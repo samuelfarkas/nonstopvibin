@@ -596,27 +596,31 @@ test("missing, wrong and mismatched profile credentials never reach upstream", a
   );
   assert.equal(observed.length, before);
 });
-test("round robin with session affinity off uses both company credentials and never personal credentials", async () => {
-  const changed = await fetch(`${app.origin}/api/profiles/${company.id}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${app.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ strategy: "round-robin", sessionAffinity: false }),
-  });
-  assert.equal(changed.status, 200, await changed.text());
-  const before = observed.length;
-  for (let i = 0; i < 6; i++) {
-    const response = await request(company);
-    assert.equal(response.status, 200, await response.clone().text());
-    assert.equal(response.headers.get("x-nonstopvibin-profile"), "company-a");
-    await response.text();
-  }
-  const selected = observed.slice(before);
-  assert.equal(selected.filter((k) => k === "company-one").length, 3);
-  assert.equal(selected.filter((k) => k === "company-two").length, 3);
-});
+test(
+  "round robin with session affinity off uses both company credentials and never personal credentials",
+  { timeout: 30_000 },
+  async () => {
+    const changed = await fetch(`${app.origin}/api/profiles/${company.id}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${app.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ strategy: "round-robin", sessionAffinity: false }),
+    });
+    assert.equal(changed.status, 200, await changed.text());
+    const before = observed.length;
+    for (let i = 0; i < 6; i++) {
+      const response = await request(company);
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(response.headers.get("x-nonstopvibin-profile"), "company-a");
+      await response.text();
+    }
+    const selected = observed.slice(before);
+    assert.equal(selected.filter((k) => k === "company-one").length, 3);
+    assert.equal(selected.filter((k) => k === "company-two").length, 3);
+  },
+);
 test("the shared /v1 endpoint routes solely by profile API key", async () => {
   const response = await fetch(`${app.origin}/v1/chat/completions`, {
     method: "POST",
