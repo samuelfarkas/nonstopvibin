@@ -21,6 +21,7 @@ test("config writes return the saved snapshot, serialize, and recover after fail
     assert.deepEqual(YAML.parse(await readFile(path, "utf8")), first);
     assert.equal(first.routing["session-affinity"], true);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
+    const inode = (await stat(path)).ino;
 
     store.saveProfile({
       ...profile,
@@ -36,6 +37,11 @@ test("config writes return the saved snapshot, serialize, and recover after fail
       [1235, 1236],
     );
     assert.deepEqual(YAML.parse(await readFile(path, "utf8")), writes[1]);
+    assert.equal(
+      (await stat(path)).ino,
+      inode,
+      "preserve the core's file watch",
+    );
     assert.equal(writes[1].routing["session-affinity"], false);
     assert.equal(first.routing.strategy, "fill-first");
     assert.equal(writes[1].routing.strategy, "round-robin");

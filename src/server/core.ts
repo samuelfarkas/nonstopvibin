@@ -160,8 +160,9 @@ export class CorePool {
       (id) => this.store.secret(`${id}:api`),
     );
     const path = join(directory, "config.yaml");
-    await writeFile(`${path}.tmp`, YAML.stringify(config), { mode: 0o600 });
-    await rename(`${path}.tmp`, path);
+    // The core watches this inode; atomic replacement drops its Linux watch.
+    // This derived config is regenerated from SQLite before every core start.
+    await writeFile(path, YAML.stringify(config), { mode: 0o600 });
     await chmod(path, 0o600);
     return config;
   }
