@@ -188,7 +188,7 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
     let data = saved?.type === "custom" ? saved.data : undefined;
     // Existing conversations keep their recorded identity. An explicitly launched
     // nonstopvibin model outranks repository defaults.
-    if (!saved && !profiles.has(ctx.model?.provider ?? "") && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
+    if (!saved && !ctx.model?.provider.startsWith("nonstopvibin-") && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
       for (const path of preferencePaths) {
         try { data = JSON.parse(await readFile(path, "utf8")); break; }
         catch (error) {

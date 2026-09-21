@@ -261,6 +261,12 @@ async (
       expected: ["nonstopvibin-personal", "claude-opus-5"],
     },
     {
+      name: "explicit third-party profile",
+      preference: ["nonstopvibin-carvago", "claude-opus-5"],
+      initial: ["nonstopvibin-third", "claude-opus-5"],
+      expected: ["nonstopvibin-third", "claude-opus-5"],
+    },
+    {
       name: "provider stability",
       preference: ["nonstopvibin-carvago", "claude-opus-5"],
       initial: ["nonstopvibin-personal", "claude-opus-5"],
