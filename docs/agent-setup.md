@@ -82,11 +82,13 @@ profiles contribute to one `/nv` command; disconnecting one leaves the others us
   alias. Pi's manually configured favorite-model scope remains separate: use the
   picker's **all** scope if old favorites refer to another profile.
 - Opening pi or using `/new` restores the repository's last selected profile and
-  model. Subdirectories share the Git checkout's preference. A worktree without
-  its own preference inherits the main checkout's profile and model. An explicit
-  profile/model change (including releasing the lock) saves a worktree-only override;
-  inheritance itself creates no extra file. Existing conversations keep their own
-  selection. Outside Git, preferences are per working directory.
+  model when pi starts from another provider. An explicitly launched
+  `nonstopvibin-*` provider/model stays authoritative. Subdirectories share the Git
+  checkout's preference. A worktree without its own preference inherits the main
+  checkout's profile and model. An explicit profile/model change (including releasing
+  the lock) saves a worktree-only override; inheritance itself creates no extra file.
+  Existing conversations keep their own selection. Outside Git, preferences are per
+  working directory.
   Preferences live in the app's private agent data (`agents/pi-preferences/`), never
   in tracked repository files, and contain only profile/model IDs. Concurrent
   sessions keep their own choices; the last explicit change wins for future sessions.
@@ -107,7 +109,8 @@ It does not replace the built-in `/model` command or rewrite pi's startup settin
 A profile switch continues the existing conversation, including its context, through
 the chosen profile. Start a new pi session when that context should remain separate.
 Each open pi session has its own selection; changing the app's selected profile does
-not redirect any of them. Repository preferences also apply in print/RPC mode; the interactive profile
+not redirect any of them. Repository preferences also apply in print/RPC mode when
+the host does not launch an explicit nonstopvibin model; the interactive profile
 picker is intended for the TUI. Existing conversation selections always take priority.
 
 The design keeps existing provider IDs, endpoints, credential helpers and pi's
