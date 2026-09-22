@@ -285,7 +285,7 @@ async (
     assert.equal(current.model.provider, scenario.expected[0], scenario.name);
     assert.equal(current.model.id, scenario.expected[1], scenario.name);
     assert.deepEqual(
-      current.branch.at(-1).data,
+      { ...current.branch.at(-1).data },
       { provider: scenario.expected[0], modelId: scenario.expected[1] },
       scenario.name + " records its chosen identity",
     );
