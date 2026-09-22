@@ -204,7 +204,7 @@ export class CorePool {
     );
     const child = spawn(
       this.binary,
-      ["--config", join(directory, "config.yaml"), "--local-model"],
+      ["--config", join(directory, "config.yaml")],
       { cwd: directory, env, stdio: ["ignore", "ignore", "ignore"] },
     );
     const runtime: Runtime = {

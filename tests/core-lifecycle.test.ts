@@ -8,6 +8,24 @@ import { CorePool } from "../src/server/core.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 
+test("profile cores allow upstream model catalog refreshes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
+  const store = new Store(directory, fileKeyCodec(directory));
+  const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+  const profile = store.createProfile("Model refresh fixture", "forest");
+  try {
+    await core.start(profile.id);
+    assert.ok(
+      !core.runtimes.get(profile.id)!.child.spawnargs.includes("--local-model"),
+      "embedded-only mode prevents newly released models reaching profile catalogs",
+    );
+  } finally {
+    await core.shutdown();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test(
   "queued starts reject shutdown after a pending accounting drain",
   { timeout: 10000 },
