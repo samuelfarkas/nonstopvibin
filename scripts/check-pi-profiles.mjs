@@ -200,6 +200,7 @@ try {
     manager = SessionManager.inMemory(root),
     cwd = root,
     sessionStartEvent,
+    launch = { provider: "synthetic-other", modelId: "shared" },
   ) {
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
@@ -233,9 +234,9 @@ try {
       sessionStartEvent,
       tools: [],
       model: {
-        ...catalog[0],
-        provider: "nonstopvibin-" + slug,
-        baseUrl: `http://127.0.0.1:${port}/p/${slug}/v1`,
+        ...catalog.find((model) => model.id === launch.modelId),
+        provider: launch.provider,
+        baseUrl: `http://127.0.0.1:${port}/p/${launch.provider === "synthetic-other" ? "work" : slug}/v1`,
       },
     });
     assert.equal(
@@ -349,8 +350,17 @@ try {
   await mkdir(nested);
   await mkdir(otherRepo);
   assert.equal(spawnSync("git", ["init", "-q", otherRepo]).status, 0);
-  const work = await openSession("work");
-  const personal = await openSession("personal");
+  const work = await openSession("work", undefined, undefined, undefined, {
+    provider: "nonstopvibin-work",
+    modelId: "shared",
+  });
+  const personal = await openSession(
+    "personal",
+    undefined,
+    undefined,
+    undefined,
+    { provider: "nonstopvibin-personal", modelId: "shared" },
+  );
   assert.match(work.footer, /work/);
   assert.match(personal.footer, /personal/);
   const available = (item) =>
@@ -376,6 +386,41 @@ try {
   await work.session.setModel(
     work.modelRuntime.getModel("nonstopvibin-work", "second"),
   );
+  const explicitGpt = await openSession(
+    "work",
+    undefined,
+    undefined,
+    undefined,
+    { provider: "nonstopvibin-work", modelId: "shared" },
+  );
+  assert.equal(explicitGpt.session.model.provider, "nonstopvibin-work");
+  assert.equal(
+    explicitGpt.session.model.id,
+    "shared",
+    "an explicit nonstopvibin model outranks the repository model",
+  );
+  const explicitClaude = await openSession(
+    "work",
+    undefined,
+    undefined,
+    undefined,
+    { provider: "nonstopvibin-work", modelId: "anthropic-fixture" },
+  );
+  assert.equal(explicitClaude.session.model.provider, "nonstopvibin-work");
+  assert.equal(explicitClaude.session.model.id, "anthropic-fixture");
+  const explicitPersonal = await openSession(
+    "personal",
+    undefined,
+    undefined,
+    undefined,
+    { provider: "nonstopvibin-personal", modelId: "anthropic-fixture" },
+  );
+  assert.equal(
+    explicitPersonal.session.model.provider,
+    "nonstopvibin-personal",
+    "an explicit provider must not switch to the repository profile",
+  );
+  assert.equal(explicitPersonal.session.model.id, "anthropic-fixture");
   assert.equal(
     spawnSync("git", [
       "-C",
@@ -437,9 +482,13 @@ try {
       },
     ],
   };
+  const unavailableProfileModel = missingInheritedModel.modelRuntime.getModel(
+    "nonstopvibin-work",
+    "shared",
+  );
   for (const method of ["stream", "streamSimple"]) {
     const rejected = await missingInheritedModel.modelRuntime[method](
-      missingInheritedModel.session.model,
+      unavailableProfileModel,
       missingContext,
     ).result();
     assert.equal(rejected.stopReason, "error");
@@ -609,6 +658,8 @@ try {
     "personal",
     SessionManager.inMemory(otherRepo),
     otherRepo,
+    undefined,
+    { provider: "nonstopvibin-personal", modelId: "shared" },
   );
   assert.equal(
     independent.session.model.provider,
@@ -802,6 +853,9 @@ try {
   for (const item of [
     work,
     personal,
+    explicitGpt,
+    explicitClaude,
+    explicitPersonal,
     restored,
     missing,
     deleted,

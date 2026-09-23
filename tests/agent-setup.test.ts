@@ -309,6 +309,14 @@ test("native installs use harness configuration, keep secrets out of files and r
           f.keys.get(f.company.id),
         );
       } else if (agent === "pi") {
+        const descriptor = JSON.parse(
+          await readFile(installed.files[1], "utf8"),
+        );
+        assert.equal(
+          descriptor.content,
+          content,
+          "the installed extension must match its generated descriptor",
+        );
         // Stand in for pi's bundled catalog, which the loader aliases for extensions.
         const stub = join(
           f.directory,
