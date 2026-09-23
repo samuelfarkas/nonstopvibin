@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Application } from "../src/server/server.ts";
+import { CorePool } from "../src/server/core.ts";
 import type { JsonObject } from "../src/shared/types.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
@@ -196,14 +197,27 @@ test(
     );
     const address = upstream.address();
     assert.ok(address instanceof Object);
+    const binary = resolve(".vendor/core/cli-proxy-api");
+    const localCatalogBinary = join(directory, "core-local-catalog-wrapper");
+    // Keep this fixture deterministic while the production core refreshes its
+    // mutable remote catalog: the wrapper adds --local-model only here.
     const app = await Application.create({
       directory,
       agentHome: join(directory, "home"),
-      binary: resolve(".vendor/core/cli-proxy-api"),
+      binary: localCatalogBinary,
       clientDirectory: resolve("dist/client"),
       port: 0,
     });
     try {
+      // Verify the underlying pinned core separately; the wrapper is test-only
+      // and catalog-pinned, so Application.create cannot verify it before write.
+      await new CorePool(app.store, binary).verifyBinary();
+      await writeFile(
+        localCatalogBinary,
+        `#!/bin/sh\nexec '${binary.replaceAll("'", "'\\''")}' "$@" --local-model\n`,
+        { mode: 0o755 },
+      );
+      await chmod(localCatalogBinary, 0o755);
       const profile = app.store.createProfile("Mixed models", "forest");
       const foreign = app.store.createProfile("Other profile", "blue");
       for (const [id, protocol] of [
