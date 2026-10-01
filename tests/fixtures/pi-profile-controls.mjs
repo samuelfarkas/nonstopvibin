@@ -1,11 +1,17 @@
 // Executed with the exact generated controls in a fresh VM by the test wrapper.
-async (assert, connectProfileControls, directory) => {
+async (
+  assert,
+  connectProfileControls,
+  directory,
+  { createHash, mkdir, writeFile },
+) => {
   let sessionId = 0;
   function session(
     saved = [],
     initial = "nonstopvibin-work",
     missing = [],
     workSlug = "work",
+    initialModel = "shared",
   ) {
     const workProvider = "nonstopvibin-" + workSlug;
     const profiles = [
@@ -28,11 +34,21 @@ async (assert, connectProfileControls, directory) => {
     let auth = true;
     let afterAuth;
     let footer;
-    for (const id of [...profiles.map((item) => item.provider), "other"]) {
+    for (const id of new Set([
+      ...profiles.map((item) => item.provider),
+      "other",
+      initial,
+    ])) {
       const models = (
         missing.includes(id)
           ? []
-          : ["shared", id === workProvider ? "work-only" : "personal-only"]
+          : [
+              "shared",
+              "gpt-5.6-sol",
+              "gpt-5.6-luna",
+              "claude-opus-5",
+              id === workProvider ? "work-only" : "personal-only",
+            ]
       ).map((name) => ({ provider: id, id: name }));
       const stream = (model, context, options) => {
         requests.push({ provider: id, model: model.id, context, options });
@@ -47,7 +63,8 @@ async (assert, connectProfileControls, directory) => {
         streamSimple: stream,
         fetchDeferred: stream,
       });
-      if (id === initial) current = models[0];
+      if (id === initial)
+        current = models.find((model) => model.id === initialModel);
     }
     const builtins = new Map(providers);
     const ctx = {
@@ -140,6 +157,11 @@ async (assert, connectProfileControls, directory) => {
       },
     };
     const preferences = directory + "/preferences-" + sessionId++;
+    const preferenceFile =
+      preferences +
+      "/" +
+      createHash("sha256").update(directory).digest("hex") +
+      ".json";
     for (const profile of profiles)
       connectProfileControls(api, profile, preferences);
     return {
@@ -179,6 +201,10 @@ async (assert, connectProfileControls, directory) => {
           { apiKey: "synthetic", marker: true },
         );
       },
+      writePreference: async (provider, modelId) => {
+        await mkdir(preferences, { recursive: true });
+        await writeFile(preferenceFile, JSON.stringify({ provider, modelId }));
+      },
     };
   }
 
@@ -206,6 +232,87 @@ async (assert, connectProfileControls, directory) => {
     replacement.providers.get("other"),
     nativeOther,
     "cleanup preserves a later owner's registration",
+  );
+
+  const freshStart = { type: "session_start", reason: "startup" };
+  for (const scenario of [
+    {
+      name: "explicit GPT model",
+      preference: ["nonstopvibin-carvago", "gpt-5.6-sol"],
+      initial: ["nonstopvibin-carvago", "gpt-5.6-luna"],
+      expected: ["nonstopvibin-carvago", "gpt-5.6-luna"],
+    },
+    {
+      name: "explicit Claude model",
+      preference: ["nonstopvibin-carvago", "gpt-5.6-sol"],
+      initial: ["nonstopvibin-carvago", "claude-opus-5"],
+      expected: ["nonstopvibin-carvago", "claude-opus-5"],
+    },
+    {
+      name: "repository fallback",
+      preference: ["nonstopvibin-carvago", "gpt-5.6-sol"],
+      initial: ["openai-codex", "gpt-5.6-sol"],
+      expected: ["nonstopvibin-carvago", "gpt-5.6-sol"],
+    },
+    {
+      name: "personal explicit model",
+      preference: ["nonstopvibin-personal", "gpt-5.6-sol"],
+      initial: ["nonstopvibin-personal", "claude-opus-5"],
+      expected: ["nonstopvibin-personal", "claude-opus-5"],
+    },
+    {
+      name: "explicit third-party profile",
+      preference: ["nonstopvibin-carvago", "claude-opus-5"],
+      initial: ["nonstopvibin-third", "claude-opus-5"],
+      expected: ["nonstopvibin-third", "claude-opus-5"],
+    },
+    {
+      name: "provider stability",
+      preference: ["nonstopvibin-carvago", "claude-opus-5"],
+      initial: ["nonstopvibin-personal", "claude-opus-5"],
+      expected: ["nonstopvibin-personal", "claude-opus-5"],
+    },
+  ]) {
+    const current = session(
+      [],
+      scenario.initial[0],
+      [],
+      "carvago",
+      scenario.initial[1],
+    );
+    await current.writePreference(...scenario.preference);
+    await current.emit("session_start", freshStart);
+    assert.equal(current.model.provider, scenario.expected[0], scenario.name);
+    assert.equal(current.model.id, scenario.expected[1], scenario.name);
+    assert.deepEqual(
+      { ...current.branch.at(-1).data },
+      { provider: scenario.expected[0], modelId: scenario.expected[1] },
+      scenario.name + " records its chosen identity",
+    );
+  }
+  const recorded = session(
+    [
+      {
+        type: "custom",
+        customType: "nonstopvibin-profile",
+        data: {
+          provider: "nonstopvibin-carvago",
+          modelId: "gpt-5.6-luna",
+        },
+      },
+    ],
+    "nonstopvibin-personal",
+    [],
+    "carvago",
+    "claude-opus-5",
+  );
+  await recorded.writePreference("nonstopvibin-carvago", "gpt-5.6-sol");
+  await recorded.emit("session_start", freshStart);
+  assert.equal(recorded.model.provider, "nonstopvibin-carvago");
+  assert.equal(
+    recorded.model.id,
+    "gpt-5.6-luna",
+    "existing conversation identity outranks launch and repository defaults",
   );
 
   const work = session();

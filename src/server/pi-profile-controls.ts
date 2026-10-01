@@ -186,8 +186,9 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
     const branch = ctx.sessionManager.getBranch();
     const saved = branch.findLast((entry) => entry.type === "custom" && entry.customType === entryType);
     let data = saved?.type === "custom" ? saved.data : undefined;
-    // Existing conversations keep their recorded identity; defaults apply only to fresh sessions.
-    if (!saved && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
+    // Existing conversations keep their recorded identity. An explicitly launched
+    // nonstopvibin model outranks repository defaults.
+    if (!saved && !ctx.model?.provider.startsWith("nonstopvibin-") && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
       for (const path of preferencePaths) {
         try { data = JSON.parse(await readFile(path, "utf8")); break; }
         catch (error) {
