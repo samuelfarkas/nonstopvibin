@@ -111,6 +111,7 @@ const manifestFields = {
   port: z.number().int().min(1).max(65535),
   content: z.string().max(1_000_000),
   retained: z.string().max(1_000_000).optional(),
+  helperContent: z.string().max(1_000_000).optional(),
 };
 const manifestSchema = z.union([
   z
@@ -121,6 +122,7 @@ const manifestSchema = z.union([
         z.literal(4),
         z.literal(5),
         z.literal(6),
+        z.literal(7),
       ]),
       input: agentSetupSchema,
       models: z.array(z.string().min(1).max(200)).max(10000),
@@ -249,7 +251,7 @@ export class AgentSetup {
     this.connection = connection;
   }
 
-  async restore(): Promise<void> {
+  async restore(profiles: Profile[] = [], port?: number): Promise<string[]> {
     if (
       (await privateDirectory(this.directory, false)) ||
       (await privateDirectory(
@@ -258,6 +260,101 @@ export class AgentSetup {
       ))
     )
       await this.start();
+    const failures: string[] = [];
+    if (port === undefined) return failures;
+    for (const profile of profiles)
+      for (const agent of agentSchema.options) {
+        let manifests: Manifest[];
+        try {
+          manifests = await this.manifests(profile, agent);
+        } catch {
+          failures.push(
+            `Could not update ${agent} connection metadata for ${profile.slug}. Open Connect agents to resolve it.`,
+          );
+          continue;
+        }
+        for (const manifest of manifests) {
+          try {
+            const folder = join(this.directory, profile.slug);
+            const target = await this.target(
+              profile,
+              manifest.input,
+              false,
+              manifest.version,
+            );
+            const current = await readConfig(target);
+            if (current === undefined)
+              throw new AppError(
+                "The installed agent configuration was removed.",
+              );
+            const expected = mergeNativeConfig(
+              agent,
+              current,
+              manifest.content,
+              manifest.content,
+            );
+            if (
+              agent === "claude" &&
+              !isDeepStrictEqual(
+                jsonObject(current),
+                jsonObject(expected ?? "{}"),
+              )
+            )
+              throw new AppError("Installed connection fields were removed.");
+            const helper = join(folder, `${agent}-key-${port}`);
+            const content =
+              agent === "opencode"
+                ? openCodePlugin(profile, this.socketPath, port)
+                : nativeConfiguration(profile, manifest.input, helper, port);
+            const helperContent =
+              agent === "opencode"
+                ? undefined
+                : credentialHelper(profile, this.socketPath, port);
+            const installedHelper =
+              agent === "opencode"
+                ? undefined
+                : await readConfig(this.helper(folder, manifest));
+            if (agent !== "opencode" && installedHelper === undefined)
+              throw new AppError(
+                "The installed credential helper was removed.",
+              );
+            if (
+              installedHelper !== undefined &&
+              installedHelper !== helperContent &&
+              installedHelper !==
+                (manifest.helperContent ??
+                  credentialHelper(profile, this.socketPath, manifest.port))
+            )
+              throw new AppError("The installed credential helper was edited.");
+            const pickerContent = this.pickerSettings(manifest);
+            const installedPicker =
+              pickerContent === undefined
+                ? undefined
+                : await readConfig(this.pickerPath(folder, manifest.input));
+            if (pickerContent !== undefined && installedPicker === undefined)
+              throw new AppError("The installed model settings were removed.");
+            if (
+              manifest.version !== (agent === "pi" ? 7 : 3) ||
+              manifest.port !== port ||
+              manifest.content !== content ||
+              manifest.helperContent !== helperContent ||
+              installedHelper !== helperContent ||
+              installedPicker !== pickerContent
+            )
+              await this.install(
+                profile,
+                manifest.input,
+                manifest.models,
+                port,
+              );
+          } catch {
+            failures.push(
+              `Could not automatically update ${agent} for ${profile.slug}. Open Connect agents to resolve edited or missing files.`,
+            );
+          }
+        }
+      }
+    return failures;
   }
 
   private async start(): Promise<void> {
@@ -422,7 +519,7 @@ export class AgentSetup {
     profile: Profile,
     input: AgentSetupInput,
     create: boolean,
-    version = 6,
+    version = 7,
   ): Promise<string> {
     const { home, codex, opencode, pi } = this.directories;
     if (input.agent === "claude") {
@@ -502,7 +599,7 @@ export class AgentSetup {
           : input.agent === "codex"
             ? `Works in any project. Pick a model with /model before the first prompt; Codex's built-in default may not exist here. Needs Codex 0.140.0 or later.`
             : input.agent === "pi"
-              ? `Choose ${profile.name} once with /nv; pi remembers the profile and model for this repository, including /new. Use native /model to switch models. The footer shows the active profile. Restart pi or /reload after reconnecting each profile. Skip /login: a stored key would override the credential helper. Needs pi 0.85.1 or later.`
+              ? `Choose ${profile.name} once with /nv; pi remembers the profile and model for this repository, including /new. Use native /model to switch models. The footer shows the active profile. App startup updates connected extensions automatically; restart pi or /reload to load changes. Skip /login: a stored key would override the credential helper. Needs pi 0.85.1 or later.`
               : `Use /models to choose nonstopvibin · ${profile.name}. Needs OpenCode 1.18.29 or later; background model overrides to another provider are rejected.`,
     };
   }
@@ -517,7 +614,7 @@ export class AgentSetup {
     const result = await this.result(profile, manifest);
     if (
       manifest.version === 1 ||
-      (agent === "pi" && manifest.version !== 6) ||
+      (agent === "pi" && manifest.version !== 7) ||
       (agent === "claude" && manifest.version !== 3)
     )
       result.needsReconnect = true;
@@ -559,6 +656,7 @@ export class AgentSetup {
     profile: Profile,
     input: AgentSetupInput,
     models: string[],
+    port?: number,
   ): Promise<InstalledSetup> {
     const validated = agentSetupSchema.parse(input);
     z.string().uuid().parse(profile.id);
@@ -595,18 +693,25 @@ export class AgentSetup {
         validated.agent,
         validated.projectDirectory,
       );
-      const { port } = this.connection(profile.id);
+      port ??= this.connection(profile.id).port;
+      z.number().int().min(1).max(65535).parse(port);
       const folder = await this.folder(profile, true);
       if (!folder)
         throw new AppError("Could not create the agent connection directory.");
       const manifest: Manifest = {
-        version: validated.agent === "pi" ? 6 : 3,
+        version: validated.agent === "pi" ? 7 : 3,
         input: validated,
         models: catalog,
         port,
         content: "",
       };
       const helper = this.helper(folder, manifest);
+      if (validated.agent !== "opencode")
+        manifest.helperContent = credentialHelper(
+          profile,
+          this.socketPath,
+          port,
+        );
       manifest.content =
         validated.agent === "opencode"
           ? openCodePlugin(profile, this.socketPath, port)
@@ -660,13 +765,9 @@ export class AgentSetup {
           "The model catalog is too large for native agent settings.",
         );
       await this.start();
-      if (validated.agent !== "opencode") {
+      if (manifest.helperContent !== undefined) {
         await readConfig(helper); // Refuse symlinks and non-owned files before replacement.
-        await writeAtomic(
-          helper,
-          credentialHelper(profile, this.socketPath, port),
-          0o700,
-        );
+        await writeAtomic(helper, manifest.helperContent, 0o700);
       }
       await replaceConfig(target, before, after);
       let previousRemoved = false;

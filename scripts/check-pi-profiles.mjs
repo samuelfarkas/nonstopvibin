@@ -677,6 +677,75 @@ try {
     profile: "work",
     model: "anthropic-fixture",
   });
+  assert.equal(
+    work.session.model.compat.supportsMidConvoToolChanges,
+    undefined,
+  );
+  const tool = (name) => ({
+    name,
+    description: name,
+    parameters: { type: "object", properties: {} },
+  });
+  let replayPayload;
+  const replay = await work.modelRuntime
+    .streamSimple(
+      {
+        ...work.session.model,
+        compat: {
+          ...work.session.model.compat,
+          supportsMidConvoSystemMessages: true,
+          supportsMidConvoToolChanges: true,
+        },
+      },
+      {
+        messages: [
+          {
+            role: "system",
+            content: "",
+            toolsAdded: [tool("old_tool")],
+            timestamp: 0,
+          },
+          { role: "user", content: "Before tools change", timestamp: 1 },
+          {
+            role: "system",
+            content: "",
+            toolsAdded: [tool("new_tool")],
+            toolsRemoved: [{ name: "old_tool" }],
+            timestamp: 2,
+          },
+          { role: "user", content: "After tools change", timestamp: 3 },
+        ],
+      },
+      {
+        onPayload: (payload) => {
+          replayPayload = payload;
+        },
+      },
+    )
+    .result();
+  assert.notEqual(replay.stopReason, "error", replay.errorMessage);
+  assert.deepEqual(
+    replayPayload.tools.map((entry) => entry.name),
+    ["old_tool", "__pi_deferred_placeholder__", "new_tool"],
+  );
+  assert.deepEqual(
+    replayPayload.messages.find((message) => message.role === "system").content,
+    [
+      {
+        type: "tool_removal",
+        tool: { type: "tool_reference", name: "old_tool" },
+      },
+      {
+        type: "tool_addition",
+        tool: { type: "tool_reference", name: "new_tool" },
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+  );
+  assert.equal(replayPayload.tools.at(-1).defer_loading, true);
+  assert.ok(
+    replayPayload.betas.includes("mid-conversation-tool-changes-2026-07-01"),
+  );
   await work.session.prompt("/nv personal");
   assert.equal(work.session.model.provider, "nonstopvibin-personal");
   assert.deepEqual(

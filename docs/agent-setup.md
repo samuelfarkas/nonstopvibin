@@ -11,7 +11,15 @@ Start a profile, open **Connect agents**, choose **Claude Code**, **Codex**, or
 | pi          | Add an automatically loaded `.js` provider extension under `~/.pi/agent/extensions/`                                                         | Run `pi`, choose a profile once with `/nv`, then use `/model`. The footer shows the conversation's locked profile.        |
 
 Restart an already-running agent after setup. Pi also supports `/reload` for
-extensions. Setup uses supported environment overrides for the agent config
+extensions. Once connected, app startup automatically updates installed extensions,
+native connection settings and credential helpers when their generated content
+changes, including connections for stopped profiles and every Claude project.
+Unchanged files are not rewritten. User preferences and unrelated settings are
+retained; edited or deleted integrations require resolving the warning in **Connect
+agents**. There is no per-profile reinstall after an ordinary app update. Open
+agent sessions still need a restart (or pi's `/reload`) to load changed files.
+
+Setup uses supported environment overrides for the agent config
 location when they are available to the app process. A desktop launched outside
 your shell may not inherit those overrides; inspect **Connection details** for
 the actual paths before using an alternate config directory.
@@ -55,7 +63,9 @@ socket. They never request management credentials. Helper and
 manifest files live under `<app data>/agent-connections/<slug>/`.
 
 Each connection keeps a fixed profile URL. If the gateway port changes, old
-helpers refuse to return credentials. Reconnect the agent and restart its session.
+helpers refuse to return credentials. App startup updates owned connections to
+the new port; restart the agent or `/reload` in pi. Resolve any update warning
+in **Connect agents** before retrying.
 Updating a helper does not redirect it to a different profile. Stopping a profile
 fails requests inside that profile; the gateway never borrows another profile's
 accounts.
@@ -71,8 +81,9 @@ running as your OS user.
 
 ### pi: choose the profile separately
 
-Reconnect each existing pi connection once to install the profile controls, then
-restart pi or `/reload`. Older connections are marked **Reconnect**. All connected
+App startup upgrades existing owned pi connections to the current profile controls;
+restart pi or `/reload` to load them. Connections needing manual repair are marked
+**Reconnect**. All connected
 profiles contribute to one `/nv` command; disconnecting one leaves the others usable.
 
 - `/nv` chooses a profile and remembers it for this repository. `/nv <slug>` selects
@@ -168,11 +179,23 @@ discovery with request-time credential rotation. They used isolated temporary co
 and no real accounts. These checks do not certify every tool, subagent, translated
 model, or Linux desktop behavior.
 
-Repository tests also exercise both directions through CLIProxyAPI 7.2.151 with synthetic Responses/Anthropic providers: fragmented tool arguments, two calls, tool-result replay, reasoning effort and transport-shape-valid synthetic signatures, and foreign-profile rejection. These are protocol checks, not proof of provider-issued signature validity or every model.
+Repository tests also exercise both directions through CLIProxyAPI 8.0.8 with synthetic Responses/Anthropic providers: fragmented tool arguments, two calls, tool-result replay, reasoning effort and transport-shape-valid synthetic signatures, and foreign-profile rejection. These are protocol checks, not proof of provider-issued signature validity or every model.
+
+Pi's builtin model capabilities now control native mid-conversation tool changes.
+The 8.0.8 core forwards the tool-change beta and remaps addition/removal references
+with their declarations. Tests cover reference blocks and inline definitions over
+streaming and non-streaming gateway requests, including the OAuth wire profile
+using synthetic API credentials. Pi 0.99.2 uses `tool_reference` with
+`mid-conversation-tool-changes-2026-07-01`, which
+[Anthropic still supports](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages).
+Live Anthropic acceptance remains unverified. The separate mid-conversation effort
+fallback remains enabled. App startup updates existing owned Pi extensions;
+use `/reload` in Pi to load the refreshed integration.
 
 Repository tests cover native config generation, exact owned-field removal,
 conflicts, comment preservation, missing/invalid inputs, shell/TOML/JavaScript
 escaping, symlink/special-file refusal, private socket authentication, key rotation,
-port drift, restart, stopped profiles, management isolation, and real-core gateway
+port drift, automatic startup updates without rewriting unchanged files, stopped
+profiles, management isolation, and real-core gateway
 routing/streaming. These checks do not replace live provider or native Linux desktop
 testing.

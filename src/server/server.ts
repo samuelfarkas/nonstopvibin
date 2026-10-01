@@ -224,7 +224,11 @@ export class Application {
       if (existsSync(options.binary)) await app.core.verifyBinary();
       await app.core.restore();
       try {
-        await app.agentSetup.restore();
+        for (const failure of await app.agentSetup.restore(
+          store.profiles(),
+          app.port,
+        ))
+          app.core.report(failure);
       } catch {
         app.core.report(
           "Agent connections are unavailable. Open Connect agents and reconnect the agent.",

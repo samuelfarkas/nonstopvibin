@@ -788,6 +788,39 @@ test("stopping a profile fails closed and a restart preserves its key and usage"
   await result.text();
 });
 
+test("app startup refreshes an installed extension without starting its profile", async () => {
+  const options = {
+    ...app.options,
+    directory: join(directory, "agent-update-fixture"),
+    agentHome: join(directory, "agent-update-home"),
+    binary: join(directory, "missing-core"),
+    port: 0,
+  };
+  let instance = await Application.create(options);
+  try {
+    const profile = instance.store.createProfile("Before update", "blue");
+    const installed = await instance.agentSetup.install(
+      profile,
+      { agent: "pi" },
+      ["fixture-model"],
+      instance.port,
+    );
+    instance.store.saveProfile({ ...profile, name: "After update" });
+    await instance.close();
+    instance = await Application.create(options);
+    const manifest = JSON.parse(await readFile(installed.files[1], "utf8"));
+    assert.equal(manifest.port, instance.port);
+    assert.equal(manifest.version, 7);
+    const content = await readFile(installed.files[0], "utf8");
+    assert.match(content, /After update/);
+    assert.ok(content.includes(instance.endpoint(profile.id)));
+    assert.equal(instance.state().profiles[0]?.runtime, "stopped");
+    assert.deepEqual(instance.state().errors, []);
+  } finally {
+    await instance.close();
+  }
+});
+
 test("Responses WebSocket upgrades enforce the same profile boundary", async () => {
   async function handshake(profile: Profile, key: string): Promise<number> {
     return new Promise((resolve, reject) => {

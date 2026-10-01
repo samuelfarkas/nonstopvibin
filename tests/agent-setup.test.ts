@@ -327,7 +327,7 @@ test("native installs use harness configuration, keep secrets out of files and r
         );
         await writeFile(
           join(stub, "providers", "all.js"),
-          `export const getBuiltinModel = (provider, id) => provider === "anthropic" && id === ${JSON.stringify(selected)} ? { id, name: "Fixture Opus", provider: "anthropic", baseUrl: "https://api.anthropic.com", headers: { "x-vendor": "1" }, thinkingLevelMap: { max: "max" }, compat: { supportsStrictTools: true }, cost: { input: 9, output: 9, cacheRead: 1, cacheWrite: 1 } } : undefined;`,
+          `export const getBuiltinModel = (provider, id) => provider === "anthropic" && id === ${JSON.stringify(selected)} ? { id, name: "Fixture Opus", provider: "anthropic", baseUrl: "https://api.anthropic.com", headers: { "x-vendor": "1" }, thinkingLevelMap: { max: "max" }, compat: { supportsStrictTools: true, supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true }, cost: { input: 9, output: 9, cacheRead: 1, cacheWrite: 1 } } : undefined;`,
         );
         const script = `globalThis.fetch = async (url, init) => { if (!url.endsWith("/p/work/v1/models?nonstopvibin=pi") || init.headers.Authorization !== ${JSON.stringify(`Bearer ${f.keys.get(f.company.id)}`)} || init.redirect !== "error") throw new Error("wrong discovery scope"); return Response.json({models: ${JSON.stringify([selected, "second-fixture"].map((id, index) => ({ id, name: `${id} · API list price`, api: index ? "openai-completions" : "anthropic-messages", input: ["text"], contextWindow: 64000, maxTokens: 8000, cost: { input: 1, output: 2 } })))} }); }; const {default: extension} = await import(${JSON.stringify(pathToFileURL(installed.files[0]).href)}); await extension({registerProvider:(id,provider)=>console.log(JSON.stringify({id,provider})),events:{emit(){},on(){}},on(){},registerCommand(){}});`;
         const registered = JSON.parse(
@@ -352,7 +352,9 @@ test("native installs use harness configuration, keep secrets out of files and r
         assert.deepEqual(known.thinkingLevelMap, { max: "max" });
         assert.deepEqual(known.compat, {
           supportsStrictTools: true,
+          supportsMidConvoSystemMessages: true,
           supportsMidConvoEffort: false,
+          supportsMidConvoToolChanges: true,
         });
         assert.equal(known.cost.input, 9);
         assert.equal(known.provider, undefined);
@@ -463,6 +465,229 @@ test("native credential helpers fail closed when stopped and resume through the 
   }
 });
 
+test("startup updates installed harnesses for stopped profiles, preserves preferences and skips unchanged files", async () => {
+  const f = await fixture();
+  const restarted = new AgentSetup(f.directory, f.connection, { home: f.home });
+  try {
+    const installed = new Map<
+      Agent,
+      Awaited<ReturnType<AgentSetup["install"]>>
+    >();
+    for (const agent of agents)
+      installed.set(
+        agent,
+        await f.setup.install(f.company, ...input(agent, f.project)),
+      );
+    const secondProject = join(f.directory, "second-project");
+    await mkdir(secondProject);
+    const secondClaude = await f.setup.install(
+      f.company,
+      ...input("claude", secondProject),
+    );
+    const codex = installed.get("codex")!;
+    const preference =
+      'model = "user-chosen-model"\nmodel_reasoning_effort = "high"\n';
+    await writeFile(
+      codex.files[0],
+      preference + (await readFile(codex.files[0], "utf8")),
+    );
+    const claude = installed.get("claude")!;
+    for (const connection of [claude, secondClaude]) {
+      const manifest = JSON.parse(await readFile(connection.files[1], "utf8"));
+      manifest.helperContent += "\n# previous helper template\n";
+      await writeFile(connection.files[1], JSON.stringify(manifest));
+      await writeFile(connection.files[2], manifest.helperContent);
+    }
+    const settings = JSON.parse(await readFile(claude.files[0], "utf8"));
+    settings.env.USER_SETTING = "keep";
+    settings.permissions = { allow: ["Read"] };
+    await writeFile(claude.files[0], JSON.stringify(settings));
+    const pi = installed.get("pi")!;
+    const old = JSON.parse(await readFile(pi.files[1], "utf8"));
+    old.version = 6;
+    delete old.helperContent;
+    old.content = old.content.replace(
+      "supportsMidConvoEffort: false",
+      "supportsMidConvoEffort: false, supportsMidConvoToolChanges: false",
+    );
+    await writeFile(pi.files[0], old.content);
+    await writeFile(pi.files[1], JSON.stringify(old));
+    await f.setup.close();
+    assert.deepEqual(await restarted.restore([f.company], 4318), []);
+    f.keys.delete(f.company.id);
+    f.setPort(4418);
+    const renamed = { ...f.company, name: "Renamed profile", enabled: false };
+    assert.deepEqual(await restarted.restore([renamed, f.personal], 4418), []);
+    assert.equal(
+      await restarted.status(f.personal, "pi"),
+      null,
+      "startup must not install a disconnected harness",
+    );
+    await assert.rejects(
+      f.run(join(restarted.directory, renamed.slug, "pi-key-4418")),
+      /start/,
+    );
+    f.keys.set(f.company.id, `nv_${"A".repeat(43)}`);
+    const files = new Set<string>();
+    for (const agent of agents) {
+      const current = await restarted.status(renamed, agent);
+      assert.ok(current);
+      assert.equal(current.needsReconnect, undefined);
+      assert.deepEqual(current.models, ["fixture-model", "second-fixture"]);
+      current.files.forEach((file) => files.add(file));
+      const manifest = JSON.parse(await readFile(current.files[1], "utf8"));
+      assert.equal(manifest.port, 4418);
+      assert.equal(manifest.version, agent === "pi" ? 7 : 3);
+      if (agent !== "opencode") {
+        assert.equal(
+          manifest.helperContent,
+          await readFile(current.files[2], "utf8"),
+        );
+        assert.equal(
+          (await f.run(current.files[2])).stdout.trim(),
+          f.keys.get(f.company.id),
+        );
+      }
+    }
+    const otherClaude = await restarted.status(
+      renamed,
+      "claude",
+      secondProject,
+    );
+    assert.equal(otherClaude?.needsReconnect, undefined);
+    otherClaude?.files.forEach((file) => files.add(file));
+    assert.ok((await readFile(codex.files[0], "utf8")).startsWith(preference));
+    const updatedSettings = JSON.parse(await readFile(claude.files[0], "utf8"));
+    assert.equal(updatedSettings.env.USER_SETTING, "keep");
+    assert.deepEqual(updatedSettings.permissions, { allow: ["Read"] });
+    assert.doesNotMatch(
+      await readFile(pi.files[0], "utf8"),
+      /supportsMidConvoToolChanges: false/,
+    );
+    await assert.rejects(
+      f.run(pi.files[2]),
+      /gateway port changed/,
+      "loaded old-port sessions still fail closed",
+    );
+    assert.equal(
+      JSON.parse(await readFile(secondClaude.files[0], "utf8")).env
+        .ANTHROPIC_BASE_URL,
+      "http://127.0.0.1:4418/p/work",
+    );
+    const before = await Promise.all(
+      [...files].map(
+        async (file) => [file, (await stat(file)).mtimeMs] as const,
+      ),
+    );
+    assert.deepEqual(await restarted.restore([renamed, f.personal], 4418), []);
+    for (const [file, mtime] of before)
+      assert.equal(
+        (await stat(file)).mtimeMs,
+        mtime,
+        "current integrations must not be rewritten each startup",
+      );
+  } finally {
+    await restarted.close();
+    await f.close();
+  }
+});
+
+test("startup leaves edited or removed integrations untouched and updates other connections", async () => {
+  const f = await fixture();
+  const restarted = new AgentSetup(f.directory, f.connection, { home: f.home });
+  try {
+    const pi = await f.setup.install(f.company, ...input("pi", f.project));
+    const edited = (await readFile(pi.files[0], "utf8")) + "\n// user edit\n";
+    await writeFile(pi.files[0], edited);
+    const codex = await f.setup.install(
+      f.company,
+      ...input("codex", f.project),
+    );
+    await rm(codex.files[0]);
+    const claude = await f.setup.install(
+      f.company,
+      ...input("claude", f.project),
+    );
+    const helper =
+      (await readFile(claude.files[2], "utf8")) + "\n# user edit\n";
+    const secondProject = join(f.directory, "second-project");
+    await mkdir(secondProject);
+    const secondClaude = await f.setup.install(
+      f.company,
+      ...input("claude", secondProject),
+    );
+    const removedFields = JSON.parse(
+      await readFile(secondClaude.files[0], "utf8"),
+    );
+    delete removedFields.env.ANTHROPIC_BASE_URL;
+    const removed = JSON.stringify(removedFields);
+    await writeFile(secondClaude.files[0], removed);
+    await writeFile(claude.files[2], helper);
+    const other = await f.setup.install(f.personal, ...input("pi", f.project));
+    await f.setup.close();
+    const failures = await restarted.restore(
+      [
+        { ...f.company, name: "Changed" },
+        { ...f.personal, name: "Changed" },
+      ],
+      4318,
+    );
+    assert.equal(failures.length, 4);
+    assert.ok(
+      failures.every(
+        (failure) =>
+          failure.includes("work") && failure.includes("Connect agents"),
+      ),
+    );
+    assert.equal(await readFile(pi.files[0], "utf8"), edited);
+    assert.equal(await readConfig(codex.files[0]), undefined);
+    assert.equal(await readFile(claude.files[2], "utf8"), helper);
+    assert.equal(await readFile(secondClaude.files[0], "utf8"), removed);
+    assert.match(await readFile(other.files[0], "utf8"), /Changed/);
+    assert.equal(
+      (await restarted.status({ ...f.personal, name: "Changed" }, "pi"))
+        ?.needsReconnect,
+      undefined,
+    );
+  } finally {
+    await restarted.close();
+    await f.close();
+  }
+});
+
+test("startup refuses deleted helpers and pickers but migrates Claude setups that never had a picker", async () => {
+  const f = await fixture();
+  try {
+    const pi = await f.setup.install(f.company, ...input("pi", f.project));
+    const claude = await f.setup.install(
+      f.company,
+      ...input("claude", f.project),
+    );
+    await rm(pi.files[2]);
+    await rm(claude.files[3]);
+    const files = [pi.files[0], pi.files[1], claude.files[0], claude.files[1]];
+    const before = await Promise.all(
+      files.map((file) => readFile(file, "utf8")),
+    );
+    const failures = await f.setup.restore([f.company], 4318);
+    assert.equal(failures.length, 2);
+    assert.equal(await readConfig(pi.files[2]), undefined);
+    assert.equal(await readConfig(claude.files[3]), undefined);
+    assert.deepEqual(
+      await Promise.all(files.map((file) => readFile(file, "utf8"))),
+      before,
+    );
+    await f.setup.remove(f.company, "pi");
+    const manifest = JSON.parse(before[3]);
+    manifest.version = 2;
+    await writeFile(claude.files[1], JSON.stringify(manifest));
+    assert.deepEqual(await f.setup.restore([f.company], 4318), []);
+    assert.ok(await readConfig(claude.files[3]));
+  } finally {
+    await f.close();
+  }
+});
+
 test("the credential bridge only serves its narrow local socket protocol", async () => {
   const f = await fixture();
   try {
@@ -553,7 +778,30 @@ test("native update and disconnect preserve unrelated preferences and refuse edi
       );
       if (agent === "pi") {
         const manifest = JSON.parse(await readFile(installed.files[1], "utf8"));
-        assert.equal(manifest.version, 6);
+        assert.equal(manifest.version, 7);
+        manifest.version = 6;
+        manifest.content = manifest.content.replace(
+          "supportsMidConvoEffort: false",
+          "supportsMidConvoEffort: false, supportsMidConvoToolChanges: false",
+        );
+        await writeFile(installed.files[0], manifest.content);
+        await writeFile(installed.files[1], JSON.stringify(manifest));
+        assert.equal(
+          (await f.setup.status(f.company, agent))?.needsReconnect,
+          true,
+        );
+        await f.setup.install(f.company, ...input(agent, f.project));
+        assert.equal(
+          (await f.setup.status(f.company, agent))?.needsReconnect,
+          undefined,
+        );
+        const updated = JSON.parse(await readFile(installed.files[1], "utf8"));
+        assert.equal(updated.version, 7);
+        assert.doesNotMatch(
+          updated.content,
+          /supportsMidConvoToolChanges: false/,
+        );
+        manifest.content = updated.content;
         const legacy = join(
           f.home,
           ".pi",

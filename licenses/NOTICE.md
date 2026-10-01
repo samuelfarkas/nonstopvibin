@@ -1,6 +1,6 @@
 # Third-party notices
 
-- CLIProxyAPI 7.2.151 is distributed as an unmodified binary. Its MIT license is included in CLIProxyAPI.txt. Provider SVG assets were sourced from its MIT-licensed repository; service names and logos remain their owners' trademarks.
+- CLIProxyAPI 8.0.8 is distributed as an unmodified binary. Its MIT license is included in CLIProxyAPI.txt. Provider SVG assets were sourced from its MIT-licensed repository; service names and logos remain their owners' trademarks.
 - The OpenCode symbol and interface icons use Lucide shapes. Lucide is ISC licensed: https://github.com/lucide-icons/lucide/blob/main/LICENSE.
 - Electron includes Chromium, Node.js, and their third-party notices in the packaged framework. See https://github.com/electron/electron/blob/main/LICENSE.
 - React, Radix UI, YAML, Zod, Lucide, and their bundled dependencies retain their licenses. Full dependency license texts are included in `dist/licenses/THIRD-PARTY.txt` inside the application archive.

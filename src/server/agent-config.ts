@@ -109,7 +109,7 @@ export default async function (pi) {
     if (!Array.isArray(models) || !models.length) throw new Error("The nonstopvibin catalog is empty.");
     models = models.map((model) => {
       const { provider, headers, compat, ...known } = getBuiltinModel(builtin[model.api], model.id) ?? {};
-      // The core rewrites anthropic-beta, so per-message output_config is rejected upstream.
+      // Keep pi's effort fallback; native tool changes use the builtin model's capabilities.
       return { ...model, ...known, compat: { ...compat, supportsMidConvoEffort: false }, api: model.api, baseUrl: model.api === "anthropic-messages" ? ${JSON.stringify(endpoint.replace(/\/v1$/, ""))} : ${JSON.stringify(endpoint)} };
     });
     pi.registerProvider(${JSON.stringify(provider)}, {

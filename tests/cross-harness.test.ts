@@ -4,6 +4,7 @@ import http from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Application } from "../src/server/server.ts";
+import { record } from "../src/server/json.ts";
 import type { JsonObject } from "../src/shared/types.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
@@ -165,6 +166,219 @@ function messagesStream(model: string) {
 }
 
 test(
+  "pinned core forwards Pi tool changes and betas through the profile gateway",
+  { timeout: 30000 },
+  async () => {
+    const directory = await mkdtemp("/tmp/nv-pi-tools-");
+    const requests: {
+      body: ReturnType<typeof JSON.parse>;
+      headers: http.IncomingHttpHeaders;
+    }[] = [];
+    const upstream = http.createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      requests.push({ body, headers: req.headers });
+      if (body.stream) {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.end(messagesStream(body.model));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "msg_fixture",
+            type: "message",
+            role: "assistant",
+            model: body.model,
+            content: [{ type: "text", text: "ok" }],
+            stop_reason: "end_turn",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+        );
+      }
+    });
+    await new Promise<void>((resolve) =>
+      upstream.listen(0, "127.0.0.1", resolve),
+    );
+    const address = upstream.address();
+    assert.ok(address instanceof Object);
+    const app = await Application.create({
+      directory,
+      agentHome: join(directory, "home"),
+      binary: resolve(".vendor/core/cli-proxy-api"),
+      clientDirectory: resolve("dist/client"),
+      port: 0,
+    });
+    try {
+      for (const oauth of [false, true]) {
+        const profile = app.store.createProfile(
+          oauth ? "CLI fingerprint fixture" : "API fixture",
+          "forest",
+        );
+        const key = "synthetic-anthropic";
+        app.store.saveApiAccount(
+          profile.id,
+          {
+            id: profile.id,
+            name: "Synthetic Claude",
+            provider: "custom",
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            prefix: "",
+            disabled: false,
+            models: [{ id: "claude-opus-5-5", protocol: "anthropic" }],
+          },
+          key,
+        );
+        await app.core.start(profile.id);
+        if (oauth) {
+          // Exercise the OAuth wire profile without a token or external account-profile lookup.
+          const config = record(
+            await app.core.management(profile.id, "/config"),
+          );
+          const entries = config["claude-api-key"];
+          assert.ok(Array.isArray(entries));
+          await app.core.management(
+            profile.id,
+            "/claude-api-key",
+            "PUT",
+            entries.map((entry) => ({
+              ...record(entry),
+              "fingerprint-profile": "claude-code-cli",
+            })),
+          );
+        }
+        for (const inline of [false, true])
+          for (const stream of [false, true]) {
+            const response = await fetch(
+              `${app.endpoint(profile.id)}/messages`,
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                  "Content-Type": "application/json",
+                  "anthropic-version": "2023-06-01",
+                  "anthropic-beta":
+                    "mid-conversation-tool-changes-2026-07-01,message-threads-2026-08-12",
+                },
+                body: JSON.stringify({
+                  model: "claude-opus-5-5",
+                  max_tokens: 64,
+                  stream,
+                  tools: [
+                    {
+                      name: "read_file",
+                      input_schema: { type: "object", properties: {} },
+                    },
+                    {
+                      name: "lookup_notes",
+                      input_schema: { type: "object", properties: {} },
+                      defer_loading: true,
+                    },
+                  ],
+                  messages: [
+                    { role: "user", content: "Before tools change" },
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: "ok" }],
+                    },
+                    {
+                      role: "system",
+                      content: [
+                        {
+                          type: "tool_removal",
+                          tool: { type: "tool_reference", name: "read_file" },
+                        },
+                        {
+                          type: "tool_addition",
+                          tool: inline
+                            ? {
+                                type: "tool_definition",
+                                definition: {
+                                  name: "lookup_notes",
+                                  input_schema: {
+                                    type: "object",
+                                    properties: {},
+                                  },
+                                },
+                              }
+                            : { type: "tool_reference", name: "lookup_notes" },
+                        },
+                      ],
+                    },
+                    { role: "user", content: "After tools change" },
+                  ],
+                }),
+                signal: AbortSignal.timeout(10000),
+              },
+            );
+            assert.equal(response.status, 200, await response.clone().text());
+            assert.equal(
+              response.headers.get("x-nonstopvibin-profile"),
+              profile.slug,
+            );
+            await response.text();
+            const request = requests.at(-1)!;
+            const betas = String(request.headers["anthropic-beta"]).split(",");
+            assert.ok(
+              betas.includes("mid-conversation-tool-changes-2026-07-01"),
+            );
+            assert.ok(betas.includes("message-threads-2026-08-12"));
+            assert.equal(betas.includes("oauth-2025-04-20"), oauth);
+            if (inline && oauth)
+              assert.ok(
+                betas.includes("inline-tools-2026-09-15"),
+                "OAuth inline definitions need an automatically assembled beta",
+              );
+            assert.equal(request.headers.authorization, `Bearer ${key}`);
+            const tools = request.body.tools;
+            const blocks = request.body.messages.flatMap(
+              (message: { content: unknown }) =>
+                Array.isArray(message.content) ? message.content : [],
+            );
+            const removal = blocks.find(
+              (block: { type: string }) => block.type === "tool_removal",
+            );
+            const addition = blocks.find(
+              (block: { type: string }) => block.type === "tool_addition",
+            );
+            assert.equal(removal.tool.name, tools[0].name);
+            assert.equal(
+              inline ? addition.tool.definition.name : addition.tool.name,
+              tools[1].name,
+            );
+            assert.equal(tools[1].defer_loading, true);
+            if (oauth) {
+              assert.notEqual(
+                tools[0].name,
+                "read_file",
+                "OAuth aliases must reach declarations and removal references together",
+              );
+              assert.notEqual(
+                tools[1].name,
+                "lookup_notes",
+                "OAuth aliases must reach additions too",
+              );
+            }
+          }
+        await app.core.stop(profile.id);
+      }
+      assert.equal(requests.length, 8);
+    } finally {
+      await app.close();
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+        upstream.closeAllConnections();
+      });
+      await rm(directory, { recursive: true, force: true });
+      await rm(app.agentSetup.socketDirectory, {
+        recursive: true,
+        force: true,
+      });
+    }
+  },
+);
+
+test(
   "pinned core translates both native harness tool streams and replays signed reasoning within the same profile",
   { timeout: 30000 },
   async () => {
@@ -207,7 +421,7 @@ test(
       const profile = app.store.createProfile("Mixed models", "forest");
       const foreign = app.store.createProfile("Other profile", "blue");
       for (const [id, protocol] of [
-        ["gpt-5.4", "responses"],
+        ["gpt-6.1-sol", "responses"],
         ["claude-sonnet-4-6", "anthropic"],
       ] as const)
         app.store.saveApiAccount(
@@ -247,13 +461,13 @@ test(
       const models = (await catalog.json()).models;
       assert.deepEqual(
         models.map((model: { slug: string }) => model.slug).sort(),
-        ["claude-sonnet-4-6", "gpt-5.4"],
+        ["claude-sonnet-4-6", "gpt-6.1-sol"],
       );
       for (const model of models)
         assert.ok(Array.isArray(model.supported_reasoning_levels));
 
       const claudeRequest = {
-        model: "gpt-5.4",
+        model: "gpt-6.1-sol",
         stream: true,
         max_tokens: 4096,
         thinking: { type: "adaptive" },

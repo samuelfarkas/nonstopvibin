@@ -79,6 +79,14 @@ distributed together. To upgrade:
    through the normal release workflow above.
 
 Packaging rejects mismatched versions, platforms, architectures and binary hashes.
+
+The 8.0.8 upgrade keeps the legacy YAML configuration and `/v0/management`
+routes, which upstream retains alongside its new v8 configuration and OAuth APIs.
+Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain disabled.
+The core now supplies its Claude Code 2.1.280 fingerprint without a wrapper override.
+App startup upgrades existing owned Pi connections; reload Pi to remove older
+tool-change fallbacks. Core installation replaces the binary for the next process
+start; restart NonstopVibin to replace any running profile cores.
 macOS signing updates the packaged manifest hash after verifying the unsigned core.
 Installed users receive the new core by updating NonstopVibin; while app updates
 are disabled, they install the newer app manually. Development checkouts rerun

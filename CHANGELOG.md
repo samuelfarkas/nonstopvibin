@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Upgraded bundled CLIProxyAPI from 7.2.151 to 8.0.8 with reviewed archive and binary
+  hashes for all four targets. Pi native tool changes now retain their beta headers
+  and matching tool aliases; use `/reload` after app startup updates Pi extensions.
 - Errored profiles can now be restarted directly from the sidebar.
 - API account and credential updates now roll back together when a write fails.
 - Malformed sign-in callback URLs now receive a safe error response without stopping the app.
@@ -18,6 +21,9 @@
 
 ### Changed
 
+- Installed agent connections now update automatically on app startup, including
+  stopped profiles and every connected Claude project. Existing user settings are
+  preserved; edited or removed integrations require manual repair.
 - Desktop and development now share `~/.nonstopvibin` and an owner-only AES-GCM
   vault key. Linux no longer requires a secret service. Older data directories
   are not imported automatically; see [storage migration](docs/architecture.md).

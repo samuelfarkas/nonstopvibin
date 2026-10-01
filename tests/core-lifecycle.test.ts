@@ -7,8 +7,9 @@ import { join, resolve } from "node:path";
 import { CorePool } from "../src/server/core.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
+import { record } from "../src/server/json.ts";
 
-test("profile cores allow upstream model catalog refreshes", async () => {
+test("profile cores refresh model catalogs without overriding the pinned core's Claude fingerprint", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
   const store = new Store(directory, fileKeyCodec(directory));
   const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
@@ -19,6 +20,8 @@ test("profile cores allow upstream model catalog refreshes", async () => {
       !core.runtimes.get(profile.id)!.child.spawnargs.includes("--local-model"),
       "embedded-only mode prevents newly released models reaching profile catalogs",
     );
+    const config = record(await core.management(profile.id, "/config"));
+    assert.equal(record(config["claude-header-defaults"])["user-agent"], "");
   } finally {
     await core.shutdown();
     store.close();
