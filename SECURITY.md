@@ -11,8 +11,11 @@ change without notice during the 0.x release series.
 
 ## Supported deployment
 
-The application is a loopback desktop service on macOS/Linux, not an internet-facing
-or multi-user hosted proxy. Profiles separate account pools, not OS users. SQLite
+The application is a loopback desktop service on macOS/Linux, or a headless
+Linux service reached through SSH (optionally HTTPS Tailscale Serve; see the
+[server guide](docs/server.md)), not an internet-facing or multi-user hosted proxy.
+The agent gateway remains loopback-only in both modes. Profiles separate account
+pools, not OS users. SQLite
 secrets use AES-GCM with an owner-only vault.key stored beside the database; software
 running as the same OS user can read both and decrypt them. The upstream core also
 requires plaintext OAuth/config files in owner-only directories. See

@@ -61,3 +61,54 @@ jobs:
             release/*.blockmap
             release/latest*.yml
             release/beta*.yml
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun ci
+      - run: bun run dist:server
+      - name: Smoke-test the x64 server archive
+        run: |
+          set -eu
+          work=$(mktemp -d)
+          pid=
+          trap 'if [ -n "$pid" ]; then kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi; rm -rf "$work"' EXIT
+          export HOME="$work/home" NONSTOPVIBIN_DATA_DIR="$work/data"
+          mkdir -p "$HOME"
+          tar -xzf release/nonstopvibin-server-*-linux-x64.tar.gz -C "$work"
+          "$work"/nonstopvibin-server-*-linux-x64/install.sh --no-service --prefix "$work/prefix"
+          nv="$work/prefix/bin/nonstopvibin"
+          port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+          "$nv" serve --port "$port" > "$work/serve.log" 2>&1 &
+          pid=$!
+          for _ in $(seq 30); do "$nv" status > /dev/null && break; sleep 1; done
+          "$nv" status
+          token=$("$nv" url --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["url"].split("#session=")[1])')
+          curl -fsS "http://127.0.0.1:$port/" | grep -q '<div id="root">'
+          curl -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$port/api/state" | grep -q '"coreAvailable":true'
+          kill -TERM "$pid"
+          wait "$pid"
+          pid=
+          set +e
+          "$nv" status
+          status=$?
+          set -e
+          test "$status" -eq 3
+          # A non-TTY log (journald) must never contain the session token.
+          ! grep -q "session=" "$work/serve.log"
+          ! grep -qF "$token" "$work/serve.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          retention-days: 7
+          if-no-files-found: error
+          name: nonstopvibin-server
+          path: release/*.tar.gz
