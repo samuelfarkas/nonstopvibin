@@ -123,7 +123,7 @@ export async function probe(session: Session): Promise<ServerState | null> {
   }
 }
 
-// Never unlink this inode: SQLite's OS-backed exclusive lock is released on
+// Never unlink this inode: SQLite's OS-backed writer lock is released on
 // process exit/crash, without a stale-owner check/delete race. The separate
 // database leaves the application's WAL available to normal store operations.
 const ownedDirectories = new Set<string>();
@@ -178,7 +178,9 @@ function reserveDirectory(directory: string): () => void {
     );
   const lock = new DatabaseSync(path);
   try {
-    lock.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
+    // Reserve the single writer without upgrading past concurrent SHARED readers:
+    // EXCLUSIVE upgrades can make both initial contenders fail with SQLITE_BUSY.
+    lock.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
   } catch (error) {
     lock.close();
     if (error instanceof Error && "errcode" in error && error.errcode === 5)
