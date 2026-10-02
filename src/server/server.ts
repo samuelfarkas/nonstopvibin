@@ -157,6 +157,7 @@ export class Application {
   readonly agentSetup: AgentSetup;
   port = 0;
   closing = false;
+  private closePromise?: Promise<void>;
   constructor(options: ServerOptions, store: Store) {
     this.options = options;
     this.store = store;
@@ -222,11 +223,16 @@ export class Application {
       this.gateway.upgrade(req, socket, head);
     });
   }
-  static async create(options: ServerOptions): Promise<Application> {
+  static async create(
+    options: ServerOptions,
+    signal?: AbortSignal,
+  ): Promise<Application> {
+    signal?.throwIfAborted();
     for (const host of options.allowHosts ?? [])
       if (!validAllowHost(host))
         throw new Error(`Invalid allowed host: ${JSON.stringify(host)}`);
     await mkdir(options.directory, { recursive: true, mode: 0o700 });
+    signal?.throwIfAborted();
     const store = new Store(options.directory, fileKeyCodec(options.directory));
     const app = new Application(options, store);
     try {
@@ -235,13 +241,16 @@ export class Application {
         app.server.once("error", reject);
         app.server.listen(options.port ?? 4318, "127.0.0.1", resolve);
       });
+      signal?.throwIfAborted();
       const address = app.server.address();
       if (!(address instanceof Object))
         throw new Error("Gateway failed to bind.");
       app.port = address.port;
       if (existsSync(options.binary))
         await app.core.verifyBinary(options.requirePinnedCore);
-      await app.core.restore();
+      signal?.throwIfAborted();
+      await app.core.restore(signal);
+      signal?.throwIfAborted();
       try {
         for (const failure of await app.agentSetup.restore(
           store.profiles(),
@@ -253,9 +262,18 @@ export class Application {
           "Agent connections are unavailable. Open Connect agents and reconnect the agent.",
         );
       }
+      signal?.throwIfAborted();
       return app;
     } catch (error) {
-      await app.close();
+      try {
+        await app.close();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `${errorMessage(error)} Cleanup failed: ${errorMessage(cleanupError)}`,
+          { cause: cleanupError },
+        );
+      }
       throw error;
     }
   }
@@ -786,15 +804,26 @@ export class Application {
     }
     throw new AppError("Not found.", 404);
   }
-  async close(): Promise<void> {
-    if (this.closing) return;
+  close(): Promise<void> {
+    return (this.closePromise ??= this.closeResources());
+  }
+  private async closeResources(): Promise<void> {
     this.closing = true;
     this.server.close();
     this.server.closeIdleConnections();
-    await this.agentSetup.close();
-    await this.core.shutdown();
-    await this.usagePrices.close();
-    this.server.closeAllConnections();
-    this.store.close();
+    try {
+      await this.agentSetup.close();
+    } finally {
+      try {
+        await this.core.shutdown();
+      } finally {
+        try {
+          await this.usagePrices.close();
+        } finally {
+          this.server.closeAllConnections();
+          this.store.close();
+        }
+      }
+    }
   }
 }
