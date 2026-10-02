@@ -1829,6 +1829,9 @@ details > dl {
   max-width: 44ch;
   font-size: var(--text-body);
 }
+.fatal p.muted {
+  display: block;
+}
 
 /* Fixed app scales: CSS viewport size, not device pixels or guessed DPI.
    Native View > Zoom remains available for individual display preferences. */

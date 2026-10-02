@@ -65,6 +65,19 @@ not demonstrate a live Codex conversation.
 Closing the window leaves the proxy running in the menu bar. **Quit** stops it.
 **Start at login** is optional in Settings.
 
+## Run on a Linux server
+
+To keep subscriptions next to agents on a headless Debian server, install the
+server build there and open its UI from your laptop through an SSH tunnel:
+
+```sh
+bun run server:deploy myserver   # build, copy, install a systemd user service
+bun run server:open myserver     # tunnel and open the UI
+```
+
+See [Run on a Linux server](docs/server.md) for manual installation, provider
+sign-in, Tailscale, upgrades, and security notes.
+
 ## Build from source
 
 This is a prerelease. Install [Bun 1.4.2](https://bun.com/docs/installation) and

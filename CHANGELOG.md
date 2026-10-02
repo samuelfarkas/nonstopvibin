@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Headless Linux server: `bun run dist:server` builds a self-contained
+  `nonstopvibin` archive for Debian 12+ (x64 and arm64) with `install.sh`, a
+  systemd user service, and `serve`, `url`, `status` and `service` commands.
+  `bun run server:deploy` and `bun run server:open` install it and open its UI
+  through an SSH tunnel. Optional `--allow-host` admits one exact HTTPS host,
+  such as Tailscale Serve, for the web UI only. See [the server guide](docs/server.md).
+- In a browser, the sign-in dialog now opens its paste-callback field by default,
+  and an expired session after a server restart shows the recovery screen.
+
 ### Fixed
 
 - Upgraded bundled CLIProxyAPI from 7.2.151 to 8.0.8 with reviewed archive and binary

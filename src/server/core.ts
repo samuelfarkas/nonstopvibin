@@ -20,6 +20,7 @@ import {
 import { randomUUID, createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import YAML from "yaml";
+import coreRelease from "../../scripts/core-release.json";
 import type {
   Account,
   Json,
@@ -1532,7 +1533,7 @@ export class CorePool {
         await this.stop(profile.id, false);
     }
   }
-  async verifyBinary(): Promise<void> {
+  async verifyBinary(requirePinnedCore = false): Promise<void> {
     const manifest = record(
       parse(await readFile(join(this.binary, "..", "manifest.json"), "utf8")),
     );
@@ -1540,7 +1541,12 @@ export class CorePool {
     for await (const chunk of createReadStream(this.binary))
       digest.update(chunk);
     const hash = digest.digest("hex");
-    if (manifest.binarySha256 !== hash)
+    // Headless releases must also match the compiled pin. Desktop signing
+    // changes the binary and refreshes its manifest after packaging verifies it.
+    const pin = new Map(Object.entries(coreRelease.binaries)).get(
+      `${process.platform}_${process.arch}`,
+    );
+    if (manifest.binarySha256 !== hash || (requirePinnedCore && pin !== hash))
       throw new AppError("The bundled core failed its integrity check.", 503);
   }
 }
