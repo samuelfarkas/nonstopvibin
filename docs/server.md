@@ -42,7 +42,8 @@ your existing supervisor. No OpenRC/runit unit is provided.
 
 The installer checks readable PEM certificate presence in common Debian/Arch,
 RPM and openSUSE locations, plus `SSL_CERT_FILE`/colon-separated `SSL_CERT_DIR`
-overrides. It does not validate certificate contents, provider TLS, or every
+overrides, including hidden PEM files in certificate directories. It does not
+validate certificate contents, provider TLS, or every
 runtime's root selection. Keep the distribution's CA trust package current;
 configure custom roots for the runtime that needs them rather than disabling TLS
 verification.
@@ -79,7 +80,10 @@ and cleanup. openSUSE's package mirror was unavailable, so synthetic requests an
 restart were not verified there. The SSH checks used OrbStack Linux machines
 with a shared VM kernel; the foreground checks used Docker, not full VMs. Arch's
 full VM could not start. Automatic lingering was denied on Ubuntu/Fedora;
-administrator-enabled lingering kept their services reachable after SSH logout.
+corrected root/orb probes with administrator-enabled lingering verified
+authenticated reachability while logged out, with no user-login sessions before
+or after the probe and unchanged service PID/session-token identity. Earlier
+probes reopened SSH before fetching state and did not prove this persistence.
 Boot persistence was not tested. Native x64 hardware,
 Arch Linux ARM, real-provider TLS/OAuth and arbitrary older distributions remain
 unverified. A newer distribution working does not prove every older one works.

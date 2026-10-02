@@ -35,7 +35,7 @@ has_ca_certificates() (
   IFS=:
   for directory in ${SSL_CERT_DIR:-/etc/ssl/certs:/etc/pki/tls/certs}; do
     set +f
-    for file in "$directory"/*; do
+    for file in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
       has_certificate "$file" && return 0
     done
     set -f

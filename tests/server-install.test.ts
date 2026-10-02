@@ -62,6 +62,13 @@ test("installer recognizes RPM/openSUSE/Arch trust stores and explicit overrides
     );
     await writeFile(join(certificates, "root.pem"), pem);
     assert.equal(check("", `${directory}/missing:${certificates}`), true);
+    await rm(join(certificates, "root.pem"));
+    await writeFile(join(certificates, ".root.pem"), pem);
+    assert.equal(
+      check(join(directory, "missing"), certificates),
+      true,
+      "a directory containing only a hidden PEM file is recognized",
+    );
     assert.equal(
       check("", `${directory}/custom*`),
       false,
