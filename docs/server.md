@@ -6,7 +6,13 @@ agents run, for example a VPS you reach over SSH. The server build is one
 It listens only on `127.0.0.1`; you open the UI from your laptop through an SSH
 tunnel.
 
-Supported: Debian 12 or later (glibc), x64 or arm64, with systemd. Install it as
+The two archives target **glibc-based Linux, x64 or arm64**, not just Debian.
+Use them on common distributions such as Ubuntu/Debian, Fedora, Rocky/Alma/RHEL,
+Arch and openSUSE, subject to the compatibility evidence below. Bun and Node are
+not needed on the server. Alpine/musl is not supported by these archives;
+compatibility shims are not a substitute for a tested musl build. A systemd user
+session is required only for automatic service installation, not foreground use.
+Install it as
 the same non-root user that runs your agents, because it writes their settings
 (`~/.codex`, `~/.claude`, pi and OpenCode folders) and serves their credential
 helpers over a Unix socket owned by that user.
@@ -14,11 +20,69 @@ helpers over a Unix socket owned by that user.
 The server needs `curl` (the agents' credential helpers use it) and system CA
 certificates (the core verifies providers with them):
 
+Use your distribution's packages, for example:
+
 ```sh
-sudo apt install curl ca-certificates dbus-user-session
+# Debian / Ubuntu
+sudo apt install curl ca-certificates
+# Fedora / Rocky / Alma / RHEL
+sudo dnf install curl ca-certificates
+# Arch (x86_64) / Arch Linux ARM (separate project)
+sudo pacman -Syu curl ca-certificates
+# openSUSE
+sudo zypper install curl ca-certificates ca-certificates-mozilla
 ```
 
-`dbus-user-session` lets `systemctl --user` work over SSH on minimal installs.
+For `systemctl --user`, log in directly as that user through SSH/PAM, not `su` or
+`sudo`. The systemd user session and D-Bus must be installed and reachable.
+Minimal Debian/Ubuntu installs may also need `sudo apt install dbus-user-session`;
+other distributions package these components differently. Without a user manager,
+use `install.sh --no-service`, then `nonstopvibin serve` in a terminal or under
+your existing supervisor. No OpenRC/runit unit is provided.
+
+The installer checks readable PEM certificate presence in common Debian/Arch,
+RPM and openSUSE locations, plus `SSL_CERT_FILE`/colon-separated `SSL_CERT_DIR`
+overrides. It does not validate certificate contents, provider TLS, or every
+runtime's root selection. Keep the distribution's CA trust package current;
+configure custom roots for the runtime that needs them rather than disabling TLS
+verification.
+
+## Compatibility evidence
+
+Both current executables are dynamically linked ELF64 binaries, not static
+Linux-universal executables. They need the matching glibc loader and system
+libraries: the app uses libc, libpthread, libdl and libm; the pinned Go core also
+uses libresolv. The current app's largest required GLIBC symbol version is 2.17
+on both targets; the core's is 2.17 on arm64 and 2.3.2 on x64. These measured symbol
+versions are **not** a complete minimum supported OS/kernel/CPU guarantee.
+Old glibc releases, unusual loaders, CPU configurations and stripped-down images
+need their own runtime checks. The loaders are `/lib64/ld-linux-x86-64.so.2` and
+`/lib/ld-linux-aarch64.so.1`. These archives use Bun 1.4.2's normal Linux targets
+(the x64 archive is not its alternate baseline-CPU target); the pinned core was
+built with Go 1.26.4. Do not infer an older-CPU or kernel floor from ELF ABI notes.
+Arch Linux ARM is distinct from official x86_64 Arch; results for one do not
+certify the other.
+
+The official archives were exercised in these isolated environments:
+
+| Distribution                  | glibc | Architecture | Coverage                                         |
+| ----------------------------- | ----- | ------------ | ------------------------------------------------ |
+| Ubuntu 22.04.5                | 2.35  | native arm64 | SSH/PAM, systemd user service                    |
+| Fedora 43                     | 2.42  | native arm64 | SSH/PAM, systemd user service                    |
+| Arch rolling (20260927 image) | 2.44  | emulated x64 | container, foreground                            |
+| Rocky 8.9                     | 2.28  | native arm64 | container, foreground                            |
+| openSUSE Leap 16.0            | 2.40  | native arm64 | partial container: install, startup, UI, cleanup |
+
+All but the partial openSUSE check exercised authenticated state and UI HTTP 200, a real pinned
+core request to a synthetic provider, restart, status, session-token rotation
+and cleanup. openSUSE's package mirror was unavailable, so synthetic requests and
+restart were not verified there. The SSH checks used OrbStack Linux machines
+with a shared VM kernel; the foreground checks used Docker, not full VMs. Arch's
+full VM could not start. Automatic lingering was denied on Ubuntu/Fedora;
+administrator-enabled lingering kept their services reachable after SSH logout.
+Boot persistence was not tested. Native x64 hardware,
+Arch Linux ARM, real-provider TLS/OAuth and arbitrary older distributions remain
+unverified. A newer distribution working does not prove every older one works.
 
 ## Install
 

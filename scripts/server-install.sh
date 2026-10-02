@@ -15,6 +15,34 @@ die() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
 }
+# Presence check only, not validation of provider TLS or the runtime's root set.
+# Match Go's common Linux bundle/directory locations and explicit overrides.
+has_ca_certificates() (
+  set -f
+  has_certificate() {
+    [ -f "$1" ] && [ -r "$1" ] && [ -s "$1" ] &&
+      grep -q -- '-----BEGIN CERTIFICATE-----' "$1"
+  }
+  if [ -n "${SSL_CERT_FILE:-}" ]; then
+    has_certificate "$SSL_CERT_FILE" && return 0
+  else
+    for file in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+      /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem \
+      /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/cert.pem; do
+      has_certificate "$file" && return 0
+    done
+  fi
+  IFS=:
+  for directory in ${SSL_CERT_DIR:-/etc/ssl/certs:/etc/pki/tls/certs}; do
+    set +f
+    for file in "$directory"/*; do
+      has_certificate "$file" && return 0
+    done
+    set -f
+  done
+  return 1
+)
+
 usage() {
   cat <<EOF
 Install NonstopVibin $VERSION (linux-$ARCH) for the current user.
@@ -31,7 +59,8 @@ Usage: ./install.sh [--prefix DIR] [--no-service] [--port N] [--allow-host FQDN]
 
 A first install creates and starts the user service. An upgrade restarts the
 existing service and keeps its options, unless --port or --allow-host is given.
-Supported: Debian 12 or later (glibc), x64 or arm64.
+Targets: glibc-based Linux, x64 or arm64 (not Alpine/musl).
+A systemd user session is needed only for the service; otherwise use --no-service.
 EOF
 }
 
@@ -91,10 +120,10 @@ for entry in nonstopvibin client core licenses; do
 done
 
 if ! command -v curl >/dev/null 2>&1; then
-  warn "curl is not installed. Agent credential helpers need it: sudo apt install curl"
+  warn "curl is not installed. Agent credential helpers need it; install curl with your distribution's package manager."
 fi
-if [ ! -s /etc/ssl/certs/ca-certificates.crt ]; then
-  warn "System CA certificates are missing; provider connections will fail: sudo apt install ca-certificates"
+if ! has_ca_certificates; then
+  warn "No readable CA certificate bundle was found in common Linux trust-store locations. Install/configure your distribution's CA certificates (see docs/server.md); this presence check does not validate provider TLS."
 fi
 
 LIB="$PREFIX/lib/nonstopvibin"
@@ -155,8 +184,10 @@ if [ "$SERVICE" = 1 ]; then
   else
     say ""
     say "No systemd user manager is reachable, so no service was installed."
-    say "Log in over SSH directly as this user (not su/sudo), and install"
-    say "dbus-user-session if needed; then run: $BIN/nonstopvibin service install"
+    say "Log in over SSH directly as this user (not su/sudo), and check that"
+    say "your distribution's systemd user session and D-Bus are available."
+    say "Then run: $BIN/nonstopvibin service install"
+    say "Without systemd, use --no-service and run serve under your own supervisor."
   fi
 fi
 

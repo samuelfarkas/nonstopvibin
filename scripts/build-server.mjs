@@ -136,9 +136,11 @@ for (const arch of arches) {
       join(out, "README.md"),
       `# NonstopVibin ${pkg.version} headless server (linux-${arch})
 
-Install as the non-root user that runs your coding agents (Debian 12+):
+Install as the non-root user that runs your coding agents on glibc-based Linux
+(x64 or arm64; not Alpine/musl). A systemd user session is optional:
 
     ./install.sh            # ~/.local, plus a systemd user service
+    ./install.sh --no-service  # foreground / existing supervisor
     ./install.sh --help     # options
 
 Then run \`nonstopvibin url\` for the session link and SSH tunnel command.

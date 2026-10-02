@@ -454,8 +454,8 @@ function requireUserManager(): void {
             ? "."
             : " (XDG_RUNTIME_DIR is not set)."),
         "Log in over SSH directly as this user (not through su or sudo).",
-        "If it still fails, run `sudo apt install dbus-user-session`, then reconnect.",
-        "Without a service, run `nonstopvibin serve` in a terminal instead.",
+        "Check your distribution's systemd user session and D-Bus packages, then reconnect (see docs/server.md).",
+        "Without systemd, install with --no-service and run `nonstopvibin serve` in a terminal or under your own supervisor.",
       ].join("\n"),
     );
 }

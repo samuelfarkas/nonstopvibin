@@ -67,7 +67,7 @@ Closing the window leaves the proxy running in the menu bar. **Quit** stops it.
 
 ## Run on a Linux server
 
-To keep subscriptions next to agents on a headless Debian server, install the
+To keep subscriptions next to agents on a headless glibc-based Linux server, install the
 server build there and open its UI from your laptop through an SSH tunnel:
 
 ```sh
