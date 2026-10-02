@@ -1,7 +1,17 @@
 // `nonstopvibin`: the headless Linux server entry point.
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
-import { constants, existsSync, realpathSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+} from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -12,6 +22,7 @@ import coreRelease from "../../scripts/core-release.json";
 import { Application, validAllowHost } from "./server.ts";
 import { dataDirectory } from "./data-directory.ts";
 import { isMissing, writeAtomic } from "./native-config-files.ts";
+import { errorMessage } from "./errors.ts";
 
 // Replaced with `true` by scripts/build-server.mjs.
 declare const NONSTOPVIBIN_PACKAGED: boolean;
@@ -112,6 +123,75 @@ export async function probe(session: Session): Promise<ServerState | null> {
   }
 }
 
+// Never unlink this inode: SQLite's OS-backed exclusive lock is released on
+// process exit/crash, without a stale-owner check/delete race. The separate
+// database leaves the application's WAL available to normal store operations.
+const ownedDirectories = new Set<string>();
+const reservations = new WeakMap<Application, () => void>();
+function reserveDirectory(directory: string): () => void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const folder = lstatSync(directory);
+  if (
+    !folder.isDirectory() ||
+    folder.isSymbolicLink() ||
+    folder.uid !== process.getuid?.()
+  )
+    throw new CliError(
+      "The server data directory must be owner-only, owned by you, and not a symbolic link.",
+    );
+  // Preserve the store's existing permission tightening, before creating the lock.
+  if ((folder.mode & 0o777) !== 0o700) chmodSync(directory, 0o700);
+  const canonical = realpathSync(directory);
+  const occupied = () =>
+    new CliError(
+      `NonstopVibin is already starting, running or stopping for ${canonical}. Run \`nonstopvibin url\` for its link.`,
+    );
+  // Do not open/close another descriptor for the locked inode in this process:
+  // POSIX advisory locks are process-scoped, and close would release them.
+  if (ownedDirectories.has(canonical)) throw occupied();
+  const path = join(canonical, "server.lock.sqlite");
+  try {
+    closeSync(
+      openSync(
+        path,
+        constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_WRONLY |
+          constants.O_NOFOLLOW,
+        0o600,
+      ),
+    );
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST"))
+      throw error;
+  }
+  const file = lstatSync(path);
+  if (
+    !file.isFile() ||
+    file.isSymbolicLink() ||
+    file.nlink !== 1 ||
+    file.uid !== process.getuid?.() ||
+    (file.mode & 0o077) !== 0
+  )
+    throw new CliError(
+      "server.lock.sqlite must be an owner-only ordinary file you own, without links.",
+    );
+  const lock = new DatabaseSync(path);
+  try {
+    lock.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE");
+  } catch (error) {
+    lock.close();
+    if (error instanceof Error && "errcode" in error && error.errcode === 5)
+      throw occupied();
+    throw error;
+  }
+  ownedDirectories.add(canonical);
+  return () => {
+    lock.close();
+    ownedDirectories.delete(canonical);
+  };
+}
+
 export interface ServeOptions {
   directory: string;
   binary: string;
@@ -119,40 +199,38 @@ export interface ServeOptions {
   port: number;
   allowHosts: string[];
 }
-export async function startServer(options: ServeOptions): Promise<Application> {
+export async function startServer(
+  options: ServeOptions,
+  signal?: AbortSignal,
+): Promise<Application> {
+  signal?.throwIfAborted();
   const existing = await readSession(options.directory);
   if (existing && (await probe(existing)))
     throw new CliError(
       `NonstopVibin is already running on 127.0.0.1:${existing.port} for ${options.directory}. Run \`nonstopvibin url\` for its link.`,
     );
-  if (!existsSync(options.binary))
-    throw new CliError(
-      `The proxy core is missing at ${options.binary}. Reinstall NonstopVibin from its release archive.`,
-    );
-  let application: Application;
+  const release = reserveDirectory(options.directory);
+  let application: Application | undefined;
   try {
-    application = await Application.create({
-      directory: options.directory,
-      binary: options.binary,
-      clientDirectory: options.clientDirectory,
-      port: options.port,
-      allowHosts: options.allowHosts,
-      desktop: false,
-      development: false,
-      requirePinnedCore: true,
-    });
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      error.code === "EADDRINUSE"
-    )
+    signal?.throwIfAborted();
+    if (!existsSync(options.binary))
       throw new CliError(
-        `Port ${options.port} on 127.0.0.1 is already in use. Stop the other program, or choose another port with --port.`,
+        `The proxy core is missing at ${options.binary}. Reinstall NonstopVibin from its release archive.`,
       );
-    throw error;
-  }
-  try {
+    application = await Application.create(
+      {
+        directory: options.directory,
+        binary: options.binary,
+        clientDirectory: options.clientDirectory,
+        port: options.port,
+        allowHosts: options.allowHosts,
+        desktop: false,
+        development: false,
+        requirePinnedCore: true,
+      },
+      signal,
+    );
+    signal?.throwIfAborted();
     await writeAtomic(
       sessionPath(options.directory),
       JSON.stringify({
@@ -164,11 +242,32 @@ export async function startServer(options: ServeOptions): Promise<Application> {
         startedAt: new Date().toISOString(),
       } satisfies Session),
     );
+    signal?.throwIfAborted();
+    reservations.set(application, release);
+    return application;
   } catch (error) {
-    await application.close();
+    try {
+      if (application) await application.close();
+      await removeSession(options.directory);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `${errorMessage(error)} Cleanup failed: ${errorMessage(cleanupError)}`,
+        { cause: cleanupError },
+      );
+    } finally {
+      release();
+    }
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "EADDRINUSE"
+    )
+      throw new CliError(
+        `Port ${options.port} on 127.0.0.1 is already in use. Stop the other program, or choose another port with --port.`,
+      );
     throw error;
   }
-  return application;
 }
 export async function stopServer(
   application: Application,
@@ -178,6 +277,11 @@ export async function stopServer(
     await application.close();
   } finally {
     await removeSession(directory);
+    const release = reservations.get(application);
+    if (release) {
+      reservations.delete(application);
+      release();
+    }
   }
 }
 
@@ -605,16 +709,12 @@ export async function main(argv: string[]): Promise<number> {
       ? await discoveryDirectory()
       : dataDirectory();
   if (command === "serve" && !subcommand) {
-    const application = await startServer({
-      directory,
-      binary: coreBinary,
-      clientDirectory,
-      port,
-      allowHosts,
-    });
+    const controller = new AbortController();
+    let application: Application | undefined;
     let stopping = false;
     const stop = () => {
-      if (stopping) return;
+      controller.abort();
+      if (!application || stopping) return;
       stopping = true;
       stopServer(application, directory).then(
         () => process.exit(0),
@@ -624,8 +724,27 @@ export async function main(argv: string[]): Promise<number> {
         },
       );
     };
+    // Receive termination before directory reservation, store creation or any
+    // core spawn. Startup cancellation itself awaits partial-app cleanup.
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
+    try {
+      application = await startServer(
+        {
+          directory,
+          binary: coreBinary,
+          clientDirectory,
+          port,
+          allowHosts,
+        },
+        controller.signal,
+      );
+    } catch (error) {
+      process.removeListener("SIGINT", stop);
+      process.removeListener("SIGTERM", stop);
+      if (error === controller.signal.reason) return 0;
+      throw error;
+    }
     // journald must never receive the session token.
     const session = await readSession(directory);
     if (process.stdout.isTTY && session)

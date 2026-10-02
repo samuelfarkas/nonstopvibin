@@ -167,7 +167,8 @@ export class CorePool {
     await chmod(path, 0o600);
     return config;
   }
-  async start(profileId: string): Promise<void> {
+  async start(profileId: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const stopping = this.stops.get(profileId);
     if (stopping) await stopping;
     if (this.shuttingDown)
@@ -179,7 +180,7 @@ export class CorePool {
       );
     if (this.starting.has(profileId)) return this.starting.get(profileId);
     if (this.runtimes.get(profileId)?.state === "running") return;
-    const operation = this.startProcess(profileId);
+    const operation = this.startProcess(profileId, signal);
     this.starting.set(profileId, operation);
     try {
       await operation;
@@ -187,7 +188,10 @@ export class CorePool {
       this.starting.delete(profileId);
     }
   }
-  private async startProcess(profileId: string): Promise<void> {
+  private async startProcess(
+    profileId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     this.store.profile(profileId);
     if (!existsSync(this.binary))
       throw new AppError(
@@ -203,6 +207,7 @@ export class CorePool {
         (key) => (process.env[key] ? [[key, process.env[key]!]] : []),
       ),
     );
+    signal?.throwIfAborted();
     const child = spawn(
       this.binary,
       ["--config", join(directory, "config.yaml")],
@@ -232,19 +237,23 @@ export class CorePool {
     });
     let lastError = "";
     for (let attempt = 0; attempt < 80; attempt++) {
+      signal?.throwIfAborted();
       if (runtime.state === "error") break;
       try {
-        await this.management(profileId, "/config");
+        await this.management(profileId, "/config", "GET", undefined, signal);
+        signal?.throwIfAborted();
         runtime.state = "running";
         this.schedulePolling?.();
         const profile = this.store.profile(profileId);
         this.store.saveProfile({ ...profile, enabled: true });
-        await this.syncAccounts(profileId);
+        await this.syncAccounts(profileId, signal);
+        signal?.throwIfAborted();
         this.onStatusChange?.();
         return;
       } catch (error) {
+        signal?.throwIfAborted();
         lastError = errorMessage(error);
-        await delay(100);
+        await delay(100, undefined, { signal });
       }
     }
     runtime.stopping = true;
@@ -279,8 +288,10 @@ export class CorePool {
   }
   private async stopProcess(profileId: string): Promise<void> {
     const runtime = this.runtimes.get(profileId);
+    // A failed spawn emits error/close, not exit; there is no child to reap.
     if (
       runtime &&
+      runtime.child.pid !== undefined &&
       runtime.child.exitCode === null &&
       runtime.child.signalCode === null
     ) {
@@ -374,6 +385,7 @@ export class CorePool {
     path: string,
     method = "GET",
     body?: Json,
+    signal?: AbortSignal,
   ): Promise<Json> {
     const runtime = this.runtimes.get(profileId);
     if (!runtime) throw new AppError("Start this profile first.", 409);
@@ -387,7 +399,9 @@ export class CorePool {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+          : AbortSignal.timeout(15_000),
         redirect: "error",
       },
     );
@@ -399,7 +413,7 @@ export class CorePool {
     if (response.status === 204) return {};
     return responseJson(response);
   }
-  async syncAccounts(profileId: string): Promise<void> {
+  async syncAccounts(profileId: string, signal?: AbortSignal): Promise<void> {
     const runtime = this.runtimes.get(profileId);
     if (
       !runtime ||
@@ -408,7 +422,9 @@ export class CorePool {
       this.shuttingDown
     )
       return;
-    const response = record(await this.management(profileId, "/auth-files"));
+    const response = record(
+      await this.management(profileId, "/auth-files", "GET", undefined, signal),
+    );
     if (!Array.isArray(response.files))
       throw new AppError("The proxy returned an unexpected account list.", 502);
     const identities = new Map<string, ReturnType<typeof claudeIdentity>>();
@@ -1504,19 +1520,23 @@ export class CorePool {
     this.schedulePolling = schedule;
     schedule();
   }
-  async restore(): Promise<void> {
+  async restore(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     // Pending sign-ins never survive an app restart or enter an active profile.
     await rm(join(this.store.directory, "oauth-pending"), {
       recursive: true,
       force: true,
     });
     for (const profile of this.store.profiles().filter((p) => p.enabled)) {
+      signal?.throwIfAborted();
       try {
-        await this.start(profile.id);
+        await this.start(profile.id, signal);
       } catch (error) {
+        signal?.throwIfAborted();
         this.report(`${profile.name}: ${errorMessage(error)}`);
       }
     }
+    signal?.throwIfAborted();
     this.beginPolling();
   }
   async shutdown(): Promise<void> {
