@@ -136,8 +136,11 @@ for (const arch of arches) {
       join(out, "README.md"),
       `# NonstopVibin ${pkg.version} headless server (linux-${arch})
 
-Install as the non-root user that runs your coding agents on glibc-based Linux
-(x64 or arm64; not Alpine/musl). A systemd user session is optional:
+Run on glibc-based Linux (x64 or arm64; not Alpine/musl) as a non-root user.
+For trusted co-located agents, use their user. For a protected upstream consumed
+through a separate private inference gate, use a dedicated protected service
+user with no coding agents; never share its credentials/helpers with guests.
+A systemd user session is optional:
 
     ./install.sh            # ~/.local, plus a systemd user service
     ./install.sh --no-service  # foreground / existing supervisor
