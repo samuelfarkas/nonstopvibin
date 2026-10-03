@@ -462,12 +462,28 @@ export function AddSubscription({
               session.expiresAt ?? session.startedAt + 300_000,
             ).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
           </p>
-          <details>
-            <summary>Browser did not return to the app?</summary>
-            <p>
-              Paste the full localhost callback URL from your browser. Its
-              sign-in state must match this profile.
-            </p>
+          {/* In a browser the server may be remote, so its loopback callback
+              cannot be reached; pasting is the expected path there. */}
+          <details open={!window.nonstopvibin && !session.userCode}>
+            {window.nonstopvibin ? (
+              <>
+                <summary>Browser did not return to the app?</summary>
+                <p>
+                  Paste the full localhost callback URL from your browser. Its
+                  sign-in state must match this profile.
+                </p>
+              </>
+            ) : (
+              <>
+                <summary>Page at localhost failed to load?</summary>
+                <p>
+                  After you sign in, the provider sends your browser to an{" "}
+                  <code>http://localhost:…</code> address. When NonstopVibin
+                  runs on a remote server, that page fails to load. Copy its
+                  full address from the address bar and paste it here.
+                </p>
+              </>
+            )}
             <label className="field">
               Callback URL
               <input

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CorePool } from "../src/server/core.ts";
@@ -28,6 +28,30 @@ test("profile cores refresh model catalogs without overriding the pinned core's 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test(
+  "shutdown completes after the core could not spawn",
+  { timeout: 10000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-core-spawn-failure-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const binary = join(directory, "non-executable-core");
+    await copyFile(resolve(".vendor/core/cli-proxy-api"), binary);
+    await chmod(binary, 0o600);
+    const core = new CorePool(store, binary);
+    const profile = store.createProfile("Spawn failure", "forest");
+    try {
+      await assert.rejects(core.start(profile.id), /Could not launch proxy/);
+      assert.equal(core.runtimes.get(profile.id)?.child.pid, undefined);
+      await core.shutdown();
+      assert.equal(core.starting.size, 0);
+    } finally {
+      await core.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "queued starts reject shutdown after a pending accounting drain",

@@ -168,6 +168,12 @@ export function App() {
       try {
         await refresh();
       } catch (e) {
+        // A restarted server issues a new session token; show the recovery
+        // screen rather than a stale workspace.
+        if (e instanceof Error && "status" in e && e.status === 401) {
+          setReady(false);
+          setState(undefined);
+        }
         setError(
           e instanceof Error ? e.message : "The local service is unavailable.",
         );
@@ -233,10 +239,13 @@ export function App() {
         {error ? (
           <>
             <p role="alert">{error}</p>
-            <p className="muted">
-              Open the desktop app, or use the session link printed by bun run
-              dev.
-            </p>
+            {/* The server's 401 message already carries this guidance. */}
+            {!error.includes("nonstopvibin url") && (
+              <p className="muted">
+                Open NonstopVibin from the desktop app. On a server, run{" "}
+                <code>nonstopvibin url</code> for a new link.
+              </p>
+            )}
             <button className="button" onClick={() => location.reload()}>
               Try again
             </button>
