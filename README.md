@@ -67,8 +67,9 @@ Closing the window leaves the proxy running in the menu bar. **Quit** stops it.
 
 ## Run on a Linux server
 
-To keep subscriptions next to agents on a headless glibc-based Linux server, install the
-server build there and open its UI from your laptop through an SSH tunnel:
+Install the headless build on a glibc-based Linux server for trusted co-located
+agents, or under a dedicated protected user behind a separate consumer-owned
+private inference gate. Open its operator UI from your laptop through SSH:
 
 ```sh
 bun run server:deploy myserver   # build, copy, install a systemd user service
@@ -76,7 +77,8 @@ bun run server:open myserver     # tunnel and open the UI
 ```
 
 See [Run on a Linux server](docs/server.md) for manual installation, provider
-sign-in, Tailscale, upgrades, and security notes.
+sign-in, Tailscale, upgrades, and the [protected-upstream contract](docs/server.md#protected-upstream)
+(with Homeplane as a planned consumer example, not a bundled gate).
 
 ## Build from source
 
