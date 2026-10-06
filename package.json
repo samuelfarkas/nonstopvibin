@@ -63,7 +63,7 @@
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
-    "@vitejs/plugin-react": "5.2.0",
+    "@vitejs/plugin-react": "6.1.1",
     "electron": "44.2.0",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
