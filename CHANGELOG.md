@@ -10,6 +10,8 @@
 - Errored profiles can now be restarted directly from the sidebar.
 - API account and credential updates now roll back together when a write fails.
 - Malformed sign-in callback URLs now receive a safe error response without stopping the app.
+- Subscriptions whose provider rejected the saved sign-in now show **Reconnect needed**
+  instead of **Cooling down**.
 
 ### Security
 

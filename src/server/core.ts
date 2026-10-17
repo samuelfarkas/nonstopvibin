@@ -451,12 +451,17 @@ export class CorePool {
         kind: "oauth",
         email: text(file.email),
         disabled: file.disabled === true,
+        // Core status messages: "disabled (invalid grant)", "invalid grant (retrying)", "unauthorized", "token expired".
         status: file.disabled
           ? "Paused"
-          : file.unavailable
-            ? "Cooling down"
-            : file.status === "error"
-              ? "Needs attention"
+          : file.status === "error"
+            ? /invalid grant|unauthorized/i.test(
+                String(file.status_message ?? ""),
+              )
+              ? "Reconnect needed"
+              : "Needs attention"
+            : file.unavailable
+              ? "Cooling down"
               : "Ready",
         priority: number(file.priority) ?? 0,
         authIndex: String(file.auth_index ?? ""),

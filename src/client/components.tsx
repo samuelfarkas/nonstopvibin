@@ -245,7 +245,7 @@ export function ProviderIcon({ provider }: { provider: string }) {
 export function Status({ value }: { value: string }) {
   return (
     <span
-      className={`status ${value === "running" || value === "Ready" ? "good" : value === "error" || value === "Needs attention" ? "bad" : ""}`}
+      className={`status ${value === "running" || value === "Ready" ? "good" : value === "error" || value === "Needs attention" || value === "Reconnect needed" ? "bad" : ""}`}
     >
       <span className="status-dot" />
       {value === "running"
