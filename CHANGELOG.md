@@ -26,6 +26,7 @@
 
 - Reconnecting a Claude subscription now finishes on its own after the browser
   sign-in; the organization review remains for new connections and mismatches.
+  The desktop window comes forward when the browser sign-in returns.
 - Installed agent connections now update automatically on app startup, including
   stopped profiles and every connected Claude project. Existing user settings are
   preserved; edited or removed integrations require manual repair.
