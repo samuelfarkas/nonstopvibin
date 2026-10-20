@@ -7,7 +7,7 @@
   "workspaces": [],
   "packageManager": "bun@1.4.2",
   "dependencies": {
-    "deepsec": "2.3.9"
+    "deepsec": "2.3.10"
   },
   "scripts": {
     "scan": "deepsec scan --project-id nonstopvibin",
