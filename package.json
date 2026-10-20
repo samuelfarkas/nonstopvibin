@@ -67,9 +67,9 @@
     "electron": "44.2.0",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
-    "oxfmt": "0.66.0",
+    "oxfmt": "0.67.0",
     "oxlint": "1.81.0",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "typescript": "5.9.3",
     "vite": "8.2.2"
   },
