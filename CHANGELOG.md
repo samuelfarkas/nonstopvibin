@@ -18,7 +18,7 @@
 - Packaged resources now exclude unapproved license files and reject secret-like paths.
 - Custom agent configuration roots now reject shared write access.
 - Invalid quota responses no longer persist provider response excerpts in error text.
-- Updated sharp, oxfmt (tinypool), source-map-js, and http-cache-semantics to resolve high and critical audit advisories.
+- Updated sharp, oxfmt (tinypool), source-map-js, and http-cache-semantics, plus the DeepSec workspace's MCP SDK and proxy-addr, to resolve high and critical audit advisories.
 
 ### Changed
 
