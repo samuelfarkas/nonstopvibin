@@ -558,15 +558,17 @@ export function App() {
                             const stale = isQuotaStale(a.quota);
                             const tag = a.disabled
                               ? ["Paused", "out"]
-                              : a.quota?.status === "error"
-                                ? ["Check failed", "bad"]
-                                : v === 0
-                                  ? ["Out", "out"]
-                                  : v !== null && v < 20
-                                    ? ["Low", "warn"]
-                                    : stale && a.quota
-                                      ? ["Stale", ""]
-                                      : null;
+                              : a.status === "Reconnect needed"
+                                ? ["Reconnect needed", "bad"]
+                                : a.quota?.status === "error"
+                                  ? ["Check failed", "bad"]
+                                  : v === 0
+                                    ? ["Out", "out"]
+                                    : v !== null && v < 20
+                                      ? ["Low", "warn"]
+                                      : stale && a.quota
+                                        ? ["Stale", ""]
+                                        : null;
                             return (
                               <div
                                 className={`account-row ${a.disabled ? "disabled" : ""}`}
@@ -860,8 +862,9 @@ function AccountDetails({
             <RefreshCw size={14} aria-hidden="true" /> Reconnect subscription
           </button>
           <p className="field-note">
-            Sign in again to this organization while keeping this connection’s
-            history and settings.
+            {account.status === "Reconnect needed"
+              ? "The provider no longer accepts this connection’s sign-in. Reconnect to restore it."
+              : "Sign in again to this organization while keeping this connection’s history and settings."}
           </p>
         </div>
       )}

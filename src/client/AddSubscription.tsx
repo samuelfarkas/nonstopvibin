@@ -150,6 +150,34 @@ export function AddSubscription({
           await onSaved();
         }
         if (!cancelled && result.status === "review") {
+          if (result.review.action === "reconnect" && reconnectId) {
+            // The verified seat already matches the chosen connection; a confirm
+            // click adds nothing and users miss it. Fall back to manual review on failure.
+            let confirmed: OAuthStatus;
+            try {
+              confirmed = await api<OAuthStatus>(
+                `/profiles/${profile.id}/oauth-confirm`,
+                "POST",
+                { state: session.state },
+              );
+              if (confirmed.status !== "ok")
+                throw new Error("The connection was not completed. Try again.");
+            } catch (e) {
+              if (cancelled) return;
+              setReview(result.review);
+              setError(
+                e instanceof Error
+                  ? e.message
+                  : "Could not reconnect the subscription.",
+              );
+              return;
+            }
+            // The server has already replaced the credential; show the result even
+            // if a profile refresh restarted this effect while confirming.
+            setComplete(confirmed);
+            await onSaved();
+            return;
+          }
           setReview(result.review);
           setError("");
         }
@@ -172,7 +200,15 @@ export function AddSubscription({
       cancelled = true;
       clearInterval(timer);
     };
-  }, [session, complete, review, verificationFailed, profile.id, onSaved]);
+  }, [
+    session,
+    complete,
+    review,
+    verificationFailed,
+    profile.id,
+    reconnectId,
+    onSaved,
+  ]);
   async function run(action: () => Promise<void>) {
     setError("");
     setBusy(true);
@@ -396,9 +432,18 @@ export function AddSubscription({
                     ? accountLabel(reconnectTarget)
                     : "the organization you want to connect"}
                 </strong>{" "}
-                on the Claude authorization page. You’ll confirm the selected
-                organization here before it joins{" "}
-                <strong>{profile.name}</strong>.
+                on the Claude authorization page.{" "}
+                {reconnectTarget ? (
+                  <>
+                    After you sign in, the reconnect in{" "}
+                    <strong>{profile.name}</strong> finishes here on its own.
+                  </>
+                ) : (
+                  <>
+                    You’ll confirm the selected organization here before it
+                    joins <strong>{profile.name}</strong>.
+                  </>
+                )}
               </>
             ) : (
               <>

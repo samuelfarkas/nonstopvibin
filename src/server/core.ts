@@ -111,6 +111,8 @@ export class CorePool {
   private stops = new Map<string, Promise<void>>();
   private usageCollections = new Map<string, Promise<number>>();
   onStatusChange?: () => void;
+  /** A browser sign-in callback was accepted; the desktop can bring the dialog forward. */
+  onOAuthCallback?: () => void;
   private shuttingDown = false;
   private schedulePolling?: () => void;
   errors: string[] = [];
@@ -451,12 +453,17 @@ export class CorePool {
         kind: "oauth",
         email: text(file.email),
         disabled: file.disabled === true,
+        // Core status messages: "disabled (invalid grant)", "invalid grant (retrying)", "unauthorized", "token expired".
         status: file.disabled
           ? "Paused"
-          : file.unavailable
-            ? "Cooling down"
-            : file.status === "error"
-              ? "Needs attention"
+          : file.status === "error"
+            ? /invalid grant|unauthorized/i.test(
+                String(file.status_message ?? ""),
+              )
+              ? "Reconnect needed"
+              : "Needs attention"
+            : file.unavailable
+              ? "Cooling down"
               : "Ready",
         priority: number(file.priority) ?? 0,
         authIndex: String(file.auth_index ?? ""),
@@ -551,6 +558,7 @@ export class CorePool {
           const directory = await mkdtemp(join(parent, "claude-"));
           const store = new Store(directory, this.store.codec);
           const core = new CorePool(store, this.binary);
+          core.onOAuthCallback = () => this.onOAuthCallback?.();
           const pending = store.createProfile("Pending sign-in", "forest");
           this.claudeSignIn = { core, profileId: pending.id };
           const session = await core.beginDirectOAuth(pending.id, provider);
@@ -648,6 +656,7 @@ export class CorePool {
               '<!doctype html><title>nonstopvibin</title><body style="font:16px system-ui;padding:64px;background:#fbfcf9;color:#275b42"><h1>Sign-in received.</h1><p>Return to nonstopvibin to finish connecting your subscription. You can close this tab.</p>',
             );
             this.closeCallback(false);
+            this.onOAuthCallback?.();
           },
           () => {
             res.writeHead(400);

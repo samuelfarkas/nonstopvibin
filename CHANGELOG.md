@@ -10,6 +10,8 @@
 - Errored profiles can now be restarted directly from the sidebar.
 - API account and credential updates now roll back together when a write fails.
 - Malformed sign-in callback URLs now receive a safe error response without stopping the app.
+- Subscriptions whose provider rejected the saved sign-in now show **Reconnect needed**
+  instead of **Cooling down**.
 
 ### Security
 
@@ -22,6 +24,9 @@
 
 ### Changed
 
+- Reconnecting a Claude subscription now finishes on its own after the browser
+  sign-in; the organization review remains for new connections and mismatches.
+  The desktop window comes forward when the browser sign-in returns.
 - Installed agent connections now update automatically on app startup, including
   stopped profiles and every connected Claude project. Existing user settings are
   preserved; edited or removed integrations require manual repair.

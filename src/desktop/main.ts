@@ -494,6 +494,10 @@ async function start(): Promise<void> {
     tray.setImage(state === "stopped" ? stoppedImage : ballImage);
   };
   application.core.onStatusChange = syncTray;
+  application.core.onOAuthCallback = () => {
+    // Only an existing window holds the sign-in dialog; a new one would not.
+    if (mainWindow) void showMain().catch(reportDesktopError);
+  };
   application.gateway.onActivityChange = syncTray;
   syncTray();
   const openTray = async () => {
