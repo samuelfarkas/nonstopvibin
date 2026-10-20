@@ -7,6 +7,7 @@ import { extname, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import coreRelease from "../../scripts/core-release.json";
+import { version } from "../../package.json";
 import type {
   ApiAccount,
   AppState,
@@ -119,6 +120,16 @@ export function json<T>(res: ServerResponse, value: T, status = 200): void {
   });
   res.end(JSON.stringify(value));
 }
+// An exact DNS name such as a Tailscale Serve host: lowercase labels, at least
+// one dot, an alphabetic top-level label (so no IP literals), no port or wildcard.
+export function validAllowHost(host: string): boolean {
+  return (
+    host.length <= 253 &&
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+      host,
+    )
+  );
+}
 interface ServerOptions {
   directory: string;
   binary: string;
@@ -127,6 +138,10 @@ interface ServerOptions {
   desktop?: boolean;
   development?: boolean;
   agentHome?: string;
+  // Extra Host names for the management UI only (HTTPS reverse proxy such as
+  // Tailscale Serve). The agent gateway stays loopback-only.
+  allowHosts?: string[];
+  requirePinnedCore?: boolean;
 }
 export class Application {
   readonly options: ServerOptions;
@@ -142,6 +157,7 @@ export class Application {
   readonly agentSetup: AgentSetup;
   port = 0;
   closing = false;
+  private closePromise?: Promise<void>;
   constructor(options: ServerOptions, store: Store) {
     this.options = options;
     this.store = store;
@@ -198,7 +214,7 @@ export class Application {
     this.server.requestTimeout = 0;
     this.server.headersTimeout = 60_000;
     this.server.on("upgrade", (req, socket, head) => {
-      if (!this.validHost(req) || req.headers.origin) {
+      if (!this.validHost(req) || this.allowedHost(req) || req.headers.origin) {
         socket.end(
           "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
@@ -207,8 +223,16 @@ export class Application {
       this.gateway.upgrade(req, socket, head);
     });
   }
-  static async create(options: ServerOptions): Promise<Application> {
+  static async create(
+    options: ServerOptions,
+    signal?: AbortSignal,
+  ): Promise<Application> {
+    signal?.throwIfAborted();
+    for (const host of options.allowHosts ?? [])
+      if (!validAllowHost(host))
+        throw new Error(`Invalid allowed host: ${JSON.stringify(host)}`);
     await mkdir(options.directory, { recursive: true, mode: 0o700 });
+    signal?.throwIfAborted();
     const store = new Store(options.directory, fileKeyCodec(options.directory));
     const app = new Application(options, store);
     try {
@@ -217,12 +241,16 @@ export class Application {
         app.server.once("error", reject);
         app.server.listen(options.port ?? 4318, "127.0.0.1", resolve);
       });
+      signal?.throwIfAborted();
       const address = app.server.address();
       if (!(address instanceof Object))
         throw new Error("Gateway failed to bind.");
       app.port = address.port;
-      if (existsSync(options.binary)) await app.core.verifyBinary();
-      await app.core.restore();
+      if (existsSync(options.binary))
+        await app.core.verifyBinary(options.requirePinnedCore);
+      signal?.throwIfAborted();
+      await app.core.restore(signal);
+      signal?.throwIfAborted();
       try {
         for (const failure of await app.agentSetup.restore(
           store.profiles(),
@@ -234,9 +262,18 @@ export class Application {
           "Agent connections are unavailable. Open Connect agents and reconnect the agent.",
         );
       }
+      signal?.throwIfAborted();
       return app;
     } catch (error) {
-      await app.close();
+      try {
+        await app.close();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `${errorMessage(error)} Cleanup failed: ${errorMessage(cleanupError)}`,
+          { cause: cleanupError },
+        );
+      }
       throw error;
     }
   }
@@ -266,7 +303,7 @@ export class Application {
       gateway: this.origin,
       storage: this.store.codec.label,
       usageRetentionDays: this.store.usageRetentionDays(),
-      version: "0.1.1",
+      version,
       desktop: Boolean(this.options.desktop),
       errors: this.core.errors,
     };
@@ -276,8 +313,12 @@ export class Application {
       req.headers.host === `127.0.0.1:${this.port}` ||
       req.headers.host === `localhost:${this.port}` ||
       (Boolean(this.options.development) &&
-        req.headers.host === "127.0.0.1:5173")
+        req.headers.host === "127.0.0.1:5173") ||
+      this.allowedHost(req)
     );
+  }
+  private allowedHost(req: IncomingMessage): boolean {
+    return this.options.allowHosts?.includes(req.headers.host ?? "") ?? false;
   }
   private async handle(
     req: IncomingMessage,
@@ -290,8 +331,10 @@ export class Application {
       const origin = req.headers.origin;
       if (
         origin &&
-        origin !== this.origin &&
-        !(this.options.development && origin === "http://127.0.0.1:5173")
+        (this.allowedHost(req)
+          ? origin !== `https://${req.headers.host}`
+          : origin !== this.origin &&
+            !(this.options.development && origin === "http://127.0.0.1:5173"))
       )
         throw new AppError(
           "Cross-origin management requests are not allowed.",
@@ -299,13 +342,18 @@ export class Application {
         );
       if (!sameSecret(req.headers.authorization ?? "", `Bearer ${this.token}`))
         throw new AppError(
-          "Open nonstopvibin from the desktop app or the local session link.",
+          "Open NonstopVibin from the desktop app, or run nonstopvibin url on the server for a new session link.",
           401,
         );
       await this.api(req, res, url);
       return;
     }
     if (url.pathname.startsWith("/v1") || url.pathname.startsWith("/p/")) {
+      if (this.allowedHost(req))
+        throw new AppError(
+          "The agent API is only available on the loopback address.",
+          403,
+        );
       if (req.headers.origin)
         throw new AppError(
           "The agent API accepts local agent clients, not browser origins.",
@@ -756,15 +804,26 @@ export class Application {
     }
     throw new AppError("Not found.", 404);
   }
-  async close(): Promise<void> {
-    if (this.closing) return;
+  close(): Promise<void> {
+    return (this.closePromise ??= this.closeResources());
+  }
+  private async closeResources(): Promise<void> {
     this.closing = true;
     this.server.close();
     this.server.closeIdleConnections();
-    await this.agentSetup.close();
-    await this.core.shutdown();
-    await this.usagePrices.close();
-    this.server.closeAllConnections();
-    this.store.close();
+    try {
+      await this.agentSetup.close();
+    } finally {
+      try {
+        await this.core.shutdown();
+      } finally {
+        try {
+          await this.usagePrices.close();
+        } finally {
+          this.server.closeAllConnections();
+          this.store.close();
+        }
+      }
+    }
   }
 }
