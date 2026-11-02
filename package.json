@@ -55,7 +55,7 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "yaml": "2.9.0",
-    "zod": "4.5.4"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
@@ -64,14 +64,14 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "5.2.0",
-    "electron": "44.2.0",
+    "electron": "44.9.1",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
     "oxfmt": "0.67.0",
     "oxlint": "1.81.0",
     "sharp": "0.35.5",
     "typescript": "5.9.3",
-    "vite": "8.2.2"
+    "vite": "8.2.4"
   },
   "build": {
     "asarUnpack": [
