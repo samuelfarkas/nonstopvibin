@@ -7,7 +7,7 @@
   "workspaces": [],
   "packageManager": "bun@1.4.2",
   "dependencies": {
-    "deepsec": "2.3.9"
+    "deepsec": "2.3.10"
   },
   "scripts": {
     "scan": "deepsec scan --project-id nonstopvibin",
@@ -19,6 +19,8 @@
     "audit": "bun audit --audit-level=high"
   },
   "overrides": {
-    "@earendil-works/pi-coding-agent": "0.99.2"
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "undici": "8.12.2",
+    "zod": "4.6.6"
   }
 }
