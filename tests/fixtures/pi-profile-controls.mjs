@@ -422,7 +422,8 @@ async (
   const recordedId = work.branch.findLast(
     (entry) => entry.type === "model_change",
   ).modelId;
-  const launchedId = recordedId === "gpt-5.6-luna" ? "claude-opus-5" : "gpt-5.6-luna";
+  const launchedId =
+    recordedId === "gpt-5.6-luna" ? "claude-opus-5" : "gpt-5.6-luna";
   const forked = session(
     work.branch,
     "nonstopvibin-work",
