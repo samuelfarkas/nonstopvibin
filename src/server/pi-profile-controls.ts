@@ -185,6 +185,11 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
     preferencePath = preferencePaths[0];
     const branch = ctx.sessionManager.getBranch();
     const saved = branch.findLast((entry) => entry.type === "custom" && entry.customType === entryType);
+    const recorded = branch.findLast((entry) => entry.type === "model_change");
+    // A forked session (e.g. a subagent child) inherits the parent's profile entry, but a nonstopvibin
+    // model set at launch differs from the branch's last recorded model. That launch model wins.
+    const launched = event.type === "session_start" && ctx.sessionManager.getHeader()?.parentSession && ctx.model?.provider.startsWith("nonstopvibin-")
+      && (recorded?.provider !== ctx.model.provider || recorded?.modelId !== ctx.model.id) ? ctx.model : undefined;
     let data = saved?.type === "custom" ? saved.data : undefined;
     // Existing conversations keep their recorded identity. An explicitly launched
     // nonstopvibin model outranks repository defaults.
@@ -198,7 +203,10 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
         }
       }
     }
-    if (saved?.type === "custom" || data !== undefined) {
+    if (launched) {
+      active = launched.provider;
+      modelId = launched.id;
+    } else if (saved?.type === "custom" || data !== undefined) {
       if (!data || typeof data !== "object" || !("provider" in data) || !("modelId" in data) || !(data.provider === null || (typeof data.provider === "string" && /^nonstopvibin-[a-z0-9][a-z0-9-]*$/.test(data.provider))) || !(data.modelId === null || typeof data.modelId === "string")) {
         active = "nonstopvibin-unavailable";
         modelId = null;
@@ -210,7 +218,6 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
     } else {
       // On legacy sessions use their recorded identity, not pi's fallback when
       // the original provider disappeared. New sessions may use a native default.
-      const recorded = branch.findLast((entry) => entry.type === "model_change");
       const provider = recorded?.provider ?? ctx.model?.provider ?? (profiles.size === 1 ? profile.provider : undefined);
       active = provider?.startsWith("nonstopvibin-") ? provider : null;
       modelId = active ? (recorded?.modelId ?? ctx.model?.id ?? null) : null;
@@ -223,7 +230,7 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
       if (!model) notify(ctx, "The saved model in " + label() + " is unavailable. Start the profile and /reload, or choose with /nv.");
       else if (ctx.model?.provider !== active || ctx.model?.id !== modelId) await selectModel(ctx, model);
     }
-    if (!saved) save();
+    if (!saved || launched) save();
     status(ctx);
   }
   pi.on("session_start", restore);

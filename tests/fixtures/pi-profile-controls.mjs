@@ -12,6 +12,7 @@ async (
     missing = [],
     workSlug = "work",
     initialModel = "shared",
+    parentSession,
   ) {
     const workProvider = "nonstopvibin-" + workSlug;
     const profiles = [
@@ -75,7 +76,10 @@ async (
       },
       isIdle: () => !busy,
       hasPendingMessages: () => pending,
-      sessionManager: { getBranch: () => branch },
+      sessionManager: {
+        getBranch: () => branch,
+        getHeader: () => ({ parentSession }),
+      },
       modelRegistry: {
         getAll: () =>
           [...providers.values()].flatMap((item) => item.getModels()),
@@ -414,6 +418,58 @@ async (
   await restored.emit("session_start");
   assert.equal(restored.model.provider, "nonstopvibin-work");
   assert.throws(() => restored.request("other"), /Switch profiles/);
+  // A forked subagent child inherits the parent's entries but launches with its own model.
+  const recordedId = work.branch.findLast(
+    (entry) => entry.type === "model_change",
+  ).modelId;
+  const launchedId = recordedId === "gpt-5.6-luna" ? "claude-opus-5" : "gpt-5.6-luna";
+  const forked = session(
+    work.branch,
+    "nonstopvibin-work",
+    [],
+    "work",
+    launchedId,
+    "parent.jsonl",
+  );
+  await forked.emit("session_start", freshStart);
+  assert.equal(
+    forked.model.id,
+    launchedId,
+    "a launch-time model outranks the inherited profile entry",
+  );
+  assert.deepEqual(
+    { ...forked.branch.at(-1).data },
+    { provider: "nonstopvibin-work", modelId: launchedId },
+    "the fork records its launch identity",
+  );
+  assert.equal(forked.request("nonstopvibin-work"), "synthetic-stream");
+  const resumedFork = session(
+    work.branch,
+    "nonstopvibin-work",
+    [],
+    "work",
+    recordedId,
+    "parent.jsonl",
+  );
+  await resumedFork.emit("session_start", freshStart);
+  assert.equal(
+    resumedFork.model.id,
+    work.branch.findLast((entry) => entry.type === "custom").data.modelId,
+    "a fork resumed on its recorded model keeps the saved identity",
+  );
+  const relaunched = session(
+    work.branch,
+    "nonstopvibin-work",
+    [],
+    "work",
+    launchedId,
+  );
+  await relaunched.emit("session_start", freshStart);
+  assert.equal(
+    relaunched.model.id,
+    work.branch.findLast((entry) => entry.type === "custom").data.modelId,
+    "outside a fork the conversation identity still outranks the launch model",
+  );
   const unavailable = session(work.branch, "other", ["nonstopvibin-work"]);
   await unavailable.emit("session_start");
   assert.equal((await unavailable.emit("input")).action, "handled");
