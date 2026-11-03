@@ -187,6 +187,127 @@
   white-space: nowrap;
 }
 
+.model-token-chart {
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.model-token-note,
+.model-token-empty {
+  margin: 0 0 12px;
+  color: var(--ink-3);
+  font-size: var(--text-caption);
+}
+
+.model-token-chart .activity-section-heading {
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.model-token-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--text-caption);
+}
+
+.model-token-table caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.model-token-table th:first-child {
+  width: 35%;
+}
+
+.model-token-table th {
+  text-align: left;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.model-token-table thead {
+  color: var(--ink-3);
+}
+
+.model-token-table th,
+.model-token-table td {
+  padding: 6px 0;
+}
+
+.model-token-table tbody th {
+  padding-right: 16px;
+}
+
+.model-token-value {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.model-token-value > code {
+  min-width: 9ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-token-target {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  border-left: 1px solid var(--line);
+}
+
+.model-token-bar {
+  height: 12px;
+  background: var(--fill);
+  border-radius: 0 4px 4px 0;
+}
+
+.model-token-target:hover .model-token-bar,
+.model-token-target:focus-visible .model-token-bar {
+  background: var(--ink-2);
+}
+
+.model-token-tooltip {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  z-index: var(--z-dropdown);
+  max-width: min(320px, 60vw);
+  padding: 8px 12px;
+  background: var(--bg-3);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+@media (forced-colors: active) {
+  .model-token-bar {
+    background: CanvasText;
+    forced-color-adjust: none;
+  }
+}
+
+@media print {
+  .model-token-bar {
+    background: repeating-linear-gradient(
+      45deg,
+      #777 0 2px,
+      transparent 2px 4px
+    );
+    print-color-adjust: exact;
+  }
+}
+
 .account-activity-table th:first-child,
 .account-activity-table td:first-child {
   width: 38%;
