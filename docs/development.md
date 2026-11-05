@@ -21,7 +21,18 @@ bun run start       # Launch the built Electron app
 bun run test:desktop # Isolated Electron lifecycle check (requires a desktop)
 bun run dist:mac     # DMG, on macOS
 bun run dist:linux   # AppImage and deb, on Linux
+bun run dist:server  # Headless Linux server archives (x64 and arm64), any host
 ```
+
+`dist:server` runs `bun run build`, then `scripts/build-server.mjs`, which
+cross-compiles `src/server/cli.ts` with `bun build --compile` for each Linux
+target (pass `x64` or `arm64` to build one), stages the pinned Linux core in a
+temporary directory (your own `.vendor/core` is untouched), and writes
+`release/nonstopvibin-server-<version>-linux-<arch>.tar.gz`. It checks the ELF
+architecture of both binaries, the core's version, platform and hashes against
+`scripts/core-release.json`, and the exact archive contents, then prints each
+archive's SHA-256. Run the CLI from source with `bun src/server/cli.ts`; it then
+uses `.vendor/core` and `dist/client`. See [Run on a Linux server](server.md).
 
 The desktop check uses temporary data and a synthetic profile. It verifies window recreation, draft preservation, IPC bootstrap, continued proxy access with both windows closed, and renderer process exit. For memory comparisons, use a packaged build with the same enabled profiles and distinguish idle, UI-open, and request-load measurements; summed RSS includes shared pages. No universal RAM target is enforced.
 

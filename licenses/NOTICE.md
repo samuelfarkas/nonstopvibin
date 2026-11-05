@@ -2,6 +2,7 @@
 
 - CLIProxyAPI 8.0.8 is distributed as an unmodified binary. Its MIT license is included in CLIProxyAPI.txt. Provider SVG assets were sourced from its MIT-licensed repository; service names and logos remain their owners' trademarks.
 - The OpenCode symbol and interface icons use Lucide shapes. Lucide is ISC licensed: https://github.com/lucide-icons/lucide/blob/main/LICENSE.
+- The headless server archive's binary embeds the Bun 1.4.2 runtime (MIT), which statically links JavaScriptCore/WebKit (LGPL-2) and other libraries; that archive includes Bun's license file as `licenses/Bun.txt`. The application source is this repository; rebuild the binary, for example against a relinked Bun, with `bun run dist:server`.
 - Electron includes Chromium, Node.js, and their third-party notices in the packaged framework. See https://github.com/electron/electron/blob/main/LICENSE.
 - React, Radix UI, YAML, Zod, Lucide, and their bundled dependencies retain their licenses. Full dependency license texts are included in `dist/licenses/THIRD-PARTY.txt` inside the application archive.
 - react-remove-scroll-bar 2.3.8 omits its license file from the npm package. The bundled MIT text is preserved from [upstream commit 7301c160](https://github.com/theKashey/react-remove-scroll-bar/blob/7301c160fda44cb8cf2b9fdfde61efad35736196/LICENSE).

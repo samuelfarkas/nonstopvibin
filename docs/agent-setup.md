@@ -1,5 +1,13 @@
 # Native agent setup
 
+This setup is for **trusted co-located agents running as the NonstopVibin user**.
+It does not configure remote/VM workers. For a protected upstream, keep the
+service under a separate protected user and have the consuming system generate
+guest-native settings and scoped credentials for its private gate; see the
+[server contract](server.md#protected-upstream). Never copy the host Unix-socket
+helper, profile key or loopback settings into guests. The co-located workflow
+below remains supported.
+
 Start a profile, open **Connect agents**, choose **Claude Code**, **Codex**, or
 **pi**, then click **Connect**. Keep the app and profile running while you work. The profile endpoint and key are under
 **Advanced connection details**; normal setup never copies a key or asks you to run a launcher.

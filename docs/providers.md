@@ -4,13 +4,23 @@
 | ----------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | ChatGPT / Codex               | CLIProxyAPI OAuth; existing auth JSON                                  | Actual duration labels, primary/secondary/code-review windows | Core sign-in session lifecycle tested; live account inference and quota not yet tested |
 | Claude subscriptions          | CLIProxyAPI OAuth; existing auth JSON                                  | 5-hour, weekly and additional model windows                   | Parser and session plumbing tested; live account inference and quota not yet tested    |
-| Anthropic API                 | API key                                                                | Subscription quota does not apply                             | Messages protocol translated through the real core to a local fixture                  |
+| Anthropic API                 | API key                                                                | Subscription quota does not apply                             | Native Messages and cross-protocol paths through the real core to local fixtures       |
 | OpenCode Go                   | Subscription API key                                                   | Rolling, weekly, monthly                                      | Discovery and wire-protocol handling implemented; live Go key still needed             |
 | Kimi Code                     | OAuth/device sign-in/import                                            | Usage and rate-limit windows                                  | Not shown in the app yet                                                               |
 | Antigravity                   | OAuth/import                                                           | Per-model quota buckets                                       | Not shown in the app yet                                                               |
 | Grok Build                    | OAuth/device sign-in/import                                            | Weekly credits and monthly billing windows                    | Not shown in the app yet                                                               |
 | OpenAI / compatible providers | API key, URL, protocol, optional model prefix                          | Unavailable unless a specific adapter exists                  | Local integration fixtures exercise actual credential selection and streaming          |
 | Gemini                        | Existing CLIProxyAPI auth-file import, or compatible API configuration | No dedicated adapter                                          | Import support only; no dedicated sign-in button or live test                          |
+
+Native Anthropic fixture checks also cover ordered tool SSE/replay, PNG bytes,
+version/beta forwarding, provider error normalization, profile exhaustion and
+idle transport cleanup after graceful FIN, TCP reset, Fetch abort and
+ClientRequest destroy. They are not live-provider or native Claude-process
+acceptance, nor proof of remote computation/billing cancellation. Custom-origin
+`count_tokens` is a local text estimate that omits image tokens; pinned native
+clean EOF can truncate without an error terminal. See the
+[protected-upstream limitations](server.md#native-anthropic-transport-and-limitations)
+before admitting unattended consumers.
 
 For custom routes, cross-protocol reasoning/thinking metadata comes from CLIProxyAPI's model catalog. A configured model ID absent from the core's remote catalog can therefore lose those controls during translation, even while routing remains configured.
 
