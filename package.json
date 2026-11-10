@@ -65,7 +65,7 @@
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "5.2.0",
     "electron": "44.9.1",
-    "electron-builder": "26.15.3",
+    "electron-builder": "26.18.0",
     "esbuild": "0.28.2",
     "oxfmt": "0.67.0",
     "oxlint": "1.81.0",
