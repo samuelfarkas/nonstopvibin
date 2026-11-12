@@ -80,10 +80,10 @@ distributed together. To upgrade:
 
 Packaging rejects mismatched versions, platforms, architectures and binary hashes.
 
-The 8.0.8 upgrade keeps the legacy YAML configuration and `/v0/management`
+The 8.0.67 upgrade keeps the legacy YAML configuration and `/v0/management`
 routes, which upstream retains alongside its new v8 configuration and OAuth APIs.
 Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain disabled.
-The core now supplies its Claude Code 2.1.280 fingerprint without a wrapper override.
+The core now supplies its Claude Code 2.1.321 fingerprint without a wrapper override.
 App startup upgrades existing owned Pi connections; reload Pi to remove older
 tool-change fallbacks. Core installation replaces the binary for the next process
 start; restart NonstopVibin to replace any running profile cores.

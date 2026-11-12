@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
 import { record } from "../src/server/json.ts";
 import { CorePool } from "../src/server/core.ts";
@@ -247,6 +248,38 @@ test(
               "fingerprint-profile": "claude-code-cli",
             })),
           );
+          // Management saves apply to the running executor asynchronously; probe
+          // until the credential's fingerprint reaches upstream, discarding probes.
+          const deadline = Date.now() + 10_000;
+          for (;;) {
+            const probe = await fetch(`${app.endpoint(profile.id)}/messages`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: "claude-opus-5-5",
+                max_tokens: 8,
+                messages: [{ role: "user", content: "fingerprint probe" }],
+              }),
+              signal: AbortSignal.timeout(10000),
+            });
+            assert.equal(probe.status, 200, await probe.clone().text());
+            await probe.text();
+            if (
+              String(requests.pop()?.headers["user-agent"]).startsWith(
+                "claude-cli/",
+              )
+            )
+              break;
+            assert.ok(
+              Date.now() < deadline,
+              "the fingerprint profile was not applied",
+            );
+            await sleep(200);
+          }
         }
         for (const inline of [false, true])
           for (const stream of [false, true]) {

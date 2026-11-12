@@ -182,10 +182,10 @@ discovery with request-time credential rotation. They used isolated temporary co
 and no real accounts. These checks do not certify every tool, subagent, translated
 model, or Linux desktop behavior.
 
-Repository tests also exercise both directions through CLIProxyAPI 8.0.8 with synthetic Responses/Anthropic providers: fragmented tool arguments, two calls, tool-result replay, reasoning effort and transport-shape-valid synthetic signatures, and foreign-profile rejection. These are protocol checks, not proof of provider-issued signature validity or every model.
+Repository tests also exercise both directions through CLIProxyAPI 8.0.67 with synthetic Responses/Anthropic providers: fragmented tool arguments, two calls, tool-result replay, reasoning effort and transport-shape-valid synthetic signatures, and foreign-profile rejection. These are protocol checks, not proof of provider-issued signature validity or every model.
 
 Pi's builtin model capabilities now control native mid-conversation tool changes.
-The 8.0.8 core forwards the tool-change beta and remaps addition/removal references
+The 8.0.67 core forwards the tool-change beta and remaps addition/removal references
 with their declarations. Tests cover reference blocks and inline definitions over
 streaming and non-streaming gateway requests, including the OAuth wire profile
 using synthetic API credentials. Pi 0.99.2 uses `tool_reference` with
