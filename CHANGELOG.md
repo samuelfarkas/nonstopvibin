@@ -4,8 +4,11 @@
 
 ### Fixed
 
-- Upgraded bundled CLIProxyAPI from 7.2.151 to 8.0.8 with reviewed archive and binary
-  hashes for all four targets. Pi native tool changes now retain their beta headers
+- Upgraded bundled CLIProxyAPI from 7.2.151 to 8.0.67 with reviewed archive and binary
+  hashes for all four targets. The core now presents the Claude Code 2.1.321 client
+  baseline, so Claude subscriptions can use Claude Fable 5.2 and Haiku 5.5; 8.0.8
+  requests for these models were rejected with "version 2.1.290 or newer is required".
+  Pi native tool changes now retain their beta headers
   and matching tool aliases; use `/reload` after app startup updates Pi extensions.
 - Errored profiles can now be restarted directly from the sidebar.
 - API account and credential updates now roll back together when a write fails.
