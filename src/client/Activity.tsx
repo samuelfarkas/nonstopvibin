@@ -1,5 +1,7 @@
 import "./activity.css";
 import { activityBuckets } from "./activity-buckets.ts";
+import { activityModels } from "./activity-models.ts";
+import { ModelTokenChart } from "./ModelTokenChart.tsx";
 
 import { useEffect, useState } from "react";
 import { Download, Search } from "lucide-react";
@@ -244,37 +246,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
     (a, b) => b.requests - a.requests,
   );
 
-  const modelGroups = new Map<
-    string,
-    {
-      requests: number;
-      tokens: number;
-      failed: number;
-      latencies: number[];
-      usd: number;
-      priced: number;
-    }
-  >();
-  for (const record of records) {
-    const group = modelGroups.get(record.model) ?? {
-      requests: 0,
-      tokens: 0,
-      failed: 0,
-      latencies: [],
-      usd: 0,
-      priced: 0,
-    };
-    group.requests += 1;
-    group.tokens += record.totalTokens;
-    group.usd += costOf(record) ?? 0;
-    group.priced += Number(costOf(record) !== null);
-    if (record.failed) group.failed += 1;
-    group.latencies.push(record.latencyMs);
-    modelGroups.set(record.model, group);
-  }
-  const byModel = [...modelGroups].sort(
-    (a, b) => b[1].requests - a[1].requests,
-  );
+  const byModel = activityModels(records, pricing?.usd);
 
   function exportCSV() {
     const keys: Array<keyof UsageRecord> = [
@@ -471,6 +443,8 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
               </div>
             </section>
           )}
+
+          <ModelTokenChart models={byModel} requests={records.length} />
 
           <details
             className="activity-disclosure token-mix"
