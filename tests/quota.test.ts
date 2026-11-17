@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CorePool } from "../src/server/core.ts";
+import { Cores } from "../src/server/cores.ts";
 import { parseQuota } from "../src/server/quota.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
@@ -209,7 +209,7 @@ test("Antigravity fractions and Grok weekly/monthly limits preserve independent 
 test("OpenCode Go quota errors do not persist invalid response excerpts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-quota-"));
   const store = new Store(directory, fileKeyCodec(directory));
-  const core = new CorePool(store, "unused");
+  const { quotas } = new Cores(store, "unused");
   const profile = store.createProfile("Fixture");
   const accountId = "opencode-go-fixture";
   store.saveApiAccount(
@@ -229,7 +229,7 @@ test("OpenCode Go quota errors do not persist invalid response excerpts", async 
   globalThis.fetch = async () =>
     new Response('{"secret":"SENTINEL_9f3a"', { status: 200 });
   try {
-    const quota = await core.refreshQuota(profile.id, accountId);
+    const quota = await quotas.refresh(profile.id, accountId);
     assert.equal(quota.status, "error");
     assert.equal(quota.error, "Quota response was not valid JSON.");
     assert.equal(quota.error.includes("SENTINEL_9f3a"), false);

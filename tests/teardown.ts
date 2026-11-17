@@ -30,12 +30,7 @@ export async function settle(
 }
 
 function pending(core: CorePool): string {
-  const alive = [...core.runtimes].filter(
-    ([, { child }]) =>
-      child.pid !== undefined &&
-      child.exitCode === null &&
-      child.signalCode === null,
-  );
+  const alive = [...core.runtimes].filter(([id]) => core.alive(id));
   if (!alive.length) return "every core has exited, so not on a core.";
   return alive
     .map(([id, runtime]) => {

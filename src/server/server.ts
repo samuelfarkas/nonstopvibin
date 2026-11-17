@@ -35,7 +35,7 @@ import { Store, sameSecret, type ApiAccount } from "./store.ts";
 import { ownerOnlyDirectory } from "./data-directory.ts";
 import { offeredModels } from "./agents.ts";
 import { fileKeyCodec } from "./vault.ts";
-import { CorePool } from "./core.ts";
+import { Cores, type CoresOptions } from "./cores.ts";
 import { Gateway } from "./gateway.ts";
 import { AppError, errorMessage } from "./errors.ts";
 import { userAgent, version } from "./config.ts";
@@ -218,11 +218,13 @@ interface ServerOptions {
   // Tailscale Serve). The agent gateway stays loopback-only.
   allowHosts?: string[];
   requirePinnedCore?: boolean;
+  /** How the profile cores are reached and timed; tests answer and shorten them. */
+  cores?: CoresOptions;
 }
 export class Application {
   readonly options: ServerOptions;
   readonly store: Store;
-  readonly core: CorePool;
+  readonly cores: Cores;
   readonly gateway: Gateway;
   readonly server: http.Server;
   readonly token = randomBytes(32).toString("base64url");
@@ -238,16 +240,17 @@ export class Application {
   constructor(options: ServerOptions, store: Store) {
     this.options = options;
     this.store = store;
-    this.core = new CorePool(store, options.binary);
-    this.gateway = new Gateway(store, this.core);
+    // The scheduler drains slowly while the gateway still has requests open.
+    this.cores = new Cores(store, options.binary, {
+      ...options.cores,
+      inFlight: (profileId) => this.gateway.active.get(profileId) ?? 0,
+    });
+    this.gateway = new Gateway(store, this.cores.pool, this.cores.usage);
     this.agentSetup = new AgentSetup(
       options.directory,
       (profileId) => {
         this.store.profile(profileId);
-        if (
-          this.closing ||
-          this.core.runtimes.get(profileId)?.state !== "running"
-        )
+        if (this.closing || !this.cores.pool.running(profileId))
           throw new AppError(
             "Start this profile before connecting an agent.",
             409,
@@ -286,7 +289,7 @@ export class Application {
             : error instanceof AppError
               ? error.message
               : "The operation failed. Check the profile status and try again.";
-        if (status === 500) this.core.report(errorMessage(error));
+        if (status === 500) this.cores.pool.report(errorMessage(error));
         // A departed client cannot receive the error; only the report above matters.
         if (res.destroyed) return;
         json<ApiError>(
@@ -332,18 +335,18 @@ export class Application {
         throw new Error("Gateway failed to bind.");
       app.port = address.port;
       if (existsSync(options.binary))
-        await app.core.verifyBinary(options.requirePinnedCore);
+        await app.cores.pool.verifyBinary(options.requirePinnedCore);
       signal?.throwIfAborted();
-      await app.core.restore(signal);
+      await app.cores.restore(signal);
       signal?.throwIfAborted();
       try {
         for (const failure of await app.agentSetup.restore(
           store.profiles(),
           app.port,
         ))
-          app.core.report(failure);
+          app.cores.pool.report(failure);
       } catch {
-        app.core.report(
+        app.cores.pool.report(
           "Agent connections are unavailable. Open Connect agents and reconnect the agent.",
         );
       }
@@ -370,12 +373,12 @@ export class Application {
   }
   state(): AppState {
     const profiles: ProfileState[] = this.store.profiles().map((profile) => {
-      const runtime = this.core.runtimes.get(profile.id);
+      const runtime = this.cores.pool.runtimes.get(profile.id);
       return {
         ...profile,
         runtime: runtime?.state ?? "stopped",
         error: runtime?.error,
-        accounts: this.core.accounts(profile.id),
+        accounts: this.cores.accounts.list(profile.id),
         endpoint: this.endpoint(profile.id),
       };
     });
@@ -386,7 +389,7 @@ export class Application {
       usageRetentionDays: this.store.usageRetentionDays(),
       version,
       desktop: Boolean(this.options.desktop),
-      errors: this.core.errors,
+      errors: this.cores.pool.errors,
     };
   }
   validHost(req: IncomingMessage): boolean {
@@ -559,14 +562,14 @@ export class Application {
         handle: async ({ param, body }) => {
           const id = param("profileId");
           this.store.saveProfile({ ...this.store.profile(id), ...body });
-          await this.core.configure(id);
+          await this.cores.pool.configure(id);
           return this.state();
         },
       },
       "POST /profiles/:profileId/start": {
         body: noBody,
         handle: async ({ param }) => {
-          await this.core.start(param("profileId"));
+          await this.cores.pool.start(param("profileId"));
           return this.state();
         },
       },
@@ -574,9 +577,10 @@ export class Application {
         body: noBody,
         handle: async ({ param }) => {
           const id = param("profileId");
-          await this.core.syncAccounts(id);
-          for (const account of this.core.accounts(id))
-            if (!account.disabled) await this.core.refreshQuota(id, account.id);
+          await this.cores.quotas.refreshAccounts(
+            id,
+            (account) => !account.disabled,
+          );
           return this.state();
         },
       },
@@ -590,7 +594,7 @@ export class Application {
         body: noBody,
         handle: async ({ param, query }) => {
           const id = param("profileId");
-          const models = await this.core.models(id);
+          const models = await this.cores.pool.models(id);
           return query.get("metadata") === "1"
             ? this.gateway.catalog.models(models, this.store.apiAccounts(id))
             : models;
@@ -635,7 +639,7 @@ export class Application {
         body: agentSetupSchema,
         handle: async ({ param, body }) => {
           const id = param("profileId");
-          const models = await this.core.models(id);
+          const models = await this.cores.pool.models(id);
           if (!models.length)
             throw new AppError("This profile has no available models.");
           const offered = await offeredModels(
@@ -703,7 +707,7 @@ export class Application {
           })
           .strict(),
         handle: ({ param, body }) =>
-          this.core.beginOAuth(
+          this.cores.signIn.begin(
             param("profileId"),
             body.provider,
             body.reconnectAccountId,
@@ -712,7 +716,7 @@ export class Application {
       "GET /profiles/:profileId/oauth": {
         body: noBody,
         handle: ({ param, query }) =>
-          this.core.oauthStatus(
+          this.cores.signIn.status(
             param("profileId"),
             z.string().min(1).parse(query.get("state")),
           ),
@@ -720,7 +724,7 @@ export class Application {
       "DELETE /profiles/:profileId/oauth": {
         body: noBody,
         handle: async ({ param, query }) => {
-          await this.core.cancelOAuth(
+          await this.cores.signIn.cancel(
             param("profileId"),
             z.string().min(1).parse(query.get("state")),
           );
@@ -730,26 +734,29 @@ export class Application {
       "POST /profiles/:profileId/oauth-confirm": {
         body: z.object({ state: z.string().min(1).max(500) }).strict(),
         handle: ({ param, body }) =>
-          this.core.confirmOAuth(param("profileId"), body.state),
+          this.cores.signIn.confirm(param("profileId"), body.state),
       },
       "GET /profiles/:profileId/oauth-session": {
         body: noBody,
         handle: ({ param }) =>
-          this.core.oauth?.profileId === param("profileId")
-            ? this.core.oauth
+          this.cores.signIn.session?.profileId === param("profileId")
+            ? this.cores.signIn.session
             : null,
       },
       "POST /profiles/:profileId/callback": {
         body: z.object({ url: z.string().url().max(10_000) }).strict(),
         handle: async ({ param, body }) => {
-          await this.core.oauthCallback(param("profileId"), body.url);
+          await this.cores.signIn.callback(param("profileId"), body.url);
           return { ok: true };
         },
       },
       "POST /profiles/:profileId/import": {
         body: z.object({ contents: z.record(z.string(), z.json()) }).strict(),
         handle: async ({ param, body }) => {
-          await this.core.importAuth(param("profileId"), body.contents);
+          await this.cores.credentials.import(
+            param("profileId"),
+            body.contents,
+          );
           return this.state();
         },
       },
@@ -758,7 +765,7 @@ export class Application {
           .object({ sourceId: z.string().regex(/^[a-f0-9]{64}$/) })
           .strict(),
         handle: async ({ param, body }) => {
-          await this.core.importAuth(
+          await this.cores.credentials.import(
             param("profileId"),
             await this.imports.contents(body.sourceId),
           );
@@ -779,7 +786,7 @@ export class Application {
           })
           .strict(),
         handle: async ({ param, body }) => {
-          await this.core.setAccount(
+          await this.cores.credentials.setAccount(
             param("profileId"),
             param("accountId"),
             body,
@@ -790,19 +797,22 @@ export class Application {
       "DELETE /profiles/:profileId/accounts/:accountId": {
         body: noBody,
         handle: async ({ param }) => {
-          await this.core.removeAccount(param("profileId"), param("accountId"));
+          await this.cores.credentials.removeAccount(
+            param("profileId"),
+            param("accountId"),
+          );
           return this.state();
         },
       },
       "GET /profiles/:profileId/accounts/:accountId/reset-credits": {
         body: noBody,
         handle: ({ param }) =>
-          this.core.resetCredits(param("profileId"), param("accountId")),
+          this.cores.resets.credits(param("profileId"), param("accountId")),
       },
       "POST /profiles/:profileId/accounts/:accountId/reset-credits": {
         body: z.object({ creditId: z.string().min(1).max(500) }).strict(),
         handle: ({ param, body }) =>
-          this.core.consumeResetCredit(
+          this.cores.resets.consume(
             param("profileId"),
             param("accountId"),
             body.creditId,
@@ -897,9 +907,9 @@ export class Application {
               );
           }
           this.store.saveApiAccount(id, account, input.apiKey);
-          await this.core.start(id);
-          await this.core.configure(id);
-          await this.core.refreshQuota(id, account.id);
+          await this.cores.pool.start(id);
+          await this.cores.pool.configure(id);
+          await this.cores.quotas.refresh(id, account.id);
           return this.state();
         },
       },
@@ -916,7 +926,7 @@ export class Application {
       await this.agentSetup.close();
     } finally {
       try {
-        await this.core.shutdown();
+        await this.cores.shutdown();
       } finally {
         try {
           await this.usagePrices.close();

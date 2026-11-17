@@ -4,7 +4,9 @@ import http from "node:http";
 import { chmod, copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CorePool } from "../src/server/core.ts";
+import { CorePool, coreTiming, httpManagement } from "../src/server/core.ts";
+import { Cores } from "../src/server/cores.ts";
+import { usageTiming } from "../src/server/usage.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { record } from "../src/server/json.ts";
@@ -48,9 +50,9 @@ test(
       `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => {}, 1000);\n`,
     );
     await chmod(binary, 0o700);
-    const core = new CorePool(store, binary);
-    core.timing.ready = 1000;
-    core.timing.kill = 300;
+    const core = new CorePool(store, binary, {
+      timing: { ...coreTiming, ready: 1000, kill: 300 },
+    });
     const profile = store.createProfile("Wedged fixture");
     try {
       const started = Date.now();
@@ -73,22 +75,23 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-usage-backoff-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    core.timing.coalesce = 20;
-    core.timing.usageBackoff = 160;
-    const profile = store.createProfile("Backoff fixture");
     const attempts: number[] = [];
     let failing = true;
-    core.collectUsage = async () => {
-      attempts.push(Date.now());
-      if (failing) throw new Error("usage queue unavailable");
-      return 0;
-    };
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      usageTiming: { ...usageTiming, coalesce: 20, usageBackoff: 160 },
+      management: async (request) => {
+        if (!request.path.startsWith("/usage-queue"))
+          return httpManagement(request);
+        attempts.push(Date.now());
+        if (failing) throw new Error("usage queue unavailable");
+        return [];
+      },
+    });
+    const profile = store.createProfile("Backoff fixture");
     try {
-      await core.start(profile.id);
-      const runtime = core.runtimes.get(profile.id)!;
-      core.beginPolling();
-      core.markUsageActivity(profile.id);
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      cores.usage.markActivity(profile.id);
       await new Promise((resolve) => setTimeout(resolve, 900));
       const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
       // Unbounded 20 ms retries would make about 45 attempts here.
@@ -100,11 +103,15 @@ test(
         `backoff is bounded: ${gaps}`,
       );
       failing = false;
-      core.markUsageActivity(profile.id);
+      cores.usage.markActivity(profile.id);
       await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(runtime.usageFailures, 0, "a success resets the backoff");
+      assert.equal(
+        cores.usage.cadence(profile.id)?.failures,
+        0,
+        "a success resets the backoff",
+      );
     } finally {
-      await core.shutdown();
+      await cores.shutdown();
       store.close();
       await rm(directory, { recursive: true, force: true });
     }
@@ -117,62 +124,60 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-idle-drain-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    core.timing.coalesce = 20;
-    const profile = store.createProfile("Idle fixture");
-    const collectUsage = core.collectUsage;
     let drains = 0;
     let drained = () => {};
-    core.collectUsage = async (id) => {
-      const count = await collectUsage.call(core, id);
-      drains++;
-      drained();
-      return count;
-    };
+    let inFlight = 0;
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      // Activity keeps the queue draining for 100 ms instead of 10 s.
+      usageTiming: { ...usageTiming, coalesce: 20, activity: 100 },
+      inFlight: () => inFlight,
+      management: async (request) => {
+        const result = await httpManagement(request);
+        if (request.path.startsWith("/usage-queue")) {
+          drains++;
+          drained();
+        }
+        return result;
+      },
+    });
+    const profile = store.createProfile("Idle fixture");
     // Resolves once the scheduler has acted on a drain that began after the window closed.
-    const trailingDrain = (runtime: { usageActiveUntil: number }) =>
+    const trailingDrain = (cadence: { activeUntil: number }) =>
       new Promise<void>((resolve) => {
         const opened = Date.now();
         drained = () => {
           if (
-            opened >= runtime.usageActiveUntil ||
-            Date.now() >= runtime.usageActiveUntil
+            opened >= cadence.activeUntil ||
+            Date.now() >= cadence.activeUntil
           )
             setImmediate(resolve);
         };
       });
     try {
-      await core.start(profile.id);
-      const runtime = core.runtimes.get(profile.id)!;
-      core.beginPolling();
-      core.markUsageActivity(profile.id);
-      runtime.usageActiveUntil = Date.now() + 100;
-      await trailingDrain(runtime);
-      assert.equal(
-        runtime.nextUsageAt,
-        Infinity,
-        "idle after the trailing drain",
-      );
+      await cores.pool.start(profile.id);
+      const cadence = cores.usage.cadence(profile.id)!;
+      cores.usage.begin();
+      cores.usage.markActivity(profile.id);
+      await trailingDrain(cadence);
+      assert.equal(cadence.nextAt, Infinity, "idle after the trailing drain");
       const settled = drains;
       await new Promise((resolve) => setTimeout(resolve, 300));
       assert.equal(drains, settled, "no usage wakeups while idle");
 
-      core.usageInFlight = () => 1;
-      core.markUsageActivity(profile.id);
-      runtime.usageActiveUntil = Date.now() + 100;
-      await trailingDrain(runtime);
+      inFlight = 1;
+      cores.usage.markActivity(profile.id);
+      await trailingDrain(cadence);
       assert.ok(
-        Number.isFinite(runtime.nextUsageAt) &&
-          runtime.nextUsageAt > Date.now(),
+        Number.isFinite(cadence.nextAt) && cadence.nextAt > Date.now(),
         "an open stream or WebSocket keeps its periodic drain",
       );
-      core.usageInFlight = () => 0;
+      inFlight = 0;
 
       const beforeStop = drains;
-      await core.stop(profile.id);
+      await cores.pool.stop(profile.id);
       assert.equal(drains, beforeStop + 1, "stop still drains the queue");
     } finally {
-      await core.shutdown();
+      await cores.shutdown();
       store.close();
       await rm(directory, { recursive: true, force: true });
     }
@@ -207,25 +212,26 @@ test(
 async function runningPool(prefix: string, count: number) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   const store = new Store(directory, fileKeyCodec(directory));
-  const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
   const drained = new Set<string>();
-  const collectUsage = core.collectUsage.bind(core);
-  core.collectUsage = (profileId) => {
-    drained.add(profileId);
-    return collectUsage(profileId);
-  };
+  const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    management: (request) => {
+      if (request.path.startsWith("/usage-queue"))
+        drained.add(request.profileId);
+      return httpManagement(request);
+    },
+  });
   const profiles = [];
   for (let i = 0; i < count; i++) {
     const profile = store.createProfile(`Shutdown ${i}`);
-    await core.start(profile.id);
+    await cores.pool.start(profile.id);
     profiles.push(profile);
   }
   const close = async () => {
-    await core.shutdown();
+    await cores.shutdown();
     store.close();
     await rm(directory, { recursive: true, force: true });
   };
-  return { core, profiles, drained, close };
+  return { cores, profiles, drained, close };
 }
 const exited = (child: { exitCode: number | null; signalCode: unknown }) =>
   child.exitCode !== null || child.signalCode !== null;
@@ -240,7 +246,7 @@ test(
       const signalled: number[] = [];
       const exits: number[] = [];
       for (const profile of pool.profiles) {
-        const child = pool.core.runtimes.get(profile.id)!.child;
+        const child = pool.cores.pool.runtimes.get(profile.id)!.child;
         const kill = child.kill.bind(child);
         // As on a slow runner: each core exits a second after it is told to.
         child.kill = (signal) => {
@@ -251,7 +257,7 @@ test(
         child.once("exit", () => exits.push(Date.now()));
       }
       const started = Date.now();
-      await pool.core.shutdown();
+      await pool.cores.shutdown();
       const elapsed = Date.now() - started;
       assert.ok(
         Math.max(...signalled) < Math.min(...exits),
@@ -263,7 +269,7 @@ test(
       );
       assert.equal(pool.drained.size, 3, "every profile's usage was drained");
       for (const profile of pool.profiles) {
-        const runtime = pool.core.runtimes.get(profile.id)!;
+        const runtime = pool.cores.pool.runtimes.get(profile.id)!;
         assert.equal(runtime.state, "stopped");
         assert.ok(exited(runtime.child));
       }
@@ -281,7 +287,7 @@ test(
     for (const failing of [[0], [0, 1]]) {
       const pool = await runningPool("nv-shutdown-failure-", 3);
       const broken = failing.map(
-        (i) => pool.core.runtimes.get(pool.profiles[i]!.id)!.child,
+        (i) => pool.cores.pool.runtimes.get(pool.profiles[i]!.id)!.child,
       );
       try {
         broken.forEach((child, i) => {
@@ -289,7 +295,7 @@ test(
             throw new Error(`synthetic stop failure ${i}`);
           };
         });
-        await assert.rejects(pool.core.shutdown(), (error: Error) => {
+        await assert.rejects(pool.cores.shutdown(), (error: Error) => {
           const errors =
             error instanceof AggregateError ? error.errors : [error];
           assert.equal(error instanceof AggregateError, failing.length > 1);
@@ -303,7 +309,7 @@ test(
         });
         assert.equal(pool.drained.size, 3, "every profile's usage was drained");
         for (const profile of pool.profiles.slice(failing.length)) {
-          const runtime = pool.core.runtimes.get(profile.id)!;
+          const runtime = pool.cores.pool.runtimes.get(profile.id)!;
           assert.equal(runtime.state, "stopped");
           assert.ok(exited(runtime.child));
         }
@@ -323,8 +329,6 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-stop-race-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    const profile = store.createProfile("Shutdown fixture");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -333,6 +337,18 @@ test(
     const draining = new Promise<void>((resolve) => {
       entered = resolve;
     });
+    let gated = false;
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      management: async (request) => {
+        if (!gated || !request.path.startsWith("/usage-queue"))
+          return httpManagement(request);
+        entered();
+        await gate;
+        return [];
+      },
+    });
+    const core = cores.pool;
+    const profile = store.createProfile("Shutdown fixture");
     try {
       await Promise.all([core.start(profile.id), core.stop(profile.id)]);
       assert.equal(
@@ -341,15 +357,11 @@ test(
         "an immediate stop must observe the new startup",
       );
       await core.start(profile.id);
-      core.collectUsage = async () => {
-        entered();
-        await gate;
-        return 0;
-      };
+      gated = true;
       const stopping = core.stop(profile.id);
       await draining;
       const starting = assert.rejects(core.start(profile.id), /shutting down/);
-      const shutdown = core.shutdown();
+      const shutdown = cores.shutdown();
       release();
       await Promise.all([stopping, starting, shutdown]);
       assert.equal(core.starting.size, 0);
@@ -361,7 +373,7 @@ test(
       await assert.rejects(core.start(profile.id), /shutting down/);
     } finally {
       release();
-      await core.shutdown();
+      await cores.shutdown();
       store.close();
       await rm(directory, { recursive: true, force: true });
     }
@@ -374,11 +386,21 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-oauth-race-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    // Once set, this profile's management calls reach the fixture instead of its core.
+    let fixturePort: number | undefined;
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      management: (request) =>
+        httpManagement(
+          fixturePort === undefined
+            ? request
+            : { ...request, port: fixturePort },
+        ),
+    });
+    const { pool: core, signIn } = cores;
     const profile = store.createProfile("OAuth fixture");
     // Port 0 lets the callback server pick a free port itself; reserving one first races.
     const callbackPort = () => {
-      const address = core["callbackServer"]?.address();
+      const address = signIn.callbackServer?.address();
       assert.ok(address instanceof Object);
       return address.port;
     };
@@ -415,20 +437,15 @@ test(
       await core.start(profile.id);
       const managementAddress = fixture.address();
       assert.ok(managementAddress instanceof Object);
-      core.runtimes.get(profile.id)!.port = managementAddress.port;
-      await core.beginOAuth(profile.id, "codex");
+      fixturePort = managementAddress.port;
+      await signIn.begin(profile.id, "codex");
       const port = callbackPort();
-      const cancel = core.cancelOAuth(profile.id, "synthetic-state");
+      const cancel = signIn.cancel(profile.id, "synthetic-state");
       await cancelling;
-      let received!: () => void;
-      const callbackReceived = new Promise<void>((resolve) => {
-        received = resolve;
-      });
-      const callback = core.oauthCallback.bind(core);
-      core.oauthCallback = (...args) => {
-        received();
-        return callback(...args);
-      };
+      // Its own handler runs first and queues the callback behind the cancellation.
+      const callbackReceived = new Promise<void>((resolve) =>
+        signIn.callbackServer?.once("request", () => resolve()),
+      );
       request = http.get(
         `http://127.0.0.1:${port}/callback?state=synthetic-state`,
         (res) => res.resume(),
@@ -437,19 +454,85 @@ test(
       await callbackReceived;
       release();
       await cancel;
-      const next = await core.beginOAuth(profile.id, "codex");
+      const next = await signIn.begin(profile.id, "codex");
       const successful = await fetch(
         `http://127.0.0.1:${callbackPort()}/callback?state=${next.state}`,
       );
       assert.equal(successful.status, 200);
       assert.match(await successful.text(), /Sign-in received/);
-      await core.cancelOAuth(profile.id, next.state);
+      await signIn.cancel(profile.id, next.state);
     } finally {
       release();
       request?.destroy();
-      await core.shutdown();
+      await cores.shutdown();
       fixture.close();
       fixture.closeAllConnections();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "shutdown lets a queued credential change finish before it stops the core",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-shutdown-order-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"));
+    const profile = store.createProfile("Order fixture");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const changing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    try {
+      await cores.pool.start(profile.id);
+      const change = cores.credentials.queue(async () => {
+        entered();
+        await gate;
+        return cores.pool.runtimes.get(profile.id)?.stopping;
+      });
+      await changing;
+      const shutdown = cores.shutdown();
+      await assert.rejects(cores.pool.start(profile.id), /shutting down/);
+      // Time enough for a shutdown that did not wait to begin stopping the core.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      release();
+      assert.equal(await change, false, "no stop began during the change");
+      await shutdown;
+      assert.equal(cores.pool.alive(profile.id), false);
+    } finally {
+      release();
+      await cores.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a core held stopped for a credential swap cannot start until the swap ends, then restarts",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-swap-order-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const pool = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    const profile = store.createProfile("Swap fixture");
+    try {
+      await pool.start(profile.id);
+      const before = pool.runtimes.get(profile.id)!.child;
+      await pool.whileStopped(profile.id, async () => {
+        assert.equal(pool.alive(profile.id), false, "stopped before the swap");
+        await assert.rejects(pool.start(profile.id), /reconnecting/);
+      });
+      assert.ok(pool.running(profile.id), "running again after the swap");
+      assert.notEqual(pool.runtimes.get(profile.id)!.child, before);
+    } finally {
+      await pool.shutdown();
       store.close();
       await rm(directory, { recursive: true, force: true });
     }

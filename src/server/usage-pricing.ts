@@ -3,7 +3,6 @@ import type { Store } from "./store.ts";
 import { z } from "zod";
 import type {
   CatalogModel,
-  Json,
   PricingTokens,
   UsagePricing,
   UsageRecord,
@@ -13,45 +12,6 @@ import type {
 import type { ModelCatalog } from "./model-catalog.ts";
 import type { UsageHistory } from "../shared/api.ts";
 import { usagePageSize } from "../shared/vocabulary.ts";
-
-const counter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const breakdown = z.object({
-  schema_version: z.literal(2),
-  quality: z.literal("complete"),
-  total_tokens: counter,
-  unclassified_tokens: z.literal(0),
-  input: z.object({
-    total_tokens: counter,
-    uncached_tokens: counter,
-    cache_read_tokens: counter,
-    cache_write_tokens: counter,
-  }),
-  output: z.object({
-    total_tokens: counter,
-    non_reasoning_tokens: counter,
-    reasoning_tokens: counter,
-  }),
-});
-
-export function pricingTokens(value: Json | undefined): PricingTokens | null {
-  const parsed = breakdown.safeParse(value);
-  if (!parsed.success) return null;
-  const { input: i, output: o, total_tokens: total } = parsed.data;
-  if (
-    i.total_tokens !==
-      i.uncached_tokens + i.cache_read_tokens + i.cache_write_tokens ||
-    o.total_tokens !== o.non_reasoning_tokens + o.reasoning_tokens ||
-    total !== i.total_tokens + o.total_tokens
-  )
-    return null;
-  return {
-    input: i.uncached_tokens,
-    cached: i.cache_read_tokens,
-    cacheWrite: i.cache_write_tokens,
-    output: o.non_reasoning_tokens,
-    reasoning: o.reasoning_tokens,
-  };
-}
 
 function legacyTokens(r: UsageRecord): PricingTokens | null {
   const t = {

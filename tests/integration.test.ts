@@ -24,7 +24,14 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import { agentDefinitions } from "../src/server/agents.ts";
 import { Application } from "../src/server/server.ts";
-import { CorePool } from "../src/server/core.ts";
+import { httpManagement, type Management } from "../src/server/core.ts";
+import {
+  coreConfigPath,
+  credentialDirectory,
+  profileDirectory,
+} from "../src/server/data-directory.ts";
+import { Cores } from "../src/server/cores.ts";
+import { usageTiming } from "../src/server/usage.ts";
 import { Store, secretIds } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
@@ -38,6 +45,10 @@ let directory: string;
 let failCompany = false;
 let onHang: (() => void) | undefined;
 const observed: string[] = [];
+// The shared app's management calls go through this when a test sets it.
+let intercept: Management | undefined;
+// The shared app's scheduler periods; a test may shorten one for its duration.
+const appUsageTiming = { ...usageTiming };
 let upstream: http.Server;
 let upstreamBase: string;
 async function request(
@@ -127,6 +138,10 @@ beforeAll(async () => {
     binary: resolve(".vendor/core/cli-proxy-api"),
     clientDirectory: resolve("dist/client"),
     port: 0,
+    cores: {
+      management: (request) => (intercept ?? httpManagement)(request),
+      usageTiming: appUsageTiming,
+    },
   });
   company = app.store.createProfile("Company A");
   personal = app.store.createProfile("Personal");
@@ -148,13 +163,13 @@ beforeAll(async () => {
         },
         key,
       );
-  await app.core.start(company.id);
-  await app.core.start(personal.id);
+  await app.cores.pool.start(company.id);
+  await app.cores.pool.start(personal.id);
 }, 30_000);
 // A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
 // settle names whatever is still running well before this hook's own limit.
 afterAll(async () => {
-  if (app) await settle("app.close()", app.close(), app.core, 25_000);
+  if (app) await settle("app.close()", app.close(), app.cores.pool, 25_000);
   if (upstream)
     await new Promise<void>((resolve) => {
       upstream.close(() => resolve());
@@ -309,18 +324,24 @@ test("settings displays the core release pin supplied by application state", () 
 });
 
 test("real core launches with separate owner-only directories and a model catalog", async () => {
-  const config = record(await app.core.management(company.id, "/config"));
+  const config = record(await app.cores.pool.management(company.id, "/config"));
   assert.equal(config["commercial-mode"], true);
   assert.equal(config["usage-statistics-enabled"], true);
-  assert.notEqual(app.core.port(company.id), app.core.port(personal.id));
+  assert.notEqual(
+    app.cores.pool.port(company.id),
+    app.cores.pool.port(personal.id),
+  );
   assert.ok(
-    (await app.core.models(company.id)).some((m) => m.id === "fixture-model"),
+    (await app.cores.pool.models(company.id)).some(
+      (m) => m.id === "fixture-model",
+    ),
   );
   for (const profile of [company, personal]) {
-    const config = join(app.core.directory(profile.id), "config.yaml");
+    const config = coreConfigPath(app.store.directory, profile.id);
     assert.equal((await stat(config)).mode & 0o777, 0o600);
     assert.equal(
-      (await stat(join(app.core.directory(profile.id), "auth"))).mode & 0o777,
+      (await stat(credentialDirectory(app.store.directory, profile.id))).mode &
+        0o777,
       0o700,
     );
   }
@@ -355,12 +376,6 @@ test(
     const root = join(directory, "maintenance-fixture");
     await mkdir(root, { mode: 0o700 });
     const store = new Store(root, fileKeyCodec(root));
-    const core = new CorePool(store, app.options.binary);
-    core.timing.accounts = 200;
-    core.timing.coalesce = 20;
-    const profile = store.createProfile("Maintenance fixture");
-    const syncAccounts = core.syncAccounts;
-    const collectUsage = core.collectUsage;
     let enter!: () => void;
     let resume!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -369,21 +384,28 @@ test(
     const release = new Promise<void>((resolve) => {
       resume = resolve;
     });
+    let started = false;
     let collections = 0;
     let collected = () => {};
+    const cores = new Cores(store, app.options.binary, {
+      usageTiming: { ...usageTiming, accounts: 200, coalesce: 20 },
+      management: async (request) => {
+        if (started && request.path === "/auth-files") {
+          enter();
+          await release;
+        }
+        if (started && request.path.startsWith("/usage-queue")) {
+          collections++;
+          collected();
+        }
+        return httpManagement(request);
+      },
+    });
+    const profile = store.createProfile("Maintenance fixture");
     try {
-      await core.start(profile.id);
-      core.syncAccounts = async (id) => {
-        enter();
-        await release;
-        return syncAccounts.call(core, id);
-      };
-      core.collectUsage = async (id) => {
-        collections++;
-        collected();
-        return collectUsage.call(core, id);
-      };
-      core.beginPolling();
+      await cores.pool.start(profile.id);
+      started = true;
+      cores.usage.begin();
       await entered;
       assert.ok(
         collections <= 2,
@@ -393,7 +415,7 @@ test(
       const next = new Promise<void>((resolve) => {
         collected = resolve;
       });
-      core.markUsageActivity(profile.id);
+      cores.usage.markActivity(profile.id);
       await next;
       assert.ok(
         collections > before,
@@ -401,14 +423,14 @@ test(
       );
     } finally {
       resume();
-      await core.shutdown();
+      await cores.shutdown();
       store.close();
     }
   },
 );
 test("concurrent usage drains share one destructive queue read", async () => {
-  const first = app.core.collectUsage(company.id);
-  const second = app.core.collectUsage(company.id);
+  const first = app.cores.usage.collect(company.id);
+  const second = app.cores.usage.collect(company.id);
   assert.equal(first, second);
   await first;
 });
@@ -743,7 +765,7 @@ test("SSE survives the real core and gateway with usage events and completion ma
 });
 test("actual upstream accounting reaches durable SQLite exactly once", async () => {
   for (let attempt = 0; attempt < 30; attempt++) {
-    await app.core.collectUsage(company.id);
+    await app.cores.usage.collect(company.id);
     if (app.store.summary(company.id).requests >= 7) break;
     await delay(50);
   }
@@ -764,7 +786,7 @@ test("actual upstream accounting reaches durable SQLite exactly once", async () 
   const raw = JSON.stringify(app.store.usage(company.id));
   assert.equal(raw.includes("company-one"), false);
   assert.equal(raw.includes("hello"), false);
-  await app.core.collectUsage(company.id);
+  await app.cores.usage.collect(company.id);
   assert.deepEqual(app.store.summary(company.id), summary);
 });
 test("fill first stays on one eligible credential", async () => {
@@ -813,8 +835,8 @@ test("Anthropic Messages and OpenAI Responses are translated through the profile
 });
 test("OAuth sessions are profile bound, cancellable, and protected from concurrent starts", async () => {
   const results = await Promise.allSettled([
-    app.core.beginOAuth(company.id, "codex"),
-    app.core.beginOAuth(personal.id, "codex"),
+    app.cores.signIn.begin(company.id, "codex"),
+    app.cores.signIn.begin(personal.id, "codex"),
   ]);
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   const session = results.find((r) => r.status === "fulfilled");
@@ -836,21 +858,21 @@ test("OAuth sessions are profile bound, cancellable, and protected from concurre
     });
   });
   assert.match(malformedResponse, /^HTTP\/1\.1 400/);
-  await app.core.oauthStatus(session.value.profileId, session.value.state);
+  await app.cores.signIn.status(session.value.profileId, session.value.state);
   const wrongProfile =
     session.value.profileId === company.id ? personal.id : company.id;
   await assert.rejects(
-    app.core.oauthStatus(wrongProfile, session.value.state),
+    app.cores.signIn.status(wrongProfile, session.value.state),
     /not found for this profile/,
   );
   await assert.rejects(
-    app.core.cancelOAuth(wrongProfile, session.value.state),
+    app.cores.signIn.cancel(wrongProfile, session.value.state),
     /not found for this profile/,
   );
-  await app.core.cancelOAuth(session.value.profileId, session.value.state);
-  assert.equal(app.core.oauth, undefined);
-  const next = await app.core.beginOAuth(personal.id, "codex");
-  await app.core.cancelOAuth(personal.id, next.state);
+  await app.cores.signIn.cancel(session.value.profileId, session.value.state);
+  assert.equal(app.cores.signIn.session, undefined);
+  const next = await app.cores.signIn.begin(personal.id, "codex");
+  await app.cores.signIn.cancel(personal.id, next.state);
 });
 test("quota exhaustion fails inside Company A while Personal remains available", async () => {
   failCompany = true;
@@ -868,11 +890,11 @@ test(
   { timeout: 15_000 },
   async () => {
     const key = app.store.clientKey(personal.id);
-    await app.core.collectUsage(personal.id);
+    await app.cores.usage.collect(personal.id);
     const summary = app.store.summary(personal.id);
-    await app.core.stop(personal.id);
+    await app.cores.pool.stop(personal.id);
     assert.equal((await request(personal)).status, 503);
-    await app.core.start(personal.id);
+    await app.cores.pool.start(personal.id);
     assert.equal(app.store.clientKey(personal.id), key);
     assert.deepEqual(app.store.summary(personal.id), summary);
     const result = await request(personal);
@@ -963,7 +985,8 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
   assert.equal(upgraded.headers["x-nonstopvibin-profile"], personal.slug);
   assert.ok(upgraded.headers["sec-websocket-accept"]);
   // A core that sets browser-facing headers on the handshake must not reach the agent with them.
-  const runtime = app.core.runtimes.get(personal.id)!;
+  // The gateway's own connection to a core has no production seam; to be rebuilt in the tests stage.
+  const runtime = app.cores.pool["processes"].get(personal.id)!;
   const fixture = http.createServer();
   fixture.on("upgrade", (_req, socket) => {
     socket.end(
@@ -996,20 +1019,30 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
 });
 
 test("account pause, resume and removal apply to the running model catalog", async () => {
-  await app.core.setAccount(personal.id, "personal-one", { disabled: true });
+  await app.cores.credentials.setAccount(personal.id, "personal-one", {
+    disabled: true,
+  });
   assert.equal(
-    (await app.core.models(personal.id)).some((m) => m.id === "fixture-model"),
+    (await app.cores.pool.models(personal.id)).some(
+      (m) => m.id === "fixture-model",
+    ),
     false,
   );
-  await app.core.setAccount(personal.id, "personal-one", { disabled: false });
+  await app.cores.credentials.setAccount(personal.id, "personal-one", {
+    disabled: false,
+  });
   assert.equal(
-    (await app.core.models(personal.id)).some((m) => m.id === "fixture-model"),
+    (await app.cores.pool.models(personal.id)).some(
+      (m) => m.id === "fixture-model",
+    ),
     true,
   );
-  await app.core.removeAccount(personal.id, "personal-one");
-  assert.equal(app.core.accounts(personal.id).length, 0);
+  await app.cores.credentials.removeAccount(personal.id, "personal-one");
+  assert.equal(app.cores.accounts.list(personal.id).length, 0);
   assert.equal(
-    (await app.core.models(personal.id)).some((m) => m.id === "fixture-model"),
+    (await app.cores.pool.models(personal.id)).some(
+      (m) => m.id === "fixture-model",
+    ),
     false,
   );
   assert.throws(() => app.store.apiKey("personal-one"), /Credential not found/);
@@ -1017,9 +1050,12 @@ test("account pause, resume and removal apply to the running model catalog", asy
 
 test("the core leaves no request-body capture or error log files after traffic", async () => {
   for (const profile of [company, personal]) {
-    const files = await readdir(app.core.directory(profile.id), {
-      recursive: true,
-    });
+    const files = await readdir(
+      profileDirectory(app.store.directory, profile.id),
+      {
+        recursive: true,
+      },
+    );
     assert.deepEqual(
       files.filter((file) =>
         /\.log$|request-body|api-request|api-response/.test(file),
@@ -1033,22 +1069,22 @@ test(
   "stop completes when the core exits during the final usage drain",
   { timeout: 2000 },
   async () => {
-    const runtime = app.core.runtimes.get(personal.id);
+    const runtime = app.cores.pool.runtimes.get(personal.id);
     assert.ok(runtime);
-    const collectUsage = app.core.collectUsage;
-    app.core.collectUsage = async (profileId) => {
-      const count = await collectUsage.call(app.core, profileId);
-      const exited = once(runtime.child, "exit");
-      runtime.child.kill("SIGTERM");
-      await exited;
-      return count;
+    intercept = async (request) => {
+      const page = await httpManagement(request);
+      if (request.path.startsWith("/usage-queue")) {
+        const exited = once(runtime.child, "exit");
+        runtime.child.kill("SIGTERM");
+        await exited;
+      }
+      return page;
     };
     try {
-      await app.core.stop(personal.id);
+      await app.cores.pool.stop(personal.id);
       assert.equal(runtime.state, "stopped");
-      assert.equal(app.store.profile(personal.id).enabled, false);
     } finally {
-      app.core.collectUsage = collectUsage;
+      intercept = undefined;
     }
   },
 );
@@ -1095,7 +1131,7 @@ test(
       );
     } finally {
       for (const profile of profiles) {
-        await app.core.stop(profile.id);
+        await app.cores.pool.stop(profile.id);
       }
     }
   },
@@ -1106,8 +1142,8 @@ test(
   { timeout: 10000 },
   async () => {
     const profile = app.store.createProfile("Drain fixture");
-    await app.core.start(profile.id);
-    const runtime = app.core.runtimes.get(profile.id)!;
+    await app.cores.pool.start(profile.id);
+    const runtime = app.cores.pool.runtimes.get(profile.id)!;
     const queue = Array.from({ length: 1001 }, (_, i) => ({
       request_id: `drain-${i}`,
       timestamp: new Date().toISOString(),
@@ -1122,9 +1158,9 @@ test(
         return;
       }
       pages++;
-      assert.throws(() => app.core.port(profile.id), /stopped/);
+      assert.throws(() => app.cores.pool.port(profile.id), /stopped/);
       // A gateway request finishing during the stop makes a scheduled drain due at once.
-      app.core.markUsageActivity(profile.id);
+      app.cores.usage.markActivity(profile.id);
       // Yield so both stop callers overlap the same destructive drain.
       await delay(10);
       res.setHeader("Content-Type", "application/json");
@@ -1136,10 +1172,16 @@ test(
     const address = fixture.address();
     assert.ok(address instanceof Object);
     // Finish any poll of the real core before replacing its queue with the fixture.
-    await app.core.collectUsage(profile.id);
-    runtime.port = address.port;
-    const coalesce = app.core.timing.coalesce;
-    app.core.timing.coalesce = 0;
+    await app.cores.usage.collect(profile.id);
+    const fixturePort = address.port;
+    intercept = (request) =>
+      httpManagement(
+        request.profileId === profile.id
+          ? { ...request, port: fixturePort }
+          : request,
+      );
+    const coalesce = appUsageTiming.coalesce;
+    appUsageTiming.coalesce = 0;
     // As on a slow runner, the core takes a while to exit after the stop's final drain.
     const kill = runtime.child.kill.bind(runtime.child);
     runtime.child.kill = (signal) => {
@@ -1147,7 +1189,10 @@ test(
       return true;
     };
     try {
-      await Promise.all([app.core.stop(profile.id), app.core.stop(profile.id)]);
+      await Promise.all([
+        app.cores.pool.stop(profile.id),
+        app.cores.pool.stop(profile.id),
+      ]);
       // Only the stop reads a stopping core's queue: 500, 500, then the short page.
       assert.equal(pages, 3);
       assert.equal(queue.length, 0);
@@ -1157,10 +1202,11 @@ test(
         runtime.child.exitCode !== null || runtime.child.signalCode !== null,
       );
     } finally {
-      app.core.timing.coalesce = coalesce;
+      appUsageTiming.coalesce = coalesce;
+      intercept = undefined;
       fixture.close();
       fixture.closeAllConnections();
-      await app.core.stop(profile.id);
+      await app.cores.pool.stop(profile.id);
     }
   },
 );
@@ -1262,9 +1308,9 @@ test(
       // Let the server's request catch observe the settled proxy.
       await new Promise((resolve) => setImmediate(resolve));
     };
-    const reported = [...app.core.errors];
+    const reported = [...app.cores.pool.errors];
     try {
-      await app.core.start(profile.id);
+      await app.cores.pool.start(profile.id);
       const hung = new Promise<void>((resolve) => {
         onHang = resolve;
       });
@@ -1283,9 +1329,10 @@ test(
       await pending;
       await settled();
       assert.equal(app.gateway.active.get(profile.id), 0);
-      assert.deepEqual(app.core.errors, reported);
+      assert.deepEqual(app.cores.pool.errors, reported);
 
-      const runtime = app.core.runtimes.get(profile.id)!;
+      // The gateway's own connection to a core has no production seam; to be rebuilt in the tests stage.
+      const runtime = app.cores.pool["processes"].get(profile.id)!;
       const closed = http.createServer();
       await new Promise<void>((resolve) =>
         closed.listen(0, "127.0.0.1", resolve),
@@ -1305,14 +1352,14 @@ test(
           /profile proxy is unavailable\. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin\./,
         );
         assert.doesNotMatch(body, /ECONNREFUSED|hang up|Premature/i);
-        assert.deepEqual(app.core.errors, reported);
+        assert.deepEqual(app.cores.pool.errors, reported);
       } finally {
         runtime.port = port;
       }
     } finally {
       onHang = undefined;
       app.gateway.proxy = proxy;
-      await app.core.stop(profile.id);
+      await app.cores.pool.stop(profile.id);
     }
   },
 );

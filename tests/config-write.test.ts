@@ -4,7 +4,8 @@ import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
-import { CorePool } from "../src/server/core.ts";
+import { ConfigWriter } from "../src/server/config.ts";
+import { coreConfigPath } from "../src/server/data-directory.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 
@@ -15,9 +16,9 @@ test("config writes return the saved snapshot, serialize, and recover after fail
     const profile = store.createProfile("Fixture");
     assert.equal(profile.strategy, "fill-first");
     assert.equal(profile.sessionAffinity, true);
-    const core = new CorePool(store, "unused");
-    const path = join(core.directory(profile.id), "config.yaml");
-    const first = await core.writeConfig(profile.id, 1234);
+    const config = new ConfigWriter(store);
+    const path = coreConfigPath(directory, profile.id);
+    const first = await config.write(profile.id, 1234);
     assert.deepEqual(YAML.parse(await readFile(path, "utf8")), first);
     assert.equal(first.routing["session-affinity"], true);
     assert.equal((await stat(path)).mode & 0o777, 0o600);
@@ -29,8 +30,8 @@ test("config writes return the saved snapshot, serialize, and recover after fail
       sessionAffinity: false,
     });
     const writes = await Promise.all([
-      core.writeConfig(profile.id, 1235),
-      core.writeConfig(profile.id, 1236),
+      config.write(profile.id, 1235),
+      config.write(profile.id, 1236),
     ]);
     assert.deepEqual(
       writes.map((config) => config.port),
@@ -48,9 +49,9 @@ test("config writes return the saved snapshot, serialize, and recover after fail
 
     await rm(path);
     await mkdir(path);
-    await assert.rejects(core.writeConfig(profile.id, 1237));
+    await assert.rejects(config.write(profile.id, 1237));
     await rm(path, { recursive: true });
-    const recovered = await core.writeConfig(profile.id, 1238);
+    const recovered = await config.write(profile.id, 1238);
     assert.equal(recovered.port, 1238);
     assert.deepEqual(YAML.parse(await readFile(path, "utf8")), recovered);
   } finally {

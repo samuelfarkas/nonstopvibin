@@ -15,6 +15,9 @@ const label = z
   .max(200)
   .regex(/^[^\p{Cc}]+$/u);
 
+/** The beta flag Anthropic's OAuth account endpoints require. */
+export const claudeOAuthBeta = "oauth-2025-04-20";
+
 // Credential files may predate organization metadata. Missing identity never matches another seat.
 export function claudeIdentity(value: Json | undefined): SeatIdentity {
   const raw = record(value);
@@ -34,9 +37,10 @@ export function sameSeat(a: SeatIdentity, b: SeatIdentity): boolean {
   );
 }
 
+/** Asks Claude whose token this is: a copy of the credential with that seat and email. */
 export async function verifyClaudeIdentity(
   raw: JsonObject,
-): Promise<SeatIdentity> {
+): Promise<JsonObject> {
   const token = text(raw.access_token);
   if (!token)
     throw new AppError(
@@ -48,7 +52,7 @@ export async function verifyClaudeIdentity(
     response = await fetch("https://api.anthropic.com/api/oauth/profile", {
       headers: {
         Authorization: `Bearer ${token}`,
-        "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-beta": claudeOAuthBeta,
       },
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
@@ -86,10 +90,12 @@ export async function verifyClaudeIdentity(
       502,
     );
   // Use the identity returned for this token, not imported labels or the browser's active organization.
-  raw.account_uuid = identity.accountUuid;
-  raw.organization_uuid = identity.organizationUuid;
-  raw.organization_name = identity.organizationName;
   const email = label.safeParse(account.email).data;
-  if (email) raw.email = email;
-  return identity;
+  return {
+    ...raw,
+    account_uuid: identity.accountUuid,
+    organization_uuid: identity.organizationUuid,
+    organization_name: identity.organizationName,
+    ...(email && { email }),
+  };
 }

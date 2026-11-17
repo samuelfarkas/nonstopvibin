@@ -10,7 +10,9 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { CorePool } from "../src/server/core.ts";
+import { httpManagement, type Management } from "../src/server/core.ts";
+import { Cores } from "../src/server/cores.ts";
+import { profileDirectory } from "../src/server/data-directory.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { claudeIdentity, sameSeat } from "../src/server/identity.ts";
@@ -90,42 +92,45 @@ test(
   async (t) => {
     const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-seats-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
     const first = store.createProfile("First profile");
     const second = store.createProfile("Second profile");
-    const originalManagement = CorePool.prototype.management;
     const originalFetch = globalThis.fetch;
-    const completed = new WeakSet<CorePool>();
+    // Profiles (staging ones included) whose browser callback has arrived.
+    const completed = new Set<string>();
     let nextCredential = credential(organizationA);
     let profileUnavailable = false;
+    // Moves the sign-in clock forward to expire a session.
+    let skew = 0;
     // Only the external OAuth exchange/profile service is simulated. File storage,
     // staging processes, management uploads, watchers, and account synchronization use the verified core.
-    CorePool.prototype.management = async function (
-      profileId,
-      path,
-      method,
-      body,
-    ) {
-      if (path === "/oauth-callback") {
-        await originalManagement.call(
-          this,
-          profileId,
-          "/auth-files?name=claude-same%40example.invalid.json",
-          "POST",
-          nextCredential,
-        );
-        completed.add(this);
+    const management: Management = async (request) => {
+      if (request.path === "/oauth-callback") {
+        await httpManagement({
+          ...request,
+          path: "/auth-files?name=claude-same%40example.invalid.json",
+          method: "POST",
+          body: nextCredential,
+        });
+        completed.add(request.profileId);
         return { status: "ok" };
       }
-      if (path.startsWith("/get-auth-status") && completed.has(this))
+      if (
+        request.path.startsWith("/get-auth-status") &&
+        completed.has(request.profileId)
+      )
         return { status: "ok" };
-      if (path === "/api-call")
+      if (request.path === "/api-call")
         return {
           status_code: 200,
           body: { five_hour: { utilization: 25 } },
         };
-      return originalManagement.call(this, profileId, path, method, body);
+      return httpManagement(request);
     };
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      management,
+      now: () => Date.now() + skew,
+    });
+    const { pool: core, signIn } = cores;
     globalThis.fetch = Object.assign(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url =
@@ -161,7 +166,7 @@ test(
       reconnectAccountId?: string,
     ) {
       nextCredential = raw;
-      const session = await core.beginOAuth(
+      const session = await signIn.begin(
         profile.id,
         "claude",
         reconnectAccountId,
@@ -171,13 +176,13 @@ test(
       );
       callback.searchParams.set("state", session.state);
       callback.searchParams.set("code", "synthetic-code");
-      await core.oauthCallback(profile.id, callback.href);
+      await signIn.callback(profile.id, callback.href);
       return session;
     }
     async function confirm(profile: Profile, session: OAuthSession) {
-      const review = await core.oauthStatus(profile.id, session.state);
+      const review = await signIn.status(profile.id, session.state);
       assert.equal(review.status, "review");
-      const result = await core.confirmOAuth(profile.id, session.state);
+      const result = await signIn.confirm(profile.id, session.state);
       assert.equal(result.status, "ok");
       assert.ok(result.status === "ok" && result.account);
       if (!result.account.disabled)
@@ -193,17 +198,17 @@ test(
         "a pending organization is invisible to active profiles until confirmation",
         async () => {
           const session = await authorize(first);
-          assert.equal(core.accounts(first.id).length, 0);
-          const review = await core.oauthStatus(first.id, session.state);
+          assert.equal(cores.accounts.list(first.id).length, 0);
+          const review = await signIn.status(first.id, session.state);
           assert.ok(review.status === "review");
           assert.equal(review.review.account.organizationName, "Example A");
           assert.equal(review.review.action, "add");
-          assert.equal(core.accounts(first.id).length, 0);
+          assert.equal(cores.accounts.list(first.id).length, 0);
           assert.ok(
             !JSON.stringify(review).includes(nextCredential.access_token),
           );
           await assert.rejects(
-            core.confirmOAuth(second.id, session.state),
+            signIn.confirm(second.id, session.state),
             /not found for this profile/,
           );
           const account = await confirm(first, session);
@@ -212,8 +217,11 @@ test(
           assert.ok(!firstId.includes("@"));
           assert.equal(accountLabel(account), "Example A");
           assert.equal(
-            (await stat(join(core.directory(first.id), "auth", firstId))).mode &
-              0o777,
+            (
+              await stat(
+                join(profileDirectory(directory, first.id), "auth", firstId),
+              )
+            ).mode & 0o777,
             0o600,
           );
           assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
@@ -227,9 +235,9 @@ test(
           secondId = account.id;
           assert.notEqual(secondId, firstId);
           assert.notEqual(account.authIndex, firstIndex);
-          assert.equal(core.accounts(first.id).length, 2);
+          assert.equal(cores.accounts.list(first.id).length, 2);
           assert.equal(
-            new Set(core.accounts(first.id).map((a) => a.email)).size,
+            new Set(cores.accounts.list(first.id).map((a) => a.email)).size,
             1,
           );
         },
@@ -237,7 +245,7 @@ test(
       await t.test(
         "reconnecting preserves the ID, paused state, custom label, priority, quota, and the other seat",
         async () => {
-          await core.setAccount(first.id, firstId, {
+          await cores.credentials.setAccount(first.id, firstId, {
             disabled: true,
             name: "Work seat",
             priority: 7,
@@ -248,7 +256,7 @@ test(
             checkedAt: "2026-09-06T00:00:00Z",
           });
           const otherBefore = await readFile(
-            join(core.directory(first.id), "auth", secondId),
+            join(profileDirectory(directory, first.id), "auth", secondId),
             "utf8",
           );
           const session = await authorize(
@@ -256,7 +264,7 @@ test(
             credential(organizationA, "reauthorized"),
             firstId,
           );
-          const review = await core.oauthStatus(first.id, session.state);
+          const review = await signIn.status(first.id, session.state);
           assert.ok(review.status === "review");
           assert.equal(review.review.action, "reconnect");
           const oldProcess = core.runtimes.get(first.id)!.child;
@@ -276,18 +284,19 @@ test(
           assert.equal(account.quota?.checkedAt, "2026-09-06T00:00:00Z");
           assert.equal(
             await readFile(
-              join(core.directory(first.id), "auth", secondId),
+              join(profileDirectory(directory, first.id), "auth", secondId),
               "utf8",
             ),
             otherBefore,
           );
-          assert.equal(core.accounts(first.id).length, 2);
+          assert.equal(cores.accounts.list(first.id).length, 2);
         },
       );
       await t.test(
         "reconnecting a stopped profile preserves its stopped state",
         async () => {
           await core.stop(first.id);
+          const enabled = store.profile(first.id).enabled;
           const session = await authorize(
             first,
             credential(organizationA, "stopped-reconnect"),
@@ -297,7 +306,7 @@ test(
           assert.equal(account.id, firstId);
           assert.equal(account.authIndex, firstIndex);
           assert.equal(core.runtimes.get(first.id)!.state, "stopped");
-          assert.equal(store.profile(first.id).enabled, false);
+          assert.equal(store.profile(first.id).enabled, enabled);
           assert.equal(account.disabled, true);
           await core.start(first.id);
         },
@@ -306,7 +315,7 @@ test(
         "wrong organization on reconnect is blocked before any credential is replaced",
         async () => {
           const before = await readFile(
-            join(core.directory(first.id), "auth", firstId),
+            join(profileDirectory(directory, first.id), "auth", firstId),
             "utf8",
           );
           const session = await authorize(
@@ -314,35 +323,35 @@ test(
             credential(organizationB, "wrong-seat"),
             firstId,
           );
-          const result = await core.oauthStatus(first.id, session.state);
+          const result = await signIn.status(first.id, session.state);
           assert.ok(result.status === "review");
           assert.equal(result.review.action, "blocked");
           await assert.rejects(
-            core.confirmOAuth(first.id, session.state),
+            signIn.confirm(first.id, session.state),
             /not the organization/,
           );
           assert.equal(
             await readFile(
-              join(core.directory(first.id), "auth", firstId),
+              join(profileDirectory(directory, first.id), "auth", firstId),
               "utf8",
             ),
             before,
           );
-          await core.cancelOAuth(first.id, session.state);
+          await signIn.cancel(first.id, session.state);
         },
       );
       await t.test(
         "the same seat can be added and reconnected independently in another profile",
         async () => {
           const before = await readFile(
-            join(core.directory(first.id), "auth", firstId),
+            join(profileDirectory(directory, first.id), "auth", firstId),
             "utf8",
           );
           const session = await authorize(
             second,
             credential(organizationA, "another-token"),
           );
-          const result = await core.oauthStatus(second.id, session.state);
+          const result = await signIn.status(second.id, session.state);
           assert.ok(result.status === "review");
           assert.equal(result.review.action, "add");
           const account = await confirm(second, session);
@@ -355,13 +364,13 @@ test(
           );
           assert.equal((await confirm(second, reconnect)).id, account.id);
           await assert.rejects(
-            core.importAuth(
+            cores.credentials.import(
               second.id,
               credential(organizationA, "independent-token"),
             ),
             /already connected/,
           );
-          const imported = await core.importAuth(
+          const imported = await cores.credentials.import(
             second.id,
             credential(organizationB),
           );
@@ -369,13 +378,13 @@ test(
           assert.equal(imported.quota?.windows[0]?.remainingPercent, 75);
           assert.equal(
             await readFile(
-              join(core.directory(first.id), "auth", firstId),
+              join(profileDirectory(directory, first.id), "auth", firstId),
               "utf8",
             ),
             before,
           );
-          assert.equal(core.accounts(first.id).length, 2);
-          assert.equal(core.accounts(second.id).length, 2);
+          assert.equal(cores.accounts.list(first.id).length, 2);
+          assert.equal(cores.accounts.list(second.id).length, 2);
         },
       );
       await t.test(
@@ -393,12 +402,12 @@ test(
           ];
           const accounts = [];
           for (const profile of profiles) {
-            accounts.push(await core.importAuth(profile.id, raw));
+            accounts.push(await cores.credentials.import(profile.id, raw));
             await assert.rejects(
-              core.importAuth(profile.id, raw),
+              cores.credentials.import(profile.id, raw),
               /already connected/,
             );
-            assert.equal(core.accounts(profile.id).length, 1);
+            assert.equal(cores.accounts.list(profile.id).length, 1);
           }
           assert.notEqual(accounts[0]!.id, accounts[1]!.id);
         },
@@ -412,16 +421,16 @@ test(
           );
           profileUnavailable = true;
           await assert.rejects(
-            core.oauthStatus(first.id, session.state),
+            signIn.status(first.id, session.state),
             (error: Error) =>
               /HTTP 503/.test(error.message) &&
               !error.message.includes("private provider body"),
           );
-          assert.ok(core.oauth);
+          assert.ok(signIn.session);
           profileUnavailable = false;
-          const result = await core.oauthStatus(first.id, session.state);
+          const result = await signIn.status(first.id, session.state);
           assert.equal(result.status, "review");
-          await core.cancelOAuth(first.id, session.state);
+          await signIn.cancel(first.id, session.state);
         },
       );
       await t.test(
@@ -431,36 +440,42 @@ test(
             first,
             credential(organizationB, "cancelled"),
           );
-          await core.cancelOAuth(first.id, session.state);
+          await signIn.cancel(first.id, session.state);
           await assert.rejects(
-            core.oauthCallback(
+            signIn.callback(
               first.id,
               `http://localhost/?state=${session.state}`,
             ),
             /not found/,
           );
           assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
-          const expired = await core.beginOAuth(first.id, "claude");
-          core.oauth!.expiresAt = Date.now() - 1;
+          const expired = await signIn.begin(first.id, "claude");
+          skew = 3_600_000;
           await assert.rejects(
-            core.confirmOAuth(first.id, expired.state),
+            signIn.confirm(first.id, expired.state),
             /expired/,
           );
-          const next = await core.beginOAuth(first.id, "claude");
-          await core.cancelOAuth(first.id, next.state);
+          // The expired session no longer blocks a new one.
+          const next = await signIn.begin(first.id, "claude");
+          skew = 0;
+          await signIn.cancel(first.id, next.state);
           assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
         },
       );
       await t.test(
         "unrelated malformed JSON does not break account display",
         async () => {
-          const path = join(core.directory(first.id), "auth", "unrelated.json");
+          const path = join(
+            profileDirectory(directory, first.id),
+            "auth",
+            "unrelated.json",
+          );
           await writeFile(path, "malformed", { mode: 0o600 });
           try {
-            await core.syncAccounts(first.id);
-            assert.equal(core.accounts(first.id).length, 2);
+            await cores.accounts.sync(first.id);
+            assert.equal(cores.accounts.list(first.id).length, 2);
             assert.equal(
-              core.accounts(first.id).find((a) => a.id === firstId)
+              cores.accounts.list(first.id).find((a) => a.id === firstId)
                 ?.organizationUuid,
               organizationA,
             );
@@ -473,7 +488,7 @@ test(
         "organization metadata is available in imports and persists across restart without renaming",
         async () => {
           const catalog = new ImportCatalog([
-            join(core.directory(first.id), "auth"),
+            join(profileDirectory(directory, first.id), "auth"),
           ]);
           const sources = await catalog.scan();
           assert.equal(sources.length, 2);
@@ -485,11 +500,12 @@ test(
           await core.stop(first.id);
           await core.start(first.id);
           assert.deepEqual(
-            new Set(core.accounts(first.id).map((a) => a.id)),
+            new Set(cores.accounts.list(first.id).map((a) => a.id)),
             new Set([firstId, secondId]),
           );
           assert.equal(
-            core.accounts(first.id).find((a) => a.id === firstId)?.authIndex,
+            cores.accounts.list(first.id).find((a) => a.id === firstId)
+              ?.authIndex,
             firstIndex,
           );
           assert.equal(
@@ -503,16 +519,15 @@ test(
         "shutdown cleans up pending sign-in even after its core has stopped",
         async () => {
           await core.start(second.id);
-          await core.beginOAuth(first.id, "codex");
+          await signIn.begin(first.id, "codex");
           await core.stop(first.id);
-          await core.shutdown();
-          assert.equal(core.oauth, undefined);
+          await cores.shutdown();
+          assert.equal(signIn.session, undefined);
           assert.equal(core.runtimes.get(second.id)!.state, "stopped");
         },
       );
     } finally {
-      await core.shutdown();
-      CorePool.prototype.management = originalManagement;
+      await cores.shutdown();
       globalThis.fetch = originalFetch;
       store.close();
       await rm(directory, { recursive: true, force: true });

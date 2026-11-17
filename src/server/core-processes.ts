@@ -14,6 +14,8 @@ import { coreArguments, coreLedgerDirectory } from "./data-directory.ts";
 // next instance on the same data directory reap cores whose owner is provably dead.
 // Both identify a process by PID plus start time and full command line.
 
+/** How long a core gets to exit after SIGTERM before SIGKILL, wherever it is stopped. */
+export const killGraceMs = 5000;
 const run = promisify(execFile);
 const psEnvironment = {
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -68,7 +70,7 @@ function coreOf(directory: string, identity: string): boolean {
 // $1 core PID, $2 its exact command line. Captures the core's identity, then sleeps in
 // read until EOF: the write end lives only in the owning process (pipes are close-on-exec).
 // The owner SIGKILLs this watchdog as soon as the core exits, so EOF means the owner died.
-// Then: SIGTERM, up to 5 s for a graceful exit (checked only during this shutdown), SIGKILL.
+// Then: SIGTERM, killGraceMs for a graceful exit (checked only during this shutdown), SIGKILL.
 const watchdogScript = `trap '' HUP INT
 export PATH=${psEnvironment.PATH} LC_ALL=C TZ=UTC
 identity() { ps -ww -o lstart= -o command= -p "$1" 2>/dev/null; }
@@ -80,7 +82,7 @@ while read -r _; do :; done
 [ "$(identity "$1")" = "$held" ] || exit 0
 kill -TERM "$1" 2>/dev/null
 i=0
-while [ $i -lt 50 ]; do
+while [ $i -lt ${killGraceMs / 100} ]; do
   sleep 0.1
   [ "$(identity "$1")" = "$held" ] || exit 0
   i=$((i + 1))
@@ -218,7 +220,7 @@ function signal(pid: number, name: NodeJS.Signals): void {
 async function stopOrphan(entry: Entry, identify: Identify): Promise<void> {
   signal(entry.pid, "SIGTERM");
   // Not our child, so exit cannot be awaited; this bounded wait runs only while reaping.
-  for (let waited = 0; waited < 5000; waited += 100) {
+  for (let waited = 0; waited < killGraceMs; waited += 100) {
     await delay(100);
     if ((await identify(entry.pid)) !== entry.identity) return;
   }

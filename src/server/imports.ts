@@ -12,7 +12,7 @@ import { credentialFileBytes } from "../shared/vocabulary.ts";
 // Only known local installations are scanned. The renderer never supplies a filesystem path.
 export class ImportCatalog {
   private files = new Map<string, string>();
-  readonly directories: string[];
+  private readonly directories: string[];
   constructor(
     directories = [
       join(homedir(), "Library/Application Support/com.cpa.gui/oauth"),

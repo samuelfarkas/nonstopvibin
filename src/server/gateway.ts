@@ -2,7 +2,8 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import type { Duplex } from "node:stream";
-import { CorePool } from "./core.ts";
+import type { CorePool } from "./core.ts";
+import type { Usage } from "./usage.ts";
 import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
 import { ModelCatalog } from "./model-catalog.ts";
@@ -99,13 +100,14 @@ function forwardedHeaders(
 export class Gateway {
   readonly store: Store;
   readonly core: CorePool;
+  private readonly usage: Usage;
   readonly active = new Map<string, number>();
   readonly catalog = new ModelCatalog();
   onActivityChange?: () => void;
-  constructor(store: Store, core: CorePool) {
+  constructor(store: Store, core: CorePool, usage: Usage) {
     this.store = store;
     this.core = core;
-    core.usageInFlight = (profileId) => this.active.get(profileId) ?? 0;
+    this.usage = usage;
   }
   private acquire(profileId: string): () => void {
     const count = this.active.get(profileId) ?? 0;
@@ -115,13 +117,13 @@ export class Gateway {
         429,
       );
     this.active.set(profileId, count + 1);
-    this.core.markUsageActivity(profileId);
+    this.usage.markActivity(profileId);
     if (count === 0) this.onActivityChange?.();
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      this.core.markUsageActivity(profileId);
+      this.usage.markActivity(profileId);
       this.active.set(
         profileId,
         Math.max(0, (this.active.get(profileId) ?? 1) - 1),

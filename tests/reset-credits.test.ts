@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Json } from "../src/shared/types.ts";
 import { Application } from "../src/server/server.ts";
+import { httpManagement } from "../src/server/core.ts";
 import { record, parse } from "../src/server/json.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
@@ -29,81 +30,76 @@ test(
   { timeout: 15000 },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-resets-"));
-    const app = await Application.create({
-      directory,
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
-      port: 0,
-    });
-    const profile = app.store.createProfile("Reset fixture");
-    const other = app.store.createProfile("Other profile");
     const requests: string[] = [];
     let code = "reset";
     let fail = false;
     let quotaFails = false;
     let release: (() => void) | undefined;
     let gate: Promise<void> | undefined;
-    try {
-      await app.core.start(profile.id);
-      const runtime = app.core.runtimes.get(profile.id)!;
-      runtime.accounts = [
-        {
-          id: "fixture.json",
-          name: "Synthetic Codex",
-          provider: "codex",
-          kind: "oauth",
-          disabled: false,
-          status: "Ready",
-          priority: 0,
-          authIndex: "fixture-index",
-        },
-      ];
-      runtime.chatgptAccountIds.set("fixture.json", "fixture-identity");
-      const management = app.core.management.bind(app.core);
-      app.core.management = async (id, path, method, body) => {
-        if (path !== "/api-call") return management(id, path, method, body);
-        assert.equal(id, profile.id);
-        assert.equal(method, "POST");
-        const call = record(body);
-        assert.equal(call.auth_index, "fixture-index");
-        assert.equal(
-          record(call.header)["Chatgpt-Account-Id"],
-          "fixture-identity",
-        );
-        assert.equal(record(call.header).Authorization, "Bearer $TOKEN$");
-        if (call.url === "https://chatgpt.com/backend-api/wham/usage") {
-          return {
-            status_code: quotaFails ? 503 : 200,
-            body: JSON.stringify({
-              rate_limit: {
-                primary_window: {
-                  used_percent: 0,
-                  limit_window_seconds: 18000,
+    // The core's account list for the fixture profile: one Codex subscription.
+    let accountFile: Json = {
+      name: "fixture.json",
+      provider: "codex",
+      auth_index: "fixture-index",
+      id_token: { chatgpt_account_id: "fixture-identity" },
+    };
+    const app = await Application.create({
+      directory,
+      binary: resolve(".vendor/core/cli-proxy-api"),
+      clientDirectory: resolve("dist/client"),
+      port: 0,
+      cores: {
+        management: async (request) => {
+          if (request.path === "/auth-files") return { files: [accountFile] };
+          if (request.path !== "/api-call") return httpManagement(request);
+          assert.equal(request.profileId, profile.id);
+          assert.equal(request.method, "POST");
+          const call = record(request.body);
+          assert.equal(call.auth_index, "fixture-index");
+          assert.equal(
+            record(call.header)["Chatgpt-Account-Id"],
+            "fixture-identity",
+          );
+          assert.equal(record(call.header).Authorization, "Bearer $TOKEN$");
+          if (call.url === "https://chatgpt.com/backend-api/wham/usage") {
+            return {
+              status_code: quotaFails ? 503 : 200,
+              body: JSON.stringify({
+                rate_limit: {
+                  primary_window: {
+                    used_percent: 0,
+                    limit_window_seconds: 18000,
+                  },
                 },
-              },
-            }),
-          };
-        }
-        if (call.method === "GET") {
+              }),
+            };
+          }
+          if (call.method === "GET") {
+            assert.equal(
+              call.url,
+              "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+            );
+            return { status_code: 200, body: JSON.stringify(credits) };
+          }
           assert.equal(
             call.url,
-            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
           );
-          return { status_code: 200, body: JSON.stringify(credits) };
-        }
-        assert.equal(
-          call.url,
-          "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
-        );
-        assert.equal(call.method, "POST");
-        const payload = record(parse(String(call.data)));
-        assert.equal(payload.credit_id, "credit-one");
-        requests.push(String(payload.redeem_request_id));
-        if (gate) await gate;
-        return fail
-          ? { status_code: 503, body: "sensitive upstream error" }
-          : { status_code: 200, body: JSON.stringify({ code }) };
-      };
+          assert.equal(call.method, "POST");
+          const payload = record(parse(String(call.data)));
+          assert.equal(payload.credit_id, "credit-one");
+          requests.push(String(payload.redeem_request_id));
+          if (gate) await gate;
+          return fail
+            ? { status_code: 503, body: "sensitive upstream error" }
+            : { status_code: 200, body: JSON.stringify({ code }) };
+        },
+      },
+    });
+    const profile = app.store.createProfile("Reset fixture");
+    const other = app.store.createProfile("Other profile");
+    try {
+      await app.cores.pool.start(profile.id);
       const path = `/api/profiles/${profile.id}/accounts/fixture.json/reset-credits`;
       async function request(
         method = "GET",
@@ -172,13 +168,13 @@ test(
       gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      const pending = app.core.consumeResetCredit(
+      const pending = app.cores.resets.consume(
         profile.id,
         "fixture.json",
         "credit-one",
       );
       await assert.rejects(
-        app.core.consumeResetCredit(profile.id, "fixture.json", "credit-one"),
+        app.cores.resets.consume(profile.id, "fixture.json", "credit-one"),
         /already in progress/,
       );
       release!();
@@ -210,10 +206,15 @@ test(
         app.store.resetRequestId("fixture-identity", "credit-one"),
         requests[0],
       );
-      runtime.accounts[0].provider = "claude";
+      accountFile = { ...record(accountFile), provider: "claude" };
+      await app.cores.accounts.sync(profile.id);
       assert.equal((await request()).status, 400);
-      runtime.accounts[0].provider = "codex";
-      runtime.chatgptAccountIds.clear();
+      accountFile = {
+        name: "fixture.json",
+        provider: "codex",
+        auth_index: "fixture-index",
+      };
+      await app.cores.accounts.sync(profile.id);
       assert.equal((await request()).status, 409);
       assert.equal(
         resetCreditsSchema.safeParse({ ...credits, available_count: -1 })

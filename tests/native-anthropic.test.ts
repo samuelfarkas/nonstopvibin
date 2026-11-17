@@ -228,14 +228,14 @@ beforeAll(async () => {
   exhausted = app.store.createProfile("Exhausted native fixture");
   for (const profile of [primary, other, exhausted]) {
     addAccount(profile);
-    await app.core.start(profile.id);
+    await app.cores.pool.start(profile.id);
   }
 }, 30_000);
 // A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
 // settle names whatever is still running well before this hook's own limit.
 afterAll(async () => {
   if (app) {
-    await settle("app.close()", app.close(), app.core, 25_000);
+    await settle("app.close()", app.close(), app.cores.pool, 25_000);
     await rm(app.agentSetup.socketDirectory, { recursive: true, force: true });
   }
   if (upstream)
@@ -301,7 +301,7 @@ test(
     );
     assert.equal(missing.status, 404);
     const empty = app.store.createProfile("Empty native fixture");
-    await app.core.start(empty.id);
+    await app.cores.pool.start(empty.id);
     const emptyCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
       headers: headers(empty),
     });
@@ -321,7 +321,7 @@ test(
       (await emptyCheck.json()).error.message,
       "No models are available. Refresh the profile catalog.",
     );
-    await app.core.stop(empty.id);
+    await app.cores.pool.stop(empty.id);
     const stoppedCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
       headers: headers(empty),
     });
@@ -587,7 +587,7 @@ test("native clean EOF and provider error events end with an error, not message_
     // A failed stream cools down its account, so each case gets its own profile.
     const profile = app.store.createProfile(`Failing ${label}`);
     addAccount(profile);
-    await app.core.start(profile.id);
+    await app.cores.pool.start(profile.id);
     const response = await send(
       { stream: true, messages: message(label) },
       profile,

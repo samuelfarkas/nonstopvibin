@@ -114,7 +114,7 @@ for (const [profile, accounts] of [
       ],
     });
   }
-  await app.core.start(profile.id);
+  await app.cores.pool.start(profile.id);
 }
 app.store.createProfile("Side projects");
 // Deterministic simulated request history so Activity has something to show.
@@ -160,7 +160,7 @@ app.store.addUsage(
   }),
 );
 // Keep simulated quota readings stable; the simulator never contacts provider quota services.
-app.core.refreshQuota = async (profileId, accountId) =>
+app.cores.quotas.refresh = async (profileId, accountId) =>
   app.store.quota(profileId, accountId)!;
 await writeFile(
   join(directory, "connection.json"),

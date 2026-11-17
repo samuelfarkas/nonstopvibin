@@ -112,7 +112,7 @@ function safeExternal(raw: string): string {
   return url.href;
 }
 function reportDesktopError(error: Error) {
-  application.core.report(errorMessage(error));
+  application.cores.pool.report(errorMessage(error));
 }
 async function watchOutsideClicks(window: BrowserWindow): Promise<void> {
   const root = app.getAppPath();
@@ -231,7 +231,7 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
     try {
       void shell.openExternal(safeExternal(url)).catch(reportDesktopError);
     } catch (error) {
-      application.core.report(errorMessage(error));
+      application.cores.pool.report(errorMessage(error));
     }
     return { action: "deny" };
   });
@@ -478,8 +478,8 @@ async function start(): Promise<void> {
         .map(({ id, name }) => ({ id, name }));
       trayGeneration = application.store.profileGeneration;
     }
-    const running = trayProfiles.filter(
-      (p) => application.core.runtimes.get(p.id)?.state === "running",
+    const running = trayProfiles.filter((p) =>
+      application.cores.pool.running(p.id),
     );
     const streaming = running.some(
       (p) => (application.gateway.active.get(p.id) ?? 0) > 0,
@@ -498,8 +498,8 @@ async function start(): Promise<void> {
     trayState = state;
     tray.setImage(state === "stopped" ? stoppedImage : ballImage);
   };
-  application.core.onStatusChange = syncTray;
-  application.core.onOAuthCallback = () => {
+  application.cores.pool.onStatusChange = syncTray;
+  application.cores.signIn.onCallback = () => {
     // Only an existing window holds the sign-in dialog; a new one would not.
     if (mainWindow) void showMain().catch(reportDesktopError);
   };

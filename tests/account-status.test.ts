@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -13,30 +12,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../src/shared/types.ts";
-import { CorePool } from "../src/server/core.ts";
+import { Accounts } from "../src/server/accounts.ts";
+import { credentialDirectory } from "../src/server/data-directory.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 
 test("dead refresh tokens show as Reconnect needed instead of a cooldown", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-status-"));
   const store = new Store(directory, fileKeyCodec(directory));
-  const originalManagement = CorePool.prototype.management;
   try {
     const profile = store.createProfile("Fixture");
-    const core = new CorePool(store, "unused");
-    await mkdir(join(core.directory(profile.id), "auth"), { recursive: true });
-    // SAFETY: syncAccounts only reads runtime state and account maps; the
-    // child process is never touched, so an empty stub is enough.
-    core.runtimes.set(profile.id, {
-      child: {} as ChildProcess,
-      port: 0,
-      state: "running",
-      stopping: false,
-      accounts: [],
-      chatgptAccountIds: new Map(),
-      nextUsageAt: 0,
-      usageActiveUntil: 0,
-    });
     const file = (name: string, fields: Record<string, Json>) => ({
       name,
       provider: "claude",
@@ -44,33 +29,43 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
       auth_index: name,
       ...fields,
     });
-    CorePool.prototype.management = async (_profileId, path) => {
-      assert.equal(path, "/auth-files");
-      return {
-        files: [
-          file("invalid-grant.json", {
-            status: "error",
-            status_message: "invalid grant (retrying)",
-            unavailable: true,
-          }),
-          file("unauthorized.json", {
-            status: "error",
-            status_message: "unauthorized",
-            unavailable: true,
-          }),
-          file("expired.json", {
-            status: "error",
-            status_message: "token expired",
-            unavailable: true,
-          }),
-          file("cooldown.json", { unavailable: true }),
-          file("ready.json", {}),
-        ],
-      };
-    };
-    await core.syncAccounts(profile.id);
+    // A running core that lists these files.
+    const accounts = new Accounts(
+      {
+        usable: () => true,
+        management: async (_profileId, path) => {
+          assert.equal(path, "/auth-files");
+          return {
+            files: [
+              file("invalid-grant.json", {
+                status: "error",
+                status_message: "invalid grant (retrying)",
+                unavailable: true,
+              }),
+              file("unauthorized.json", {
+                status: "error",
+                status_message: "unauthorized",
+                unavailable: true,
+              }),
+              file("expired.json", {
+                status: "error",
+                status_message: "token expired",
+                unavailable: true,
+              }),
+              file("cooldown.json", { unavailable: true }),
+              file("ready.json", {}),
+            ],
+          };
+        },
+      },
+      store,
+    );
+    await mkdir(credentialDirectory(directory, profile.id), {
+      recursive: true,
+    });
+    await accounts.sync(profile.id);
     assert.deepEqual(
-      core.accounts(profile.id).map((account) => [account.id, account.status]),
+      accounts.list(profile.id).map((account) => [account.id, account.status]),
       [
         ["invalid-grant.json", "Reconnect needed"],
         ["unauthorized.json", "Reconnect needed"],
@@ -80,7 +75,6 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
       ],
     );
   } finally {
-    CorePool.prototype.management = originalManagement;
     store.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -89,26 +83,22 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
 test("account sync re-reads a Claude identity only when its file changes and repairs only loose modes", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-identity-"));
   const store = new Store(directory, fileKeyCodec(directory));
-  const originalManagement = CorePool.prototype.management;
   try {
     const profile = store.createProfile("Fixture");
-    const core = new CorePool(store, "unused");
-    const auth = join(core.directory(profile.id), "auth");
+    // A running core that lists this file.
+    const accounts = new Accounts(
+      {
+        usable: () => true,
+        management: async () => ({
+          files: [
+            { name: "seat.json", provider: "claude", auth_index: "seat" },
+          ],
+        }),
+      },
+      store,
+    );
+    const auth = credentialDirectory(directory, profile.id);
     await mkdir(auth, { recursive: true });
-    // SAFETY: as above, syncAccounts never touches the child process.
-    core.runtimes.set(profile.id, {
-      child: {} as ChildProcess,
-      port: 0,
-      state: "running",
-      stopping: false,
-      accounts: [],
-      chatgptAccountIds: new Map(),
-      nextUsageAt: 0,
-      usageActiveUntil: 0,
-    });
-    CorePool.prototype.management = async () => ({
-      files: [{ name: "seat.json", provider: "claude", auth_index: "seat" }],
-    });
     const path = join(auth, "seat.json");
     const write = (organization: string) =>
       writeFile(
@@ -117,8 +107,8 @@ test("account sync re-reads a Claude identity only when its file changes and rep
         { mode: 0o644 },
       );
     const organization = async () => {
-      await core.syncAccounts(profile.id);
-      return core.accounts(profile.id)[0]?.organizationName;
+      await accounts.sync(profile.id);
+      return accounts.list(profile.id)[0]?.organizationName;
     };
     await write("Org One");
     await chmod(path, 0o644);
@@ -132,7 +122,6 @@ test("account sync re-reads a Claude identity only when its file changes and rep
     await utimes(path, 1_000_000, 1_000_001);
     assert.equal(await organization(), "Org Two");
   } finally {
-    CorePool.prototype.management = originalManagement;
     store.close();
     await rm(directory, { recursive: true, force: true });
   }

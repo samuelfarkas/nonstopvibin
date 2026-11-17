@@ -311,8 +311,8 @@ test(
       });
       await stopServer(recovered, failedDirectory);
       const profile = app.store.createProfile("Concurrent close");
-      await app.core.start(profile.id);
-      const pid = app.core.runtimes.get(profile.id)?.child.pid;
+      await app.cores.pool.start(profile.id);
+      const pid = app.cores.pool.runtimes.get(profile.id)?.child.pid;
       assert.ok(pid);
       signal(pid, "SIGSTOP");
       const closing = Promise.all([

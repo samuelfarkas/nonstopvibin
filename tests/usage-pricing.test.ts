@@ -8,9 +8,9 @@ import assert from "node:assert/strict";
 import {
   estimateUsd,
   normalizedTokens,
-  pricingTokens,
   UsagePrices,
 } from "../src/server/usage-pricing.ts";
+import { pricingTokens } from "../src/server/usage.ts";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
 

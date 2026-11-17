@@ -229,15 +229,15 @@ test(
           },
           key,
         );
-        await app.core.start(profile.id);
+        await app.cores.pool.start(profile.id);
         if (oauth) {
           // Exercise the OAuth wire profile without a token or external account-profile lookup.
           const config = record(
-            await app.core.management(profile.id, "/config"),
+            await app.cores.pool.management(profile.id, "/config"),
           );
           const entries = config["claude-api-key"];
           assert.ok(Array.isArray(entries));
-          await app.core.management(
+          await app.cores.pool.management(
             profile.id,
             "/claude-api-key",
             "PUT",
@@ -392,7 +392,7 @@ test(
               );
             }
           }
-        await app.core.stop(profile.id);
+        await app.cores.pool.stop(profile.id);
       }
       assert.equal(requests.length, 8);
     } finally {
@@ -482,7 +482,7 @@ test(
           },
           `synthetic-${protocol}`,
         );
-      await app.core.start(profile.id);
+      await app.cores.pool.start(profile.id);
       const endpoint = app.endpoint(profile.id);
       const headers = {
         Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
