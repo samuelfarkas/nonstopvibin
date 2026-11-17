@@ -1,20 +1,15 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { timingSafeEqual, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import type { Duplex } from "node:stream";
 import { CorePool } from "./core.ts";
-import { Store, clientDigest } from "./store.ts";
+import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
 import { ModelCatalog } from "./model-catalog.ts";
 import { agentModels, offeredModels } from "./agents.ts";
 import { agents, isAgent } from "../shared/agents.ts";
 import type { Profile } from "../shared/types.ts";
 
-export function sameSecret(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
 const permitted =
   /^\/(?:v1\/(?:models|chat\/completions|responses(?:\/.*)?|messages(?:\/count_tokens)?|completions|embeddings|images\/(?:generations|edits)|audio\/(?:speech|transcriptions)|ws)|v1beta\/models(?:\/.*)?|v1interactions(?:\/.*)?)$/;
 function keyOwner(store: Store, key: string): Profile | undefined {

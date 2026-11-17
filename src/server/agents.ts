@@ -1,9 +1,8 @@
 import { join } from "node:path";
 import { agents, type Agent } from "../shared/agents.ts";
-import type { Model } from "../shared/types.ts";
+import type { CatalogModel, Model } from "../shared/types.ts";
 import { modelsFor, nativeAgent } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
-import type { CatalogModel } from "./model-catalog.ts";
 
 /** Manifest versions releases have written; version 1 has its own schema. */
 export const manifestVersions = [2, 3, 4, 5, 6, 7] as const;

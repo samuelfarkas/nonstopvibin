@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Model } from "../shared/types.ts";
+import type { CatalogModel, Model } from "../shared/types.ts";
 import { providerEntry } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
 import type { ApiAccount } from "./store.ts";
@@ -57,35 +57,6 @@ const catalogSchema = z.record(
 );
 type Catalog = z.input<typeof catalogSchema>;
 const providerId = (id: string) => providerEntry(id)?.catalog ?? id;
-/** A model with the models.dev limits and prices the agents and Activity need. */
-export interface CatalogModel extends Model {
-  metadata?: {
-    name: string;
-    context: number;
-    output: number;
-    inputLimit?: number;
-    input: Array<"text" | "image">;
-    reasoning: boolean;
-    toolCall: boolean;
-    cost?: {
-      input: number;
-      output: number;
-      reasoning?: number;
-      cache_read?: number;
-      cache_write?: number;
-      tiers?: Array<{
-        input: number;
-        output: number;
-        reasoning?: number;
-        cache_read?: number;
-        cache_write?: number;
-        tier: { type: "context"; size: number };
-      }>;
-    };
-    source: string;
-    fetchedAt: string;
-  };
-}
 
 // Match the routing provider and exact upstream ID. Never borrow a same-named
 // model's pricing from another vendor or guess model versions from a prefix.

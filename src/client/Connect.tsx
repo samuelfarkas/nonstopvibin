@@ -34,7 +34,9 @@ export function Connect({ profile }: { profile: ProfileState }) {
     setLoading(false);
     if (profile.runtime !== "running") return;
     setLoading(true);
-    api<Model[]>(`/profiles/${profile.id}/models`)
+    api("GET /profiles/:profileId/models", {
+      params: { profileId: profile.id },
+    })
       .then((result) => {
         if (!cancelled) {
           setModels(result);
@@ -52,7 +54,9 @@ export function Connect({ profile }: { profile: ProfileState }) {
   }, [profile.id, profile.runtime, accountCatalog, refresh]);
   async function getProfileKey() {
     if (key) return key;
-    const result = await api<{ key: string }>(`/profiles/${profile.id}/key`);
+    const result = await api("GET /profiles/:profileId/key", {
+      params: { profileId: profile.id },
+    });
     setKey(result.key);
     return result.key;
   }

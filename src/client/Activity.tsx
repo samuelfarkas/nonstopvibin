@@ -75,11 +75,10 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
       if (busy) return;
       busy = true;
       try {
-        const data = await api<{
-          records: UsageRecord[];
-          summary: UsageSummary;
-          pricing?: UsagePricing;
-        }>(`/profiles/${profile.id}/usage?days=${days}`);
+        const data = await api("GET /profiles/:profileId/usage", {
+          params: { profileId: profile.id },
+          query: { days },
+        });
         if (!stopped) {
           setRecords(data.records);
           setSummary(data.summary);

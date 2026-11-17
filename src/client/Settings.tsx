@@ -183,8 +183,8 @@ export function SettingsPage({
                     setSavingRetention(true);
                     try {
                       await refresh(
-                        await api<AppState>("/usage-retention", "PUT", {
-                          days: retention,
+                        await api("PUT /usage-retention", {
+                          body: { days: retention },
                         }),
                       );
                     } catch (error) {
@@ -205,7 +205,12 @@ export function SettingsPage({
                     id="usage-retention"
                     value={String(retention)}
                     disabled={savingRetention}
-                    onValueChange={(value) => setRetention(Number(value))}
+                    onValueChange={(value) =>
+                      setRetention(
+                        retentionDays.find((days) => String(days) === value) ??
+                          retention,
+                      )
+                    }
                     options={retentionDays.map((days) => ({
                       value: String(days),
                       label: retentionLabels[days],
@@ -313,8 +318,9 @@ function ProfileSettings({
             setSaving(true);
             try {
               await refresh(
-                await api<AppState>(`/profiles/${profile.id}`, "PATCH", {
-                  name,
+                await api("PATCH /profiles/:profileId", {
+                  params: { profileId: profile.id },
+                  body: { name },
                 }),
               );
               setSaved(true);
@@ -359,8 +365,9 @@ function ProfileSettings({
           onChange={async (e) => {
             try {
               await refresh(
-                await api<AppState>(`/profiles/${profile.id}`, "PATCH", {
-                  sessionAffinity: e.target.checked,
+                await api("PATCH /profiles/:profileId", {
+                  params: { profileId: profile.id },
+                  body: { sessionAffinity: e.target.checked },
                 }),
               );
             } catch (err) {

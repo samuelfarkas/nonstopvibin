@@ -19,6 +19,7 @@ import {
   providerEntry,
   type OAuthProvider,
   type Protocol,
+  type Provider,
 } from "../shared/providers.ts";
 import {
   credentialFileBytes,
@@ -85,7 +86,7 @@ export function AddSubscription({
   const [session, setSession] = useState<OAuthSession>();
   const [complete, setComplete] =
     useState<Extract<OAuthStatus, { status: "ok" }>>();
-  const [presetId, setPresetId] = useState("opencode-go");
+  const [presetId, setPresetId] = useState<Provider>("opencode-go");
   const preset = apiPresets.find((p) => p.id === presetId)!;
   const [name, setName] = useState("OpenCode Go");
   const [baseUrl, setBaseUrl] = useState(preset.baseUrl);
@@ -101,7 +102,9 @@ export function AddSubscription({
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
-    api<OAuthSession | null>(`/profiles/${profile.id}/oauth-session`)
+    api("GET /profiles/:profileId/oauth-session", {
+      params: { profileId: profile.id },
+    })
       .then((existing) => {
         if (!cancelled && existing) {
           setSession(existing);
@@ -117,17 +120,17 @@ export function AddSubscription({
   }, [profile.id]);
   useEffect(() => {
     if (tab === "import")
-      api<ImportSource[]>("/import-sources")
+      api("GET /import-sources")
         .then(setSources)
         .catch((e) => setError(e.message));
   }, [tab]);
   async function cancelSignIn() {
     if (!session || complete) return;
     try {
-      await api(
-        `/profiles/${profile.id}/oauth?state=${encodeURIComponent(session.state)}`,
-        "DELETE",
-      );
+      await api("DELETE /profiles/:profileId/oauth", {
+        params: { profileId: profile.id },
+        query: { state: session.state },
+      });
     } catch (e) {
       if (
         !(e instanceof Error) ||
@@ -153,9 +156,10 @@ export function AddSubscription({
       if (pending || cancelled) return;
       pending = true;
       try {
-        const result = await api<OAuthStatus>(
-          `/profiles/${profile.id}/oauth?state=${encodeURIComponent(session.state)}`,
-        );
+        const result = await api("GET /profiles/:profileId/oauth", {
+          params: { profileId: profile.id },
+          query: { state: session.state },
+        });
         if (!cancelled && result.status === "ok") {
           setComplete(result);
           await onSaved();
@@ -166,11 +170,10 @@ export function AddSubscription({
             // click adds nothing and users miss it. Fall back to manual review on failure.
             let confirmed: OAuthStatus;
             try {
-              confirmed = await api<OAuthStatus>(
-                `/profiles/${profile.id}/oauth-confirm`,
-                "POST",
-                { state: session.state },
-              );
+              confirmed = await api("POST /profiles/:profileId/oauth-confirm", {
+                params: { profileId: profile.id },
+                body: { state: session.state },
+              });
               if (confirmed.status !== "ok")
                 throw new Error("The connection was not completed. Try again.");
             } catch (e) {
@@ -234,12 +237,11 @@ export function AddSubscription({
     }
   }
   async function begin(provider: OAuthProvider) {
-    const next = await api<OAuthSession>(
-      `/profiles/${profile.id}/oauth`,
-      "POST",
+    const next = await api("POST /profiles/:profileId/oauth", {
+      params: { profileId: profile.id },
       // JSON.stringify drops undefined, so a fresh connection sends no target.
-      { provider, reconnectAccountId: reconnectTarget?.id },
-    );
+      body: { provider, reconnectAccountId: reconnectTarget?.id },
+    });
     setSession(next);
     setReview(undefined);
     setVerificationFailed(false);
@@ -380,10 +382,12 @@ export function AddSubscription({
                 disabled={busy}
                 onClick={() =>
                   run(async () => {
-                    const result = await api<OAuthStatus>(
-                      `/profiles/${profile.id}/oauth-confirm`,
-                      "POST",
-                      { state: session!.state },
+                    const result = await api(
+                      "POST /profiles/:profileId/oauth-confirm",
+                      {
+                        params: { profileId: profile.id },
+                        body: { state: session!.state },
+                      },
                     );
                     if (result.status !== "ok")
                       throw new Error(
@@ -538,8 +542,9 @@ export function AddSubscription({
               disabled={!callback || busy}
               onClick={() =>
                 run(async () => {
-                  await api(`/profiles/${profile.id}/callback`, "POST", {
-                    url: callback,
+                  await api("POST /profiles/:profileId/callback", {
+                    params: { profileId: profile.id },
+                    body: { url: callback },
                   });
                   setCallback("");
                 })
@@ -653,21 +658,23 @@ export function AddSubscription({
               onSubmit={(e) => {
                 e.preventDefault();
                 void run(async () => {
-                  const next = await api<AppState>(
-                    `/profiles/${profile.id}/api-account`,
-                    "POST",
+                  const next = await api(
+                    "POST /profiles/:profileId/api-account",
                     {
-                      name,
-                      provider: presetId,
-                      baseUrl,
-                      apiKey: key,
-                      protocol,
-                      prefix,
-                      models: models
-                        .split(/[\n,]/)
-                        .map((m) => m.trim())
-                        .filter(Boolean)
-                        .map((id) => ({ id, protocol })),
+                      params: { profileId: profile.id },
+                      body: {
+                        name,
+                        provider: presetId,
+                        baseUrl,
+                        apiKey: key,
+                        protocol,
+                        prefix,
+                        models: models
+                          .split(/[\n,]/)
+                          .map((m) => m.trim())
+                          .filter(Boolean)
+                          .map((id) => ({ id, protocol })),
+                      },
                     },
                   );
                   setKey("");
@@ -875,10 +882,12 @@ export function AddSubscription({
                       let imported = 0;
                       let next: AppState | undefined;
                       for (const sourceId of selectedSources) {
-                        next = await api<AppState>(
-                          `/profiles/${profile.id}/import-source`,
-                          "POST",
-                          { sourceId },
+                        next = await api(
+                          "POST /profiles/:profileId/import-source",
+                          {
+                            params: { profileId: profile.id },
+                            body: { sourceId },
+                          },
                         );
                         imported++;
                       }
@@ -888,12 +897,13 @@ export function AddSubscription({
                             `${file.name} is too large. ${imported} files imported so far.`,
                           );
                         // The server validates the credential; the client only forwards the file.
-                        const contents: Json = JSON.parse(await file.text());
-                        next = await api<AppState>(
-                          `/profiles/${profile.id}/import`,
-                          "POST",
-                          { contents },
+                        const contents: Record<string, Json> = JSON.parse(
+                          await file.text(),
                         );
+                        next = await api("POST /profiles/:profileId/import", {
+                          params: { profileId: profile.id },
+                          body: { contents },
+                        });
                         imported++;
                       }
                       await onSaved(next);

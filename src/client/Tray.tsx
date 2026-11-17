@@ -56,7 +56,9 @@ export function TrayView({
               for (const p of state.profiles.filter(
                 (p) => p.runtime === "running",
               ))
-                next = await api<AppState>(`/profiles/${p.id}/refresh`, "POST");
+                next = await api("POST /profiles/:profileId/refresh", {
+                  params: { profileId: p.id },
+                });
               await refresh(next);
             } catch (e) {
               setError(e instanceof Error ? e.message : "Refresh failed.");

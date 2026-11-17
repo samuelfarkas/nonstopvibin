@@ -1,6 +1,11 @@
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { chmodSync } from "node:fs";
-import { createHash, randomUUID, randomBytes } from "node:crypto";
+import {
+  createHash,
+  randomUUID,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import type {
   Account,
   Profile,
@@ -9,7 +14,11 @@ import type {
   UsageSummary,
 } from "../shared/types.ts";
 import type { Protocol, Provider } from "../shared/providers.ts";
-import { retentionDays, usagePageSize } from "../shared/vocabulary.ts";
+import {
+  retentionDays,
+  usagePageSize,
+  type RetentionDays,
+} from "../shared/vocabulary.ts";
 import type { SecretCodec } from "./vault.ts";
 import { AppError } from "./errors.ts";
 import { databasePath, ownerOnlyDirectory } from "./data-directory.ts";
@@ -40,6 +49,12 @@ const settingIds = {
 /** A profile's client key: `nv_` and 32 random bytes in base64url. */
 export const clientKeyPattern = /^nv_[A-Za-z0-9_-]{43}$/;
 
+/** Constant-time comparison of two secrets. */
+export function sameSecret(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
 /** One-way index key for a client key; the index never holds the key itself. */
 export function clientDigest(key: string): string {
   return createHash("sha256").update(key).digest("base64");
@@ -355,11 +370,13 @@ export class Store {
       totalTokens: Number(row?.totalTokens ?? 0),
     };
   }
-  usageRetentionDays(): number {
+  usageRetentionDays(): RetentionDays {
     const row = this.db
       .prepare("SELECT value FROM settings WHERE id=?")
       .get(settingIds.retention);
-    return Number(row?.value ?? 0);
+    const days = Number(row?.value ?? 0);
+    // Only setUsageRetentionDays writes it; anything else reads as the default.
+    return retentionDays.find((option) => option === days) ?? 0;
   }
   setUsageRetentionDays(days: number): void {
     if (!retentionDays.some((option) => option === days))

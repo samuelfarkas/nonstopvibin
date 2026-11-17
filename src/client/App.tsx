@@ -25,7 +25,7 @@ import {
   providerLabel,
 } from "../shared/providers.ts";
 import { nameLength, priorityLimit } from "../shared/vocabulary.ts";
-import { api, initializeSession } from "./api.ts";
+import { api, initializeSession, refusedSession } from "./api.ts";
 import {
   accountLabel,
   age,
@@ -140,6 +140,7 @@ export function App() {
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
+  const [sessionRefused, setSessionRefused] = useState(false);
   const tray = new URLSearchParams(location.search).get("view") === "tray";
   // Only the main window handles will-prevent-unload; the tray must stay closable.
   useKeepDraft(!tray && Boolean(busy || shownError || notice));
@@ -152,7 +153,7 @@ export function App() {
   }, [page, tray]);
   // Mutating routes return the full state; pass it to skip a second /state fetch.
   const refresh = useCallback(async (next?: AppState) => {
-    setState(next ?? (await api<AppState>("/state")));
+    setState(next ?? (await api("GET /state")));
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -162,7 +163,9 @@ export function App() {
         if (mounted) setReady(true);
       })
       .catch((e) => {
-        if (mounted) setError(e.message);
+        if (!mounted) return;
+        setError(e.message);
+        setSessionRefused(e instanceof Error && refusedSession(e));
       });
     return () => {
       mounted = false;
@@ -182,10 +185,11 @@ export function App() {
           e instanceof Error ? e.message : "The local service is unavailable.";
         // A restarted server issues a new session token; show the recovery
         // screen rather than a stale workspace.
-        if (e instanceof Error && "status" in e && e.status === 401) {
+        if (e instanceof Error && refusedSession(e)) {
           setReady(false);
           setState(undefined);
           setError(message);
+          setSessionRefused(true);
         } else setPollError(message);
       } finally {
         polling = false;
@@ -248,8 +252,8 @@ export function App() {
         {error ? (
           <>
             <p role="alert">{error}</p>
-            {/* The server's 401 message already carries this guidance. */}
-            {!error.includes("nonstopvibin url") && (
+            {/* A refused session's message already carries this guidance. */}
+            {!sessionRefused && (
               <p className="muted">
                 Open NonstopVibin from the desktop app. On a server, run{" "}
                 <code>nonstopvibin url</code> for a new link.
@@ -353,7 +357,9 @@ export function App() {
                   disabled={Boolean(busy)}
                   onClick={() =>
                     void perform("runtime", () =>
-                      api<AppState>(`/profiles/${profile.id}/start`, "POST"),
+                      api("POST /profiles/:profileId/start", {
+                        params: { profileId: profile.id },
+                      }),
                     )
                   }
                 >
@@ -451,10 +457,9 @@ export function App() {
                         void perform(
                           "quotas",
                           () =>
-                            api<AppState>(
-                              `/profiles/${profile.id}/refresh`,
-                              "POST",
-                            ),
+                            api("POST /profiles/:profileId/refresh", {
+                              params: { profileId: profile.id },
+                            }),
                           "Quota check complete.",
                         );
                       }}
@@ -538,11 +543,10 @@ export function App() {
                             void perform(
                               "routing",
                               () =>
-                                api<AppState>(
-                                  `/profiles/${profile.id}`,
-                                  "PATCH",
-                                  { strategy },
-                                ),
+                                api("PATCH /profiles/:profileId", {
+                                  params: { profileId: profile.id },
+                                  body: { strategy },
+                                }),
                               "Routing updated for this profile.",
                             );
                           }}
@@ -787,9 +791,7 @@ function CreateProfile({
           setBusy(true);
           setError("");
           try {
-            const p = await api<{ id: string }>("/profiles", "POST", {
-              name,
-            });
+            const p = await api("POST /profiles", { body: { name } });
             await onCreated(p.id);
           } catch (e) {
             setError(
@@ -863,11 +865,10 @@ function AccountDetails({
     setError("");
     try {
       await refresh(
-        await api<AppState>(
-          `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
-          "PATCH",
-          patch,
-        ),
+        await api("PATCH /profiles/:profileId/accounts/:accountId", {
+          params: { profileId: profile.id, accountId: account.id },
+          body: patch,
+        }),
       );
     } catch (e) {
       setError(
@@ -1031,9 +1032,14 @@ function AccountDetails({
                   setError("");
                   try {
                     await refresh(
-                      await api<AppState>(
-                        `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
-                        "DELETE",
+                      await api(
+                        "DELETE /profiles/:profileId/accounts/:accountId",
+                        {
+                          params: {
+                            profileId: profile.id,
+                            accountId: account.id,
+                          },
+                        },
                       ),
                     );
                     onClose();

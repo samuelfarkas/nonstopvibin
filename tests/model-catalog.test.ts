@@ -1,10 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  ModelCatalog,
-  enrichModels,
-  type CatalogModel,
-} from "../src/server/model-catalog.ts";
+import { ModelCatalog, enrichModels } from "../src/server/model-catalog.ts";
+import type { CatalogModel } from "../src/shared/types.ts";
 import { agentModels, offeredModels } from "../src/server/agents.ts";
 import { modelsFor } from "../src/shared/providers.ts";
 import { AppError } from "../src/server/errors.ts";

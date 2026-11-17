@@ -7,6 +7,14 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import coreRelease from "../../scripts/core-release.json";
 import type { AppState, Json, ProfileState } from "../shared/types.ts";
+import type {
+  ApiError,
+  RouteBody,
+  RouteKey,
+  RouteParamName,
+  RouteResponse,
+  SessionRefused,
+} from "../shared/api.ts";
 import {
   apiKeyProviders,
   oauthProviders,
@@ -23,12 +31,12 @@ import {
   retentionDays,
   strategies,
 } from "../shared/vocabulary.ts";
-import { Store, type ApiAccount } from "./store.ts";
+import { Store, sameSecret, type ApiAccount } from "./store.ts";
 import { ownerOnlyDirectory } from "./data-directory.ts";
 import { offeredModels } from "./agents.ts";
 import { fileKeyCodec } from "./vault.ts";
 import { CorePool } from "./core.ts";
-import { Gateway, sameSecret } from "./gateway.ts";
+import { Gateway } from "./gateway.ts";
 import { AppError, errorMessage } from "./errors.ts";
 import { userAgent, version } from "./config.ts";
 import { parse, record, responseJson, text } from "./json.ts";
@@ -128,6 +136,66 @@ function json<T>(res: ServerResponse, value: T, status = 200): void {
   });
   res.end(JSON.stringify(value));
 }
+type Awaitable<T> = T | Promise<T>;
+interface RouteCall<K extends RouteKey> {
+  param(name: RouteParamName<K>): string;
+  query: URLSearchParams;
+  body: RouteBody<K>;
+}
+interface RouteDefinition<K extends RouteKey> {
+  /** Validates the request body at run time. */
+  body: z.ZodType<RouteBody<K>>;
+  handle: (call: RouteCall<K>) => Awaitable<RouteResponse<K>>;
+  status?: number;
+}
+type RouteTable = { [K in RouteKey]: RouteDefinition<K> };
+/** The body schema of a route that takes none; its request body is never read. */
+const noBody: z.ZodType<undefined> = z.undefined();
+interface Endpoint {
+  method: string;
+  /** The path parameters when the path is this route's. */
+  match(
+    pathname: string,
+    segments: string[],
+  ): Record<string, string> | undefined;
+  serve(
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: Record<string, string>,
+    query: URLSearchParams,
+  ): Promise<void>;
+}
+function endpoint<K extends RouteKey>(key: K, table: RouteTable): Endpoint {
+  const definition = table[key];
+  const [method, path] = key.split(" ");
+  const pattern = ["api", ...path.split("/").filter(Boolean)];
+  return {
+    method,
+    // A route without parameters matches its raw path exactly; one with
+    // parameters matches the decoded segments, which skip empty ones.
+    match: pattern.some((part) => part.startsWith(":"))
+      ? (_, segments) => {
+          if (segments.length !== pattern.length) return undefined;
+          const params: Record<string, string> = {};
+          for (const [index, part] of pattern.entries()) {
+            if (part.startsWith(":")) params[part.slice(1)] = segments[index];
+            else if (part !== segments[index]) return undefined;
+          }
+          return params;
+        }
+      : (pathname) => (pathname === `/api${path}` ? {} : undefined),
+    async serve(req, res, params, query) {
+      const body = definition.body.parse(
+        definition.body === noBody ? undefined : await jsonBody(req),
+      );
+      json(
+        res,
+        await definition.handle({ param: (name) => params[name], query, body }),
+        definition.status,
+      );
+    },
+  };
+}
 // An exact DNS name such as a Tailscale Serve host: lowercase labels, at least
 // one dot, an alphabetic top-level label (so no IP literals), no port or wildcard.
 export function validAllowHost(host: string): boolean {
@@ -163,6 +231,7 @@ export class Application {
   readonly imports = new ImportCatalog();
   readonly usagePrices = new UsagePrices();
   readonly agentSetup: AgentSetup;
+  private readonly endpoints: Endpoint[];
   port = 0;
   closing = false;
   private closePromise?: Promise<void>;
@@ -187,6 +256,10 @@ export class Application {
       },
       options.agentHome ? { home: options.agentHome } : undefined,
     );
+    const routes = this.routes();
+    this.endpoints = Object.keys(routes)
+      .filter((key): key is RouteKey => Object.hasOwn(routes, key))
+      .map((key) => endpoint(key, routes));
     this.server = http.createServer((req, res) => {
       this.handle(req, res).catch((error) => {
         // The client hung up mid-body, as the gateway treats it: nothing failed in the app.
@@ -216,7 +289,7 @@ export class Application {
         if (status === 500) this.core.report(errorMessage(error));
         // A departed client cannot receive the error; only the report above matters.
         if (res.destroyed) return;
-        json(
+        json<ApiError>(
           res,
           { error: { message, type: "nonstopvibin_error", code: status } },
           status,
@@ -351,7 +424,7 @@ export class Application {
       if (!sameSecret(req.headers.authorization ?? "", `Bearer ${this.token}`))
         throw new AppError(
           "Open NonstopVibin from the desktop app, or run nonstopvibin url on the server for a new session link.",
-          401,
+          401 satisfies SessionRefused,
         );
       await this.api(req, res, url);
       return;
@@ -426,7 +499,6 @@ export class Application {
     res: ServerResponse,
     url: URL,
   ): Promise<void> {
-    const method = req.method;
     // Split on raw "/" first so an encoded slash stays inside its segment.
     const segments = url.pathname
       .split("/")
@@ -438,388 +510,400 @@ export class Application {
           throw new AppError("Malformed request path.", 400);
         }
       });
-    if (url.pathname === "/api/state" && method === "GET") {
-      json(res, this.state());
-      return;
-    }
-    if (url.pathname === "/api/usage-retention" && method === "PUT") {
-      const input = z
-        .object({
-          days: z.union(retentionDays.map((days) => z.literal(days))),
-        })
-        .strict()
-        .parse(await jsonBody(req));
-      this.store.setUsageRetentionDays(input.days);
-      json(res, this.state());
-      return;
-    }
-    if (url.pathname === "/api/import-sources" && method === "GET") {
-      json(res, await this.imports.scan());
-      return;
-    }
-    if (url.pathname === "/api/profiles" && method === "POST") {
-      const input = profileSchema.parse(await jsonBody(req));
-      json(res, this.store.createProfile(input.name), 201);
-      return;
-    }
-    if (segments[1] !== "profiles" || !segments[2])
-      throw new AppError("Not found.", 404);
-    const id = z.string().uuid().parse(segments[2]);
-    const profile = this.store.profile(id);
-    const action = segments[3];
-    if (!action && method === "PATCH") {
-      this.store.saveProfile({
-        ...profile,
-        ...patchSchema.parse(await jsonBody(req)),
-      });
-      await this.core.configure(id);
-      json(res, this.state());
-      return;
-    }
-    if (action === "start" && method === "POST") {
-      await this.core.start(id);
-      json(res, this.state());
-      return;
-    }
-    if (action === "refresh" && method === "POST") {
-      await this.core.syncAccounts(id);
-      for (const account of this.core.accounts(id))
-        if (!account.disabled) await this.core.refreshQuota(id, account.id);
-      json(res, this.state());
-      return;
-    }
-    if (action === "key" && method === "GET") {
-      json(res, { key: this.store.clientKey(id) });
-      return;
-    }
-    if (action === "models" && method === "GET") {
-      const models = await this.core.models(id);
-      json(
-        res,
-        url.searchParams.get("metadata") === "1"
-          ? await this.gateway.catalog.models(
-              models,
-              this.store.apiAccounts(id),
-            )
-          : models,
-      );
-      return;
-    }
-    if (action === "usage" && method === "GET") {
-      const days = z.coerce
-        .number()
-        .int()
-        .min(1)
-        .max(allHistoryDays)
-        .parse(url.searchParams.get("days") ?? 7);
-      const since =
-        days === allHistoryDays
-          ? ""
-          : new Date(Date.now() - days * 86_400_000).toISOString();
-      json(
-        res,
-        await this.usagePrices.history(
-          this.store,
-          id,
-          since,
-          this.gateway.catalog,
-        ),
-      );
-      return;
-    }
-    if (action === "agent-setup" && segments.length === 4) {
-      if (method === "GET") {
-        const selection = agentSelectionSchema.parse({
-          agent: url.searchParams.get("agent"),
-          projectDirectory:
-            url.searchParams.get("projectDirectory") ?? undefined,
-        });
-        json(
-          res,
-          await this.agentSetup.status(
-            profile,
-            selection.agent,
-            selection.projectDirectory,
-          ),
-        );
-        return;
-      }
-      if (method === "POST") {
-        const input = agentSetupSchema.parse(await jsonBody(req));
-        const models = await this.core.models(id);
-        if (!models.length)
-          throw new AppError("This profile has no available models.");
-        const offered = await offeredModels(
-          input.agent,
-          models,
-          input.otherProviders ?? true,
-          (models) =>
-            this.gateway.catalog.models(models, this.store.apiAccounts(id)),
-        );
-        // Only an agent with a native vendor can be left without models.
-        if (!offered.length)
-          throw new AppError(
-            `This profile has no ${agents[input.agent].native} models. Add one, or offer models from other providers.`,
-          );
-        json(
-          res,
-          await this.agentSetup.install(
-            profile,
-            input,
-            offered.map((model) => model.id),
-          ),
-        );
-        return;
-      }
-      if (method === "DELETE") {
-        const selection = agentSelectionSchema.parse(await jsonBody(req));
-        await this.agentSetup.remove(
-          profile,
-          selection.agent,
-          selection.projectDirectory,
-        );
-        json(res, { ok: true });
+    // Any profile path names a real profile before its route is chosen.
+    if (segments[1] === "profiles" && segments[2])
+      this.store.profile(z.string().uuid().parse(segments[2]));
+    for (const endpoint of this.endpoints) {
+      const params =
+        endpoint.method === req.method &&
+        endpoint.match(url.pathname, segments);
+      if (params) {
+        await endpoint.serve(req, res, params, url.searchParams);
         return;
       }
     }
     if (
-      action === "agent-check" &&
-      method === "POST" &&
-      segments.length === 4
-    ) {
-      z.object({})
-        .strict()
-        .parse(await jsonBody(req));
-      const response = await fetch(`${this.endpoint(id)}/models`, {
-        headers: {
-          Authorization: `Bearer ${this.store.clientKey(id)}`,
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok)
-        throw new AppError(
-          "The profile connection failed. Check that this profile is running.",
-          502,
-        );
-      const catalog = record(await responseJson(response));
-      if (
-        !Array.isArray(catalog.data) ||
-        !catalog.data.some((entry) => text(record(entry).id) !== undefined)
-      )
-        throw new AppError(
-          "No models are available. Refresh the profile catalog.",
-        );
-      json(res, { ok: true });
-      return;
-    }
-    if (action === "oauth" && method === "POST") {
-      const { provider, reconnectAccountId } = z
-        .object({
-          provider: z.enum(oauthProviders.map(({ id }) => id)),
-          reconnectAccountId: z.string().min(1).max(255).optional(),
-        })
-        .strict()
-        .parse(await jsonBody(req));
-      json(res, await this.core.beginOAuth(id, provider, reconnectAccountId));
-      return;
-    }
-    if (
-      action === "oauth-confirm" &&
-      method === "POST" &&
-      segments.length === 4
-    ) {
-      const { state } = z
-        .object({ state: z.string().min(1).max(500) })
-        .strict()
-        .parse(await jsonBody(req));
-      json(res, await this.core.confirmOAuth(id, state));
-      return;
-    }
-    if (action === "oauth-session" && method === "GET") {
-      json(res, this.core.oauth?.profileId === id ? this.core.oauth : null);
-      return;
-    }
-    if (action === "oauth" && method === "GET") {
-      json(
-        res,
-        await this.core.oauthStatus(
-          id,
-          z.string().min(1).parse(url.searchParams.get("state")),
-        ),
-      );
-      return;
-    }
-    if (action === "oauth" && method === "DELETE") {
-      await this.core.cancelOAuth(
-        id,
-        z.string().min(1).parse(url.searchParams.get("state")),
-      );
-      json(res, { ok: true });
-      return;
-    }
-    if (action === "callback" && method === "POST") {
-      const { url } = z
-        .object({ url: z.string().url().max(10_000) })
-        .strict()
-        .parse(await jsonBody(req));
-      await this.core.oauthCallback(id, url);
-      json(res, { ok: true });
-      return;
-    }
-    if (action === "import" && method === "POST") {
-      const { contents } = z
-        .object({ contents: z.record(z.string(), z.json()) })
-        .strict()
-        .parse(await jsonBody(req));
-      await this.core.importAuth(id, contents);
-      json(res, this.state());
-      return;
-    }
-    if (action === "import-source" && method === "POST") {
-      const { sourceId } = z
-        .object({ sourceId: z.string().regex(/^[a-f0-9]{64}$/) })
-        .strict()
-        .parse(await jsonBody(req));
-      await this.core.importAuth(id, await this.imports.contents(sourceId));
-      json(res, this.state());
-      return;
-    }
-    if (
-      action === "accounts" &&
-      segments[4] &&
+      segments[1] === "profiles" &&
+      segments[3] === "accounts" &&
       segments[5] === "reset-credits" &&
       segments.length === 6
-    ) {
-      const accountId = segments[4];
-      if (method === "GET") {
-        json(res, await this.core.resetCredits(id, accountId));
-        return;
-      }
-      if (method === "POST") {
-        const { creditId } = z
-          .object({ creditId: z.string().min(1).max(500) })
-          .strict()
-          .parse(await jsonBody(req));
-        json(res, await this.core.consumeResetCredit(id, accountId, creditId));
-        return;
-      }
+    )
       throw new AppError("Method not allowed.", 405);
-    }
-    if (action === "accounts" && segments[4] && method === "PATCH") {
-      const accountId = segments[4];
-      const patch = z
-        .object({
-          disabled: z.boolean().optional(),
-          priority: z
+    throw new AppError("Not found.", 404);
+  }
+  private routes(): RouteTable {
+    return {
+      "GET /state": { body: noBody, handle: () => this.state() },
+      "PUT /usage-retention": {
+        body: z
+          .object({
+            days: z.union(retentionDays.map((days) => z.literal(days))),
+          })
+          .strict(),
+        handle: ({ body }) => {
+          this.store.setUsageRetentionDays(body.days);
+          return this.state();
+        },
+      },
+      "GET /import-sources": {
+        body: noBody,
+        handle: () => this.imports.scan(),
+      },
+      "POST /profiles": {
+        body: profileSchema,
+        status: 201,
+        handle: ({ body }) => this.store.createProfile(body.name),
+      },
+      "PATCH /profiles/:profileId": {
+        body: patchSchema,
+        handle: async ({ param, body }) => {
+          const id = param("profileId");
+          this.store.saveProfile({ ...this.store.profile(id), ...body });
+          await this.core.configure(id);
+          return this.state();
+        },
+      },
+      "POST /profiles/:profileId/start": {
+        body: noBody,
+        handle: async ({ param }) => {
+          await this.core.start(param("profileId"));
+          return this.state();
+        },
+      },
+      "POST /profiles/:profileId/refresh": {
+        body: noBody,
+        handle: async ({ param }) => {
+          const id = param("profileId");
+          await this.core.syncAccounts(id);
+          for (const account of this.core.accounts(id))
+            if (!account.disabled) await this.core.refreshQuota(id, account.id);
+          return this.state();
+        },
+      },
+      "GET /profiles/:profileId/key": {
+        body: noBody,
+        handle: ({ param }) => ({
+          key: this.store.clientKey(param("profileId")),
+        }),
+      },
+      "GET /profiles/:profileId/models": {
+        body: noBody,
+        handle: async ({ param, query }) => {
+          const id = param("profileId");
+          const models = await this.core.models(id);
+          return query.get("metadata") === "1"
+            ? this.gateway.catalog.models(models, this.store.apiAccounts(id))
+            : models;
+        },
+      },
+      "GET /profiles/:profileId/usage": {
+        body: noBody,
+        handle: ({ param, query }) => {
+          const days = z.coerce
             .number()
             .int()
-            .min(-priorityLimit)
-            .max(priorityLimit)
-            .optional(),
-          name: nameSchema.optional(),
-        })
-        .strict()
-        .parse(await jsonBody(req));
-      await this.core.setAccount(id, accountId, patch);
-      json(res, this.state());
-      return;
-    }
-    if (action === "accounts" && segments[4] && method === "DELETE") {
-      await this.core.removeAccount(id, segments[4]);
-      json(res, this.state());
-      return;
-    }
-    if (action === "api-account" && method === "POST") {
-      const input = apiSchema.parse(await jsonBody(req));
-      providerURL(input.baseUrl);
-      const preset = providerEntry(input.provider).preset;
-      if (
-        preset?.fixedEndpoint &&
-        input.baseUrl.replace(/\/$/, "") !== preset.baseUrl
-      )
-        throw new AppError(`${preset.name} must use its official endpoint.`);
-      let models =
-        input.provider === "opencode-go"
-          ? input.models.map((m) => ({ ...m, protocol: goModelProtocol(m.id) }))
-          : input.models;
-      if (!models.length) {
-        const response = await fetch(
-          `${input.baseUrl.replace(/\/$/, "")}/models`,
-          {
+            .min(1)
+            .max(allHistoryDays)
+            .parse(query.get("days") ?? 7);
+          const since =
+            days === allHistoryDays
+              ? ""
+              : new Date(Date.now() - days * 86_400_000).toISOString();
+          return this.usagePrices.history(
+            this.store,
+            param("profileId"),
+            since,
+            this.gateway.catalog,
+          );
+        },
+      },
+      "GET /profiles/:profileId/agent-setup": {
+        body: noBody,
+        handle: ({ param, query }) => {
+          const selection = agentSelectionSchema.parse({
+            agent: query.get("agent"),
+            projectDirectory: query.get("projectDirectory") ?? undefined,
+          });
+          return this.agentSetup.status(
+            this.store.profile(param("profileId")),
+            selection.agent,
+            selection.projectDirectory,
+          );
+        },
+      },
+      "POST /profiles/:profileId/agent-setup": {
+        body: agentSetupSchema,
+        handle: async ({ param, body }) => {
+          const id = param("profileId");
+          const models = await this.core.models(id);
+          if (!models.length)
+            throw new AppError("This profile has no available models.");
+          const offered = await offeredModels(
+            body.agent,
+            models,
+            body.otherProviders ?? true,
+            (models) =>
+              this.gateway.catalog.models(models, this.store.apiAccounts(id)),
+          );
+          // Only an agent with a native vendor can be left without models.
+          if (!offered.length)
+            throw new AppError(
+              `This profile has no ${agents[body.agent].native} models. Add one, or offer models from other providers.`,
+            );
+          return this.agentSetup.install(
+            this.store.profile(id),
+            body,
+            offered.map((model) => model.id),
+          );
+        },
+      },
+      "DELETE /profiles/:profileId/agent-setup": {
+        body: agentSelectionSchema,
+        handle: async ({ param, body }) => {
+          await this.agentSetup.remove(
+            this.store.profile(param("profileId")),
+            body.agent,
+            body.projectDirectory,
+          );
+          return { ok: true };
+        },
+      },
+      "POST /profiles/:profileId/agent-check": {
+        body: z.object({}).strict(),
+        handle: async ({ param }) => {
+          const id = param("profileId");
+          const response = await fetch(`${this.endpoint(id)}/models`, {
             headers: {
-              ...(input.provider === "anthropic" ||
-              input.protocol === "anthropic"
-                ? {
-                    "x-api-key": input.apiKey,
-                    "anthropic-version": "2023-06-01",
-                  }
-                : { Authorization: `Bearer ${input.apiKey}` }),
-              "User-Agent": userAgent,
+              Authorization: `Bearer ${this.store.clientKey(id)}`,
             },
             redirect: "error",
-            signal: AbortSignal.timeout(20_000),
-          },
-        );
-        if (!response.ok)
-          throw new AppError(
-            `Model discovery returned HTTP ${response.status}. Verify the API key, or enter model IDs manually.`,
-            502,
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok)
+            throw new AppError(
+              "The profile connection failed. Check that this profile is running.",
+              502,
+            );
+          const catalog = record(await responseJson(response));
+          if (
+            !Array.isArray(catalog.data) ||
+            !catalog.data.some((entry) => text(record(entry).id) !== undefined)
+          )
+            throw new AppError(
+              "No models are available. Refresh the profile catalog.",
+            );
+          return { ok: true };
+        },
+      },
+      "POST /profiles/:profileId/oauth": {
+        body: z
+          .object({
+            provider: z.enum(oauthProviders.map(({ id }) => id)),
+            reconnectAccountId: z.string().min(1).max(255).optional(),
+          })
+          .strict(),
+        handle: ({ param, body }) =>
+          this.core.beginOAuth(
+            param("profileId"),
+            body.provider,
+            body.reconnectAccountId,
+          ),
+      },
+      "GET /profiles/:profileId/oauth": {
+        body: noBody,
+        handle: ({ param, query }) =>
+          this.core.oauthStatus(
+            param("profileId"),
+            z.string().min(1).parse(query.get("state")),
+          ),
+      },
+      "DELETE /profiles/:profileId/oauth": {
+        body: noBody,
+        handle: async ({ param, query }) => {
+          await this.core.cancelOAuth(
+            param("profileId"),
+            z.string().min(1).parse(query.get("state")),
           );
-        const data = record(await responseJson(response));
-        models = Array.isArray(data.data)
-          ? data.data
-              .flatMap((raw) => {
-                const r = record(raw);
-                const id = text(r.id);
-                return id === undefined
-                  ? []
-                  : [
-                      {
-                        id,
-                        protocol:
-                          input.provider === "opencode-go"
-                            ? goModelProtocol(id, text(r.endpoint))
-                            : input.provider === "anthropic"
-                              ? ("anthropic" as const)
-                              : input.protocol,
-                      },
-                    ];
-              })
-              .slice(0, 500)
-          : [];
-      }
-      if (!models.length)
-        throw new AppError(
-          "No models were found. Enter the model IDs your provider supports.",
-        );
-      const account: ApiAccount = {
-        id: randomUUID(),
-        name: input.name,
-        provider: input.provider,
-        baseUrl: input.baseUrl.replace(/\/$/, ""),
-        prefix: input.prefix,
-        models,
-        disabled: false,
-      };
-      for (const existing of this.store.apiAccounts(id)) {
-        if (
-          existing.baseUrl === account.baseUrl &&
-          sameSecret(this.store.apiKey(existing.id), input.apiKey)
-        )
-          throw new AppError(
-            "This API key is already connected to this profile.",
-            409,
+          return { ok: true };
+        },
+      },
+      "POST /profiles/:profileId/oauth-confirm": {
+        body: z.object({ state: z.string().min(1).max(500) }).strict(),
+        handle: ({ param, body }) =>
+          this.core.confirmOAuth(param("profileId"), body.state),
+      },
+      "GET /profiles/:profileId/oauth-session": {
+        body: noBody,
+        handle: ({ param }) =>
+          this.core.oauth?.profileId === param("profileId")
+            ? this.core.oauth
+            : null,
+      },
+      "POST /profiles/:profileId/callback": {
+        body: z.object({ url: z.string().url().max(10_000) }).strict(),
+        handle: async ({ param, body }) => {
+          await this.core.oauthCallback(param("profileId"), body.url);
+          return { ok: true };
+        },
+      },
+      "POST /profiles/:profileId/import": {
+        body: z.object({ contents: z.record(z.string(), z.json()) }).strict(),
+        handle: async ({ param, body }) => {
+          await this.core.importAuth(param("profileId"), body.contents);
+          return this.state();
+        },
+      },
+      "POST /profiles/:profileId/import-source": {
+        body: z
+          .object({ sourceId: z.string().regex(/^[a-f0-9]{64}$/) })
+          .strict(),
+        handle: async ({ param, body }) => {
+          await this.core.importAuth(
+            param("profileId"),
+            await this.imports.contents(body.sourceId),
           );
-      }
-      this.store.saveApiAccount(id, account, input.apiKey);
-      await this.core.start(id);
-      await this.core.configure(id);
-      await this.core.refreshQuota(id, account.id);
-      json(res, this.state(), 201);
-      return;
-    }
-    throw new AppError("Not found.", 404);
+          return this.state();
+        },
+      },
+      "PATCH /profiles/:profileId/accounts/:accountId": {
+        body: z
+          .object({
+            disabled: z.boolean().optional(),
+            priority: z
+              .number()
+              .int()
+              .min(-priorityLimit)
+              .max(priorityLimit)
+              .optional(),
+            name: nameSchema.optional(),
+          })
+          .strict(),
+        handle: async ({ param, body }) => {
+          await this.core.setAccount(
+            param("profileId"),
+            param("accountId"),
+            body,
+          );
+          return this.state();
+        },
+      },
+      "DELETE /profiles/:profileId/accounts/:accountId": {
+        body: noBody,
+        handle: async ({ param }) => {
+          await this.core.removeAccount(param("profileId"), param("accountId"));
+          return this.state();
+        },
+      },
+      "GET /profiles/:profileId/accounts/:accountId/reset-credits": {
+        body: noBody,
+        handle: ({ param }) =>
+          this.core.resetCredits(param("profileId"), param("accountId")),
+      },
+      "POST /profiles/:profileId/accounts/:accountId/reset-credits": {
+        body: z.object({ creditId: z.string().min(1).max(500) }).strict(),
+        handle: ({ param, body }) =>
+          this.core.consumeResetCredit(
+            param("profileId"),
+            param("accountId"),
+            body.creditId,
+          ),
+      },
+      "POST /profiles/:profileId/api-account": {
+        body: apiSchema,
+        status: 201,
+        handle: async ({ param, body: input }) => {
+          const id = param("profileId");
+          providerURL(input.baseUrl);
+          const preset = providerEntry(input.provider).preset;
+          if (
+            preset?.fixedEndpoint &&
+            input.baseUrl.replace(/\/$/, "") !== preset.baseUrl
+          )
+            throw new AppError(
+              `${preset.name} must use its official endpoint.`,
+            );
+          let models = preset?.fixedEndpoint
+            ? input.models.map((m) => ({
+                ...m,
+                protocol: goModelProtocol(m.id),
+              }))
+            : input.models;
+          if (!models.length) {
+            const response = await fetch(
+              `${input.baseUrl.replace(/\/$/, "")}/models`,
+              {
+                headers: {
+                  ...(input.provider === "anthropic" ||
+                  input.protocol === "anthropic"
+                    ? {
+                        "x-api-key": input.apiKey,
+                        "anthropic-version": "2023-06-01",
+                      }
+                    : { Authorization: `Bearer ${input.apiKey}` }),
+                  "User-Agent": userAgent,
+                },
+                redirect: "error",
+                signal: AbortSignal.timeout(20_000),
+              },
+            );
+            if (!response.ok)
+              throw new AppError(
+                `Model discovery returned HTTP ${response.status}. Verify the API key, or enter model IDs manually.`,
+                502,
+              );
+            const data = record(await responseJson(response));
+            models = Array.isArray(data.data)
+              ? data.data
+                  .flatMap((raw) => {
+                    const r = record(raw);
+                    const id = text(r.id);
+                    return id === undefined
+                      ? []
+                      : [
+                          {
+                            id,
+                            protocol: preset?.fixedEndpoint
+                              ? goModelProtocol(id, text(r.endpoint))
+                              : input.provider === "anthropic"
+                                ? ("anthropic" as const)
+                                : input.protocol,
+                          },
+                        ];
+                  })
+                  .slice(0, 500)
+              : [];
+          }
+          if (!models.length)
+            throw new AppError(
+              "No models were found. Enter the model IDs your provider supports.",
+            );
+          const account: ApiAccount = {
+            id: randomUUID(),
+            name: input.name,
+            provider: input.provider,
+            baseUrl: input.baseUrl.replace(/\/$/, ""),
+            prefix: input.prefix,
+            models,
+            disabled: false,
+          };
+          for (const existing of this.store.apiAccounts(id)) {
+            if (
+              existing.baseUrl === account.baseUrl &&
+              sameSecret(this.store.apiKey(existing.id), input.apiKey)
+            )
+              throw new AppError(
+                "This API key is already connected to this profile.",
+                409,
+              );
+          }
+          this.store.saveApiAccount(id, account, input.apiKey);
+          await this.core.start(id);
+          await this.core.configure(id);
+          await this.core.refreshQuota(id, account.id);
+          return this.state();
+        },
+      },
+    };
   }
   close(): Promise<void> {
     return (this.closePromise ??= this.closeResources());

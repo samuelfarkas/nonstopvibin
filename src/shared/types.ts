@@ -1,6 +1,10 @@
 import type { Agent } from "./agents.ts";
 import type { OAuthProvider } from "./providers.ts";
-import type { ResetResultCode, strategies } from "./vocabulary.ts";
+import type {
+  ResetResultCode,
+  RetentionDays,
+  strategies,
+} from "./vocabulary.ts";
 
 /** Decoded JSON. Object values may be undefined so partial records and optional fields fit without casts. */
 export type Json =
@@ -135,7 +139,7 @@ export interface AppState {
   profiles: ProfileState[];
   coreVersion: string;
   gateway: string;
-  usageRetentionDays: number;
+  usageRetentionDays: RetentionDays;
   version: string;
   desktop: boolean;
   errors: string[];
@@ -143,6 +147,35 @@ export interface AppState {
 export interface Model {
   id: string;
   owned_by?: string;
+}
+/** A model with the models.dev limits and prices the agents and Activity need. */
+export interface CatalogModel extends Model {
+  metadata?: {
+    name: string;
+    context: number;
+    output: number;
+    inputLimit?: number;
+    input: Array<"text" | "image">;
+    reasoning: boolean;
+    toolCall: boolean;
+    cost?: {
+      input: number;
+      output: number;
+      reasoning?: number;
+      cache_read?: number;
+      cache_write?: number;
+      tiers?: Array<{
+        input: number;
+        output: number;
+        reasoning?: number;
+        cache_read?: number;
+        cache_write?: number;
+        tier: { type: "context"; size: number };
+      }>;
+    };
+    source: string;
+    fetchedAt: string;
+  };
 }
 export interface ImportSource extends SeatIdentity {
   id: string;

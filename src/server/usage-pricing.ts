@@ -2,6 +2,7 @@ import { setImmediate as yieldToLoop } from "node:timers/promises";
 import type { Store } from "./store.ts";
 import { z } from "zod";
 import type {
+  CatalogModel,
   Json,
   PricingTokens,
   UsagePricing,
@@ -9,14 +10,9 @@ import type {
   UsageTotals,
   UsageSummary,
 } from "../shared/types.ts";
-import type { CatalogModel, ModelCatalog } from "./model-catalog.ts";
+import type { ModelCatalog } from "./model-catalog.ts";
+import type { UsageHistory } from "../shared/api.ts";
 import { usagePageSize } from "../shared/vocabulary.ts";
-
-interface UsageHistory {
-  records: UsageRecord[];
-  summary: UsageSummary;
-  pricing: UsagePricing;
-}
 
 const counter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const breakdown = z.object({

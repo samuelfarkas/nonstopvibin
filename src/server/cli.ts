@@ -27,6 +27,7 @@ import { agentEnvironment } from "./agents.ts";
 import { isMissing, writeAtomic } from "./native-config-files.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
+import type { RouteResponse } from "../shared/api.ts";
 
 // Replaced with `true` by scripts/build-server.mjs.
 declare const NONSTOPVIBIN_PACKAGED: boolean;
@@ -105,11 +106,15 @@ export async function removeSession(
     await rm(sessionPath(directory), { force: true });
 }
 
-export interface ServerState {
-  version: string;
-  coreVersion: string;
-}
-const stateSchema = z.object({ version: z.string(), coreVersion: z.string() });
+/** What a CLI of any version reads from a running server's `GET /state`. */
+export type ServerState = Pick<
+  RouteResponse<"GET /state">,
+  "version" | "coreVersion"
+>;
+const stateSchema = z.object({
+  version: z.string(),
+  coreVersion: z.string(),
+}) satisfies z.ZodType<ServerState>;
 // Authenticated liveness: a stale file or a recycled PID cannot pass.
 export async function probe(session: Session): Promise<ServerState | null> {
   try {

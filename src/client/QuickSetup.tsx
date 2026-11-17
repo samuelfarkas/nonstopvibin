@@ -30,12 +30,10 @@ export function QuickSetup({
   useEffect(() => {
     if (selectedProject?.path === "") return;
     let cancelled = false;
-    const projectQuery = selectedProject?.path
-      ? `&projectDirectory=${encodeURIComponent(selectedProject.path)}`
-      : "";
-    api<AgentSetup | null>(
-      `/profiles/${profile.id}/agent-setup?agent=${agent}${projectQuery}`,
-    )
+    api("GET /profiles/:profileId/agent-setup", {
+      params: { profileId: profile.id },
+      query: { agent, projectDirectory: selectedProject?.path || undefined },
+    })
       .then((result) => {
         if (cancelled) return;
         setSetup(result);
@@ -87,11 +85,14 @@ export function QuickSetup({
     setDisconnected(false);
     try {
       if (remove) {
-        await api(`/profiles/${profile.id}/agent-setup`, "DELETE", {
-          agent,
-          ...(project && {
-            projectDirectory: setup?.projectDirectory,
-          }),
+        await api("DELETE /profiles/:profileId/agent-setup", {
+          params: { profileId: profile.id },
+          body: {
+            agent,
+            ...(project && {
+              projectDirectory: setup?.projectDirectory,
+            }),
+          },
         });
         if (project) {
           setProjects(
@@ -103,15 +104,14 @@ export function QuickSetup({
         setSetup(null);
         setDisconnected(true);
       } else {
-        const result = await api<AgentSetup>(
-          `/profiles/${profile.id}/agent-setup`,
-          "POST",
-          {
+        const result = await api("POST /profiles/:profileId/agent-setup", {
+          params: { profileId: profile.id },
+          body: {
             agent,
             ...(project && { projectDirectory }),
             ...(chooses && { otherProviders }),
           },
-        );
+        });
         setSetup(result);
         setProjects(result.projects ?? []);
         setProjectDirectory(result.projectDirectory ?? "");
@@ -381,7 +381,10 @@ export function QuickSetup({
               setError("");
               setChecked(false);
               try {
-                await api(`/profiles/${profile.id}/agent-check`, "POST", {});
+                await api("POST /profiles/:profileId/agent-check", {
+                  params: { profileId: profile.id },
+                  body: {},
+                });
                 setChecked(true);
               } catch (error) {
                 setError(

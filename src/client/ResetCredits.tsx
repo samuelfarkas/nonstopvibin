@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { ResetCredits as Credits, ResetResult } from "../shared/types.ts";
+import type { ResetCredits as Credits } from "../shared/types.ts";
 import { api } from "./api.ts";
 import { exactTime } from "./format.ts";
 import "./reset-credits.css";
@@ -24,13 +24,15 @@ export function ResetCredits({
   const restoreFocus = useRef(false);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
-  const path = `/profiles/${profileId}/accounts/${encodeURIComponent(accountId)}/reset-credits`;
   const load = useCallback(
     async (signal?: AbortSignal) => {
       setBusy(true);
       setError("");
       try {
-        const result = await api<Credits>(path, "GET", undefined, signal);
+        const result = await api(
+          "GET /profiles/:profileId/accounts/:accountId/reset-credits",
+          { params: { profileId, accountId }, signal },
+        );
         if (!signal?.aborted) setCredits(result);
       } catch (e) {
         if (!signal?.aborted)
@@ -39,7 +41,7 @@ export function ResetCredits({
         if (!signal?.aborted) setBusy(false);
       }
     },
-    [path],
+    [profileId, accountId],
   );
   useEffect(() => {
     if (!running) return;
@@ -61,9 +63,10 @@ export function ResetCredits({
     setError("");
     setMessage("");
     try {
-      const result = await api<ResetResult>(path, "POST", {
-        creditId: selected.id,
-      });
+      const result = await api(
+        "POST /profiles/:profileId/accounts/:accountId/reset-credits",
+        { params: { profileId, accountId }, body: { creditId: selected.id } },
+      );
       setMessage(
         {
           reset:
