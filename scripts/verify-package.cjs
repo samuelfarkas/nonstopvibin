@@ -139,3 +139,4 @@ module.exports = async function verifyPackage(context) {
     `Verified package contents (${entries.length} entries, ASAR SHA-256 ${createHash("sha256").update(readFileSync(archive)).digest("hex")}).`,
   );
 };
+module.exports.privateFilePattern = privateFilePattern;

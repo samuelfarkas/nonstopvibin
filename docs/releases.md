@@ -54,8 +54,9 @@ The pinned builder uses `latest-mac.yml` and `latest-linux.yml` even on GitHub
 prereleases; the updater selects the release first and falls back to these names.
 
 CI runs quality, tests, desktop smoke tests and security checks, builds macOS arm64
-and Linux x64 packages, and signs/notarizes macOS. After all checks pass, the final
-job verifies metadata versions, payload sizes and SHA-512 hashes, generates
+and Linux x64 packages and the headless Linux server archives (x64 and arm64), and
+signs/notarizes macOS. After all checks pass, the final job verifies metadata
+versions, payload sizes and SHA-512 hashes, generates
 SHA256SUMS and provenance attestations, uploads a draft release, then publishes it.
 Only the final job can publish. A failed upload leaves a draft, not a partial public
 update. Remove the failed draft before retrying the publish job; never overwrite
@@ -117,15 +118,16 @@ section. Work through these steps in order.
 5. **The Release workflow** then verifies the tag, version, `updatesEnabled` and
    update feed; runs the dependency, tooling and secret scans; builds, tests and
    smoke-tests on `macos-26` and `ubuntu-24.04`; signs, notarizes and verifies the
-   macOS app; builds the AppImage and deb; and finally verifies the update metadata,
-   writes `SHA256SUMS`, attests provenance, and publishes the release with
-   generated notes. If a job fails for a reason that needs no source change, such as
+   macOS app; builds the AppImage, the deb and the two headless server archives; and
+   finally verifies the update metadata, writes `SHA256SUMS`, attests provenance,
+   and publishes the release with generated notes. If a job fails for a reason that needs no source change, such as
    a missing secret, fix it and re-run the failed jobs. If the source must change,
    release 0.2.1 instead; the tag cannot be moved.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
    release with the DMG, macOS ZIP, AppImage, deb, blockmaps, `latest-mac.yml`,
-   `latest-linux.yml` and `SHA256SUMS`. In a folder with the downloaded assets,
-   `shasum -a 256 -c SHA256SUMS` passes and
+   `latest-linux.yml`, `nonstopvibin-server-0.2.0-linux-x64.tar.gz`,
+   `nonstopvibin-server-0.2.0-linux-arm64.tar.gz` and `SHA256SUMS`. In a folder
+   with the downloaded assets, `shasum -a 256 -c SHA256SUMS` passes and
    `gh attestation verify <file> -R samuelfarkas/nonstopvibin` passes for an
    installer. On a clean Mac, the installed app passes
    `spctl -a -vv -t execute /Applications/NonstopVibin.app` as

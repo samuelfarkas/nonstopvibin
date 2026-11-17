@@ -214,7 +214,13 @@ export class Gateway {
           );
           pipeline(response, res).then(resolve, reject);
         });
-        pipeline(req, upstream).catch(reject);
+        pipeline(req, upstream)
+          .then(() => {
+            // Bun can leave native reads paused after unpiping a complete body,
+            // hiding a peer FIN during idle SSE. Restore socket reads once.
+            req.socket.resume();
+          })
+          .catch(reject);
       });
     } catch (error) {
       // The agent hung up; there is no socket to answer and nothing failed in the app.
