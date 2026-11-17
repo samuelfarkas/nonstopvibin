@@ -91,8 +91,8 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-seats-"));
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    const first = store.createProfile("First profile", "forest");
-    const second = store.createProfile("Second profile", "blue");
+    const first = store.createProfile("First profile");
+    const second = store.createProfile("Second profile");
     const originalManagement = CorePool.prototype.management;
     const originalFetch = globalThis.fetch;
     const completed = new WeakSet<CorePool>();
@@ -388,8 +388,8 @@ test(
             expired: "2099-01-01T00:00:00Z",
           };
           const profiles = [
-            store.createProfile("Codex A", "forest"),
-            store.createProfile("Codex B", "blue"),
+            store.createProfile("Codex A"),
+            store.createProfile("Codex B"),
           ];
           const accounts = [];
           for (const profile of profiles) {

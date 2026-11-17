@@ -7,12 +7,12 @@ import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { Application, validAllowHost } from "../src/server/server.ts";
 import { CorePool } from "../src/server/core.ts";
+import { sessionPath } from "../src/server/data-directory.ts";
 import {
   parseHost,
   readSession,
   removeSession,
   renderUnit,
-  sessionPath,
   startServer,
   stopServer,
   tunnelCommand,

@@ -14,22 +14,26 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 import { join } from "node:path";
-import { chmodSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { Application } from "../server/server.ts";
 import { linuxLoginItem, setLinuxLoginItem } from "./autostart.ts";
 import { errorMessage } from "../server/errors.ts";
-import { dataDirectory } from "../server/data-directory.ts";
+import {
+  dataDirectory,
+  databasePath,
+  ownerOnlyDirectory,
+} from "../server/data-directory.ts";
+import { providers, type ProviderEntry } from "../shared/providers.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
 import type { Profile } from "../shared/types.ts";
 
 app.setName("NonstopVibin");
 const userData = dataDirectory();
-mkdirSync(userData, { recursive: true, mode: 0o700 });
-chmodSync(userData, 0o700);
+ownerOnlyDirectory(userData);
 // Set every Electron storage path before readiness or the single-instance lock.
 app.setPath("userData", userData);
 for (const name of ["sessionData", "crashDumps"] as const) {
@@ -88,22 +92,12 @@ else {
       app.quit();
     });
 }
-const externalHosts = new Set([
-  "auth.openai.com",
-  "chatgpt.com",
-  "claude.ai",
-  "console.anthropic.com",
-  "platform.claude.com",
-  "accounts.google.com",
-  "auth.kimi.com",
-  "www.kimi.com",
-  "kimi.com",
-  "accounts.x.ai",
-  "auth.x.ai",
-  "grok.com",
-  "accounts.xai.com",
-  "opencode.ai",
-]);
+// Each provider's sign-in and account pages.
+const externalHosts = new Set(
+  Object.values<ProviderEntry>(providers).flatMap(
+    (provider) => provider.hosts ?? [],
+  ),
+);
 function safeExternal(raw: string): string {
   const url = new URL(raw);
   if (
@@ -446,7 +440,7 @@ async function start(): Promise<void> {
   });
   ipcMain.handle("nv:reveal-data", (event) => {
     assertSender(event);
-    shell.showItemInFolder(join(userData, "nonstopvibin.sqlite"));
+    shell.showItemInFolder(databasePath(userData));
   });
   ipcMain.handle("nv:choose-project", async (event) => {
     assertSender(event);

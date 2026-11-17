@@ -24,24 +24,43 @@ import coreRelease from "../../scripts/core-release.json";
 import type {
   Account,
   Json,
-  JsonObject,
   Model,
-  OAuthProvider,
   OAuthSession,
   OAuthReview,
   OAuthStatus,
   ProfileState,
   Quota,
+  ResetResult,
   UsageRecord,
 } from "../shared/types.ts";
-import { oauthProviders, providerLabel } from "../shared/providers.ts";
+import {
+  isCredentialFile,
+  isOAuthProvider,
+  providerEntry,
+  providerLabel,
+  providers,
+  type OAuthProvider,
+} from "../shared/providers.ts";
+import {
+  credentialFileBytes,
+  quotaRefreshMs,
+  usagePageSize,
+} from "../shared/vocabulary.ts";
 import {
   coreConfiguration,
   userAgent,
   type CoreConfiguration,
 } from "./config.ts";
 import { AppError, errorMessage } from "./errors.ts";
-import { number, parse, record, responseJson, text, unwrap } from "./json.ts";
+import {
+  number,
+  parse,
+  record,
+  responseJson,
+  text,
+  unwrap,
+  type JsonObject,
+} from "./json.ts";
 import { pricingTokens } from "./usage-pricing.ts";
 import { resetCreditsSchema, resetResultSchema } from "./reset-credits.ts";
 import { parseQuota } from "./quota.ts";
@@ -53,6 +72,13 @@ import {
   recordCore,
   watchCore,
 } from "./core-processes.ts";
+import {
+  coreArguments,
+  coreConfigPath,
+  credentialDirectory,
+  oauthPendingDirectory,
+  profileDirectory,
+} from "./data-directory.ts";
 
 interface Runtime {
   child: ChildProcess;
@@ -166,7 +192,11 @@ export class CorePool {
   }
   directory(profileId: string): string {
     this.store.profile(profileId);
-    return join(this.store.directory, "profiles", profileId);
+    return profileDirectory(this.store.directory, profileId);
+  }
+  private credentials(profileId: string): string {
+    this.store.profile(profileId);
+    return credentialDirectory(this.store.directory, profileId);
   }
   async writeConfig(
     profileId: string,
@@ -189,7 +219,7 @@ export class CorePool {
     port: number,
   ): Promise<CoreConfiguration> {
     const directory = this.directory(profileId);
-    const authDir = join(directory, "auth");
+    const authDir = this.credentials(profileId);
     await mkdir(authDir, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
     await chmod(authDir, 0o700);
@@ -198,13 +228,13 @@ export class CorePool {
       port,
       authDir,
       {
-        core: this.store.secret(`${profileId}:core`),
-        management: this.store.secret(`${profileId}:management`),
+        core: this.store.coreKey(profileId),
+        management: this.store.managementKey(profileId),
       },
       this.store.apiAccounts(profileId),
-      (id) => this.store.secret(`${id}:api`),
+      (id) => this.store.apiKey(id),
     );
-    const path = join(directory, "config.yaml");
+    const path = coreConfigPath(this.store.directory, profileId);
     // The core watches this inode; atomic replacement drops its Linux watch.
     // This derived config is regenerated from SQLite before every core start.
     await writeFile(path, YAML.stringify(config), { mode: 0o600 });
@@ -254,7 +284,7 @@ export class CorePool {
     signal?.throwIfAborted();
     const child = spawn(
       this.binary,
-      ["--config", join(directory, "config.yaml")],
+      coreArguments(this.store.directory, profileId),
       { cwd: directory, env, stdio: ["ignore", "ignore", "ignore"] },
     );
     const runtime: Runtime = {
@@ -367,7 +397,7 @@ export class CorePool {
       runtime.stopping = true;
       if (runtime.state === "running") {
         try {
-          while ((await this.collectUsage(profileId)) === 500) {
+          while ((await this.collectUsage(profileId)) === usagePageSize) {
             // Full destructive queue pages must be persisted before terminating the core.
           }
         } catch (error) {
@@ -465,7 +495,7 @@ export class CorePool {
     const runtime = this.runtimes.get(profileId);
     if (!runtime) throw new AppError("Start this profile first.", 409);
     const headers = new Headers({
-      Authorization: `Bearer ${this.store.secret(`${profileId}:management`)}`,
+      Authorization: `Bearer ${this.store.managementKey(profileId)}`,
     });
     if (body !== undefined) headers.set("Content-Type", "application/json");
     const response = await fetch(
@@ -540,7 +570,7 @@ export class CorePool {
       }
     }
     this.claudeIdentities.set(profileId, parsed);
-    const dir = join(this.directory(profileId), "auth");
+    const dir = this.credentials(profileId);
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       if (!entry.isFile()) continue;
       const path = join(dir, entry.name);
@@ -609,7 +639,7 @@ export class CorePool {
       `http://127.0.0.1:${this.port(profileId)}/v1/models`,
       {
         headers: {
-          Authorization: `Bearer ${this.store.secret(`${profileId}:core`)}`,
+          Authorization: `Bearer ${this.store.coreKey(profileId)}`,
         },
         signal: AbortSignal.timeout(15_000),
       },
@@ -639,10 +669,7 @@ export class CorePool {
       if (this.shuttingDown)
         throw new AppError("nonstopvibin is shutting down.", 503);
       this.store.profile(profileId);
-      if (
-        this.oauth &&
-        Date.now() < (this.oauth.expiresAt ?? this.oauth.startedAt + 300_000)
-      )
+      if (this.oauth && Date.now() < this.oauth.expiresAt)
         throw new AppError(
           "Finish or cancel the current sign-in before starting another.",
           409,
@@ -653,8 +680,8 @@ export class CorePool {
           (a) => a.id === reconnectAccountId,
         );
         if (
-          provider !== "claude" ||
-          account?.provider !== "claude" ||
+          !providerEntry(provider).reconnect ||
+          account?.provider !== provider ||
           account.kind !== "oauth"
         )
           throw new AppError(
@@ -664,13 +691,13 @@ export class CorePool {
       }
       try {
         if (provider === "claude") {
-          const parent = join(this.store.directory, "oauth-pending");
+          const parent = oauthPendingDirectory(this.store.directory);
           await mkdir(parent, { recursive: true, mode: 0o700 });
           const directory = await mkdtemp(join(parent, "claude-"));
           const store = new Store(directory, this.store.codec);
           const core = new CorePool(store, this.binary);
           core.onOAuthCallback = () => this.onOAuthCallback?.();
-          const pending = store.createProfile("Pending sign-in", "forest");
+          const pending = store.createProfile("Pending sign-in");
           this.claudeSignIn = { core, profileId: pending.id };
           const session = await core.beginDirectOAuth(pending.id, provider);
           this.oauth = { ...session, profileId, reconnectAccountId };
@@ -688,10 +715,7 @@ export class CorePool {
               ),
             );
           },
-          Math.max(
-            1,
-            (session.expiresAt ?? session.startedAt + 300_000) - Date.now(),
-          ),
+          Math.max(1, session.expiresAt - Date.now()),
         );
         this.oauthExpiry.unref();
         return session;
@@ -706,7 +730,7 @@ export class CorePool {
     provider: OAuthProvider,
   ): Promise<OAuthSession> {
     await this.start(profileId);
-    const path = provider === "claude" ? "anthropic" : provider;
+    const path = providerEntry(provider).signIn?.core ?? provider;
     const response = record(
       await this.management(profileId, `/${path}-auth-url`),
     );
@@ -807,7 +831,7 @@ export class CorePool {
       this.oauth.state !== state
     )
       throw new AppError("Sign-in session not found for this profile.", 404);
-    if (Date.now() >= (this.oauth.expiresAt ?? this.oauth.startedAt + 300_000))
+    if (Date.now() >= this.oauth.expiresAt)
       throw new AppError("This sign-in expired. Start a new sign-in.", 410);
     return this.oauth;
   }
@@ -986,7 +1010,7 @@ export class CorePool {
       }
       await this.management(profileId, "/oauth-callback", "POST", {
         provider:
-          session.provider === "claude" ? "anthropic" : session.provider,
+          providerEntry(session.provider).signIn?.core ?? session.provider,
         redirect_url: redirectUrl,
       });
     });
@@ -999,7 +1023,7 @@ export class CorePool {
       name === ".json"
     )
       throw new AppError("Unsupported credential filename.");
-    return join(this.directory(profileId), "auth", name);
+    return join(this.credentials(profileId), name);
   }
   private async readCredential(
     profileId: string,
@@ -1007,7 +1031,7 @@ export class CorePool {
   ): Promise<JsonObject> {
     const path = this.credentialPath(profileId, name);
     const file = await lstat(path);
-    if (!file.isFile() || file.size > 2_000_000)
+    if (!file.isFile() || file.size > credentialFileBytes)
       throw new AppError("The credential is not a supported regular file.");
     try {
       return record(parse(await readFile(path, "utf8")));
@@ -1027,7 +1051,7 @@ export class CorePool {
   > {
     const files = [];
     const profile = this.store.profile(profileId);
-    const directory = join(this.directory(profile.id), "auth");
+    const directory = this.credentials(profile.id);
     if (!existsSync(directory)) return [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
@@ -1103,9 +1127,7 @@ export class CorePool {
     const accessToken = text(raw.access_token);
     const refreshToken = text(raw.refresh_token);
     if (
-      !["codex", "claude", "antigravity", "kimi", "xai", "gemini"].includes(
-        provider,
-      ) ||
+      !isCredentialFile(provider) ||
       (accessToken === undefined && !(raw.token instanceof Object))
     )
       throw new AppError(
@@ -1151,7 +1173,7 @@ export class CorePool {
       const runtime = this.runtimes.get(profileId);
       const wasRunning =
         runtime?.state === "running" || this.starting.has(profileId);
-      const path = join(this.directory(profileId), "auth", name);
+      const path = this.credentialPath(profileId, name);
       const temporary = `${path}.${randomUUID()}.tmp`;
       this.reconnectingProfile = profileId;
       try {
@@ -1323,7 +1345,7 @@ export class CorePool {
     profileId: string,
     accountId: string,
     creditId: string,
-  ) {
+  ): Promise<ResetResult> {
     const { identity } = this.codexResetAccount(profileId, accountId);
     const key = `codex-reset:${identity}`;
     if (this.busy.has(key))
@@ -1373,14 +1395,17 @@ export class CorePool {
     try {
       let payload: Json | undefined;
       if (account.provider === "opencode-go") {
-        const response = await fetch("https://opencode.ai/zen/go/v1/usage", {
-          headers: {
-            Authorization: `Bearer ${this.store.secret(`${accountId}:api`)}`,
-            "User-Agent": userAgent,
+        const response = await fetch(
+          `${providers["opencode-go"].preset.baseUrl}/usage`,
+          {
+            headers: {
+              Authorization: `Bearer ${this.store.apiKey(accountId)}`,
+              "User-Agent": userAgent,
+            },
+            signal: AbortSignal.timeout(15_000),
+            redirect: "error",
           },
-          signal: AbortSignal.timeout(15_000),
-          redirect: "error",
-        });
+        );
         if (!response.ok)
           throw new Error(
             `OpenCode Go returned HTTP ${response.status}. Check your API key or try again later.`,
@@ -1391,10 +1416,8 @@ export class CorePool {
           throw new Error("Quota response was not valid JSON.");
         }
       } else {
-        const provider = oauthProviders
-          .map((p) => p.id)
-          .find((id) => id === account.provider);
-        if (!provider || account.kind !== "oauth") {
+        const provider = account.provider;
+        if (!isOAuthProvider(provider) || account.kind !== "oauth") {
           quota = {
             status: "unavailable",
             windows: [],
@@ -1476,7 +1499,7 @@ export class CorePool {
     const collection = (async () => {
       const payload = await this.management(
         profileId,
-        "/usage-queue?count=500",
+        `/usage-queue?count=${usagePageSize}`,
       );
       if (!Array.isArray(payload))
         throw new AppError("Unexpected usage queue format.", 502);
@@ -1531,7 +1554,7 @@ export class CorePool {
   beginPolling(): void {
     clearTimeout(this.timer);
     let nextAccounts = Date.now() + this.timing.accounts;
-    let nextQuotas = Date.now() + 120_000;
+    let nextQuotas = Date.now() + quotaRefreshMs;
     let nextPrune = Date.now() + 86_400_000;
     let scheduledAt = Infinity;
     const schedule = () => {
@@ -1578,7 +1601,10 @@ export class CorePool {
             try {
               const count = await this.collectUsage(profileId);
               runtime.usageFailures = 0;
-              if (count === 500 || Date.now() < runtime.usageActiveUntil)
+              if (
+                count === usagePageSize ||
+                Date.now() < runtime.usageActiveUntil
+              )
                 runtime.nextUsageAt = 0;
             } catch (error) {
               // Retry the first failure at once, then back off up to timing.usageBackoff.
@@ -1607,7 +1633,7 @@ export class CorePool {
       ) {
         const quotasDue = Date.now() >= nextQuotas;
         nextAccounts = Date.now() + this.timing.accounts;
-        if (quotasDue) nextQuotas = Date.now() + 120_000;
+        if (quotasDue) nextQuotas = Date.now() + quotaRefreshMs;
         this.maintenance = (async () => {
           if (Date.now() >= nextPrune) {
             nextPrune = Date.now() + 86_400_000;
@@ -1651,7 +1677,7 @@ export class CorePool {
     signal?.throwIfAborted();
     // Stop cores a crashed instance left running on this data directory before starting ours.
     await reapOrphanedCores(this.store.directory);
-    const pending = join(this.store.directory, "oauth-pending");
+    const pending = oauthPendingDirectory(this.store.directory);
     for (const entry of await readdir(pending).catch(() => []))
       await reapOrphanedCores(join(pending, entry));
     // Pending sign-ins never survive an app restart or enter an active profile.

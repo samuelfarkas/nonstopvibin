@@ -1,21 +1,10 @@
 import { useEffect, useState } from "react";
 import { Check, FolderOpen, LoaderCircle } from "lucide-react";
-import type {
-  Agent,
-  AgentSetup,
-  Model,
-  ProfileState,
-} from "../shared/types.ts";
+import type { AgentSetup, Model, ProfileState } from "../shared/types.ts";
+import { agents, type Agent } from "../shared/agents.ts";
 import { api } from "./api.ts";
 import { modelsFor } from "../shared/providers.ts";
 import { CopyButton, Select, useKeepDraft } from "./components.tsx";
-
-const titles: Record<Agent, string> = {
-  pi: "pi",
-  codex: "Codex",
-  opencode: "OpenCode",
-  claude: "Claude Code",
-};
 
 export function QuickSetup({
   profile,
@@ -36,8 +25,8 @@ export function QuickSetup({
   const [selectedProject, setSelectedProject] = useState<{ path: string }>();
   const [disconnected, setDisconnected] = useState(false);
   const [otherProviders, setOtherProviders] = useState(false);
-  const chooses = agent === "claude" || agent === "codex";
-  const native = agent === "claude" ? "Claude" : "OpenAI";
+  const { title, project, native } = agents[agent];
+  const chooses = native !== undefined;
   useEffect(() => {
     if (selectedProject?.path === "") return;
     let cancelled = false;
@@ -100,11 +89,11 @@ export function QuickSetup({
       if (remove) {
         await api(`/profiles/${profile.id}/agent-setup`, "DELETE", {
           agent,
-          ...(agent === "claude" && {
+          ...(project && {
             projectDirectory: setup?.projectDirectory,
           }),
         });
-        if (agent === "claude") {
+        if (project) {
           setProjects(
             projects.filter((project) => project !== setup?.projectDirectory),
           );
@@ -119,7 +108,7 @@ export function QuickSetup({
           "POST",
           {
             agent,
-            ...(agent === "claude" && { projectDirectory }),
+            ...(project && { projectDirectory }),
             ...(chooses && { otherProviders }),
           },
         );
@@ -137,7 +126,7 @@ export function QuickSetup({
       setBusy(false);
     }
   }
-  const restart = `Restart ${titles[agent]} to pick up the change.`;
+  const restart = `Restart ${title} to pick up the change.`;
   return (
     <div className="quick-setup">
       <p>
@@ -145,9 +134,9 @@ export function QuickSetup({
           ? "Choose a project to connect."
           : agent === "codex"
             ? "Connect once, use in any project."
-            : `Add ${profile.name} to ${titles[agent]}.`}
+            : `Add ${profile.name} to ${title}.`}
       </p>
-      {agent === "claude" && (
+      {project && (
         <div className="setup-project">
           {projects.length > 0 && (
             <div className="field">
@@ -260,8 +249,7 @@ export function QuickSetup({
       )}
       {setup?.needsReconnect && (
         <p className="setup-note" role="alert">
-          The connection is out of date. Reconnect, then restart {titles[agent]}
-          .
+          The connection is out of date. Reconnect, then restart {title}.
         </p>
       )}
       {modelsChanged && !setup?.needsReconnect && (
@@ -277,7 +265,7 @@ export function QuickSetup({
             busy ||
             !offered.length ||
             current ||
-            (agent === "claude" && !projectDirectory.trim())
+            (project && !projectDirectory.trim())
           }
           onClick={() => void changeSetup()}
         >
@@ -289,10 +277,10 @@ export function QuickSetup({
           {current
             ? "Connected"
             : setup?.needsReconnect
-              ? `Reconnect ${titles[agent]}`
+              ? `Reconnect ${title}`
               : setup
                 ? "Save changes"
-                : `Connect ${titles[agent]}`}
+                : `Connect ${title}`}
         </button>
         {setup && (
           <button
@@ -320,11 +308,7 @@ export function QuickSetup({
       )}
       {current && setup && (
         <div className="setup-launch" role="status">
-          <h3>
-            {agent === "claude"
-              ? "Launch Claude Code"
-              : `Open ${titles[agent]}`}
-          </h3>
+          <h3>{agent === "claude" ? "Launch Claude Code" : `Open ${title}`}</h3>
           <div className="command-line">
             <code>{setup.command}</code>
             <CopyButton
@@ -344,7 +328,7 @@ export function QuickSetup({
               ? "Saves project settings and a model picker. Includes worktrees inside the project."
               : agent === "codex"
                 ? `Adds the nonstopvibin-${profile.slug} Codex profile. Your usual login stays available.`
-                : `Adds a ${titles[agent]} provider alongside your existing ones.`}
+                : `Adds a ${title} provider alongside your existing ones.`}
           </li>
           {agent === "claude" && (
             <li>

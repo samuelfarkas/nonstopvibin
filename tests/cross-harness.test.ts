@@ -5,9 +5,8 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
-import { record } from "../src/server/json.ts";
+import { record, type JsonObject } from "../src/server/json.ts";
 import { CorePool } from "../src/server/core.ts";
-import type { JsonObject } from "../src/shared/types.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
 const schema = {
@@ -215,7 +214,6 @@ test(
       for (const oauth of [false, true]) {
         const profile = app.store.createProfile(
           oauth ? "CLI fingerprint fixture" : "API fixture",
-          "forest",
         );
         const key = "synthetic-anthropic";
         app.store.saveApiAccount(
@@ -255,7 +253,7 @@ test(
             const probe = await fetch(`${app.endpoint(profile.id)}/messages`, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
                 "Content-Type": "application/json",
                 "anthropic-version": "2023-06-01",
               },
@@ -288,7 +286,7 @@ test(
               {
                 method: "POST",
                 headers: {
-                  Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                  Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
                   "Content-Type": "application/json",
                   "anthropic-version": "2023-06-01",
                   "anthropic-beta":
@@ -465,8 +463,8 @@ test(
         { mode: 0o755 },
       );
       await chmod(localCatalogBinary, 0o755);
-      const profile = app.store.createProfile("Mixed models", "forest");
-      const foreign = app.store.createProfile("Other profile", "blue");
+      const profile = app.store.createProfile("Mixed models");
+      const foreign = app.store.createProfile("Other profile");
       for (const [id, protocol] of [
         ["gpt-6.1-sol", "responses"],
         ["claude-sonnet-4-6", "anthropic"],
@@ -487,7 +485,7 @@ test(
       await app.core.start(profile.id);
       const endpoint = app.endpoint(profile.id);
       const headers = {
-        Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+        Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       };
@@ -688,7 +686,7 @@ test(
         method: "POST",
         headers: {
           ...headers,
-          Authorization: `Bearer ${app.store.secret(`${foreign.id}:client`)}`,
+          Authorization: `Bearer ${app.store.clientKey(foreign.id)}`,
         },
         body: JSON.stringify(codexRequest),
       });

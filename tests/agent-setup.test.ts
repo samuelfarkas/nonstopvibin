@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { AgentSetup, agentSetupSchema } from "../src/server/agent-setup.ts";
+import { agentDefinitions } from "../src/server/agents.ts";
 import {
   nativeConfiguration,
   nativeProvider,
@@ -30,7 +31,8 @@ import {
   projectDirectory,
   readConfig,
 } from "../src/server/native-config-files.ts";
-import type { Agent, AgentSetupInput, Profile } from "../src/shared/types.ts";
+import type { AgentSetupInput, Profile } from "../src/shared/types.ts";
+import type { Agent } from "../src/shared/agents.ts";
 
 const execute = promisify(execFile);
 const agents: Agent[] = ["pi", "codex", "opencode", "claude"];
@@ -39,7 +41,6 @@ function profile(slug = "work"): Profile {
     id: randomUUID(),
     slug,
     name: "Work's $(touch should-not-exist)",
-    color: "forest",
     strategy: "round-robin",
     sessionAffinity: false,
     enabled: true,
@@ -545,7 +546,7 @@ test("startup updates installed harnesses for stopped profiles, preserves prefer
       current.files.forEach((file) => files.add(file));
       const manifest = JSON.parse(await readFile(current.files[1], "utf8"));
       assert.equal(manifest.port, 4418);
-      assert.equal(manifest.version, agent === "pi" ? 7 : 3);
+      assert.equal(manifest.version, agentDefinitions[agent].version);
       if (agent !== "opencode") {
         assert.equal(
           manifest.helperContent,
@@ -786,7 +787,7 @@ test("native update and disconnect preserve unrelated preferences and refuse edi
       );
       if (agent === "pi") {
         const manifest = JSON.parse(await readFile(installed.files[1], "utf8"));
-        assert.equal(manifest.version, 7);
+        assert.equal(manifest.version, agentDefinitions.pi.version);
         manifest.version = 6;
         manifest.content = manifest.content.replace(
           "supportsMidConvoEffort: false",
@@ -804,7 +805,7 @@ test("native update and disconnect preserve unrelated preferences and refuse edi
           undefined,
         );
         const updated = JSON.parse(await readFile(installed.files[1], "utf8"));
-        assert.equal(updated.version, 7);
+        assert.equal(updated.version, agentDefinitions.pi.version);
         assert.doesNotMatch(
           updated.content,
           /supportsMidConvoToolChanges: false/,

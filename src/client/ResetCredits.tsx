@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { ResetCredits as Credits } from "../shared/types.ts";
+import type { ResetCredits as Credits, ResetResult } from "../shared/types.ts";
 import { api } from "./api.ts";
 import { exactTime } from "./format.ts";
 import "./reset-credits.css";
@@ -61,10 +61,9 @@ export function ResetCredits({
     setError("");
     setMessage("");
     try {
-      const result = await api<{
-        code: "reset" | "already_redeemed" | "nothing_to_reset" | "no_credit";
-        quotaRefreshed: boolean;
-      }>(path, "POST", { creditId: selected.id });
+      const result = await api<ResetResult>(path, "POST", {
+        creditId: selected.id,
+      });
       setMessage(
         {
           reset:

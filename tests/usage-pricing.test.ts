@@ -249,8 +249,8 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
   );
   const originalNow = Date.now;
   try {
-    const first = store.createProfile("First", "forest");
-    const second = store.createProfile("Second", "blue");
+    const first = store.createProfile("First");
+    const second = store.createProfile("Second");
     const now = Date.now();
     const since = (days: number) =>
       new Date(now - days * 86_400_000).toISOString();
@@ -390,7 +390,7 @@ test("history calculations restart after concurrent retention and stop before st
   const catalog = new ModelCatalog(unavailable);
   const prices = new UsagePrices(unavailable);
   try {
-    const profile = store.createProfile("Lifecycle", "forest");
+    const profile = store.createProfile("Lifecycle");
     const empty = await prices.history(store, profile.id, "", catalog);
     assert.equal(empty.pricing.totals?.requests, 0);
     assert.equal(
@@ -451,7 +451,7 @@ test("queued history responses keep records, summary and prices in one insertion
   const prices = new UsagePrices(unavailable);
   const catalog = new ModelCatalog(unavailable);
   try {
-    const profile = store.createProfile("Snapshot", "forest");
+    const profile = store.createProfile("Snapshot");
     store.addUsage(
       Array.from({ length: 1201 }, (_, i) => ({
         ...record,
@@ -509,7 +509,7 @@ test("a queued history caller runs its own request after the caller ahead of it 
     return usage(...args);
   };
   try {
-    const profile = store.createProfile("Queued failure", "forest");
+    const profile = store.createProfile("Queued failure");
     store.addUsage([{ ...record, profileId: profile.id }]);
     const first = prices.history(store, profile.id, "", catalog);
     const queued = prices.history(store, profile.id, "", catalog);

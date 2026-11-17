@@ -16,7 +16,7 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    const profile = store.createProfile("Model refresh fixture", "forest");
+    const profile = store.createProfile("Model refresh fixture");
     try {
       await core.start(profile.id);
       assert.ok(
@@ -51,7 +51,7 @@ test(
     const core = new CorePool(store, binary);
     core.timing.ready = 1000;
     core.timing.kill = 300;
-    const profile = store.createProfile("Wedged fixture", "forest");
+    const profile = store.createProfile("Wedged fixture");
     try {
       const started = Date.now();
       await assert.rejects(core.start(profile.id), /did not become ready/);
@@ -76,7 +76,7 @@ test(
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
     core.timing.coalesce = 20;
     core.timing.usageBackoff = 160;
-    const profile = store.createProfile("Backoff fixture", "forest");
+    const profile = store.createProfile("Backoff fixture");
     const attempts: number[] = [];
     let failing = true;
     core.collectUsage = async () => {
@@ -119,7 +119,7 @@ test(
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
     core.timing.coalesce = 20;
-    const profile = store.createProfile("Idle fixture", "forest");
+    const profile = store.createProfile("Idle fixture");
     const collectUsage = core.collectUsage;
     let drains = 0;
     let drained = () => {};
@@ -189,7 +189,7 @@ test(
     await copyFile(resolve(".vendor/core/cli-proxy-api"), binary);
     await chmod(binary, 0o600);
     const core = new CorePool(store, binary);
-    const profile = store.createProfile("Spawn failure", "forest");
+    const profile = store.createProfile("Spawn failure");
     try {
       await assert.rejects(core.start(profile.id), /Could not launch proxy/);
       assert.equal(core.runtimes.get(profile.id)?.child.pid, undefined);
@@ -216,7 +216,7 @@ async function runningPool(prefix: string, count: number) {
   };
   const profiles = [];
   for (let i = 0; i < count; i++) {
-    const profile = store.createProfile(`Shutdown ${i}`, "forest");
+    const profile = store.createProfile(`Shutdown ${i}`);
     await core.start(profile.id);
     profiles.push(profile);
   }
@@ -324,7 +324,7 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "nv-stop-race-"));
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    const profile = store.createProfile("Shutdown fixture", "forest");
+    const profile = store.createProfile("Shutdown fixture");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -375,7 +375,7 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "nv-oauth-race-"));
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-    const profile = store.createProfile("OAuth fixture", "forest");
+    const profile = store.createProfile("OAuth fixture");
     // Port 0 lets the callback server pick a free port itself; reserving one first races.
     const callbackPort = () => {
       const address = core["callbackServer"]?.address();

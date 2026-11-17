@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Plug } from "lucide-react";
-import type { Agent, Model, ProfileState } from "../shared/types.ts";
+import type { Model, ProfileState } from "../shared/types.ts";
+import { agentIds, agents, type Agent } from "../shared/agents.ts";
 import { api, copy } from "./api.ts";
 import { CopyButton, Empty } from "./components.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
 import "./connect.css";
 
-const agentOptions = [
-  ["claude", "Claude Code"],
-  ["codex", "Codex"],
-  ["pi", "pi"],
-] as const;
+const agentOptions = agentIds.filter((id) => agents[id].offered);
 
 export function Connect({ profile }: { profile: ProfileState }) {
   const [models, setModels] = useState<Model[]>([]);
@@ -82,7 +79,7 @@ export function Connect({ profile }: { profile: ProfileState }) {
         </div>
       )}
       <div className="agent-tabs" role="tablist" aria-label="Agent">
-        {agentOptions.map(([id, label], index) => (
+        {agentOptions.map((id, index) => (
           <button
             key={id}
             id={`agent-tab-${id}`}
@@ -107,12 +104,12 @@ export function Connect({ profile }: { profile: ProfileState }) {
                         : undefined;
               if (next === undefined) return;
               event.preventDefault();
-              const nextAgent = agentOptions[next][0];
+              const nextAgent = agentOptions[next];
               setAgent(nextAgent);
               document.getElementById(`agent-tab-${nextAgent}`)?.focus();
             }}
           >
-            {label}
+            {agents[id].title}
           </button>
         ))}
       </div>

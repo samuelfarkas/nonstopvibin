@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ResetCredits } from "../shared/types.ts";
+import { resetResultCodes } from "../shared/vocabulary.ts";
 
 // OpenAI's backend-client/src/types.rs; these are ChatGPT subscription APIs.
 // Checked against the renderer's dependency-free shared type: every field it
@@ -18,5 +19,5 @@ export const resetCreditsSchema = z.object({
   ),
 }) satisfies z.ZodType<ResetCredits>;
 export const resetResultSchema = z.object({
-  code: z.enum(["reset", "already_redeemed", "nothing_to_reset", "no_credit"]),
+  code: z.enum(resetResultCodes),
 });

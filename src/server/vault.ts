@@ -1,6 +1,6 @@
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { databasePath, vaultKeyPath } from "./data-directory.ts";
 
 export interface SecretCodec {
   encrypt(value: string): string;
@@ -8,9 +8,9 @@ export interface SecretCodec {
 }
 // Desktop and development share an owner-only local encryption key.
 export function fileKeyCodec(directory: string): SecretCodec {
-  const path = join(directory, "vault.key");
+  const path = vaultKeyPath(directory);
   if (!existsSync(path)) {
-    if (existsSync(join(directory, "nonstopvibin.sqlite")))
+    if (existsSync(databasePath(directory)))
       throw new Error(
         "vault.key is missing for an existing database. Restore its matching key from your backup.",
       );

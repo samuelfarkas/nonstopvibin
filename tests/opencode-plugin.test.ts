@@ -30,7 +30,6 @@ test("OpenCode native plugin keeps live credentials and background requests in t
     id: randomUUID(),
     slug: "work",
     name: "Work's ${literal}",
-    color: "forest",
     strategy: "round-robin",
     sessionAffinity: false,
     enabled: true,

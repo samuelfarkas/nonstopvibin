@@ -1,6 +1,10 @@
 import { dirname, join } from "node:path";
 import type { AgentSetupInput, Profile } from "../shared/types.ts";
 import { piProfileControls } from "./pi-profile-controls.ts";
+import { agentDefinitions } from "./agents.ts";
+import { clientKeyPattern } from "./store.ts";
+
+const piDirectory = agentDefinitions.pi.directory;
 
 export const shellQuote = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
@@ -99,7 +103,7 @@ const builtin = { "anthropic-messages": "anthropic", "openai-responses": "openai
 // (e.g. claude-opus-5-5 rejects thinking.type=disabled, which only the refreshed entry declares).
 async function refreshedModel(vendor, id) {
   try {
-    const store = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "models-store.json"), "utf8"));
+    const store = JSON.parse(await readFile(join(process.env.${piDirectory.variable} || join(homedir(), ${piDirectory.home.map((name) => JSON.stringify(name)).join(", ")}), "models-store.json"), "utf8"));
     return store[vendor]?.models?.find((model) => model.id === id);
   } catch {
     return undefined;
@@ -111,7 +115,7 @@ export default async function (pi) {
   try {
     const { stdout } = await promisify(execFile)(${JSON.stringify(helper)}, [], { timeout: 10000, maxBuffer: 128 });
     const key = stdout.trim();
-    if (!/^nv_[A-Za-z0-9_-]{43}$/.test(key)) throw new Error("Invalid nonstopvibin credential.");
+    if (!${clientKeyPattern}.test(key)) throw new Error("Invalid nonstopvibin credential.");
     const response = await fetch(${JSON.stringify(`${endpoint}/models?nonstopvibin=pi`)}, {
       headers: { Authorization: "Bearer " + key }, redirect: "error", signal: AbortSignal.timeout(30000)
     });

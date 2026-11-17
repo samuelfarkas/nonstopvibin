@@ -35,8 +35,8 @@ test(
       clientDirectory: resolve("dist/client"),
       port: 0,
     });
-    const profile = app.store.createProfile("Reset fixture", "forest");
-    const other = app.store.createProfile("Other profile", "blue");
+    const profile = app.store.createProfile("Reset fixture");
+    const other = app.store.createProfile("Other profile");
     const requests: string[] = [];
     let code = "reset";
     let fail = false;
@@ -53,7 +53,7 @@ test(
           provider: "codex",
           kind: "oauth",
           disabled: false,
-          status: "ready",
+          status: "Ready",
           priority: 0,
           authIndex: "fixture-index",
         },
@@ -125,7 +125,7 @@ test(
           await request(
             "POST",
             { creditId: "credit-one" },
-            app.store.secret(`${profile.id}:client`),
+            app.store.clientKey(profile.id),
           )
         ).status,
         401,

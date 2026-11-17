@@ -10,6 +10,7 @@ import type {
   UsagePricing,
 } from "../shared/types.ts";
 import { providerLabel } from "../shared/providers.ts";
+import { allHistoryDays, usagePageSize } from "../shared/vocabulary.ts";
 import { api } from "./api.ts";
 import { Empty } from "./components.tsx";
 import { accountLabel, count, csvCell, dateLabel } from "./format.ts";
@@ -18,7 +19,7 @@ const ranges = [
   { days: 1, label: "24h" },
   { days: 7, label: "7d" },
   { days: 30, label: "30d" },
-  { days: 3650, label: "all" },
+  { days: allHistoryDays, label: "all" },
 ] as const;
 
 const percentage = (part: number, whole: number, digits = 0) =>
@@ -165,12 +166,12 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
   const totalRequests = summary?.requests ?? 0;
   const failedRequests = summary?.failed ?? 0;
   const totalTokens = summary?.totalTokens ?? 0;
-  // "all" has no fixed window and the sample is capped at 500, so a daily
+  // "all" has no fixed window and the sample is capped at a page, so a daily
   // rate is only honest when the sample covers the whole history.
   const elapsedDays =
-    days !== 3650
+    days !== allHistoryDays
       ? days
-      : records.length && records.length < 500
+      : records.length && records.length < usagePageSize
         ? Math.max(
             1,
             (Date.now() -
@@ -786,11 +787,11 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
           )}
           <p className="activity-note">
             Token counts come from the proxy; they are not a subscription bill.
-            {records.length >= 500 && (
+            {records.length >= usagePageSize && (
               <>
                 {" "}
-                Charts, tables, and CSV use the latest 500 requests; summary
-                totals and estimated API value include the full range.
+                Charts, tables, and CSV use the latest {usagePageSize} requests;
+                summary totals and estimated API value include the full range.
               </>
             )}
           </p>

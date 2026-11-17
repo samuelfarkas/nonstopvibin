@@ -22,7 +22,7 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
   const store = new Store(directory, fileKeyCodec(directory));
   const originalManagement = CorePool.prototype.management;
   try {
-    const profile = store.createProfile("Fixture", "forest");
+    const profile = store.createProfile("Fixture");
     const core = new CorePool(store, "unused");
     await mkdir(join(core.directory(profile.id), "auth"), { recursive: true });
     // SAFETY: syncAccounts only reads runtime state and account maps; the
@@ -91,7 +91,7 @@ test("account sync re-reads a Claude identity only when its file changes and rep
   const store = new Store(directory, fileKeyCodec(directory));
   const originalManagement = CorePool.prototype.management;
   try {
-    const profile = store.createProfile("Fixture", "forest");
+    const profile = store.createProfile("Fixture");
     const core = new CorePool(store, "unused");
     const auth = join(core.directory(profile.id), "auth");
     await mkdir(auth, { recursive: true });

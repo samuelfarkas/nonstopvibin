@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { ApiAccount, Model } from "../shared/types.ts";
-import { modelsFor } from "../shared/providers.ts";
+import type { Model } from "../shared/types.ts";
+import { providerEntry } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
+import type { ApiAccount } from "./store.ts";
 
 const source = "https://models.dev/api.json";
 const price = z.number().finite().nonnegative();
@@ -55,13 +56,36 @@ const catalogSchema = z.record(
   }),
 );
 type Catalog = z.input<typeof catalogSchema>;
-const providers = new Map([
-  ["claude", "anthropic"],
-  ["codex", "openai"],
-  ["gemini", "google"],
-  ["kimi", "kimi-for-coding"],
-]);
-const providerId = (id: string) => providers.get(id) ?? id;
+const providerId = (id: string) => providerEntry(id)?.catalog ?? id;
+/** A model with the models.dev limits and prices the agents and Activity need. */
+export interface CatalogModel extends Model {
+  metadata?: {
+    name: string;
+    context: number;
+    output: number;
+    inputLimit?: number;
+    input: Array<"text" | "image">;
+    reasoning: boolean;
+    toolCall: boolean;
+    cost?: {
+      input: number;
+      output: number;
+      reasoning?: number;
+      cache_read?: number;
+      cache_write?: number;
+      tiers?: Array<{
+        input: number;
+        output: number;
+        reasoning?: number;
+        cache_read?: number;
+        cache_write?: number;
+        tier: { type: "context"; size: number };
+      }>;
+    };
+    source: string;
+    fetchedAt: string;
+  };
+}
 
 // Match the routing provider and exact upstream ID. Never borrow a same-named
 // model's pricing from another vendor or guess model versions from a prefix.
@@ -70,7 +94,7 @@ export function enrichModels(
   accounts: ApiAccount[],
   catalog: Catalog,
   fetchedAt: string,
-): Model[] {
+): CatalogModel[] {
   return models.map((model) => {
     const routes = accounts
       .filter((account) => !account.disabled)
@@ -167,7 +191,10 @@ export class ModelCatalog {
       });
     return this.pending;
   }
-  async models(models: Model[], accounts: ApiAccount[]): Promise<Model[]> {
+  async models(
+    models: Model[],
+    accounts: ApiAccount[],
+  ): Promise<CatalogModel[]> {
     const { data, at } = await this.load();
     return enrichModels(models, accounts, data, new Date(at).toISOString());
   }
@@ -182,7 +209,7 @@ export class ModelCatalog {
       void this.load().catch(() => {});
     }
     const cached = this.cached;
-    const enrich = (entries: Model[]) =>
+    const enrich = (entries: Model[]): CatalogModel[] =>
       cached
         ? enrichModels(
             entries,
@@ -198,73 +225,4 @@ export class ModelCatalog {
       refreshing: !!this.pending,
     };
   }
-}
-
-// Both agents need limits and prices per model. Image models, retired IDs
-// and hidden helpers have none on models.dev; they are left out and the app
-// lists them next to the connection, so nothing is omitted silently.
-export function agentModels(models: Model[], agent: "pi" | "opencode") {
-  const usable = models.filter(
-    (model) => model.metadata?.toolCall && model.metadata.cost,
-  );
-  if (!usable.length)
-    throw new AppError(
-      models.length
-        ? `No model in this profile has verified tool support and pricing on models.dev, so ${agent} cannot show any (${models.map((model) => model.id).join(", ")}).`
-        : "This profile has no available models.",
-    );
-  models = usable;
-  // pi speaks each vendor's native protocol through the gateway so thinking
-  // levels and tool calls are not translated twice.
-  const piApi = (model: Model) =>
-    modelsFor("claude", [model], false).length
-      ? "anthropic-messages"
-      : modelsFor("codex", [model], false).length
-        ? "openai-responses"
-        : "openai-completions";
-  return models.map((model) => {
-    const { id, metadata: m } = model;
-    if (!m?.cost) throw new AppError("Model metadata is unavailable.");
-    const name = `${m.name} · API list price${agent === "opencode" && m.cost.tiers?.length ? " (base rate; tiered pricing unavailable in this client)" : ""}${m.cost.cache_read === undefined || m.cost.cache_write === undefined ? " (cache pricing unavailable)" : ""}`;
-    return agent === "pi"
-      ? {
-          id,
-          name,
-          api: piApi(model),
-          reasoning: m.reasoning,
-          input: m.input,
-          contextWindow: m.context,
-          maxTokens: m.output,
-          cost: {
-            input: m.cost.input,
-            output: m.cost.output,
-            ...(m.cost.cache_read !== undefined && {
-              cacheRead: m.cost.cache_read,
-            }),
-            ...(m.cost.cache_write !== undefined && {
-              cacheWrite: m.cost.cache_write,
-            }),
-            ...(m.cost.tiers && {
-              tiers: m.cost.tiers.map((t) => ({
-                inputTokensAbove: t.tier.size,
-                input: t.input,
-                output: t.output,
-                ...(t.cache_read !== undefined && { cacheRead: t.cache_read }),
-                ...(t.cache_write !== undefined && {
-                  cacheWrite: t.cache_write,
-                }),
-              })),
-            }),
-          },
-        }
-      : {
-          id,
-          name,
-          reasoning: m.reasoning,
-          tool_call: m.toolCall,
-          modalities: { input: m.input, output: ["text"] },
-          limit: { context: m.context, input: m.inputLimit, output: m.output },
-          cost: m.cost,
-        };
-  });
 }

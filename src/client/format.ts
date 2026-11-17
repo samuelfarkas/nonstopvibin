@@ -1,4 +1,5 @@
 import type { Account, Quota } from "../shared/types.ts";
+import { quotaStaleMs } from "../shared/vocabulary.ts";
 
 export function groupAccountsByProvider(
   accounts: Account[],
@@ -102,6 +103,6 @@ export function isQuotaStale(quota?: Quota, now = Date.now()): boolean {
   return Boolean(
     quota &&
     (quota.status === "error" ||
-      now - new Date(quota.checkedAt).getTime() > 300_000),
+      now - new Date(quota.checkedAt).getTime() > quotaStaleMs),
   );
 }

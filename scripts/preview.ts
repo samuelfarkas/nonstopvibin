@@ -69,8 +69,8 @@ const app = await Application.create({
   clientDirectory: resolve("dist/client"),
   port: 4321,
 });
-const work = app.store.createProfile("Work", "forest");
-const personal = app.store.createProfile("Personal", "blue");
+const work = app.store.createProfile("Work");
+const personal = app.store.createProfile("Personal");
 for (const [profile, accounts] of [
   [
     work,
@@ -116,7 +116,7 @@ for (const [profile, accounts] of [
   }
   await app.core.start(profile.id);
 }
-app.store.createProfile("Side projects", "clay");
+app.store.createProfile("Side projects");
 // Deterministic simulated request history so Activity has something to show.
 let seed = 7;
 const random = () => {
@@ -166,7 +166,7 @@ await writeFile(
   join(directory, "connection.json"),
   JSON.stringify({
     endpoint: app.endpoint(work.id),
-    key: app.store.secret(`${work.id}:client`),
+    key: app.store.clientKey(work.id),
     provider: `nonstopvibin-${work.slug}`,
   }),
   { mode: 0o600 },

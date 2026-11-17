@@ -28,7 +28,6 @@ if (typeof electron === "string") {
         id: "p",
         slug: "work",
         name: "Work",
-        color: "forest",
         strategy: "round-robin",
         sessionAffinity: false,
         enabled: true,

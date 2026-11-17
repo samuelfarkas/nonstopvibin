@@ -190,7 +190,6 @@ try {
       id: randomUUID(),
       slug,
       name: slug,
-      color: "forest",
       strategy: "round-robin",
       sessionAffinity: false,
       enabled: true,

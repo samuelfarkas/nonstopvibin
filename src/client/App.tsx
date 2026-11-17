@@ -19,7 +19,12 @@ import {
   X,
 } from "lucide-react";
 import type { Account, AppState, ProfileState } from "../shared/types.ts";
-import { providerLabel } from "../shared/providers.ts";
+import {
+  oauthProviders,
+  providerEntry,
+  providerLabel,
+} from "../shared/providers.ts";
+import { nameLength, priorityLimit } from "../shared/vocabulary.ts";
 import { api, initializeSession } from "./api.ts";
 import {
   accountLabel,
@@ -495,13 +500,15 @@ export function App() {
                       the tokens on this machine.
                     </p>
                     <div className="empty-choices">
-                      {(
-                        [
-                          ["Claude", "5-hour · weekly · opus weekly"],
-                          ["Codex", "weekly · credits"],
-                          ["Import", "from EasyCLIProxyAPI files"],
-                        ] as const
-                      ).map(([name, caps]) => (
+                      {[
+                        ...oauthProviders
+                          .filter((provider) => provider.visible)
+                          .map((provider) => [
+                            provider.label,
+                            provider.limits ?? "",
+                          ]),
+                        ["Import", "from EasyCLIProxyAPI files"],
+                      ].map(([name, caps]) => (
                         <button key={name} onClick={() => setAddOpen(true)}>
                           <span>
                             <strong>{name}</strong>
@@ -628,7 +635,7 @@ export function App() {
                                       <span>{planLabel(a.quota.plan)}</span>
                                     )}
                                   </span>
-                                  {a.provider === "codex" &&
+                                  {providerEntry(a.provider)?.bankedResets &&
                                     a.kind === "oauth" && (
                                       <span
                                         className={`account-resets ${!stale && (a.quota?.bankedResets ?? 0) > 0 ? "available" : ""}`}
@@ -782,7 +789,6 @@ function CreateProfile({
           try {
             const p = await api<{ id: string }>("/profiles", "POST", {
               name,
-              color: "forest",
             });
             await onCreated(p.id);
           } catch (e) {
@@ -804,7 +810,7 @@ function CreateProfile({
           <input
             autoFocus
             required
-            maxLength={60}
+            maxLength={nameLength}
             placeholder="Personal, Company A, Side projects…"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -878,18 +884,19 @@ function AccountDetails({
       description={`Managed inside ${profile.name}.`}
     >
       <AccountSummary account={account} />
-      {account.provider === "claude" && account.kind === "oauth" && (
-        <div className="subscription-reconnect">
-          <button className="button" onClick={onReconnect} disabled={busy}>
-            <RefreshCw size={14} aria-hidden="true" /> Reconnect subscription
-          </button>
-          <p className="field-note">
-            {account.status === "Reconnect needed"
-              ? "The provider no longer accepts this connection’s sign-in. Reconnect to restore it."
-              : "Sign in again to this organization while keeping this connection’s history and settings."}
-          </p>
-        </div>
-      )}
+      {providerEntry(account.provider)?.reconnect &&
+        account.kind === "oauth" && (
+          <div className="subscription-reconnect">
+            <button className="button" onClick={onReconnect} disabled={busy}>
+              <RefreshCw size={14} aria-hidden="true" /> Reconnect subscription
+            </button>
+            <p className="field-note">
+              {account.status === "Reconnect needed"
+                ? "The provider no longer accepts this connection’s sign-in. Reconnect to restore it."
+                : "Sign in again to this organization while keeping this connection’s history and settings."}
+            </p>
+          </div>
+        )}
       {account.organizationUuid && (
         <details>
           <summary>Organization details</summary>
@@ -931,15 +938,16 @@ function AccountDetails({
             : "Use Refresh to fetch the provider’s current limits."}
         </p>
       )}
-      {account.provider === "codex" && account.kind === "oauth" && (
-        <ResetCredits
-          key={`${profile.id}:${account.id}`}
-          profileId={profile.id}
-          accountId={account.id}
-          running={profile.runtime === "running"}
-          refresh={refresh}
-        />
-      )}
+      {providerEntry(account.provider)?.bankedResets &&
+        account.kind === "oauth" && (
+          <ResetCredits
+            key={`${profile.id}:${account.id}`}
+            profileId={profile.id}
+            accountId={account.id}
+            running={profile.runtime === "running"}
+            refresh={refresh}
+          />
+        )}
       <hr />
       <form
         onSubmit={(e) => {
@@ -955,7 +963,7 @@ function AccountDetails({
           Label
           <input
             required
-            maxLength={60}
+            maxLength={nameLength}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -965,8 +973,8 @@ function AccountDetails({
             Routing priority
             <input
               type="number"
-              min={-1000}
-              max={1000}
+              min={-priorityLimit}
+              max={priorityLimit}
               value={priority}
               onChange={(e) => setPriority(Number(e.target.value))}
             />

@@ -8,7 +8,7 @@ import { parseQuota } from "../src/server/quota.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { csvCell, isQuotaStale, resetIn } from "../src/client/format.ts";
-import { goModelProtocol } from "../src/shared/providers.ts";
+import { goModelProtocol } from "../src/server/server.ts";
 
 const now = Date.parse("2026-09-05T12:00:00Z");
 test("quota freshness preserves failed readings and the five-minute boundary", () => {
@@ -210,7 +210,7 @@ test("OpenCode Go quota errors do not persist invalid response excerpts", async 
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-quota-"));
   const store = new Store(directory, fileKeyCodec(directory));
   const core = new CorePool(store, "unused");
-  const profile = store.createProfile("Fixture", "forest");
+  const profile = store.createProfile("Fixture");
   const accountId = "opencode-go-fixture";
   store.saveApiAccount(
     profile.id,

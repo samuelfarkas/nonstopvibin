@@ -1,3 +1,7 @@
+import type { Agent } from "./agents.ts";
+import type { OAuthProvider } from "./providers.ts";
+import type { ResetResultCode, strategies } from "./vocabulary.ts";
+
 /** Decoded JSON. Object values may be undefined so partial records and optional fields fit without casts. */
 export type Json =
   | string
@@ -6,23 +10,11 @@ export type Json =
   | null
   | Json[]
   | { [key: string]: Json | undefined };
-export type JsonObject = { [key: string]: Json | undefined };
-type Strategy = "round-robin" | "fill-first";
-export type OAuthProvider = "codex" | "claude" | "antigravity" | "kimi" | "xai";
-export type Provider =
-  | OAuthProvider
-  | "opencode-go"
-  | "openai"
-  | "anthropic"
-  | "gemini"
-  | "custom";
-export type Protocol = "openai" | "anthropic" | "responses";
 export interface Profile {
   id: string;
   slug: string;
   name: string;
-  color: string;
-  strategy: Strategy;
+  strategy: (typeof strategies)[number];
   sessionAffinity: boolean;
   enabled: boolean;
   createdAt: string;
@@ -53,6 +45,10 @@ export interface ResetCredits {
     description?: string | null;
   }>;
 }
+export interface ResetResult {
+  code: ResetResultCode;
+  quotaRefreshed: boolean;
+}
 export interface SeatIdentity {
   accountUuid?: string;
   organizationUuid?: string;
@@ -65,21 +61,18 @@ export interface Account extends SeatIdentity {
   email?: string;
   kind: "oauth" | "api-key";
   disabled: boolean;
-  status: string;
+  status:
+    | "Ready"
+    | "Needs attention"
+    | "Reconnect needed"
+    | "Cooling down"
+    | "Paused"
+    | "Configured";
   priority: number;
   authIndex?: string;
   quota?: Quota;
   prefix?: string;
   modelCount?: number;
-}
-export interface ApiAccount {
-  id: string;
-  name: string;
-  provider: Provider;
-  baseUrl: string;
-  prefix: string;
-  models: Array<{ id: string; protocol: Protocol }>;
-  disabled: boolean;
 }
 export interface UsageRecord {
   id: string;
@@ -150,32 +143,6 @@ export interface AppState {
 export interface Model {
   id: string;
   owned_by?: string;
-  metadata?: {
-    name: string;
-    context: number;
-    output: number;
-    inputLimit?: number;
-    input: Array<"text" | "image">;
-    reasoning: boolean;
-    toolCall: boolean;
-    cost?: {
-      input: number;
-      output: number;
-      reasoning?: number;
-      cache_read?: number;
-      cache_write?: number;
-      tiers?: Array<{
-        input: number;
-        output: number;
-        reasoning?: number;
-        cache_read?: number;
-        cache_write?: number;
-        tier: { type: "context"; size: number };
-      }>;
-    };
-    source: string;
-    fetchedAt: string;
-  };
 }
 export interface ImportSource extends SeatIdentity {
   id: string;
@@ -191,7 +158,7 @@ export interface OAuthSession {
   state: string;
   startedAt: number;
   userCode?: string;
-  expiresAt?: number;
+  expiresAt: number;
   reconnectAccountId?: string;
 }
 export interface OAuthReview {
@@ -204,7 +171,6 @@ export type OAuthStatus =
   | { status: "review"; review: OAuthReview }
   | { status: "ok"; account?: Account; reconnected?: boolean }
   | { status: "error"; error: string };
-export type Agent = "pi" | "codex" | "opencode" | "claude";
 export interface AgentSetupInput {
   agent: Agent;
   projectDirectory?: string;

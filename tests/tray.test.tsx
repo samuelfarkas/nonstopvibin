@@ -12,7 +12,7 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
     provider: "claude",
     kind: "oauth",
     disabled: false,
-    status: "ready",
+    status: "Ready",
     priority: 0,
     quota: {
       status: "error",
@@ -34,7 +34,6 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
         id: "p",
         slug: "work",
         name: "Work",
-        color: "forest",
         strategy: "round-robin",
         sessionAffinity: false,
         enabled: true,

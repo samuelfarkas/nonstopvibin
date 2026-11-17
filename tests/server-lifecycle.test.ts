@@ -161,7 +161,7 @@ test(
     const directory = await mkdtemp(join(tmpdir(), "nv-cli-owner-"));
     const store = new Store(directory, fileKeyCodec(directory));
     for (let i = 0; i < 3; i++) {
-      const profile = store.createProfile(`Lifecycle ${i}`, "forest");
+      const profile = store.createProfile(`Lifecycle ${i}`);
       store.saveProfile({ ...profile, enabled: true });
     }
     store.close();
@@ -256,7 +256,7 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-cli-hangup-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const profile = store.createProfile("Hangup", "forest");
+    const profile = store.createProfile("Hangup");
     store.saveProfile({ ...profile, enabled: true });
     store.close();
     const processes: RunningCli[] = [];
@@ -310,7 +310,7 @@ test(
         directory: failedDirectory,
       });
       await stopServer(recovered, failedDirectory);
-      const profile = app.store.createProfile("Concurrent close", "forest");
+      const profile = app.store.createProfile("Concurrent close");
       await app.core.start(profile.id);
       const pid = app.core.runtimes.get(profile.id)?.child.pid;
       assert.ok(pid);

@@ -1,5 +1,7 @@
 import { z } from "zod";
-import type { Json, JsonObject } from "../shared/types.ts";
+import type { Json } from "../shared/types.ts";
+
+export type JsonObject = { [key: string]: Json | undefined };
 
 /** Schema for values already decoded by JSON.parse or response.json(). */
 const json = z.json();

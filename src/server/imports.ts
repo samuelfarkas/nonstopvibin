@@ -2,10 +2,12 @@ import { readdir, readFile, lstat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import type { ImportSource, JsonObject } from "../shared/types.ts";
-import { parse, record, text } from "./json.ts";
+import type { ImportSource } from "../shared/types.ts";
+import { parse, record, text, type JsonObject } from "./json.ts";
 import { AppError } from "./errors.ts";
 import { claudeIdentity } from "./identity.ts";
+import { isCredentialFile } from "../shared/providers.ts";
+import { credentialFileBytes } from "../shared/vocabulary.ts";
 
 // Only known local installations are scanned. The renderer never supplies a filesystem path.
 export class ImportCatalog {
@@ -35,17 +37,7 @@ export class ImportCatalog {
         const path = join(directory, entry.name);
         try {
           const raw = await this.read(path);
-          if (
-            ![
-              "codex",
-              "claude",
-              "antigravity",
-              "kimi",
-              "xai",
-              "gemini",
-            ].includes(String(raw.type))
-          )
-            continue;
+          if (!isCredentialFile(String(raw.type))) continue;
           const id = createHash("sha256").update(path).digest("hex");
           this.files.set(id, path);
           result.push({
@@ -67,7 +59,7 @@ export class ImportCatalog {
   }
   private async read(path: string): Promise<JsonObject> {
     const file = await lstat(path);
-    if (!file.isFile() || file.size > 2_000_000)
+    if (!file.isFile() || file.size > credentialFileBytes)
       throw new AppError(
         "The selected account file is not a supported regular file.",
       );

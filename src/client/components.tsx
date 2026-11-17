@@ -3,7 +3,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as RadixSelect from "@radix-ui/react-select";
 import { Activity, Bot, Check, ChevronDown, Copy, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Account, QuotaWindow } from "../shared/types.ts";
+import type { Account, ProfileState, QuotaWindow } from "../shared/types.ts";
+import { providerEntry } from "../shared/providers.ts";
 import { copy } from "./api.ts";
 import { accountLabel, exactTime, resetIn } from "./format.ts";
 
@@ -224,18 +225,8 @@ export function Logo({
     </span>
   );
 }
-const providerAssets = new Map([
-  ["claude", "claude"],
-  ["anthropic", "claude"],
-  ["codex", "openai"],
-  ["openai", "openai"],
-  ["kimi", "kimi"],
-  ["antigravity", "antigravity"],
-  ["xai", "xai"],
-  ["opencode-go", "opencode"],
-]);
 export function ProviderIcon({ provider }: { provider: string }) {
-  const asset = providerAssets.get(provider);
+  const asset = providerEntry(provider)?.icon;
   return (
     <span className={`provider-icon ${provider}`}>
       {asset ? (
@@ -246,7 +237,11 @@ export function ProviderIcon({ provider }: { provider: string }) {
     </span>
   );
 }
-export function Status({ value }: { value: string }) {
+export function Status({
+  value,
+}: {
+  value: ProfileState["runtime"] | Account["status"];
+}) {
   return (
     <span
       className={`status ${value === "running" || value === "Ready" ? "good" : value === "error" || value === "Needs attention" || value === "Reconnect needed" ? "bad" : ""}`}
@@ -334,7 +329,7 @@ export function AccountSummary({ account }: { account: Account }) {
               ? `${account.prefix ? `${account.prefix}/ · ` : ""}${account.modelCount} model${account.modelCount === 1 ? "" : "s"}`
               : "OAuth subscription")}
         </div>
-        {account.provider === "claude" &&
+        {providerEntry(account.provider)?.organizations &&
           account.kind === "oauth" &&
           !account.organizationUuid && (
             <small className="identity-unknown">Organization unverified</small>

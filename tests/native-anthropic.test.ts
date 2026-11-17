@@ -8,8 +8,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
-import { record } from "../src/server/json.ts";
-import type { JsonObject, Profile } from "../src/shared/types.ts";
+import { record, type JsonObject } from "../src/server/json.ts";
+import type { Profile } from "../src/shared/types.ts";
 import { settle } from "./teardown.ts";
 
 // Mock only the external Anthropic provider. Every request below traverses the
@@ -103,7 +103,7 @@ function addAccount(profile: Profile) {
 }
 function headers(profile = primary) {
   return {
-    Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+    Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
     "Content-Type": "application/json",
     "anthropic-version": "2023-06-01",
   };
@@ -223,9 +223,9 @@ beforeAll(async () => {
     port: 0,
     requirePinnedCore: true,
   });
-  primary = app.store.createProfile("Native fixture", "forest");
-  other = app.store.createProfile("Other native fixture", "blue");
-  exhausted = app.store.createProfile("Exhausted native fixture", "forest");
+  primary = app.store.createProfile("Native fixture");
+  other = app.store.createProfile("Other native fixture");
+  exhausted = app.store.createProfile("Exhausted native fixture");
   for (const profile of [primary, other, exhausted]) {
     addAccount(profile);
     await app.core.start(profile.id);
@@ -274,7 +274,7 @@ test(
       (await models.json()).some((entry: { id: string }) => entry.id === model),
     );
     const catalog = await fetch(`${app.endpoint(primary.id)}/models`, {
-      headers: { "x-api-key": app.store.secret(`${primary.id}:client`) },
+      headers: { "x-api-key": app.store.clientKey(primary.id) },
     });
     assert.equal(catalog.status, 200);
     const catalogBody = await catalog.json();
@@ -300,7 +300,7 @@ test(
       { headers: management },
     );
     assert.equal(missing.status, 404);
-    const empty = app.store.createProfile("Empty native fixture", "blue");
+    const empty = app.store.createProfile("Empty native fixture");
     await app.core.start(empty.id);
     const emptyCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
       headers: headers(empty),
@@ -444,7 +444,7 @@ test("native API headers preserve version and extension betas, default version, 
     "anthropic-version": "2023-01-01",
     "anthropic-beta":
       "message-threads-2026-08-12,mid-conversation-tool-changes-2026-07-01",
-    "x-api-key": app.store.secret(`${primary.id}:client`),
+    "x-api-key": app.store.clientKey(primary.id),
     Cookie: "guest=not-upstream",
     "X-Forwarded-For": "192.0.2.1",
   };
@@ -585,7 +585,7 @@ test("native clean EOF and provider error events end with an error, not message_
     ],
   ] as const) {
     // A failed stream cools down its account, so each case gets its own profile.
-    const profile = app.store.createProfile(`Failing ${label}`, "forest");
+    const profile = app.store.createProfile(`Failing ${label}`);
     addAccount(profile);
     await app.core.start(profile.id);
     const response = await send(
@@ -814,7 +814,7 @@ test("native profile keys cannot manage, cross profiles or fall back to a health
     { messages: message("conflicting keys") },
     primary,
     "messages",
-    { ...headers(), "x-api-key": app.store.secret(`${other.id}:client`) },
+    { ...headers(), "x-api-key": app.store.clientKey(other.id) },
   );
   assert.equal(wrongAuth.status, 401);
   assert.equal(observed.length, before);

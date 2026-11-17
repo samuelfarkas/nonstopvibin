@@ -1,5 +1,5 @@
-import type { Json, JsonObject, Quota, QuotaWindow } from "../shared/types.ts";
-import { number, record, text, unwrap } from "./json.ts";
+import type { Json, Quota, QuotaWindow } from "../shared/types.ts";
+import { number, record, text, unwrap, type JsonObject } from "./json.ts";
 
 function remaining(used: Json | undefined): number | null {
   const n = number(used);

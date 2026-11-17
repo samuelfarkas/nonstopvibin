@@ -2,7 +2,6 @@ import { setImmediate as yieldToLoop } from "node:timers/promises";
 import type { Store } from "./store.ts";
 import { z } from "zod";
 import type {
-  Model,
   Json,
   PricingTokens,
   UsagePricing,
@@ -10,7 +9,8 @@ import type {
   UsageTotals,
   UsageSummary,
 } from "../shared/types.ts";
-import type { ModelCatalog } from "./model-catalog.ts";
+import type { CatalogModel, ModelCatalog } from "./model-catalog.ts";
+import { usagePageSize } from "../shared/vocabulary.ts";
 
 interface UsageHistory {
   records: UsageRecord[];
@@ -93,7 +93,7 @@ export function normalizedTokens(r: UsageRecord): PricingTokens | null {
 
 export function estimateUsd(
   r: UsageRecord,
-  cost: NonNullable<Model["metadata"]>["cost"],
+  cost: NonNullable<CatalogModel["metadata"]>["cost"],
   t = normalizedTokens(r),
 ): number | null {
   if (!cost || !t) return null;
@@ -215,13 +215,13 @@ export class UsagePrices {
     catalog: ModelCatalog,
   ): Promise<UsageHistory> {
     // Capture one storage snapshot after queued callers finish, before yielding.
-    const records = store.usage(profileId, since, 500);
+    const records = store.usage(profileId, since, usagePageSize);
     const pricing = this.snapshot(records, catalog);
     // Freeze rates for the entire calculation, even if a network refresh finishes between batches.
     const snapshot = records.length
       ? catalog.snapshot([])
       : {
-          enrich: (models: Model[]) => models,
+          enrich: (models: CatalogModel[]) => models,
           fetchedAt: null,
         };
     const generation = store.usageGeneration;
@@ -260,7 +260,10 @@ export class UsagePrices {
           reasoningTokens: 0,
           totalTokens: 0,
         };
-    const costs = new Map<string, NonNullable<Model["metadata"]>["cost"]>();
+    const costs = new Map<
+      string,
+      NonNullable<CatalogModel["metadata"]>["cost"]
+    >();
     const include = (r: UsageRecord, direction: number) => {
       const id = r.upstreamModel || r.model;
       const key = JSON.stringify([r.provider, id]);
@@ -306,7 +309,7 @@ export class UsagePrices {
           sequence,
         );
         for (const item of batch) include(item.record, -1);
-        if (batch.length < 500) break;
+        if (batch.length < usagePageSize) break;
         timestamp = batch[batch.length - 1].record.timestamp;
         sequence = batch[batch.length - 1].sequence;
         await yieldToLoop();
@@ -328,7 +331,7 @@ export class UsagePrices {
           );
       for (const item of batch)
         if (item.record.timestamp >= since) include(item.record, 1);
-      if (batch.length < 500) break;
+      if (batch.length < usagePageSize) break;
       sequence = batch[batch.length - 1].sequence;
       timestamp = batch[batch.length - 1].record.timestamp;
       await yieldToLoop();

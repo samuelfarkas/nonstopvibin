@@ -1,9 +1,21 @@
 import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import type { AppState, ProfileState } from "../shared/types.ts";
+import {
+  nameLength,
+  retentionDays,
+  type RetentionDays,
+} from "../shared/vocabulary.ts";
 import { api } from "./api.ts";
 import { Select, useKeepDraft } from "./components.tsx";
 import "./settings.css";
+
+const retentionLabels: Record<RetentionDays, string> = {
+  0: "Keep all history",
+  30: "30 days",
+  90: "90 days",
+  365: "1 year",
+};
 
 export function SettingsPage({
   state,
@@ -194,12 +206,10 @@ export function SettingsPage({
                     value={String(retention)}
                     disabled={savingRetention}
                     onValueChange={(value) => setRetention(Number(value))}
-                    options={[
-                      { value: "0", label: "Keep all history" },
-                      { value: "30", label: "30 days" },
-                      { value: "90", label: "90 days" },
-                      { value: "365", label: "1 year" },
-                    ]}
+                    options={retentionDays.map((days) => ({
+                      value: String(days),
+                      label: retentionLabels[days],
+                    }))}
                   />
                   <button
                     className="button"
@@ -321,7 +331,7 @@ function ProfileSettings({
           <input
             id="profile-name"
             required
-            maxLength={60}
+            maxLength={nameLength}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />

@@ -13,18 +13,27 @@ import {
   LoaderCircle,
   Plus,
 } from "lucide-react";
-import { apiPresets, oauthProviders } from "../shared/providers.ts";
+import {
+  apiPresets,
+  oauthProviders,
+  providerEntry,
+  type OAuthProvider,
+  type Protocol,
+} from "../shared/providers.ts";
+import {
+  credentialFileBytes,
+  nameLength,
+  prefixLength,
+} from "../shared/vocabulary.ts";
 import type {
   Account,
   AppState,
   ImportSource,
-  OAuthProvider,
   OAuthReview,
   OAuthStatus,
   OAuthSession,
   ProfileState,
   Json,
-  Protocol,
 } from "../shared/types.ts";
 import { api, openExternal } from "./api.ts";
 import {
@@ -37,8 +46,9 @@ import {
 
 import { accountLabel } from "./format.ts";
 
-const hiddenProviders = new Set(["antigravity", "kimi", "xai"]);
-const exposedApiPresets = new Set(["opencode-go", "custom"]);
+/** Whether accounts of this provider are seats in separate organizations. */
+const organizations = (provider: string) =>
+  providerEntry(provider)?.organizations === true;
 
 export function AddSubscription({
   profile: initialProfile,
@@ -63,7 +73,7 @@ export function AddSubscription({
   const [claudeOnly, setClaudeOnly] = useState(!!reconnectAccount);
   const claudeAccounts = claudeOnly
     ? profile.accounts.filter(
-        (a) => a.provider === "claude" && a.kind === "oauth",
+        (a) => organizations(a.provider) && a.kind === "oauth",
       )
     : [];
   const [review, setReview] = useState<OAuthReview>();
@@ -298,7 +308,7 @@ export function AddSubscription({
             >
               Done
             </button>
-            {session?.provider === "claude" && (
+            {session && organizations(session.provider) && (
               <button
                 className="button"
                 disabled={busy}
@@ -315,7 +325,7 @@ export function AddSubscription({
               </button>
             )}
           </div>
-          {session?.provider === "claude" && (
+          {session && organizations(session.provider) && (
             <p className="field-note">
               Use the same email and choose a different organization when you
               sign in.
@@ -409,7 +419,7 @@ export function AddSubscription({
           </div>
           <h3>Continue in your browser</h3>
           <p>
-            {session.provider === "claude" ? (
+            {organizations(session.provider) ? (
               <>
                 Choose{" "}
                 <strong>
@@ -438,7 +448,7 @@ export function AddSubscription({
               </>
             )}
           </p>
-          {session.provider === "claude" && (
+          {organizations(session.provider) && (
             <p className="organization-hint">
               One email can have several seats. Each organization connects
               separately.
@@ -488,9 +498,10 @@ export function AddSubscription({
               ? "Verification paused"
               : "Waiting for the provider"}
             · expires at{" "}
-            {new Date(
-              session.expiresAt ?? session.startedAt + 300_000,
-            ).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            {new Date(session.expiresAt).toLocaleTimeString([], {
+              hour: "numeric",
+              minute: "2-digit",
+            })}
           </p>
           {/* In a browser the server may be remote, so its loopback callback
               cannot be reached; pasting is the expected path there. */}
@@ -593,8 +604,7 @@ export function AddSubscription({
               {oauthProviders
                 .filter(
                   (provider) =>
-                    !hiddenProviders.has(provider.id) &&
-                    (!claudeOnly || provider.id === "claude"),
+                    provider.visible && (!claudeOnly || provider.organizations),
                 )
                 .map((provider) => (
                   <button
@@ -677,10 +687,10 @@ export function AddSubscription({
                     setBaseUrl(p.baseUrl);
                     setPrefix(p.prefix);
                     setProtocol(p.protocol);
-                    setModels(p.models);
+                    setModels("");
                   }}
                   options={apiPresets
-                    .filter((provider) => exposedApiPresets.has(provider.id))
+                    .filter((provider) => provider.visible)
                     .map((provider) => ({
                       value: provider.id,
                       label: provider.name,
@@ -695,7 +705,7 @@ export function AddSubscription({
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    maxLength={60}
+                    maxLength={nameLength}
                   />
                 </label>
                 <label className="field">
@@ -705,7 +715,7 @@ export function AddSubscription({
                     onChange={(e) => setPrefix(e.target.value)}
                     pattern="[a-z0-9-]*"
                     placeholder="e.g. go"
-                    maxLength={30}
+                    maxLength={prefixLength}
                   />
                 </label>
               </div>
@@ -728,12 +738,12 @@ export function AddSubscription({
                     type="url"
                     required
                     value={baseUrl}
-                    readOnly={presetId === "opencode-go"}
+                    readOnly={preset.fixedEndpoint}
                     onChange={(e) => setBaseUrl(e.target.value)}
                     placeholder="https://api.example.com/v1"
                   />
                 </label>
-                {presetId !== "opencode-go" && (
+                {!preset.fixedEndpoint && (
                   <label className="field">
                     API format
                     <Select<Protocol>
@@ -806,7 +816,7 @@ export function AddSubscription({
                         <small>
                           {source.organizationUuid
                             ? `${source.email || source.provider} · ${source.organizationUuid.slice(0, 8)}`
-                            : source.provider === "claude"
+                            : organizations(source.provider)
                               ? "Organization unverified"
                               : source.fileName}
                         </small>
@@ -873,7 +883,7 @@ export function AddSubscription({
                         imported++;
                       }
                       for (const file of importFiles) {
-                        if (file.size > 2_000_000)
+                        if (file.size > credentialFileBytes)
                           throw new Error(
                             `${file.name} is too large. ${imported} files imported so far.`,
                           );

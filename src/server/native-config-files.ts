@@ -13,7 +13,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { AppError } from "./errors.ts";
-import type { Agent, JsonObject } from "../shared/types.ts";
+import type { Agent } from "../shared/agents.ts";
+import type { JsonObject } from "./json.ts";
 
 export function isMissing(cause: unknown): boolean {
   return cause instanceof Error && "code" in cause && cause.code === "ENOENT";

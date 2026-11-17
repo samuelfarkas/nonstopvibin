@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store } from "../src/server/store.ts";
+import { Store, clientKeyPattern, secretIds } from "../src/server/store.ts";
 import type { SecretCodec } from "../src/server/vault.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
@@ -13,8 +13,8 @@ test("existing databases never receive a replacement vault key", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-missing-key-"));
   const store = new Store(directory, fileKeyCodec(directory));
   try {
-    const profile = store.createProfile("Fixture", "forest");
-    const secret = store.secret(`${profile.id}:client`);
+    const profile = store.createProfile("Fixture");
+    const secret = store.clientKey(profile.id);
     const path = join(directory, "vault.key");
     const original = await readFile(path);
     await rm(path);
@@ -23,7 +23,7 @@ test("existing databases never receive a replacement vault key", async () => {
     await writeFile(path, original, { mode: 0o600 });
     const encrypted = store.db
       .prepare("SELECT encrypted FROM secrets WHERE id=?")
-      .get(`${profile.id}:client`);
+      .get(secretIds.client(profile.id));
     assert.equal(
       fileKeyCodec(directory).decrypt(String(encrypted?.encrypted)),
       secret,
@@ -39,10 +39,10 @@ test("profile writes bump the generation that tray name caches use", async () =>
   const store = new Store(directory, fileKeyCodec(directory));
   try {
     const start = store.profileGeneration;
-    const profile = store.createProfile("Fixture", "forest");
+    const profile = store.createProfile("Fixture");
     assert.equal(store.profileGeneration, start + 1);
     store.profiles();
-    store.secret(`${profile.id}:client`);
+    store.clientKey(profile.id);
     assert.equal(store.profileGeneration, start + 1, "reads do not bump it");
     store.saveProfile({ ...profile, name: "Renamed" });
     assert.equal(store.profileGeneration, start + 2);
@@ -64,9 +64,9 @@ test("desktop secrets persist using an owner-only local key", async () => {
   };
   let app = await Application.create(options);
   try {
-    const profile = app.store.createProfile("Fixture", "forest");
-    const id = `${profile.id}:client`;
-    const key = app.store.secret(id);
+    const profile = app.store.createProfile("Fixture");
+    const id = secretIds.client(profile.id);
+    const key = app.store.clientKey(profile.id);
     const row = app.store.db
       .prepare("SELECT encrypted FROM secrets WHERE id=?")
       .get(id);
@@ -78,7 +78,7 @@ test("desktop secrets persist using an owner-only local key", async () => {
       assert.equal((await stat(join(directory, file))).mode & 0o777, 0o600);
     await app.close();
     app = await Application.create(options);
-    assert.equal(app.store.secret(id), key);
+    assert.equal(app.store.clientKey(profile.id), key);
     await app.close();
     await rm(directory, { recursive: true });
     app = await Application.create(options);
@@ -98,8 +98,8 @@ test("moving summaries match stored history through late inserts, changing perio
   let store = new Store(directory, fileKeyCodec(directory));
   try {
     const profiles = [
-      store.createProfile("First", "forest"),
-      store.createProfile("Second", "blue"),
+      store.createProfile("First"),
+      store.createProfile("Second"),
     ];
     const now = Date.now();
     const day = 86_400_000;
@@ -185,8 +185,8 @@ test("history cleanup is opt-in, persists, and is reflected in each affected sum
   let store = new Store(directory, fileKeyCodec(directory));
   try {
     const profiles = [
-      store.createProfile("First", "forest"),
-      store.createProfile("Second", "blue"),
+      store.createProfile("First"),
+      store.createProfile("Second"),
     ];
     const now = Date.now();
     const records: UsageRecord[] = profiles.flatMap((profile) =>
@@ -278,7 +278,7 @@ test("saveApiAccount rolls back the account when encryption fails", async () => 
   };
   const store = new Store(directory, codec);
   try {
-    const profile = store.createProfile("Fixture", "forest");
+    const profile = store.createProfile("Fixture");
     rejectEncryption = true;
     assert.throws(
       () =>
@@ -309,12 +309,9 @@ test("profile slug boundaries remain valid after truncation and duplicate suffix
   const store = new Store(directory, fileKeyCodec(directory));
   try {
     const name = "a".repeat(39) + " b";
-    assert.equal(store.createProfile(name, "forest").slug, "a".repeat(39));
-    assert.equal(
-      store.createProfile(name, "forest").slug,
-      "a".repeat(39) + "-2",
-    );
-    assert.equal(store.createProfile(" ".repeat(41), "forest").slug, "profile");
+    assert.equal(store.createProfile(name).slug, "a".repeat(39));
+    assert.equal(store.createProfile(name).slug, "a".repeat(39) + "-2");
+    assert.equal(store.createProfile(" ".repeat(41)).slug, "profile");
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });
@@ -325,8 +322,8 @@ test("time pagination seeks through tied timestamps without losing rows or cross
   const directory = await mkdtemp(join(tmpdir(), "nv-time-pages-"));
   const store = new Store(directory, fileKeyCodec(directory));
   try {
-    const profile = store.createProfile("Pagination", "forest");
-    const other = store.createProfile("Other", "blue");
+    const profile = store.createProfile("Pagination");
+    const other = store.createProfile("Other");
     // Minimal synthetic rows exercise storage ordering independently of provider accounting.
     const insert = store.db.prepare("INSERT INTO usage VALUES (?,?,?,?)");
     for (let i = 0; i < 2003; i++) {
@@ -383,6 +380,58 @@ test("time pagination seeks through tied timestamps without losing rows or cross
         .length,
       0,
     );
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("secret and setting rows keep the IDs stored databases already use", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-row-ids-"));
+  const store = new Store(directory, fileKeyCodec(directory));
+  try {
+    const profile = store.createProfile("Fixture");
+    store.saveApiAccount(
+      profile.id,
+      {
+        id: "account",
+        name: "Key",
+        provider: "custom",
+        baseUrl: "https://api.example.test/v1",
+        prefix: "",
+        models: [{ id: "model", protocol: "openai" }],
+        disabled: false,
+      },
+      "secret",
+    );
+    store.saveAccountMetadata(profile.id, []);
+    store.resetRequestId("identity", "credit");
+    store.setUsageRetentionDays(30);
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT id FROM secrets ORDER BY id")
+        .all()
+        .map((row) => String(row.id)),
+      [
+        `${profile.id}:client`,
+        `${profile.id}:core`,
+        `${profile.id}:management`,
+        "account:api",
+      ].sort(),
+    );
+    assert.deepEqual(
+      store.db
+        .prepare("SELECT id FROM settings ORDER BY id")
+        .all()
+        .map((row) => String(row.id)),
+      [
+        `accounts:${profile.id}`,
+        'codex-reset:["identity","credit"]',
+        "usage-retention-days",
+      ],
+    );
+    assert.equal(store.apiKey("account"), "secret");
+    assert.match(store.clientKey(profile.id), clientKeyPattern);
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });

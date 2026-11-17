@@ -5,8 +5,9 @@ import type { Duplex } from "node:stream";
 import { CorePool } from "./core.ts";
 import { Store, clientDigest } from "./store.ts";
 import { AppError } from "./errors.ts";
-import { ModelCatalog, agentModels } from "./model-catalog.ts";
-import { modelsFor } from "../shared/providers.ts";
+import { ModelCatalog } from "./model-catalog.ts";
+import { agentModels, offeredModels } from "./agents.ts";
+import { agents, isAgent } from "../shared/agents.ts";
 import type { Profile } from "../shared/types.ts";
 
 export function sameSecret(a: string, b: string): boolean {
@@ -20,8 +21,7 @@ function keyOwner(store: Store, key: string): Profile | undefined {
   const id = store.clientIndex().get(clientDigest(key));
   try {
     // The live rows decide, so deletion and rotation fail closed even past the index.
-    if (id && sameSecret(key, store.secret(`${id}:client`)))
-      return store.profile(id);
+    if (id && sameSecret(key, store.clientKey(id))) return store.profile(id);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
   }
@@ -147,10 +147,12 @@ export class Gateway {
       // Codex installed without other providers: serve its own vendor's models.
       const release = this.acquire(profileId);
       try {
-        const data = modelsFor(
+        const data = await offeredModels(
           "codex",
           await this.core.models(profileId),
           false,
+          (models) =>
+            this.catalog.models(models, this.store.apiAccounts(profileId)),
         );
         res.writeHead(200, {
           "Content-Type": "application/json",
@@ -170,13 +172,18 @@ export class Gateway {
     if (
       req.method === "GET" &&
       url.pathname === "/v1/models" &&
-      (agent === "pi" || agent === "opencode")
+      agent &&
+      isAgent(agent) &&
+      !agents[agent].native
     ) {
       const release = this.acquire(profileId);
       try {
-        const models = await this.catalog.models(
+        const models = await offeredModels(
+          agent,
           await this.core.models(profileId),
-          this.store.apiAccounts(profileId),
+          false,
+          (models) =>
+            this.catalog.models(models, this.store.apiAccounts(profileId)),
         );
         const payload = { models: agentModels(models, agent) };
         res.writeHead(200, {
@@ -196,7 +203,7 @@ export class Gateway {
       port,
       method: req.method,
       path,
-      headers: forwardedHeaders(req, this.store.secret(`${profileId}:core`)),
+      headers: forwardedHeaders(req, this.store.coreKey(profileId)),
     });
     let abandoned = false;
     const close = () => {
@@ -249,7 +256,7 @@ export class Gateway {
         port,
         method: "GET",
         path,
-        headers: forwardedHeaders(req, this.store.secret(`${profileId}:core`)),
+        headers: forwardedHeaders(req, this.store.coreKey(profileId)),
       });
       socket.once("close", () => {
         release();

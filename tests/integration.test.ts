@@ -22,9 +22,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
+import { agentDefinitions } from "../src/server/agents.ts";
 import { Application } from "../src/server/server.ts";
 import { CorePool } from "../src/server/core.ts";
-import { Store } from "../src/server/store.ts";
+import { Store, secretIds } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
@@ -49,7 +50,7 @@ async function request(
   return fetch(`${app.endpoint(profile.id)}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+      Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
@@ -127,8 +128,8 @@ beforeAll(async () => {
     clientDirectory: resolve("dist/client"),
     port: 0,
   });
-  company = app.store.createProfile("Company A", "forest");
-  personal = app.store.createProfile("Personal", "blue");
+  company = app.store.createProfile("Company A");
+  personal = app.store.createProfile("Personal");
   for (const [profile, keys] of [
     [company, ["company-one", "company-two"]],
     [personal, ["personal-one"]],
@@ -200,8 +201,8 @@ test("a management client that aborts mid-body is not reported as an app error",
   assert.equal(app.state().errors.length, reported);
 });
 test("a rotated or deleted profile key is rejected on the very next request", async () => {
-  const profile = app.store.createProfile("Key rotation fixture", "plum");
-  const bystander = app.store.createProfile("Key bystander", "plum");
+  const profile = app.store.createProfile("Key rotation fixture");
+  const bystander = app.store.createProfile("Key bystander");
   const status = async (key: string) => {
     const response = await fetch(`${app.origin}/v1/models`, {
       headers: { Authorization: `Bearer ${key}` },
@@ -211,10 +212,10 @@ test("a rotated or deleted profile key is rejected on the very next request", as
   };
   // Accepted keys reach the stopped-profile check; rejected keys never do.
   // Stopped profiles keep this off the running cores, whose activity later tests time.
-  const original = app.store.secret(`${profile.id}:client`);
+  const original = app.store.clientKey(profile.id);
   assert.equal(await status(original), 503);
   const rotated = `nv_${"R".repeat(43)}`;
-  app.store.setSecret(`${profile.id}:client`, rotated);
+  app.store.setSecret(secretIds.client(profile.id), rotated);
   assert.equal(await status(original), 401);
   assert.equal(await status(rotated), 503);
   // Removal outside the Store's write methods must fail closed too.
@@ -224,7 +225,7 @@ test("a rotated or deleted profile key is rejected on the very next request", as
     .prepare("DELETE FROM secrets WHERE id LIKE ?")
     .run(`${profile.id}:%`);
   assert.equal(await status(rotated), 401);
-  assert.equal(await status(app.store.secret(`${bystander.id}:client`)), 503);
+  assert.equal(await status(app.store.clientKey(bystander.id)), 503);
 });
 test("static assets revalidate without caching management responses", async () => {
   const original = app.options.clientDirectory;
@@ -325,7 +326,7 @@ test("real core launches with separate owner-only directories and a model catalo
   }
   const raw = await readFile(join(directory, "nonstopvibin.sqlite"));
   assert.equal(
-    raw.includes(Buffer.from(app.store.secret(`${company.id}:client`))),
+    raw.includes(Buffer.from(app.store.clientKey(company.id))),
     false,
   );
 });
@@ -340,10 +341,7 @@ test("usage retention management rejects profile keys and invalid limits", async
       },
       body: JSON.stringify({ days }),
     });
-  assert.equal(
-    (await put(app.store.secret(`${company.id}:client`), 30)).status,
-    401,
-  );
+  assert.equal((await put(app.store.clientKey(company.id), 30)).status, 401);
   assert.equal((await put(app.token, 1)).status, 400);
   assert.equal((await put(app.token, 0)).status, 200);
   assert.equal(app.store.usageRetentionDays(), 0);
@@ -360,7 +358,7 @@ test(
     const core = new CorePool(store, app.options.binary);
     core.timing.accounts = 200;
     core.timing.coalesce = 20;
-    const profile = store.createProfile("Maintenance fixture", "forest");
+    const profile = store.createProfile("Maintenance fixture");
     const syncAccounts = core.syncAccounts;
     const collectUsage = core.collectUsage;
     let enter!: () => void;
@@ -419,7 +417,7 @@ test("verified CLIProxyAPI exposes its native Codex catalog through the same pro
     `${app.endpoint(company.id)}/models?client_version=0.140.0`,
     {
       headers: {
-        Authorization: `Bearer ${app.store.secret(`${company.id}:client`)}`,
+        Authorization: `Bearer ${app.store.clientKey(company.id)}`,
       },
     },
   );
@@ -492,7 +490,7 @@ test("agent setup remains management-only and checks the complete profile throug
     method: "POST",
     headers: {
       ...headers,
-      Authorization: `Bearer ${app.store.secret(`${company.id}:client`)}`,
+      Authorization: `Bearer ${app.store.clientKey(company.id)}`,
     },
     body: JSON.stringify(input),
   });
@@ -523,7 +521,7 @@ test("agent setup remains management-only and checks the complete profile throug
   assert.equal(created.status, 200);
   const setup = await created.json();
   assert.equal(
-    JSON.stringify(setup).includes(app.store.secret(`${company.id}:client`)),
+    JSON.stringify(setup).includes(app.store.clientKey(company.id)),
     false,
   );
   assert.deepEqual(setup.models, ["fixture-model"]);
@@ -594,7 +592,7 @@ test("dynamic agent discovery uses validated metadata and the authenticated live
       const endpoint = `${app.endpoint(company.id)}/models?nonstopvibin=${agent}`;
       const response = await fetch(endpoint, {
         headers: {
-          Authorization: `Bearer ${app.store.secret(`${company.id}:client`)}`,
+          Authorization: `Bearer ${app.store.clientKey(company.id)}`,
         },
       });
       assert.equal(response.status, 200);
@@ -614,7 +612,7 @@ test("dynamic agent discovery uses validated metadata and the authenticated live
         (
           await fetch(endpoint, {
             headers: {
-              Authorization: `Bearer ${app.store.secret(`${personal.id}:client`)}`,
+              Authorization: `Bearer ${app.store.clientKey(personal.id)}`,
             },
           })
         ).status,
@@ -669,7 +667,7 @@ test("missing, wrong and mismatched profile credentials never reach upstream", a
     (
       await fetch(`${app.endpoint(company.id)}/models`, {
         headers: {
-          Authorization: `Bearer ${app.store.secret(`${personal.id}:client`)}`,
+          Authorization: `Bearer ${app.store.clientKey(personal.id)}`,
         },
       })
     ).status,
@@ -679,7 +677,7 @@ test("missing, wrong and mismatched profile credentials never reach upstream", a
     (
       await fetch(`${app.origin}/p/${company.slug}/v0/management/config`, {
         headers: {
-          Authorization: `Bearer ${app.store.secret(`${company.id}:client`)}`,
+          Authorization: `Bearer ${app.store.clientKey(company.id)}`,
         },
       })
     ).status,
@@ -716,7 +714,7 @@ test("the shared /v1 endpoint routes solely by profile API key", async () => {
   const response = await fetch(`${app.origin}/v1/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${app.store.secret(`${personal.id}:client`)}`,
+      Authorization: `Bearer ${app.store.clientKey(personal.id)}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -802,7 +800,7 @@ test("Anthropic Messages and OpenAI Responses are translated through the profile
     const response = await fetch(`${app.endpoint(personal.id)}/${path}`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${app.store.secret(`${personal.id}:client`)}`,
+        Authorization: `Bearer ${app.store.clientKey(personal.id)}`,
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       },
@@ -869,13 +867,13 @@ test(
   "stopping a profile fails closed and a restart preserves its key and usage",
   { timeout: 15_000 },
   async () => {
-    const key = app.store.secret(`${personal.id}:client`);
+    const key = app.store.clientKey(personal.id);
     await app.core.collectUsage(personal.id);
     const summary = app.store.summary(personal.id);
     await app.core.stop(personal.id);
     assert.equal((await request(personal)).status, 503);
     await app.core.start(personal.id);
-    assert.equal(app.store.secret(`${personal.id}:client`), key);
+    assert.equal(app.store.clientKey(personal.id), key);
     assert.deepEqual(app.store.summary(personal.id), summary);
     const result = await request(personal);
     assert.equal(result.status, 200);
@@ -893,7 +891,7 @@ test("app startup refreshes an installed extension without starting its profile"
   };
   let instance = await Application.create(options);
   try {
-    const profile = instance.store.createProfile("Before update", "blue");
+    const profile = instance.store.createProfile("Before update");
     const installed = await instance.agentSetup.install(
       profile,
       { agent: "pi" },
@@ -905,7 +903,7 @@ test("app startup refreshes an installed extension without starting its profile"
     instance = await Application.create(options);
     const manifest = JSON.parse(await readFile(installed.files[1], "utf8"));
     assert.equal(manifest.port, instance.port);
-    assert.equal(manifest.version, 7);
+    assert.equal(manifest.version, agentDefinitions.pi.version);
     const content = await readFile(installed.files[0], "utf8");
     assert.match(content, /After update/);
     assert.ok(content.includes(instance.endpoint(profile.id)));
@@ -946,7 +944,7 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
       req.once("error", (error) =>
         reject(
           new Error(
-            `Handshake for ${profile.slug} with ${key === app.store.secret(`${profile.id}:client`) ? "matching" : "foreign"} key: ${error.message}`,
+            `Handshake for ${profile.slug} with ${key === app.store.clientKey(profile.id) ? "matching" : "foreign"} key: ${error.message}`,
             { cause: error },
           ),
         ),
@@ -957,14 +955,10 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
     });
   }
   assert.equal(
-    (await handshake(personal, app.store.secret(`${company.id}:client`)))
-      .statusCode,
+    (await handshake(personal, app.store.clientKey(company.id))).statusCode,
     403,
   );
-  const upgraded = await handshake(
-    personal,
-    app.store.secret(`${personal.id}:client`),
-  );
+  const upgraded = await handshake(personal, app.store.clientKey(personal.id));
   assert.equal(upgraded.statusCode, 101);
   assert.equal(upgraded.headers["x-nonstopvibin-profile"], personal.slug);
   assert.ok(upgraded.headers["sec-websocket-accept"]);
@@ -984,7 +978,7 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
   try {
     const filtered = await handshake(
       personal,
-      app.store.secret(`${personal.id}:client`),
+      app.store.clientKey(personal.id),
     );
     assert.equal(filtered.statusCode, 101);
     assert.equal(filtered.headers["set-cookie"], undefined);
@@ -1018,10 +1012,7 @@ test("account pause, resume and removal apply to the running model catalog", asy
     (await app.core.models(personal.id)).some((m) => m.id === "fixture-model"),
     false,
   );
-  assert.throws(
-    () => app.store.secret("personal-one:api"),
-    /Credential not found/,
-  );
+  assert.throws(() => app.store.apiKey("personal-one"), /Credential not found/);
 });
 
 test("the core leaves no request-body capture or error log files after traffic", async () => {
@@ -1067,8 +1058,8 @@ test(
   { timeout: 15_000 },
   async () => {
     const profiles = [
-      app.store.createProfile("Shared A", "forest"),
-      app.store.createProfile("Shared B", "blue"),
+      app.store.createProfile("Shared A"),
+      app.store.createProfile("Shared B"),
     ];
     try {
       for (const profile of profiles) {
@@ -1114,7 +1105,7 @@ test(
   "orderly concurrent stops drain every queued page and reject new gateway requests",
   { timeout: 10000 },
   async () => {
-    const profile = app.store.createProfile("Drain fixture", "forest");
+    const profile = app.store.createProfile("Drain fixture");
     await app.core.start(profile.id);
     const runtime = app.core.runtimes.get(profile.id)!;
     const queue = Array.from({ length: 1001 }, (_, i) => ({
@@ -1175,7 +1166,7 @@ test(
 );
 
 test("activity API preserves one snapshot while usage arrives during aggregation", async () => {
-  const profile = app.store.createProfile("Activity snapshot", "forest");
+  const profile = app.store.createProfile("Activity snapshot");
   const usage = {
     profileId: profile.id,
     timestamp: new Date().toISOString(),
@@ -1245,7 +1236,7 @@ test(
   "agent aborts and an unreachable core are not reported as application faults",
   { timeout: 15_000 },
   async () => {
-    const profile = app.store.createProfile("Abort fixture", "clay");
+    const profile = app.store.createProfile("Abort fixture");
     app.store.saveApiAccount(
       profile.id,
       {

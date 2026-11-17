@@ -12,7 +12,7 @@ test("config writes return the saved snapshot, serialize, and recover after fail
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-config-"));
   const store = new Store(directory, fileKeyCodec(directory));
   try {
-    const profile = store.createProfile("Fixture", "forest");
+    const profile = store.createProfile("Fixture");
     assert.equal(profile.strategy, "fill-first");
     assert.equal(profile.sessionAffinity, true);
     const core = new CorePool(store, "unused");

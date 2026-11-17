@@ -99,7 +99,7 @@ const store = new Store(${JSON.stringify(data)}, fileKeyCodec(${JSON.stringify(d
 const pool = new CorePool(store, ${JSON.stringify(binary)});
 const started = [];
 for (let i = 0; i < ${count}; i++) {
-  const profile = store.createProfile("Owner " + i, "forest");
+  const profile = store.createProfile("Owner " + i);
   await pool.start(profile.id);
   const runtime = pool.runtimes.get(profile.id);
   started.push({ core: runtime.child.pid, watchdog: runtime.watchdog?.pid });
@@ -426,7 +426,7 @@ test(
     const store = new Store(data, fileKeyCodec(data));
     const pool = new CorePool(store, binary);
     try {
-      const profile = store.createProfile("Lifecycle", "forest");
+      const profile = store.createProfile("Lifecycle");
       for (const finish of [
         () => pool.stop(profile.id),
         () => pool.shutdown(),

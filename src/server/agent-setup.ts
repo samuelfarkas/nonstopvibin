@@ -7,12 +7,20 @@ import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type {
-  Agent,
   AgentSetup as InstalledSetup,
   AgentSetupInput,
   Profile,
 } from "../shared/types.ts";
+import { agentIds, agents, type Agent } from "../shared/agents.ts";
 import { AppError } from "./errors.ts";
+import {
+  agentDefinitions,
+  configDirectory,
+  defaultConfigDirectory,
+  manifestVersions,
+} from "./agents.ts";
+import { agentConnectionsDirectory } from "./data-directory.ts";
+import { clientKeyPattern } from "./store.ts";
 import {
   credentialHelper,
   nativeConfiguration,
@@ -32,7 +40,12 @@ import {
   writeAtomic,
 } from "./native-config-files.ts";
 
-const agentSchema = z.enum(["pi", "codex", "opencode", "claude"]);
+const agentSchema = z.enum(agentIds);
+/** Claude Code connects one project at a time; the other agents take none. */
+const projectRule = (input: { agent: Agent; projectDirectory?: string }) =>
+  agents[input.agent].project
+    ? Boolean(input.projectDirectory)
+    : input.projectDirectory === undefined;
 const projectSchema = z
   .string()
   .min(1)
@@ -51,7 +64,8 @@ export const agentSelectionSchema = z
   .object({ agent: agentSchema, projectDirectory: projectSchema })
   .strict()
   .refine(
-    (input) => input.agent === "claude" || input.projectDirectory === undefined,
+    (input) =>
+      agents[input.agent].project || input.projectDirectory === undefined,
     "Choose a project for Claude Code only.",
   );
 const legacySetupSchema = z
@@ -78,13 +92,7 @@ const legacySetupSchema = z
     (input) => input.maxTokens < input.contextWindow,
     "Output budget must be smaller than the context budget.",
   )
-  .refine(
-    (input) =>
-      input.agent === "claude"
-        ? Boolean(input.projectDirectory)
-        : input.projectDirectory === undefined,
-    "Choose a project for Claude Code only.",
-  );
+  .refine(projectRule, "Choose a project for Claude Code only.");
 
 export const agentSetupSchema = z
   .object({
@@ -93,18 +101,9 @@ export const agentSetupSchema = z
     otherProviders: z.boolean().optional(),
   })
   .strict()
+  .refine(projectRule, "Choose a project for Claude Code only.")
   .refine(
-    (input) =>
-      input.agent === "claude"
-        ? Boolean(input.projectDirectory)
-        : input.projectDirectory === undefined,
-    "Choose a project for Claude Code only.",
-  )
-  .refine(
-    (input) =>
-      input.agent === "claude" ||
-      input.agent === "codex" ||
-      input.otherProviders === undefined,
+    (input) => agents[input.agent].native || input.otherProviders === undefined,
     "Only Claude Code and Codex choose whether to offer other providers.",
   );
 const manifestFields = {
@@ -116,14 +115,7 @@ const manifestFields = {
 const manifestSchema = z.union([
   z
     .object({
-      version: z.union([
-        z.literal(2),
-        z.literal(3),
-        z.literal(4),
-        z.literal(5),
-        z.literal(6),
-        z.literal(7),
-      ]),
+      version: z.union(manifestVersions.map((version) => z.literal(version))),
       input: agentSetupSchema,
       models: z.array(z.string().min(1).max(200)).max(10000),
       ...manifestFields,
@@ -229,16 +221,12 @@ export class AgentSetup {
     connection: (profileId: string) => { key: string; port: number },
     directories: AgentDirectories = {
       home: homedir(),
-      codex: process.env.CODEX_HOME,
-      opencode:
-        process.env.OPENCODE_CONFIG_DIR ||
-        (process.env.XDG_CONFIG_HOME
-          ? join(process.env.XDG_CONFIG_HOME, "opencode")
-          : undefined),
-      pi: process.env.PI_CODING_AGENT_DIR,
+      codex: configDirectory("codex"),
+      opencode: configDirectory("opencode"),
+      pi: configDirectory("pi"),
     },
   ) {
-    this.directory = join(resolve(directory), "agent-connections");
+    this.directory = agentConnectionsDirectory(resolve(directory));
     this.directories = directories;
     // Short path accommodates macOS's 103-byte Unix socket limit, including
     // long home/XDG paths. The directory's owner and mode are checked before use.
@@ -334,7 +322,7 @@ export class AgentSetup {
             if (pickerContent !== undefined && installedPicker === undefined)
               throw new AppError("The installed model settings were removed.");
             if (
-              manifest.version !== (agent === "pi" ? 7 : 3) ||
+              manifest.version !== agentDefinitions[agent].version ||
               manifest.port !== port ||
               manifest.content !== content ||
               manifest.helperContent !== helperContent ||
@@ -389,7 +377,7 @@ export class AgentSetup {
       try {
         const { key, port } = this.connection(match[1]);
         if (
-          !/^nv_[A-Za-z0-9_-]{43}$/.test(key) ||
+          !clientKeyPattern.test(key) ||
           !Number.isInteger(port) ||
           port < 1 ||
           port > 65535
@@ -519,7 +507,7 @@ export class AgentSetup {
     profile: Profile,
     input: AgentSetupInput,
     create: boolean,
-    version = 7,
+    version: number = agentDefinitions[input.agent].version,
   ): Promise<string> {
     const { home, codex, opencode, pi } = this.directories;
     if (input.agent === "claude") {
@@ -544,20 +532,14 @@ export class AgentSetup {
           ? opencode
           : pi;
     if (create) await mkdir(custom || home, { recursive: true, mode: 0o700 });
+    const base = custom ? [] : defaultConfigDirectory(input.agent);
     const names =
       input.agent === "codex"
-        ? [
-            ...(custom ? [] : [".codex"]),
-            `nonstopvibin-${profile.slug}.config.toml`,
-          ]
+        ? [...base, `nonstopvibin-${profile.slug}.config.toml`]
         : input.agent === "opencode"
-          ? [
-              ...(custom ? [] : [".config", "opencode"]),
-              "plugins",
-              `nonstopvibin-${profile.id}.js`,
-            ]
+          ? [...base, "plugins", `nonstopvibin-${profile.id}.js`]
           : [
-              ...(custom ? [] : [".pi", "agent"]),
+              ...base,
               "extensions",
               `nonstopvibin-${version < 6 ? profile.id : profile.slug}.js`,
             ];
@@ -614,8 +596,8 @@ export class AgentSetup {
     const result = await this.result(profile, manifest);
     if (
       manifest.version === 1 ||
-      (agent === "pi" && manifest.version !== 7) ||
-      (agent === "claude" && manifest.version !== 3)
+      ((agent === "pi" || agent === "claude") &&
+        manifest.version !== agentDefinitions[agent].version)
     )
       result.needsReconnect = true;
     if (
@@ -699,7 +681,7 @@ export class AgentSetup {
       if (!folder)
         throw new AppError("Could not create the agent connection directory.");
       const manifest: Manifest = {
-        version: validated.agent === "pi" ? 7 : 3,
+        version: agentDefinitions[validated.agent].version,
         input: validated,
         models: catalog,
         port,

@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { coreConfiguration } from "../src/server/config.ts";
-import type { ApiAccount, Profile } from "../src/shared/types.ts";
+import type { Profile } from "../src/shared/types.ts";
+import type { ApiAccount } from "../src/server/store.ts";
 
 const profile: Profile = {
   id: "fixture",
   name: "Fixture",
   slug: "fixture",
-  color: "forest",
   strategy: "round-robin",
   sessionAffinity: false,
   enabled: false,

@@ -1,4 +1,6 @@
-import type { ApiAccount, Profile } from "../shared/types.ts";
+import type { Profile } from "../shared/types.ts";
+import { protocols } from "../shared/providers.ts";
+import type { ApiAccount } from "./store.ts";
 import { createHash } from "node:crypto";
 import { version } from "../../package.json";
 
@@ -43,7 +45,7 @@ export function coreConfiguration(
             "x-opencode-session": "$x-opencode-session",
           }
         : {};
-    for (const protocol of ["openai", "anthropic", "responses"] as const) {
+    for (const protocol of protocols) {
       const models = account.models
         .filter((m) => m.protocol === protocol)
         .map((m) => ({ name: m.id, alias: m.id }));

@@ -1,20 +1,31 @@
-import { agentModels } from "./model-catalog.ts";
 import { UsagePrices } from "./usage-pricing.ts";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile, mkdir, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import coreRelease from "../../scripts/core-release.json";
-import type {
-  ApiAccount,
-  AppState,
-  Json,
-  ProfileState,
-} from "../shared/types.ts";
-import { goModelProtocol, modelsFor } from "../shared/providers.ts";
-import { Store } from "./store.ts";
+import type { AppState, Json, ProfileState } from "../shared/types.ts";
+import {
+  apiKeyProviders,
+  oauthProviders,
+  protocols,
+  providerEntry,
+  type Protocol,
+} from "../shared/providers.ts";
+import { agents } from "../shared/agents.ts";
+import {
+  allHistoryDays,
+  nameLength,
+  prefixLength,
+  priorityLimit,
+  retentionDays,
+  strategies,
+} from "../shared/vocabulary.ts";
+import { Store, type ApiAccount } from "./store.ts";
+import { ownerOnlyDirectory } from "./data-directory.ts";
+import { offeredModels } from "./agents.ts";
 import { fileKeyCodec } from "./vault.ts";
 import { CorePool } from "./core.ts";
 import { Gateway, sameSecret } from "./gateway.ts";
@@ -28,48 +39,45 @@ import {
   agentSetupSchema,
 } from "./agent-setup.ts";
 
-const nameSchema = z.string().trim().min(1).max(60);
-const profileSchema = z
-  .object({
-    name: nameSchema,
-    color: z.enum(["forest", "blue", "clay", "plum"]).default("forest"),
-  })
-  .strict();
+const nameSchema = z.string().trim().min(1).max(nameLength);
+const profileSchema = z.object({ name: nameSchema }).strict();
 const patchSchema = z
   .object({
     name: nameSchema.optional(),
-    color: z.enum(["forest", "blue", "clay", "plum"]).optional(),
-    strategy: z.enum(["round-robin", "fill-first"]).optional(),
+    strategy: z.enum(strategies).optional(),
     sessionAffinity: z.boolean().optional(),
   })
   .strict();
 const apiSchema = z
   .object({
     name: nameSchema,
-    provider: z.enum([
-      "opencode-go",
-      "openai",
-      "anthropic",
-      "gemini",
-      "custom",
-    ]),
+    provider: z.enum(apiKeyProviders),
     baseUrl: z.string().url().max(500),
     apiKey: z.string().trim().min(1).max(20_000),
-    protocol: z.enum(["openai", "anthropic", "responses"]).default("openai"),
+    protocol: z.enum(protocols).default("openai"),
     prefix: z
       .string()
       .regex(/^[a-z0-9-]*$/)
-      .max(30),
+      .max(prefixLength),
     models: z
       .array(
         z.object({
           id: z.string().trim().min(1).max(200),
-          protocol: z.enum(["openai", "anthropic", "responses"]),
+          protocol: z.enum(protocols),
         }),
       )
       .max(500),
   })
   .strict();
+// OpenCode Go publishes different wire protocols per model. Prefer live endpoint metadata.
+export function goModelProtocol(id: string, endpoint?: string): Protocol {
+  if (endpoint?.includes("/messages")) return "anthropic";
+  if (endpoint?.includes("/responses")) return "responses";
+  if (endpoint?.includes("/chat/completions")) return "openai";
+  if (/^(gpt-|grok-|muse-)/.test(id)) return "responses";
+  if (/^(minimax-|qwen)/.test(id)) return "anthropic";
+  return "openai";
+}
 function providerURL(raw: string): URL {
   const url = new URL(raw);
   if (
@@ -175,10 +183,7 @@ export class Application {
             "Start this profile before connecting an agent.",
             409,
           );
-        return {
-          key: this.store.secret(`${profileId}:client`),
-          port: this.port,
-        };
+        return { key: this.store.clientKey(profileId), port: this.port };
       },
       options.agentHome ? { home: options.agentHome } : undefined,
     );
@@ -238,7 +243,7 @@ export class Application {
     for (const host of options.allowHosts ?? [])
       if (!validAllowHost(host))
         throw new Error(`Invalid allowed host: ${JSON.stringify(host)}`);
-    await mkdir(options.directory, { recursive: true, mode: 0o700 });
+    ownerOnlyDirectory(options.directory);
     signal?.throwIfAborted();
     const store = new Store(options.directory, fileKeyCodec(options.directory));
     const app = new Application(options, store);
@@ -440,12 +445,7 @@ export class Application {
     if (url.pathname === "/api/usage-retention" && method === "PUT") {
       const input = z
         .object({
-          days: z.union([
-            z.literal(0),
-            z.literal(30),
-            z.literal(90),
-            z.literal(365),
-          ]),
+          days: z.union(retentionDays.map((days) => z.literal(days))),
         })
         .strict()
         .parse(await jsonBody(req));
@@ -459,7 +459,7 @@ export class Application {
     }
     if (url.pathname === "/api/profiles" && method === "POST") {
       const input = profileSchema.parse(await jsonBody(req));
-      json(res, this.store.createProfile(input.name, input.color), 201);
+      json(res, this.store.createProfile(input.name), 201);
       return;
     }
     if (segments[1] !== "profiles" || !segments[2])
@@ -489,7 +489,7 @@ export class Application {
       return;
     }
     if (action === "key" && method === "GET") {
-      json(res, { key: this.store.secret(`${id}:client`) });
+      json(res, { key: this.store.clientKey(id) });
       return;
     }
     if (action === "models" && method === "GET") {
@@ -510,10 +510,10 @@ export class Application {
         .number()
         .int()
         .min(1)
-        .max(3650)
+        .max(allHistoryDays)
         .parse(url.searchParams.get("days") ?? 7);
       const since =
-        days === 3650
+        days === allHistoryDays
           ? ""
           : new Date(Date.now() - days * 86_400_000).toISOString();
       json(
@@ -549,19 +549,17 @@ export class Application {
         const models = await this.core.models(id);
         if (!models.length)
           throw new AppError("This profile has no available models.");
-        const offered =
-          input.agent === "pi" || input.agent === "opencode"
-            ? agentModels(
-                await this.gateway.catalog.models(
-                  models,
-                  this.store.apiAccounts(id),
-                ),
-                input.agent,
-              )
-            : modelsFor(input.agent, models, input.otherProviders ?? true);
+        const offered = await offeredModels(
+          input.agent,
+          models,
+          input.otherProviders ?? true,
+          (models) =>
+            this.gateway.catalog.models(models, this.store.apiAccounts(id)),
+        );
+        // Only an agent with a native vendor can be left without models.
         if (!offered.length)
           throw new AppError(
-            `This profile has no ${input.agent === "claude" ? "Claude" : "OpenAI"} models. Add one, or offer models from other providers.`,
+            `This profile has no ${agents[input.agent].native} models. Add one, or offer models from other providers.`,
           );
         json(
           res,
@@ -594,7 +592,7 @@ export class Application {
         .parse(await jsonBody(req));
       const response = await fetch(`${this.endpoint(id)}/models`, {
         headers: {
-          Authorization: `Bearer ${this.store.secret(`${id}:client`)}`,
+          Authorization: `Bearer ${this.store.clientKey(id)}`,
         },
         redirect: "error",
         signal: AbortSignal.timeout(10_000),
@@ -618,7 +616,7 @@ export class Application {
     if (action === "oauth" && method === "POST") {
       const { provider, reconnectAccountId } = z
         .object({
-          provider: z.enum(["codex", "claude", "antigravity", "kimi", "xai"]),
+          provider: z.enum(oauthProviders.map(({ id }) => id)),
           reconnectAccountId: z.string().min(1).max(255).optional(),
         })
         .strict()
@@ -713,7 +711,12 @@ export class Application {
       const patch = z
         .object({
           disabled: z.boolean().optional(),
-          priority: z.number().int().min(-1000).max(1000).optional(),
+          priority: z
+            .number()
+            .int()
+            .min(-priorityLimit)
+            .max(priorityLimit)
+            .optional(),
           name: nameSchema.optional(),
         })
         .strict()
@@ -730,11 +733,12 @@ export class Application {
     if (action === "api-account" && method === "POST") {
       const input = apiSchema.parse(await jsonBody(req));
       providerURL(input.baseUrl);
+      const preset = providerEntry(input.provider).preset;
       if (
-        input.provider === "opencode-go" &&
-        input.baseUrl.replace(/\/$/, "") !== "https://opencode.ai/zen/go/v1"
+        preset?.fixedEndpoint &&
+        input.baseUrl.replace(/\/$/, "") !== preset.baseUrl
       )
-        throw new AppError("OpenCode Go must use its official endpoint.");
+        throw new AppError(`${preset.name} must use its official endpoint.`);
       let models =
         input.provider === "opencode-go"
           ? input.models.map((m) => ({ ...m, protocol: goModelProtocol(m.id) }))
@@ -801,7 +805,7 @@ export class Application {
       for (const existing of this.store.apiAccounts(id)) {
         if (
           existing.baseUrl === account.baseUrl &&
-          sameSecret(this.store.secret(`${existing.id}:api`), input.apiKey)
+          sameSecret(this.store.apiKey(existing.id), input.apiKey)
         )
           throw new AppError(
             "This API key is already connected to this profile.",

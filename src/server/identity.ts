@@ -1,7 +1,7 @@
 import { z } from "zod";
-import type { Json, JsonObject, SeatIdentity } from "../shared/types.ts";
+import type { Json, SeatIdentity } from "../shared/types.ts";
 import { AppError } from "./errors.ts";
-import { record, responseJson, text } from "./json.ts";
+import { record, responseJson, text, type JsonObject } from "./json.ts";
 
 const uuid = z
   .string()

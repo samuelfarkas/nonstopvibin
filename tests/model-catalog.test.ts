@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ModelCatalog,
-  agentModels,
   enrichModels,
+  type CatalogModel,
 } from "../src/server/model-catalog.ts";
+import { agentModels, offeredModels } from "../src/server/agents.ts";
 import { modelsFor } from "../src/shared/providers.ts";
 import { AppError } from "../src/server/errors.ts";
-import type { ApiAccount } from "../src/shared/types.ts";
+import type { ApiAccount } from "../src/server/store.ts";
 
 const entry = {
   name: "Synthetic model",
@@ -39,7 +40,11 @@ const account: ApiAccount = {
   models: [{ id: "fixture-a", protocol: "anthropic" }],
 };
 
-test("catalog intersects exact provider routes, preserves every live ID and exports per-model limits and prices", () => {
+/** What pi and OpenCode are offered from models that are already enriched. */
+const offered = (agent: "pi" | "opencode", models: CatalogModel[]) =>
+  offeredModels(agent, models, false, async () => models);
+
+test("catalog intersects exact provider routes, preserves every live ID and exports per-model limits and prices", async () => {
   const live = [
     { id: "fixture-a", owned_by: "claude" },
     { id: "fixture-b", owned_by: "claude" },
@@ -99,12 +104,12 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
   );
   assert.equal(unknown.length, 3);
   assert.deepEqual(
-    agentModels(unknown, "pi").map((model) => model.id),
+    agentModels(await offered("pi", unknown), "pi").map((model) => model.id),
     ["fixture-a", "fixture-b"],
     "models without limits and prices are left out, the rest stay usable",
   );
-  assert.throws(
-    () => agentModels([{ id: "missing", owned_by: "claude" }], "pi"),
+  await assert.rejects(
+    offered("pi", [{ id: "missing", owned_by: "claude" }]),
     /missing/,
   );
   const invalid = enrichModels(
@@ -117,7 +122,7 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
     },
     "today",
   );
-  assert.throws(() => agentModels(invalid, "opencode"), /fixture-a, fixture-b/);
+  await assert.rejects(offered("opencode", invalid), /fixture-a, fixture-b/);
 });
 
 test("models.dev fetching is credential-free, bounded, cached, coalesced and retries after failure", async () => {

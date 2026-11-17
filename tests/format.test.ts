@@ -42,7 +42,7 @@ test("provider groups gather interleaved subscriptions without changing priority
     name: "Account",
     kind: "oauth",
     disabled: false,
-    status: "ready",
+    status: "Ready",
     priority: 0,
   } as const;
   const accounts = [

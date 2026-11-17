@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { coreArguments, coreLedgerDirectory } from "./data-directory.ts";
 
 // Cores must not outlive the process that started them. Layer 1: a shell watchdog
 // per core blocks reading a pipe only this process can write, so the kernel wakes
@@ -51,11 +52,16 @@ function identityCommand(identity: string): string {
 /** Whether an identity is a core started with a profile config inside `directory`. */
 function coreOf(directory: string, identity: string): boolean {
   const command = identityCommand(identity);
-  const prefix = ` --config ${join(directory, "profiles")}/`;
+  // The arguments core.ts passes, split around the profile ID (no path holds NUL).
+  const [prefix = "", suffix = ""] =
+    ` ${coreArguments(directory, "\0").join(" ")}`.split("\0");
   const at = command.lastIndexOf(prefix);
   return (
     at > 0 &&
-    /^[0-9a-f-]{36}\/config\.yaml$/.test(command.slice(at + prefix.length))
+    command.endsWith(suffix) &&
+    /^[0-9a-f-]{36}$/.test(
+      command.slice(at + prefix.length, command.length - suffix.length),
+    )
   );
 }
 
@@ -119,9 +125,6 @@ type Entry = z.infer<typeof entrySchema>;
 
 // Per lookup, so an injected one never shares this process's cached identity.
 const ownerIdentities = new WeakMap<Identify, Promise<string | undefined>>();
-function ledgerDirectory(directory: string): string {
-  return join(directory, "core-processes");
-}
 
 /** Records a running core so a later instance can reap it if this process dies. Returns the entry path. */
 export async function recordCore(
@@ -151,7 +154,7 @@ export async function recordCore(
     core.signalCode !== null
   )
     return undefined;
-  const ledger = ledgerDirectory(directory);
+  const ledger = coreLedgerDirectory(directory);
   mkdirSync(ledger, { recursive: true, mode: 0o700 });
   const path = join(ledger, `${pid}.json`);
   const entry: Entry = {
@@ -175,7 +178,7 @@ export async function reapOrphanedCores(
   directory: string,
   identify: Identify = processIdentity,
 ): Promise<void> {
-  const ledger = ledgerDirectory(directory);
+  const ledger = coreLedgerDirectory(directory);
   let names: string[];
   try {
     names = await readdir(ledger);

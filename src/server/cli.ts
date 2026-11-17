@@ -2,12 +2,10 @@
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   closeSync,
   constants,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   realpathSync,
 } from "node:fs";
@@ -19,7 +17,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import coreRelease from "../../scripts/core-release.json";
 import { Application, validAllowHost } from "./server.ts";
-import { dataDirectory } from "./data-directory.ts";
+import {
+  dataDirectory,
+  ownerOnlyDirectory,
+  serverLockPath,
+  sessionPath,
+} from "./data-directory.ts";
+import { agentEnvironment } from "./agents.ts";
 import { isMissing, writeAtomic } from "./native-config-files.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
@@ -62,9 +66,6 @@ const sessionSchema = z.object({
 });
 export type Session = z.infer<typeof sessionSchema>;
 
-export function sessionPath(directory: string): string {
-  return join(directory, "server.json");
-}
 export async function readSession(
   directory: string,
 ): Promise<Session | undefined> {
@@ -129,18 +130,18 @@ export async function probe(session: Session): Promise<ServerState | null> {
 const ownedDirectories = new Set<string>();
 const reservations = new WeakMap<Application, () => void>();
 function reserveDirectory(directory: string): () => void {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const folder = lstatSync(directory);
-  if (
-    !folder.isDirectory() ||
-    folder.isSymbolicLink() ||
-    folder.uid !== process.getuid?.()
-  )
-    throw new CliError(
-      "The server data directory must be owner-only, owned by you, and not a symbolic link.",
-    );
-  // Preserve the store's existing permission tightening, before creating the lock.
-  if ((folder.mode & 0o777) !== 0o700) chmodSync(directory, 0o700);
+  // Tightened before the lock exists, and only once the directory is vetted.
+  ownerOnlyDirectory(directory, () => {
+    const folder = lstatSync(directory);
+    if (
+      !folder.isDirectory() ||
+      folder.isSymbolicLink() ||
+      folder.uid !== process.getuid?.()
+    )
+      throw new CliError(
+        "The server data directory must be owner-only, owned by you, and not a symbolic link.",
+      );
+  });
   const canonical = realpathSync(directory);
   const occupied = () =>
     new CliError(
@@ -149,7 +150,7 @@ function reserveDirectory(directory: string): () => void {
   // Do not open/close another descriptor for the locked inode in this process:
   // POSIX advisory locks are process-scoped, and close would release them.
   if (ownedDirectories.has(canonical)) throw occupied();
-  const path = join(canonical, "server.lock.sqlite");
+  const path = serverLockPath(canonical);
   try {
     closeSync(
       openSync(
@@ -393,10 +394,7 @@ function unitQuote(value: string, dollar: boolean): string {
 // Agent configuration lands where the user's agents read it.
 export const SERVICE_ENVIRONMENT = [
   "NONSTOPVIBIN_DATA_DIR",
-  "CODEX_HOME",
-  "OPENCODE_CONFIG_DIR",
-  "XDG_CONFIG_HOME",
-  "PI_CODING_AGENT_DIR",
+  ...agentEnvironment,
 ];
 export function renderUnit(
   executable: string,

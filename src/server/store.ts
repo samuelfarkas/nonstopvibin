@@ -1,17 +1,44 @@
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync } from "node:fs";
 import { createHash, randomUUID, randomBytes } from "node:crypto";
-import { join } from "node:path";
 import type {
   Account,
-  ApiAccount,
   Profile,
   Quota,
   UsageRecord,
   UsageSummary,
 } from "../shared/types.ts";
+import type { Protocol, Provider } from "../shared/providers.ts";
+import { retentionDays, usagePageSize } from "../shared/vocabulary.ts";
 import type { SecretCodec } from "./vault.ts";
 import { AppError } from "./errors.ts";
+import { databasePath, ownerOnlyDirectory } from "./data-directory.ts";
+
+export interface ApiAccount {
+  id: string;
+  name: string;
+  provider: Provider;
+  baseUrl: string;
+  prefix: string;
+  models: Array<{ id: string; protocol: Protocol }>;
+  disabled: boolean;
+}
+// Row IDs in the secrets and settings tables. Stored data uses these exact
+// names: a rename here loses the owner's keys and settings.
+export const secretIds = {
+  client: (profileId: string) => `${profileId}:client`,
+  core: (profileId: string) => `${profileId}:core`,
+  management: (profileId: string) => `${profileId}:management`,
+  api: (accountId: string) => `${accountId}:api`,
+};
+const settingIds = {
+  accounts: (profileId: string) => `accounts:${profileId}`,
+  resetRequest: (identity: string, creditId: string) =>
+    `codex-reset:${JSON.stringify([identity, creditId])}`,
+  retention: "usage-retention-days",
+};
+/** A profile's client key: `nv_` and 32 random bytes in base64url. */
+export const clientKeyPattern = /^nv_[A-Za-z0-9_-]{43}$/;
 
 /** One-way index key for a client key; the index never holds the key itself. */
 export function clientDigest(key: string): string {
@@ -33,10 +60,9 @@ export class Store {
   constructor(directory: string, codec: SecretCodec) {
     this.directory = directory;
     this.codec = codec;
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    chmodSync(directory, 0o700);
-    this.db = new DatabaseSync(join(directory, "nonstopvibin.sqlite"));
-    chmodSync(join(directory, "nonstopvibin.sqlite"), 0o600);
+    ownerOnlyDirectory(directory);
+    this.db = new DatabaseSync(databasePath(directory));
+    chmodSync(databasePath(directory), 0o600);
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, body TEXT NOT NULL);
@@ -71,7 +97,7 @@ export class Store {
     if (!row) throw new AppError("Profile not found.", 404);
     return stored<Profile>(row.body);
   }
-  createProfile(name: string, color: string): Profile {
+  createProfile(name: string): Profile {
     const stem =
       name
         .normalize("NFKD")
@@ -88,7 +114,6 @@ export class Store {
       id: randomUUID(),
       slug,
       name,
-      color,
       strategy: "fill-first",
       sessionAffinity: true,
       enabled: false,
@@ -99,15 +124,15 @@ export class Store {
         .prepare("INSERT INTO profiles VALUES (?,?,?)")
         .run(profile.id, slug, JSON.stringify(profile));
       this.setSecret(
-        `${profile.id}:client`,
+        secretIds.client(profile.id),
         `nv_${randomBytes(32).toString("base64url")}`,
       );
       this.setSecret(
-        `${profile.id}:core`,
+        secretIds.core(profile.id),
         randomBytes(32).toString("base64url"),
       );
       this.setSecret(
-        `${profile.id}:management`,
+        secretIds.management(profile.id),
         randomBytes(32).toString("base64url"),
       );
     });
@@ -125,15 +150,15 @@ export class Store {
     this.db
       .prepare(`INSERT INTO settings VALUES (?,?) ON CONFLICT(id) DO UPDATE
         SET value=excluded.value WHERE value!=excluded.value`)
-      .run(`accounts:${profileId}`, JSON.stringify(accounts));
+      .run(settingIds.accounts(profileId), JSON.stringify(accounts));
   }
   accountMetadata(profileId: string): Account[] {
     const row = this.db
       .prepare("SELECT value FROM settings WHERE id=?")
-      .get(`accounts:${profileId}`);
+      .get(settingIds.accounts(profileId));
     return row ? stored<Account[]>(row.value) : [];
   }
-  secret(id: string): string {
+  private secret(id: string): string {
     const row = this.db
       .prepare("SELECT encrypted FROM secrets WHERE id=?")
       .get(id);
@@ -148,11 +173,25 @@ export class Store {
   clientIndex(): Map<string, string> {
     this.clients ??= new Map(
       this.profiles().map((profile) => [
-        clientDigest(this.secret(`${profile.id}:client`)),
+        clientDigest(this.clientKey(profile.id)),
         profile.id,
       ]),
     );
     return this.clients;
+  }
+  /** The key agents send for this profile. Never grants management access. */
+  clientKey(profileId: string): string {
+    return this.secret(secretIds.client(profileId));
+  }
+  /** The key the gateway sends to this profile's core. */
+  coreKey(profileId: string): string {
+    return this.secret(secretIds.core(profileId));
+  }
+  managementKey(profileId: string): string {
+    return this.secret(secretIds.management(profileId));
+  }
+  apiKey(accountId: string): string {
+    return this.secret(secretIds.api(accountId));
   }
   setSecret(id: string, value: string): void {
     this.clients = undefined;
@@ -161,7 +200,7 @@ export class Store {
       .run(id, this.codec.encrypt(value));
   }
   resetRequestId(identity: string, creditId: string): string {
-    const key = `codex-reset:${JSON.stringify([identity, creditId])}`;
+    const key = settingIds.resetRequest(identity, creditId);
     this.db
       .prepare("INSERT OR IGNORE INTO settings VALUES (?,?)")
       .run(key, randomUUID());
@@ -173,7 +212,7 @@ export class Store {
   clearResetRequest(identity: string, creditId: string): void {
     this.db
       .prepare("DELETE FROM settings WHERE id=?")
-      .run(`codex-reset:${JSON.stringify([identity, creditId])}`);
+      .run(settingIds.resetRequest(identity, creditId));
   }
   apiAccounts(profileId: string): ApiAccount[] {
     return this.db
@@ -188,7 +227,7 @@ export class Store {
       this.db
         .prepare("INSERT OR REPLACE INTO api_accounts VALUES (?,?,?)")
         .run(account.id, profileId, JSON.stringify(account));
-      if (key !== undefined) this.setSecret(`${account.id}:api`, key);
+      if (key !== undefined) this.setSecret(secretIds.api(account.id), key);
     });
   }
   removeApiAccount(profileId: string, accountId: string): void {
@@ -196,7 +235,9 @@ export class Store {
       this.db
         .prepare("DELETE FROM api_accounts WHERE profile_id=? AND id=?")
         .run(profileId, accountId);
-      this.db.prepare("DELETE FROM secrets WHERE id=?").run(accountId + ":api");
+      this.db
+        .prepare("DELETE FROM secrets WHERE id=?")
+        .run(secretIds.api(accountId));
       this.db
         .prepare("DELETE FROM quotas WHERE profile_id=? AND account_id=?")
         .run(profileId, accountId);
@@ -246,8 +287,8 @@ export class Store {
   ): Array<{ sequence: number; record: UsageRecord }> {
     return this.db
       .prepare(`SELECT rowid AS sequence, body FROM usage INDEXED BY usage_profile_sequence
-      WHERE profile_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 500`)
-      .all(profileId, after, through)
+      WHERE profile_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?`)
+      .all(profileId, after, through, usagePageSize)
       .map((row) => ({
         sequence: Number(row.sequence),
         record: stored<UsageRecord>(row.body),
@@ -272,7 +313,7 @@ export class Store {
       UNION ALL
       SELECT rowid AS sequence, body, timestamp FROM usage INDEXED BY usage_profile_time
       WHERE profile_id=? AND timestamp>? AND timestamp<? AND rowid<=?
-      ORDER BY timestamp,sequence LIMIT 500`)
+      ORDER BY timestamp,sequence LIMIT ?`)
       .all(
         profileId,
         timestamp,
@@ -283,6 +324,7 @@ export class Store {
         timestamp,
         before,
         through,
+        usagePageSize,
       )
       .map((row) => ({
         sequence: Number(row.sequence),
@@ -315,19 +357,17 @@ export class Store {
   }
   usageRetentionDays(): number {
     const row = this.db
-      .prepare("SELECT value FROM settings WHERE id='usage-retention-days'")
-      .get();
+      .prepare("SELECT value FROM settings WHERE id=?")
+      .get(settingIds.retention);
     return Number(row?.value ?? 0);
   }
   setUsageRetentionDays(days: number): void {
-    if (![0, 30, 90, 365].includes(days))
+    if (!retentionDays.some((option) => option === days))
       throw new AppError("Unsupported history retention.");
     this.transaction(() => {
       this.db
-        .prepare(
-          "INSERT OR REPLACE INTO settings VALUES ('usage-retention-days',?)",
-        )
-        .run(String(days));
+        .prepare("INSERT OR REPLACE INTO settings VALUES (?,?)")
+        .run(settingIds.retention, String(days));
       this.pruneUsage();
     });
   }
