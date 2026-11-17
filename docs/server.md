@@ -223,8 +223,9 @@ unit it changes only supplied options and environment variables, preserving the
 executable path, other arguments and previously configured directories. It copies
 `NONSTOPVIBIN_DATA_DIR`, `CODEX_HOME`, `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME`
 and `PI_CODING_AGENT_DIR` from your shell when they are set, so agent settings
-land where your agents read them. Changing the port requires reconnecting agents
-in **Connect agents**. Without systemd, run `nonstopvibin serve` in a terminal
+land where your agents read them. After a port change, startup moves connected
+agents to the new port; restart running agents, and resolve any connection the
+app reports in **Connect agents**. Without systemd, run `nonstopvibin serve` in a terminal
 multiplexer instead.
 
 ## Protected upstream

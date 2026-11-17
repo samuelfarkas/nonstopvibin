@@ -21,16 +21,10 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { AgentSetup, agentSetupSchema } from "../src/server/agent-setup.ts";
 import { agentDefinitions } from "../src/server/agents.ts";
-import {
-  nativeConfiguration,
-  nativeProvider,
-  shellQuote,
-} from "../src/server/agent-config.ts";
-import {
-  mergeNativeConfig,
-  projectDirectory,
-  readConfig,
-} from "../src/server/native-config-files.ts";
+import { nativeProvider, shellQuote } from "../src/server/agent-connection.ts";
+import { codexConfiguration } from "../src/server/agent-codex.ts";
+import { claudeProject } from "../src/server/agent-claude.ts";
+import { readConfig } from "../src/server/native-config-files.ts";
 import type { AgentSetupInput, Profile } from "../src/shared/types.ts";
 import type { Agent } from "../src/shared/agents.ts";
 
@@ -245,7 +239,7 @@ test("native installs use harness configuration, keep secrets out of files and r
       const content = await readFile(installed.files[0], "utf8");
       if (agent === "codex") {
         // SAFETY: the generated config.toml is this app's own output; the shape
-        // asserted here is the one nativeConfiguration writes for Codex.
+        // asserted here is the one codexConfiguration writes.
         const parsed = JSON.parse(
           (
             await execute(process.execPath, [
@@ -461,7 +455,7 @@ test("native credential helpers fail closed when stopped and resume through the 
       home: f.home,
     });
     try {
-      await restarted.restore();
+      await restarted.restore([f.company], 4318);
       assert.equal(
         (await f.run(installed.files[2])).stdout.trim(),
         f.keys.get(f.company.id),
@@ -744,7 +738,10 @@ test("the credential bridge only serves its narrow local socket protocol", async
     }
     assert.equal((await request(`/profiles/${randomUUID()}`)).status, 409);
     const second = new AgentSetup(f.directory, f.connection, { home: f.home });
-    await assert.rejects(second.restore(), /Another nonstopvibin instance/);
+    await assert.rejects(
+      second.restore([f.company], 4318),
+      /Another nonstopvibin instance/,
+    );
     assert.equal((await request(`/profiles/${f.company.id}`)).status, 200);
   } finally {
     await f.close();
@@ -951,8 +948,7 @@ test("native merge rejects occupied settings and malformed JSON; special files c
   });
   assert.throws(
     () =>
-      mergeNativeConfig(
-        "claude",
+      agentDefinitions.claude.merge(
         original,
         undefined,
         JSON.stringify({ apiKeyHelper: "new-helper", env: {} }),
@@ -960,12 +956,16 @@ test("native merge rejects occupied settings and malformed JSON; special files c
     /already exists/,
   );
   assert.throws(
-    () => mergeNativeConfig("claude", "[]", undefined, "{}"),
+    () => agentDefinitions.claude.merge("[]", undefined, "{}"),
     /valid JSON object/,
   );
   assert.throws(
     () =>
-      mergeNativeConfig("codex", "user config", undefined, "generated config"),
+      agentDefinitions.codex.merge(
+        "user config",
+        undefined,
+        "generated config",
+      ),
     /already exists/,
   );
   const directory = await mkdtemp("/tmp/nv-fifo-");
@@ -999,18 +999,18 @@ test("missing native files can be repaired and Claude project boundaries are exp
     await mkdir(git);
     const nested = join(f.project, "src");
     await mkdir(nested);
-    assert.equal(await projectDirectory(f.project), f.project);
-    await assert.rejects(projectDirectory(nested), /repository root/);
+    assert.equal(await claudeProject(f.project), f.project);
+    await assert.rejects(claudeProject(nested), /repository root/);
     const dotted = join(f.project, "..nested");
     await mkdir(dotted);
-    await assert.rejects(projectDirectory(dotted), /repository root/);
+    await assert.rejects(claudeProject(dotted), /repository root/);
     const worktree = join(f.directory, "worktree");
     const metadata = join(git, "worktrees", "test");
     await mkdir(worktree);
     await mkdir(metadata, { recursive: true });
     await writeFile(join(worktree, ".git"), `gitdir: ${metadata}\n`);
     await writeFile(join(metadata, "commondir"), "../..\n");
-    await assert.rejects(projectDirectory(worktree), /Git worktree/);
+    await assert.rejects(claudeProject(worktree), /Git worktree/);
     await f.setup.install(f.company, ...input("claude", f.project));
     await assert.rejects(
       f.setup.install(f.personal, ...input("claude", f.project)),
@@ -1217,7 +1217,7 @@ test("Codex native model preferences survive reconnect and disconnect without pe
       '\nmodel = "old-pinned-model"\nreview_model = "old-pinned-model"\n\n[',
     );
     assert.equal(
-      mergeNativeConfig("codex", legacy, legacy, connection),
+      agentDefinitions.codex.merge(legacy, legacy, connection),
       connection,
     );
   } finally {
@@ -1286,12 +1286,7 @@ test("Claude picker sync repairs missing files, migrates discovery-only setups, 
 
 test("Codex only tags requests for gateway model filtering when other providers are off", () => {
   const toml = (otherProviders?: boolean) =>
-    nativeConfiguration(
-      profile(),
-      { agent: "codex", otherProviders },
-      "/tmp/helper",
-      4321,
-    );
+    codexConfiguration(profile(), otherProviders, "/tmp/helper", 4321);
   const tag = 'http_headers = { "x-nonstopvibin-agent" = "codex" }';
   assert.ok(toml(false).includes(`wire_api = "responses"\n${tag}\n`));
   assert.ok(!toml(true).includes("x-nonstopvibin-agent"));

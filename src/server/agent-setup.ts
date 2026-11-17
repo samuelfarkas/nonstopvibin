@@ -1,10 +1,8 @@
-import http from "node:http";
-import { connect } from "node:net";
+import type http from "node:http";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
-import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type {
   AgentSetup as InstalledSetup,
@@ -17,71 +15,60 @@ import {
   agentDefinitions,
   configDirectory,
   defaultConfigDirectory,
-  manifestVersions,
 } from "./agents.ts";
-import { agentConnectionsDirectory } from "./data-directory.ts";
-import { clientKeyPattern } from "./store.ts";
 import {
-  credentialHelper,
-  nativeConfiguration,
+  type ConnectionContext,
+  manifestVersions,
   nativeProvider,
-  shellQuote,
-} from "./agent-config.ts";
-import { openCodePlugin } from "./opencode-plugin.ts";
+} from "./agent-connection.ts";
+import { agentConnectionsDirectory } from "./data-directory.ts";
+import { credentialHelper, serveCredentials } from "./credential-socket.ts";
 import {
   configPath,
   jsonObject,
-  matchingClaudeConfig,
-  mergeNativeConfig,
-  projectDirectory,
   readConfig,
   replaceConfig,
 } from "./native-config-files.ts";
 import { isMissing, ownEntry, writeAtomic } from "./safe-files.ts";
 
 const agentSchema = z.enum(agentIds);
-/** Claude Code connects one project at a time; the other agents take none. */
-const projectRule = (input: { agent: Agent; projectDirectory?: string }) =>
-  agents[input.agent].project
-    ? Boolean(input.projectDirectory)
-    : input.projectDirectory === undefined;
+const withoutControls = (value: string) =>
+  Array.from(value).every(
+    (character) =>
+      character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
+  );
+const modelId = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine(withoutControls, "Model IDs cannot contain control characters.");
+/**
+ * Claude Code connects one project at a time; the other agents take none. Connecting
+ * `requires` the project; looking a connection up may leave it out.
+ */
+const takesProject =
+  (requires: boolean) => (input: { agent: Agent; projectDirectory?: string }) =>
+    agents[input.agent].project
+      ? !requires || Boolean(input.projectDirectory)
+      : input.projectDirectory === undefined;
+const projectMessage = "Choose a project for Claude Code only.";
 const projectSchema = z
   .string()
   .min(1)
   .max(4096)
   .refine(
-    (value) =>
-      isAbsolute(value) &&
-      Array.from(value).every(
-        (character) =>
-          character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
-      ),
+    (value) => isAbsolute(value) && withoutControls(value),
     "Choose an absolute project directory.",
   )
   .optional();
 export const agentSelectionSchema = z
   .object({ agent: agentSchema, projectDirectory: projectSchema })
   .strict()
-  .refine(
-    (input) =>
-      agents[input.agent].project || input.projectDirectory === undefined,
-    "Choose a project for Claude Code only.",
-  );
+  .refine(takesProject(false), projectMessage);
 const legacySetupSchema = z
   .object({
     agent: agentSchema,
-    model: z
-      .string()
-      .min(1)
-      .max(200)
-      .refine(
-        (value) =>
-          Array.from(value).every(
-            (character) =>
-              character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127,
-          ),
-        "Model IDs cannot contain control characters.",
-      ),
+    model: modelId,
     projectDirectory: projectSchema,
     contextWindow: z.number().int().min(1024).max(2_000_000),
     maxTokens: z.number().int().min(1).max(200_000),
@@ -91,7 +78,7 @@ const legacySetupSchema = z
     (input) => input.maxTokens < input.contextWindow,
     "Output budget must be smaller than the context budget.",
   )
-  .refine(projectRule, "Choose a project for Claude Code only.");
+  .refine(takesProject(true), projectMessage);
 
 export const agentSetupSchema = z
   .object({
@@ -100,7 +87,7 @@ export const agentSetupSchema = z
     otherProviders: z.boolean().optional(),
   })
   .strict()
-  .refine(projectRule, "Choose a project for Claude Code only.")
+  .refine(takesProject(true), projectMessage)
   .refine(
     (input) => agents[input.agent].native || input.otherProviders === undefined,
     "Only Claude Code and Codex choose whether to offer other providers.",
@@ -138,12 +125,14 @@ const manifestSchema = z.union([
 ]);
 type Manifest = z.infer<typeof manifestSchema>;
 
-interface AgentDirectories {
-  home: string;
-  codex?: string;
-  opencode?: string;
-  pi?: string;
-}
+/** The home directory, and each agent's configuration directory when moved from it. */
+type AgentDirectories = { home: string } & Partial<Record<Agent, string>>;
+
+// Layout of the agent connections directory: `<slug>/<agent>.json` manifests (one per
+// project for Claude, with its `.settings.json`), `<slug>/<agent>-key-<port>` helpers
+// and pi's `pi-preferences`. A port change installs a new helper and leaves the old
+// one failing closed for agents still running with it.
+const helperPrefix = (agent: Agent) => `${agent}-key-`;
 
 async function privateDirectory(
   path: string,
@@ -162,64 +151,33 @@ async function privateDirectory(
   }
 }
 
-async function removeStaleSocket(path: string): Promise<void> {
-  let status;
-  try {
-    status = await lstat(path);
-  } catch (error) {
-    if (isMissing(error)) return;
-    throw error;
-  }
-  if (!status.isSocket() || status.uid !== process.getuid?.())
-    throw new AppError(
-      "The agent connection path is occupied by an unexpected file.",
-    );
-  const active = await new Promise<boolean>((resolve, reject) => {
-    const client = connect(path);
-    client.setTimeout(1000, () => {
-      client.destroy();
-      reject(new AppError("The existing agent connection did not respond."));
-    });
-    client.once("connect", () => {
-      client.destroy();
-      resolve(true);
-    });
-    client.once("error", (error: NodeJS.ErrnoException) => {
-      client.destroy();
-      if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve(false);
-      else reject(error);
-    });
-  });
-  if (active)
-    throw new AppError(
-      "Another nonstopvibin instance is serving these agent connections.",
-      409,
-    );
-  await rm(path, { force: true });
-}
-
 export class AgentSetup {
   readonly directory: string;
   readonly socketDirectory: string;
   readonly socketPath: string;
+  private readonly piPreferences: string;
   private server?: http.Server;
   private starting?: Promise<void>;
   private busy = false;
   private directories: AgentDirectories;
   private connection: (profileId: string) => { key: string; port: number };
 
+  /**
+   * `connection` answers the credential socket and the port agents use now; it throws
+   * while the profile is not running, and the app's error passes through to the routes.
+   */
   constructor(
     directory: string,
     connection: (profileId: string) => { key: string; port: number },
     directories: AgentDirectories = {
       home: homedir(),
-      codex: configDirectory("codex"),
-      opencode: configDirectory("opencode"),
-      pi: configDirectory("pi"),
+      ...Object.fromEntries(
+        agentIds.map((agent) => [agent, configDirectory(agent)]),
+      ),
     },
   ) {
     this.directory = agentConnectionsDirectory(resolve(directory));
+    this.piPreferences = join(this.directory, "pi-preferences");
     this.directories = directories;
     // Short path accommodates macOS's 103-byte Unix socket limit, including
     // long home/XDG paths. The directory's owner and mode are checked before use.
@@ -232,19 +190,16 @@ export class AgentSetup {
     this.connection = connection;
   }
 
-  async restore(profiles: Profile[] = [], port?: number): Promise<string[]> {
-    if (
-      (await privateDirectory(this.directory, false)) ||
-      (await privateDirectory(
-        join(this.directory, "..", "agent-launchers"),
-        false,
-      ))
-    )
-      await this.start();
+  /**
+   * At startup, rewrites connections whose files are still exactly ours but stale
+   * (another port, profile name, template or manifest version). Anything removed or
+   * edited is left alone and reported for the user to resolve in Connect agents.
+   */
+  async restore(profiles: Profile[], port: number): Promise<string[]> {
+    if (await privateDirectory(this.directory, false)) await this.start();
     const failures: string[] = [];
-    if (port === undefined) return failures;
     for (const profile of profiles)
-      for (const agent of agentSchema.options) {
+      for (const agent of agentIds) {
         let manifests: Manifest[];
         try {
           manifests = await this.manifests(profile, agent);
@@ -256,77 +211,48 @@ export class AgentSetup {
         }
         for (const manifest of manifests) {
           try {
+            const definition = agentDefinitions[agent];
             const folder = join(this.directory, profile.slug);
-            const target = await this.target(
-              profile,
-              manifest.input,
-              false,
-              manifest.version,
-            );
-            const current = await readConfig(target);
-            if (current === undefined)
-              throw new AppError(
-                "The installed agent configuration was removed.",
-              );
-            const expected = mergeNativeConfig(
-              agent,
-              current,
-              manifest.content,
-              manifest.content,
-            );
-            if (
-              agent === "claude" &&
-              !isDeepStrictEqual(
-                jsonObject(current),
-                jsonObject(expected ?? "{}"),
-              )
-            )
+            const installed = await this.installed(profile, manifest);
+            if (!installed.configIntact)
               throw new AppError("Installed connection fields were removed.");
-            const helper = join(folder, `${agent}-key-${port}`);
-            const content =
-              agent === "opencode"
-                ? openCodePlugin(profile, this.socketPath, port)
-                : nativeConfiguration(profile, manifest.input, helper, port);
-            const helperContent =
-              agent === "opencode"
-                ? undefined
-                : credentialHelper(profile, this.socketPath, port);
-            const installedHelper =
-              agent === "opencode"
-                ? undefined
-                : await readConfig(this.helper(folder, manifest));
-            if (agent !== "opencode" && installedHelper === undefined)
+            const content = definition.configure(
+              this.context(profile, manifest.input, folder, port),
+            );
+            const helperContent = definition.helper
+              ? credentialHelper(profile, this.socketPath, port)
+              : undefined;
+            if (definition.helper && installed.helper === undefined)
               throw new AppError(
                 "The installed credential helper was removed.",
               );
+            // A helper from an earlier template or port is still ours to replace.
             if (
-              installedHelper !== undefined &&
-              installedHelper !== helperContent &&
-              installedHelper !==
+              installed.helper !== undefined &&
+              installed.helper !== helperContent &&
+              installed.helper !==
                 (manifest.helperContent ??
                   credentialHelper(profile, this.socketPath, manifest.port))
             )
               throw new AppError("The installed credential helper was edited.");
-            const pickerContent = this.pickerSettings(manifest);
-            const installedPicker =
-              pickerContent === undefined
-                ? undefined
-                : await readConfig(this.pickerPath(folder, manifest.input));
-            if (pickerContent !== undefined && installedPicker === undefined)
+            if (
+              installed.launchSettings !== undefined &&
+              installed.launchFile === undefined
+            )
               throw new AppError("The installed model settings were removed.");
             if (
-              manifest.version !== agentDefinitions[agent].version ||
+              manifest.version !== definition.version ||
               manifest.port !== port ||
               manifest.content !== content ||
               manifest.helperContent !== helperContent ||
-              installedHelper !== helperContent ||
-              installedPicker !== pickerContent
+              installed.helper !== helperContent ||
+              installed.launchFile !== installed.launchSettings
             )
-              await this.install(
+              await this.write(
                 profile,
                 manifest.input,
                 manifest.models,
-                port,
+                () => port,
               );
           } catch {
             failures.push(
@@ -336,6 +262,40 @@ export class AgentSetup {
         }
       }
     return failures;
+  }
+
+  /**
+   * A connection's installed files, read in the order status reports problems in.
+   * `configIntact`: the agent's configuration still holds every field the connection
+   * wrote; reading it throws when the user's settings collide with ours.
+   */
+  private async installed(profile: Profile, manifest: Manifest) {
+    const { input } = manifest;
+    const definition = agentDefinitions[input.agent];
+    const folder = join(this.directory, profile.slug);
+    const launchSettings = this.launchSettings(manifest);
+    const launchFile =
+      launchSettings === undefined
+        ? undefined
+        : await readConfig(this.launchSettingsPath(folder, input));
+    const config = await readConfig(
+      await this.target(profile, input, false, manifest.version),
+    );
+    const expected = definition.merge(
+      config,
+      manifest.content,
+      manifest.content,
+    );
+    const helper = definition.helper
+      ? await readConfig(this.helperPath(folder, input.agent, manifest.port))
+      : undefined;
+    return {
+      launchSettings,
+      launchFile,
+      helper,
+      configIntact:
+        config !== undefined && definition.unchanged(config, expected),
+    };
   }
 
   private async start(): Promise<void> {
@@ -351,51 +311,7 @@ export class AgentSetup {
 
   private async listen(): Promise<void> {
     await privateDirectory(this.socketDirectory, true);
-    await removeStaleSocket(this.socketPath);
-    const server = http.createServer({ maxHeaderSize: 4096 }, (req, res) => {
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("Content-Type", "text/plain");
-      res.setHeader("Connection", "close");
-      const match = /^\/profiles\/([a-f0-9-]{36})$/.exec(req.url ?? "");
-      if (
-        req.method !== "GET" ||
-        req.headers.host !== "localhost" ||
-        req.headers.origin ||
-        !match ||
-        !z.string().uuid().safeParse(match[1]).success
-      ) {
-        res.writeHead(403).end("Agent connection request rejected.");
-        return;
-      }
-      try {
-        const { key, port } = this.connection(match[1]);
-        if (
-          !clientKeyPattern.test(key) ||
-          !Number.isInteger(port) ||
-          port < 1 ||
-          port > 65535
-        )
-          throw new Error("Invalid agent connection.");
-        // Private two-line protocol; never a shell program or management token.
-        res.end(`${key}\n${port}`);
-      } catch {
-        res.writeHead(409).end("Open nonstopvibin and start this profile.");
-      }
-    });
-    server.headersTimeout = 5000;
-    server.requestTimeout = 5000;
-    server.setTimeout(5000, (socket) => socket.destroy());
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(this.socketPath, resolve);
-      });
-      await chmod(this.socketPath, 0o600);
-      this.server = server;
-    } catch (error) {
-      server.close();
-      throw error;
-    }
+    this.server = await serveCredentials(this.socketPath, this.connection);
   }
 
   private async folder(
@@ -412,20 +328,19 @@ export class AgentSetup {
   }
 
   private manifestName(agent: Agent, project?: string): string {
-    return agent === "claude" && project
-      ? `claude-${createHash("sha256").update(project).digest("hex").slice(0, 24)}.json`
+    return agents[agent].project && project
+      ? `${agent}-${createHash("sha256").update(project).digest("hex").slice(0, 24)}.json`
       : `${agent}.json`;
   }
 
   private async manifests(profile: Profile, agent: Agent): Promise<Manifest[]> {
     const folder = await this.folder(profile, false);
     if (!folder) return [];
-    const names =
-      agent === "claude"
-        ? (await readdir(folder)).filter((name) =>
-            /^claude-[a-f0-9]{24}\.json$/.test(name),
-          )
-        : [`${agent}.json`];
+    const names = agents[agent].project
+      ? (await readdir(folder)).filter((name) =>
+          new RegExp(`^${agent}-[a-f0-9]{24}\\.json$`).test(name),
+        )
+      : [`${agent}.json`];
     const manifests: Manifest[] = [];
     for (const name of names) {
       const content = await readConfig(join(folder, name));
@@ -458,85 +373,73 @@ export class AgentSetup {
         );
   }
 
-  private helper(folder: string, manifest: Manifest): string {
-    return join(folder, `${manifest.input.agent}-key-${manifest.port}`);
+  private helperPath(folder: string, agent: Agent, port: number): string {
+    return join(folder, `${helperPrefix(agent)}${port}`);
   }
 
-  private pickerPath(folder: string, input: AgentSetupInput): string {
+  private launchSettingsPath(folder: string, input: AgentSetupInput): string {
     return join(
       folder,
-      this.manifestName("claude", input.projectDirectory).replace(
+      this.manifestName(input.agent, input.projectDirectory).replace(
         /\.json$/,
         ".settings.json",
       ),
     );
   }
 
-  private pickerSettings(manifest: Manifest | undefined): string | undefined {
-    if (
-      !manifest ||
-      manifest.version !== 3 ||
-      manifest.input.agent !== "claude"
-    )
-      return;
-    // Project/local settings ignore modelPicker. --settings carries the same
-    // immutable profile route plus the real model IDs, without choosing a model.
+  private launchSettings(manifest: Manifest | undefined): string | undefined {
     return (
-      JSON.stringify(
-        {
-          ...jsonObject(manifest.content),
-          modelPicker: {
-            options: manifest.models.map((model) => ({ model })),
-            replaceBuiltInOptions: true,
-          },
-        },
-        null,
-        2,
-      ) + "\n"
+      manifest &&
+      agentDefinitions[manifest.input.agent].launchSettings?.(manifest)
     );
+  }
+
+  private context(
+    profile: Profile,
+    input: AgentSetupInput,
+    folder: string,
+    port: number,
+  ): ConnectionContext {
+    return {
+      profile,
+      input,
+      port,
+      helper: this.helperPath(folder, input.agent, port),
+      socket: this.socketPath,
+      piPreferences: this.piPreferences,
+    };
   }
 
   private async target(
     profile: Profile,
     input: AgentSetupInput,
     create: boolean,
-    version: number = agentDefinitions[input.agent].version,
+    version: number,
   ): Promise<string> {
-    const { home, codex, opencode, pi } = this.directories;
-    if (input.agent === "claude") {
+    const definition = agentDefinitions[input.agent];
+    const names = definition.file(profile, version);
+    if (definition.projectRoot) {
       if (!input.projectDirectory)
-        throw new AppError("Choose a project for Claude Code.");
+        throw new AppError(
+          `Choose a project for ${agents[input.agent].title}.`,
+        );
       try {
         return await configPath(
-          await projectDirectory(input.projectDirectory),
-          [".claude", "settings.local.json"],
+          await definition.projectRoot(input.projectDirectory),
+          names,
           create,
         );
       } catch (error) {
         if (!create && isMissing(error))
-          return join(input.projectDirectory, ".claude", "settings.local.json");
+          return join(input.projectDirectory, ...names);
         throw error;
       }
     }
-    const custom =
-      input.agent === "codex"
-        ? codex
-        : input.agent === "opencode"
-          ? opencode
-          : pi;
+    const { home } = this.directories;
+    const custom = this.directories[input.agent];
     if (create) await mkdir(custom || home, { recursive: true, mode: 0o700 });
     const base = custom ? [] : defaultConfigDirectory(input.agent);
-    const names =
-      input.agent === "codex"
-        ? [...base, `nonstopvibin-${profile.slug}.config.toml`]
-        : input.agent === "opencode"
-          ? [...base, "plugins", `nonstopvibin-${profile.id}.js`]
-          : [
-              ...base,
-              "extensions",
-              `nonstopvibin-${version < 6 ? profile.id : profile.slug}.js`,
-            ];
-    return configPath(custom || home, names, create);
+    return configPath(custom || home, [...base, ...names], create);
   }
 
   private async result(
@@ -544,41 +447,36 @@ export class AgentSetup {
     manifest: Manifest,
   ): Promise<InstalledSetup> {
     const { input } = manifest;
+    const definition = agentDefinitions[input.agent];
     const folder = join(this.directory, profile.slug);
+    const launchSettings = this.launchSettingsPath(folder, input);
     const files = [
       await this.target(profile, input, false, manifest.version),
       join(folder, this.manifestName(input.agent, input.projectDirectory)),
     ];
-    if (input.agent !== "opencode") files.push(this.helper(folder, manifest));
-    if (this.pickerSettings(manifest))
-      files.push(this.pickerPath(folder, input));
+    if (definition.helper)
+      files.push(this.helperPath(folder, input.agent, manifest.port));
+    if (this.launchSettings(manifest)) files.push(launchSettings);
     return {
       ...input,
       models: manifest.models,
-      ...(input.agent === "claude" && {
-        projects: (await this.manifests(profile, "claude"))
+      ...(agents[input.agent].project && {
+        projects: (await this.manifests(profile, input.agent))
           .map((manifest) => manifest.input.projectDirectory!)
           .sort(),
       }),
       provider: nativeProvider(profile),
-      command:
-        input.agent === "codex"
-          ? `codex --profile nonstopvibin-${profile.slug}`
-          : input.agent === "claude"
-            ? `claude --settings ${shellQuote(this.pickerPath(folder, input))}`
-            : input.agent,
+      command: definition.command(profile, launchSettings),
       files,
-      instructions:
-        input.agent === "claude"
-          ? `Run it inside the connected project; plain claude skips the picker. Approve the credential helper, pick a model with /model, and check /status shows ${profile.name}.`
-          : input.agent === "codex"
-            ? `Works in any project. Pick a model with /model before the first prompt; Codex's built-in default may not exist here. Needs Codex 0.140.0 or later.`
-            : input.agent === "pi"
-              ? `Choose ${profile.name} once with /nv; pi remembers the profile and model for this repository, including /new. Use native /model to switch models. The footer shows the active profile. App startup updates connected extensions automatically; restart pi or /reload to load changes. Skip /login: a stored key would override the credential helper. Needs pi 0.85.1 or later.`
-              : `Use /models to choose nonstopvibin · ${profile.name}. Needs OpenCode 1.18.29 or later; background model overrides to another provider are rejected.`,
+      instructions: definition.instructions(profile),
     };
   }
 
+  /**
+   * The connection, with `needsReconnect` when the agent would fail or keep stale
+   * settings as installed: the user must act. Startup's `restore` repairs only files
+   * that are still exactly ours; the rest it reports.
+   */
   async status(
     profile: Profile,
     agent: Agent,
@@ -586,81 +484,58 @@ export class AgentSetup {
   ): Promise<InstalledSetup | null> {
     const manifest = await this.manifest(profile, agent, project);
     if (!manifest) return null;
+    const definition = agentDefinitions[agent];
     const result = await this.result(profile, manifest);
+    const installed = await this.installed(profile, manifest);
     if (
       manifest.version === 1 ||
-      ((agent === "pi" || agent === "claude") &&
-        manifest.version !== agentDefinitions[agent].version)
+      (definition.olderNeedsReconnect &&
+        manifest.version !== definition.version) ||
+      installed.launchFile !== installed.launchSettings ||
+      !installed.configIntact ||
+      (definition.helper &&
+        installed.helper !==
+          credentialHelper(profile, this.socketPath, manifest.port)) ||
+      // Like install, status answers only for a running profile: `connection` refuses a
+      // stopped one with a 409, which the route returns (the app asks only while running).
+      this.connection(profile.id).port !== manifest.port
     )
-      result.needsReconnect = true;
-    if (
-      agent === "claude" &&
-      manifest.version === 3 &&
-      (await readConfig(
-        this.pickerPath(join(this.directory, profile.slug), manifest.input),
-      )) !== this.pickerSettings(manifest)
-    )
-      result.needsReconnect = true;
-    const current = await readConfig(result.files[0]);
-    const expected = mergeNativeConfig(
-      agent,
-      current,
-      manifest.content,
-      manifest.content,
-    );
-    if (
-      current === undefined ||
-      (agent !== "claude"
-        ? current !== expected
-        : !isDeepStrictEqual(jsonObject(current), jsonObject(expected ?? "{}")))
-    )
-      result.needsReconnect = true;
-    if (
-      agent !== "opencode" &&
-      (await readConfig(
-        this.helper(join(this.directory, profile.slug), manifest),
-      )) !== credentialHelper(profile, this.socketPath, manifest.port)
-    )
-      result.needsReconnect = true;
-    if (this.connection(profile.id).port !== manifest.port)
       result.needsReconnect = true;
     return result;
   }
 
+  /** Connects an agent from the app; `connection` refuses a stopped profile. */
   async install(
     profile: Profile,
     input: AgentSetupInput,
     models: string[],
-    port?: number,
+  ): Promise<InstalledSetup> {
+    return this.write(
+      profile,
+      input,
+      models,
+      () => this.connection(profile.id).port,
+    );
+  }
+
+  /** `gatewayPort` is asked once the inputs and the existing files are checked. */
+  private async write(
+    profile: Profile,
+    input: AgentSetupInput,
+    models: string[],
+    gatewayPort: () => number,
   ): Promise<InstalledSetup> {
     const validated = agentSetupSchema.parse(input);
     z.string().uuid().parse(profile.id);
-    const catalog = z
-      .array(
-        z
-          .string()
-          .min(1)
-          .max(200)
-          .refine(
-            (value) =>
-              Array.from(value).every(
-                (character) =>
-                  character.charCodeAt(0) >= 32 &&
-                  character.charCodeAt(0) !== 127,
-              ),
-            "Model IDs cannot contain control characters.",
-          ),
-      )
-      .min(1)
-      .max(10000)
-      .parse(models);
+    const catalog = z.array(modelId).min(1).max(10000).parse(models);
+    const definition = agentDefinitions[validated.agent];
     // ponytail: serialize shared config edits; per-target locks if contention matters.
     if (this.busy)
       throw new AppError("Agent setup is already changing. Try again.", 409);
     this.busy = true;
     try {
-      if (validated.projectDirectory)
-        validated.projectDirectory = await projectDirectory(
+      if (validated.projectDirectory && definition.projectRoot)
+        validated.projectDirectory = await definition.projectRoot(
           validated.projectDirectory,
         );
       const previous = await this.manifest(
@@ -668,30 +543,34 @@ export class AgentSetup {
         validated.agent,
         validated.projectDirectory,
       );
-      port ??= this.connection(profile.id).port;
+      const port = gatewayPort();
       z.number().int().min(1).max(65535).parse(port);
       const folder = await this.folder(profile, true);
       if (!folder)
         throw new AppError("Could not create the agent connection directory.");
       const manifest: Manifest = {
-        version: agentDefinitions[validated.agent].version,
+        version: definition.version,
         input: validated,
         models: catalog,
         port,
         content: "",
       };
-      const helper = this.helper(folder, manifest);
-      if (validated.agent !== "opencode")
+      const helper = this.helperPath(folder, validated.agent, port);
+      if (definition.helper)
         manifest.helperContent = credentialHelper(
           profile,
           this.socketPath,
           port,
         );
-      manifest.content =
-        validated.agent === "opencode"
-          ? openCodePlugin(profile, this.socketPath, port)
-          : nativeConfiguration(profile, validated, helper, port);
-      const target = await this.target(profile, validated, true);
+      manifest.content = definition.configure(
+        this.context(profile, validated, folder, port),
+      );
+      const target = await this.target(
+        profile,
+        validated,
+        true,
+        definition.version,
+      );
       const before = await readConfig(target);
       const previousTarget = previous
         ? await this.target(profile, previous.input, false, previous.version)
@@ -700,6 +579,7 @@ export class AgentSetup {
         previousTarget === target
           ? undefined
           : await readConfig(previousTarget);
+      // Only pi's file moved between manifest versions (see its definition).
       if (
         previousContent !== undefined &&
         previousContent !== previous?.content
@@ -708,24 +588,23 @@ export class AgentSetup {
           "The old pi extension was edited outside nonstopvibin. Resolve it before reconnecting.",
           409,
         );
-      const after = mergeNativeConfig(
-        validated.agent,
+      const after = definition.merge(
         before,
         previous?.content,
         manifest.content,
       );
-      if (validated.agent === "claude")
+      if (definition.retain)
         manifest.retained = previous
           ? previous.retained
-          : matchingClaudeConfig(before, manifest.content);
-      const pickerPath = this.pickerPath(folder, validated);
-      const pickerAfter = this.pickerSettings(manifest);
-      const pickerBefore =
-        pickerAfter === undefined ? undefined : await readConfig(pickerPath);
+          : definition.retain(before, manifest.content);
+      const launchPath = this.launchSettingsPath(folder, validated);
+      const launchAfter = this.launchSettings(manifest);
+      const launchBefore =
+        launchAfter === undefined ? undefined : await readConfig(launchPath);
       if (
-        pickerBefore !== undefined &&
-        pickerBefore !== this.pickerSettings(previous) &&
-        pickerBefore !== pickerAfter
+        launchBefore !== undefined &&
+        launchBefore !== this.launchSettings(previous) &&
+        launchBefore !== launchAfter
       )
         throw new AppError(
           "Claude model settings were edited outside nonstopvibin. Resolve the conflicting file before syncing.",
@@ -734,7 +613,7 @@ export class AgentSetup {
       const manifestContent = JSON.stringify(manifest, null, 2) + "\n";
       if (
         Buffer.byteLength(manifestContent) > 1_000_000 ||
-        Buffer.byteLength(pickerAfter ?? "") > 1_000_000
+        Buffer.byteLength(launchAfter ?? "") > 1_000_000
       )
         throw new AppError(
           "The model catalog is too large for native agent settings.",
@@ -751,8 +630,8 @@ export class AgentSetup {
           await replaceConfig(previousTarget, previousContent, undefined);
           previousRemoved = true;
         }
-        if (pickerAfter !== undefined)
-          await replaceConfig(pickerPath, pickerBefore, pickerAfter);
+        if (launchAfter !== undefined)
+          await replaceConfig(launchPath, launchBefore, launchAfter);
         try {
           await writeAtomic(
             join(
@@ -762,8 +641,8 @@ export class AgentSetup {
             manifestContent,
           );
         } catch (error) {
-          if (pickerAfter !== undefined)
-            await replaceConfig(pickerPath, pickerAfter, pickerBefore);
+          if (launchAfter !== undefined)
+            await replaceConfig(launchPath, launchAfter, launchBefore);
           throw error;
         }
       } catch (error) {
@@ -787,8 +666,9 @@ export class AgentSetup {
       throw new AppError("Agent setup is already changing. Try again.", 409);
     this.busy = true;
     try {
+      const definition = agentDefinitions[agent];
       if (
-        agent === "claude" &&
+        agents[agent].project &&
         project === undefined &&
         (await this.manifests(profile, agent)).length > 1
       )
@@ -803,29 +683,28 @@ export class AgentSetup {
       );
       const before = await readConfig(target);
       const folder = join(this.directory, profile.slug);
-      const pickerPath = this.pickerPath(folder, manifest.input);
-      const pickerBefore =
-        this.pickerSettings(manifest) === undefined
+      const launchPath = this.launchSettingsPath(folder, manifest.input);
+      const launchBefore =
+        this.launchSettings(manifest) === undefined
           ? undefined
-          : await readConfig(pickerPath);
+          : await readConfig(launchPath);
       if (
-        pickerBefore !== undefined &&
-        pickerBefore !== this.pickerSettings(manifest)
+        launchBefore !== undefined &&
+        launchBefore !== this.launchSettings(manifest)
       )
         throw new AppError(
           "Claude model settings were edited outside nonstopvibin. Resolve the conflicting file before disconnecting.",
           409,
         );
-      const after = mergeNativeConfig(
-        agent,
+      const after = definition.merge(
         before,
         manifest.content,
         before === undefined ? undefined : manifest.retained,
       );
       await replaceConfig(target, before, after);
-      if (pickerBefore !== undefined) {
+      if (launchBefore !== undefined) {
         try {
-          await replaceConfig(pickerPath, pickerBefore, undefined);
+          await replaceConfig(launchPath, launchBefore, undefined);
         } catch (error) {
           await replaceConfig(target, after, before);
           throw error;
@@ -835,12 +714,13 @@ export class AgentSetup {
         join(folder, this.manifestName(agent, manifest.input.projectDirectory)),
         { force: true },
       );
-      if (
-        agent !== "opencode" &&
-        !(await this.manifests(profile, agent)).length
-      ) {
+      if (definition.helper && !(await this.manifests(profile, agent)).length) {
+        const prefix = helperPrefix(agent);
         for (const name of await readdir(folder))
-          if (new RegExp(`^${agent}-key-[0-9]{1,5}$`).test(name))
+          if (
+            name.startsWith(prefix) &&
+            /^[0-9]{1,5}$/.test(name.slice(prefix.length))
+          )
             await rm(join(folder, name), { force: true });
       }
     } finally {

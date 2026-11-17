@@ -17,7 +17,7 @@ import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { createRequire } from "node:module";
 import { piProfileControls } from "../src/server/pi-profile-controls.ts";
-import { nativeConfiguration } from "../src/server/agent-config.ts";
+import { piExtension } from "../src/server/agent-pi.ts";
 
 if (!process.argv[2])
   throw new Error("Pass the installed pi-coding-agent package directory.");
@@ -197,7 +197,12 @@ try {
     };
     await writeFile(
       join(extensionDir, slug + ".js"),
-      nativeConfiguration(profile, { agent: "pi" }, helper, port),
+      piExtension(
+        profile,
+        helper,
+        port,
+        join(root, "profiles", "pi-preferences"),
+      ),
       { mode: 0o600 },
     );
   }

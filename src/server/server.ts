@@ -32,6 +32,7 @@ import {
 import { Store, sameSecret, type ApiAccount } from "./store.ts";
 import { ownerOnlyDirectory } from "./data-directory.ts";
 import { offeredModels } from "./agents.ts";
+import { profileEndpoint } from "./agent-connection.ts";
 import { fileKeyCodec } from "./vault.ts";
 import { Cores, type CoresOptions } from "./cores.ts";
 import { coreVersion, verifyCore } from "./core-binary.ts";
@@ -422,7 +423,7 @@ export class Application {
     return `http://127.0.0.1:${this.port}`;
   }
   endpoint(profileId: string): string {
-    return `${this.origin}/p/${this.store.profile(profileId).slug}/v1`;
+    return profileEndpoint(this.port, this.store.profile(profileId).slug);
   }
   state(): AppState {
     const profiles: ProfileState[] = this.store.profiles().map((profile) => {

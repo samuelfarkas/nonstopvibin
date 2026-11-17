@@ -348,15 +348,11 @@ export function urlText(session: Session, sshConnection?: string): string {
   return lines.join("\n");
 }
 
+/** The session of a server answering for `directory`, or undefined. */
 async function running(directory: string) {
   const session = await readSession(directory);
   const state = session && (await probe(session));
-  if (!session || !state)
-    throw new CliError(
-      `NonstopVibin is not running for ${directory}.\nCheck \`systemctl --user status nonstopvibin\`, or start it with \`nonstopvibin serve\`.`,
-      NOT_RUNNING,
-    );
-  return { session, state };
+  return session && state ? { session, state } : undefined;
 }
 
 // systemd unit quoting: C-style escapes inside double quotes; % starts a
@@ -588,7 +584,7 @@ async function serviceInstall(
   const previousPort = previous?.match(/"--port" "(\d+)"/)?.[1];
   if (port !== undefined && previousPort && previousPort !== String(port))
     console.warn(
-      `The port changed from ${previousPort} to ${port}. Reconnect your agents in Connect agents; their settings still use the old port.`,
+      `The port changed from ${previousPort} to ${port}. Startup moves connected agents to the new port; restart running agents (or /reload in pi). Any connection it cannot update is reported in the app; resolve it in Connect agents.`,
     );
   const since = Date.now() - 1000;
   for (const args of [["daemon-reload"], ["enable", UNIT], ["restart", UNIT]]) {
@@ -651,7 +647,7 @@ Usage:
 
 Options:
   --port N           Loopback port (default ${DEFAULT_PORT}). Changing it later
-                     requires reconnecting agents.
+                     requires restarting running agents.
   --allow-host FQDN  Also accept this exact HTTPS host name for the web UI,
                      e.g. from \`tailscale serve --bg ${DEFAULT_PORT}\`.
 
@@ -715,7 +711,13 @@ export async function main(argv: string[]): Promise<number> {
     return -1;
   }
   if (command === "url" && !subcommand) {
-    const { session, state } = await running(directory);
+    const current = await running(directory);
+    if (!current)
+      throw new CliError(
+        `NonstopVibin is not running for ${directory}.\nCheck \`systemctl --user status nonstopvibin\`, or start it with \`nonstopvibin serve\`.`,
+        NOT_RUNNING,
+      );
+    const { session, state } = current;
     if (values.json) {
       console.log(
         JSON.stringify({
@@ -735,14 +737,14 @@ export async function main(argv: string[]): Promise<number> {
       process.platform === "linux"
         ? systemctl("is-active", UNIT).stdout?.trim()
         : undefined;
-    const session = await readSession(directory);
-    const state = session && (await probe(session));
-    if (!session || !state) {
+    const current = await running(directory);
+    if (!current) {
       console.log(
         `NonstopVibin is not running for ${directory}.${unit ? ` Unit nonstopvibin.service: ${unit}.` : ""}`,
       );
       return NOT_RUNNING;
     }
+    const { session, state } = current;
     console.log(
       [
         `NonstopVibin ${state.version} is running on 127.0.0.1:${session.port} (pid ${session.pid}, since ${session.startedAt}).`,

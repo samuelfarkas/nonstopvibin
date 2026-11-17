@@ -7,8 +7,9 @@ import type { Usage } from "./usage.ts";
 import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
 import type { ProfileModels } from "./model-catalog.ts";
-import { agentModels, offeredModels } from "./agents.ts";
-import { agents, isAgent } from "../shared/agents.ts";
+import { agentDefinitions, agentModels, offeredModels } from "./agents.ts";
+import { catalogRequest } from "./agent-connection.ts";
+import { isAgent, type Agent } from "../shared/agents.ts";
 import type { Profile } from "../shared/types.ts";
 
 const permitted =
@@ -66,6 +67,21 @@ function responseHeaders(
   headers["x-nonstopvibin-profile"] = slug;
   return headers;
 }
+/** The agent asking for its curated catalog, by the mechanism its definition names. */
+function curatedCatalog(req: IncomingMessage, url: URL): Agent | undefined {
+  const header = req.headers[catalogRequest.header];
+  if (
+    header !== undefined &&
+    !Array.isArray(header) &&
+    isAgent(header) &&
+    agentDefinitions[header].catalog === "header"
+  )
+    return header;
+  const query = url.searchParams.get(catalogRequest.query);
+  if (query && isAgent(query) && agentDefinitions[query].catalog === "query")
+    return query;
+  return undefined;
+}
 function forwardedHeaders(
   req: IncomingMessage,
   secret: string,
@@ -84,7 +100,7 @@ function forwardedHeaders(
     "x-forwarded-host",
     "x-forwarded-proto",
     "proxy-authorization",
-    "x-nonstopvibin-agent",
+    catalogRequest.header,
   ])
     delete headers[key];
   headers.authorization = `Bearer ${secret}`;
@@ -146,43 +162,8 @@ export class Gateway {
     const { profileId, slug, path } = routeRequest(this.store, req);
     const port = this.core.port(profileId);
     const url = new URL(path, "http://localhost");
-    const agent = url.searchParams.get("nonstopvibin");
-    if (
-      req.method === "GET" &&
-      url.pathname === "/v1/models" &&
-      req.headers["x-nonstopvibin-agent"] === "codex"
-    ) {
-      // Codex installed without other providers: serve its own vendor's models.
-      const release = this.acquire(profileId);
-      try {
-        const data = await offeredModels(
-          "codex",
-          await this.core.models(profileId),
-          false,
-          (models) => this.models.enriched(profileId, models),
-        );
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        });
-        res.end(
-          JSON.stringify({
-            object: "list",
-            data: data.map((model) => ({ object: "model", ...model })),
-          }),
-        );
-      } finally {
-        release();
-      }
-      return;
-    }
-    if (
-      req.method === "GET" &&
-      url.pathname === "/v1/models" &&
-      agent &&
-      isAgent(agent) &&
-      !agents[agent].native
-    ) {
+    const agent = curatedCatalog(req, url);
+    if (req.method === "GET" && url.pathname === "/v1/models" && agent) {
       const release = this.acquire(profileId);
       try {
         const models = await offeredModels(
@@ -191,11 +172,18 @@ export class Gateway {
           false,
           (models) => this.models.enriched(profileId, models),
         );
-        const payload = { models: agentModels(models, agent) };
+        const generated = agentDefinitions[agent].catalog === "query";
+        // The agent's own request gets the OpenAI list; generated code gets its entries.
+        const payload = generated
+          ? { models: agentModels(models, agent) }
+          : {
+              object: "list",
+              data: models.map((model) => ({ object: "model", ...model })),
+            };
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
-          "x-nonstopvibin-profile": slug,
+          ...(generated && { "x-nonstopvibin-profile": slug }),
         });
         res.end(JSON.stringify(payload));
       } finally {

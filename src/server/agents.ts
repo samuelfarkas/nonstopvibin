@@ -3,52 +3,38 @@ import { agents, type Agent } from "../shared/agents.ts";
 import type { CatalogModel, Model } from "../shared/types.ts";
 import { modelsFor, nativeAgent } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
+import type { AgentDefinition } from "./agent-connection.ts";
+import { claude } from "./agent-claude.ts";
+import { codex } from "./agent-codex.ts";
+import { openCode } from "./agent-opencode.ts";
+import { pi } from "./agent-pi.ts";
 
-/** Manifest versions releases have written; version 1 has its own schema. */
-export const manifestVersions = [2, 3, 4, 5, 6, 7] as const;
-interface AgentDefinition {
-  /** Manifest version a connection made now records; older ones are migrated. */
-  version: (typeof manifestVersions)[number];
-  /** Where the agent reads its configuration: `$variable`, `$XDG_CONFIG_HOME/xdg`, or `~/home`. */
-  directory?: { variable: string; xdg?: string; home: string[] };
-}
-// Key order is the service unit's environment order.
-export const agentDefinitions = {
-  codex: {
-    version: 3,
-    directory: { variable: "CODEX_HOME", home: [".codex"] },
-  },
-  opencode: {
-    version: 3,
-    directory: {
-      variable: "OPENCODE_CONFIG_DIR",
-      xdg: "opencode",
-      home: [".config", "opencode"],
-    },
-  },
-  pi: {
-    version: 7,
-    directory: { variable: "PI_CODING_AGENT_DIR", home: [".pi", "agent"] },
-  },
-  claude: { version: 3 },
-} satisfies Record<Agent, AgentDefinition>;
-const definition = (agent: Agent): AgentDefinition => agentDefinitions[agent];
+/**
+ * One definition per coding agent: where its configuration goes, what it contains, how
+ * it merges with the user's, how the agent launches and asks for its catalog. AgentSetup
+ * runs the same flow for each. Key order is the service unit's environment order.
+ */
+export const agentDefinitions: Record<Agent, AgentDefinition> = {
+  codex,
+  opencode: openCode,
+  pi,
+  claude,
+};
 /** Environment variables that move agent configuration; a service must forward them. */
-export const agentEnvironment = Object.values<AgentDefinition>(
-  agentDefinitions,
-).flatMap(({ directory }) =>
-  !directory
-    ? []
-    : directory.xdg
-      ? [directory.variable, "XDG_CONFIG_HOME"]
-      : [directory.variable],
+export const agentEnvironment = Object.values(agentDefinitions).flatMap(
+  ({ directory }) =>
+    !directory
+      ? []
+      : directory.xdg
+        ? [directory.variable, "XDG_CONFIG_HOME"]
+        : [directory.variable],
 );
 /** The configuration directory's path under the home directory, by default. */
 export const defaultConfigDirectory = (agent: Agent): string[] =>
-  definition(agent).directory?.home ?? [];
+  agentDefinitions[agent].directory?.home ?? [];
 /** The agent's configuration directory when the environment moves it from the default. */
 export function configDirectory(agent: Agent): string | undefined {
-  const directory = definition(agent).directory;
+  const directory = agentDefinitions[agent].directory;
   if (!directory) return undefined;
   return (
     process.env[directory.variable] ||

@@ -914,14 +914,18 @@ test("app startup refreshes an installed extension without starting its profile"
     allowMissingCore: true,
     port: 0,
   };
-  let instance = await Application.create(options);
+  let instance = await Application.create({
+    ...options,
+    binary: app.options.binary,
+  });
   try {
     const profile = instance.store.createProfile("Before update");
+    // Agents connect to a running profile; the saved copy below stays disabled.
+    await instance.cores.pool.start(profile.id);
     const installed = await instance.agentSetup.install(
       profile,
       { agent: "pi" },
       ["fixture-model"],
-      instance.port,
     );
     instance.store.saveProfile({ ...profile, name: "After update" });
     await instance.close();

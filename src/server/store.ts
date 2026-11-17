@@ -50,8 +50,16 @@ export interface UsageCursor {
   timestamp: string;
   sequence: number;
 }
-/** A profile's client key: `nv_` and 32 random bytes in base64url. */
-export const clientKeyPattern = /^nv_[A-Za-z0-9_-]{43}$/;
+/** A profile's client key: `nv_` and 32 random bytes in base64url (43 characters). */
+export const clientKey = {
+  prefix: "nv_",
+  // This order is what installed credential helpers already contain.
+  characters: "a-zA-Z0-9_-",
+  length: 43,
+} as const;
+/** A client key without anchors, for patterns that embed one. */
+export const clientKeySource = `${clientKey.prefix}[${clientKey.characters}]{${clientKey.length}}`;
+export const clientKeyPattern = new RegExp(`^${clientKeySource}$`);
 
 /** Constant-time comparison of two secrets. */
 export function sameSecret(a: string, b: string): boolean {
@@ -148,7 +156,7 @@ export class Store {
         .run(profile.id, slug, JSON.stringify(profile));
       this.setSecret(
         secretIds.client(profile.id),
-        `nv_${randomBytes(32).toString("base64url")}`,
+        `${clientKey.prefix}${randomBytes(32).toString("base64url")}`,
       );
       this.setSecret(
         secretIds.core(profile.id),

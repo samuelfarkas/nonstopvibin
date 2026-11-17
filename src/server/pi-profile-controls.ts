@@ -1,3 +1,8 @@
+import { providerPrefix } from "./agent-connection.ts";
+
+/** Characters a pi notice or label must not show: controls, format and separators. */
+export const unprintable = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
 // Included in each owned extension. pi's session-scoped event bus elects one
 // command owner, so connecting/removing profiles needs no shared-file installer.
 export const piProfileControls = String.raw`
@@ -8,7 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 /** @typedef {NonNullable<ReturnType<Context["modelRegistry"]["getProvider"]>>} Provider */
 /** @typedef {{provider: string, name: string, slug: string}} Profile */
 /** @param {string} text */
-const printable = (text) => text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ");
+const printable = (text) => text.replace(${unprintable}, " ");
 /** @param {Context} ctx @param {string} title @param {string[]} options @returns {Promise<string | undefined>} */
 async function chooseProfileOption(ctx, title, options) {
   // RPC exposes select dialogs but cannot render custom terminal components.
@@ -188,12 +193,12 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
     const recorded = branch.findLast((entry) => entry.type === "model_change");
     // A forked session (e.g. a subagent child) inherits the parent's profile entry, but a nonstopvibin
     // model set at launch differs from the branch's last recorded model. That launch model wins.
-    const launched = event.type === "session_start" && ctx.sessionManager.getHeader()?.parentSession && ctx.model?.provider.startsWith("nonstopvibin-")
+    const launched = event.type === "session_start" && ctx.sessionManager.getHeader()?.parentSession && ctx.model?.provider.startsWith("${providerPrefix}")
       && (recorded?.provider !== ctx.model.provider || recorded?.modelId !== ctx.model.id) ? ctx.model : undefined;
     let data = saved?.type === "custom" ? saved.data : undefined;
     // Existing conversations keep their recorded identity. An explicitly launched
     // nonstopvibin model outranks repository defaults.
-    if (!saved && !ctx.model?.provider.startsWith("nonstopvibin-") && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
+    if (!saved && !ctx.model?.provider.startsWith("${providerPrefix}") && event.type === "session_start" && (event.reason === "startup" || event.reason === "new") && !branch.some((entry) => entry.type === "message")) {
       for (const path of preferencePaths) {
         try { data = JSON.parse(await readFile(path, "utf8")); break; }
         catch (error) {
@@ -207,8 +212,8 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
       active = launched.provider;
       modelId = launched.id;
     } else if (saved?.type === "custom" || data !== undefined) {
-      if (!data || typeof data !== "object" || !("provider" in data) || !("modelId" in data) || !(data.provider === null || (typeof data.provider === "string" && /^nonstopvibin-[a-z0-9][a-z0-9-]*$/.test(data.provider))) || !(data.modelId === null || typeof data.modelId === "string")) {
-        active = "nonstopvibin-unavailable";
+      if (!data || typeof data !== "object" || !("provider" in data) || !("modelId" in data) || !(data.provider === null || (typeof data.provider === "string" && /^${providerPrefix}[a-z0-9][a-z0-9-]*$/.test(data.provider))) || !(data.modelId === null || typeof data.modelId === "string")) {
+        active = "${providerPrefix}unavailable";
         modelId = null;
         notify(ctx, "The saved nonstopvibin profile is invalid. Choose it again with /nv.");
       } else {
@@ -219,7 +224,7 @@ function connectProfileControls(pi, profile, preferencesDirectory) {
       // On legacy sessions use their recorded identity, not pi's fallback when
       // the original provider disappeared. New sessions may use a native default.
       const provider = recorded?.provider ?? ctx.model?.provider ?? (profiles.size === 1 ? profile.provider : undefined);
-      active = provider?.startsWith("nonstopvibin-") ? provider : null;
+      active = provider?.startsWith("${providerPrefix}") ? provider : null;
       modelId = active ? (recorded?.modelId ?? ctx.model?.id ?? null) : null;
     }
     // Include unauthenticated providers: /login can make them available without reloading.

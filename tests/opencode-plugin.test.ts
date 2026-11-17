@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
-import { openCodePlugin } from "../src/server/opencode-plugin.ts";
+import { openCodePlugin } from "../src/server/agent-opencode.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 
 // The subset of OpenCode's provider config the generated plugin reads and writes.
