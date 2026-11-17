@@ -20,7 +20,7 @@ import { createInterface } from "node:readline";
 import { z } from "zod";
 import { Application } from "../server/server.ts";
 import { linuxLoginItem, setLinuxLoginItem } from "./autostart.ts";
-import { errorMessage } from "../server/errors.ts";
+import { AppError, errorMessage } from "../server/errors.ts";
 import {
   dataDirectory,
   databasePath,
@@ -29,7 +29,11 @@ import {
 import { providers, type ProviderEntry } from "../shared/providers.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
-import type { Profile } from "../shared/types.ts";
+import {
+  checkoutLayout,
+  hostPort,
+  terminationSignals,
+} from "../server/host-defaults.ts";
 
 app.setName("NonstopVibin");
 const userData = dataDirectory();
@@ -66,8 +70,7 @@ else {
     /* The menu bar and proxy intentionally continue until Quit. */
   });
   // Route termination signals through the orderly quit, which stops every core.
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
-    process.on(signal, () => app.quit());
+  for (const signal of terminationSignals) process.on(signal, () => app.quit());
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -112,7 +115,7 @@ function safeExternal(raw: string): string {
   return url.href;
 }
 function reportDesktopError(error: Error) {
-  application.cores.pool.report(errorMessage(error));
+  application.report(errorMessage(error));
 }
 async function watchOutsideClicks(window: BrowserWindow): Promise<void> {
   const root = app.getAppPath();
@@ -166,7 +169,8 @@ async function watchOutsideClicks(window: BrowserWindow): Promise<void> {
 }
 async function showMain(profileId?: string) {
   if (quitting) return;
-  if (profileId) application.store.profile(profileId);
+  if (profileId && !application.hasProfile(profileId))
+    throw new AppError("Profile not found.", 404);
   const existing = mainWindow;
   if (!mainWindow) {
     mainWindow = createWindow("main");
@@ -205,7 +209,7 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
           titleBarStyle:
             process.platform === "darwin" ? "hiddenInset" : "default",
           trafficLightPosition: { x: 21, y: 17 },
-          icon: join(root, "dist/client/icon.png"),
+          icon: join(root, checkoutLayout.client, "icon.png"),
         }
       : {
           title: "NonstopVibin quotas",
@@ -231,7 +235,7 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
     try {
       void shell.openExternal(safeExternal(url)).catch(reportDesktopError);
     } catch (error) {
-      application.cores.pool.report(errorMessage(error));
+      application.report(errorMessage(error));
     }
     return { action: "deny" };
   });
@@ -296,10 +300,12 @@ async function start(): Promise<void> {
     directory: userData,
     binary: app.isPackaged
       ? join(process.resourcesPath, "core/cli-proxy-api")
-      : join(root, ".vendor/core/cli-proxy-api"),
-    clientDirectory: join(root, "dist/client"),
-    port: Number(process.env.NONSTOPVIBIN_PORT || 4318),
+      : join(root, checkoutLayout.core),
+    clientDirectory: join(root, checkoutLayout.client),
+    port: hostPort(),
     desktop: true,
+    // Without its core the window still opens; each profile start reports it missing.
+    allowMissingCore: true,
   });
   // The UI is dark-only; force the app appearance so native popups (select
   // menus, dialogs) match instead of following a light OS theme.
@@ -458,7 +464,8 @@ async function start(): Promise<void> {
     nativeImage.createFromPath(
       join(
         root,
-        `dist/client/tray/${process.platform === "darwin" ? "mac" : "linux"}-${name}.png`,
+        checkoutLayout.client,
+        `tray/${process.platform === "darwin" ? "mac" : "linux"}-${name}.png`,
       ),
     );
   const ballImage = trayImage("ball");
@@ -467,25 +474,12 @@ async function start(): Promise<void> {
   tray.setToolTip("NonstopVibin · proxy off");
   let trayState = "";
   let trayTooltip = "";
-  // Gateway idle/active edges run this per request; reread profiles only after a profile write.
-  let trayProfiles: Pick<Profile, "id" | "name">[] = [];
-  let trayGeneration = -1;
+  // Gateway idle/active edges run this per request.
   const syncTray = () => {
     if (quitting) return;
-    if (trayGeneration !== application.store.profileGeneration) {
-      trayProfiles = application.store
-        .profiles()
-        .map(({ id, name }) => ({ id, name }));
-      trayGeneration = application.store.profileGeneration;
-    }
-    const running = trayProfiles.filter((p) =>
-      application.cores.pool.running(p.id),
-    );
-    const streaming = running.some(
-      (p) => (application.gateway.active.get(p.id) ?? 0) > 0,
-    );
+    const { running, streaming } = application.status();
     const state = running.length ? "running" : "stopped";
-    const names = running.map((p) => p.name).join(", ");
+    const names = running.join(", ");
     const tooltip =
       state === "stopped"
         ? "NonstopVibin · proxy off"
@@ -498,12 +492,11 @@ async function start(): Promise<void> {
     trayState = state;
     tray.setImage(state === "stopped" ? stoppedImage : ballImage);
   };
-  application.cores.pool.onStatusChange = syncTray;
-  application.cores.signIn.onCallback = () => {
+  application.on("status", syncTray);
+  application.on("sign-in", () => {
     // Only an existing window holds the sign-in dialog; a new one would not.
     if (mainWindow) void showMain().catch(reportDesktopError);
-  };
-  application.gateway.onActivityChange = syncTray;
+  });
   syncTray();
   const openTray = async () => {
     if (quitting) return;

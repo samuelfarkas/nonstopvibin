@@ -216,7 +216,7 @@ test(
         );
       store = new Store(data, fileKeyCodec(data));
       pool = new CorePool(store, binary);
-      await pool.restore();
+      await pool.restore(() => {});
       assert.ok(
         !(await alive(orphan)),
         "the orphan is stopped before restore returns",

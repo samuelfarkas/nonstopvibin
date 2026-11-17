@@ -18,6 +18,7 @@ import { fileKeyCodec } from "../src/server/vault.ts";
 import { claudeIdentity, sameSeat } from "../src/server/identity.ts";
 import { ImportCatalog } from "../src/server/imports.ts";
 import { accountLabel } from "../src/client/format.ts";
+import { verifyCore } from "../src/server/core-binary.ts";
 import type { OAuthSession, Profile } from "../src/shared/types.ts";
 
 const accountUuid = "abcdef01-2345-4678-9abc-def012345678";
@@ -127,6 +128,7 @@ test(
       return httpManagement(request);
     };
     const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
       management,
       now: () => Date.now() + skew,
     });
@@ -190,7 +192,7 @@ test(
       return result.account;
     }
     try {
-      await core.verifyBinary();
+      await verifyCore(core.binary);
       let firstId = "";
       let secondId = "";
       let firstIndex = "";

@@ -1,15 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
-import { createReadStream, existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import coreRelease from "../../scripts/core-release.json";
 import type { Json, Model, ProfileState } from "../shared/types.ts";
 import { ConfigWriter, applied } from "./config.ts";
-import { AppError, errorMessage } from "./errors.ts";
-import { parse, record, responseJson, text } from "./json.ts";
+import { AppError, errorMessage, type Report } from "./errors.ts";
+import { record, responseJson, text } from "./json.ts";
 import type { Store } from "./store.ts";
 import {
   forgetCore,
@@ -85,6 +81,8 @@ export interface CorePoolOptions {
   ready?: (profileId: string, signal?: AbortSignal) => Promise<void>;
   /** Runs before a running core is told to exit. */
   beforeStop?: (profileId: string) => Promise<void>;
+  /** A core became running, failed, exited, or applied new settings. */
+  onStatusChange?: () => void;
 }
 /** The process exists and has not exited; a failed spawn has no PID and may never emit exit. */
 function alive(child: ChildProcess): boolean {
@@ -123,8 +121,6 @@ export class CorePool {
   private readonly held = new Set<string>();
   private readonly config: ConfigWriter;
   private closing = false;
-  onStatusChange?: () => void;
-  errors: string[] = [];
   private readonly options: CorePoolOptions;
   private readonly transport: Management;
   private readonly timing: CoreTiming;
@@ -201,7 +197,7 @@ export class CorePool {
     child.once("error", (error) => {
       runtime.state = "error";
       runtime.error = `Could not launch proxy: ${error.message}`;
-      this.onStatusChange?.();
+      this.options.onStatusChange?.();
     });
     child.once("exit", (code, signal) => {
       // The core is gone, so its watchdog (our own child) has nothing left to guard.
@@ -211,7 +207,7 @@ export class CorePool {
       runtime.state = runtime.stopping ? "stopped" : "error";
       if (!runtime.stopping)
         runtime.error = `Proxy exited (${signal ?? code}). Restart this profile to reconnect.`;
-      this.onStatusChange?.();
+      this.options.onStatusChange?.();
     });
     try {
       runtime.ledger = await recordCore(this.store.directory, child);
@@ -243,7 +239,7 @@ export class CorePool {
         this.store.saveProfile({ ...profile, enabled: true });
         await this.options.ready?.(profileId, signal);
         signal?.throwIfAborted();
-        this.onStatusChange?.();
+        this.options.onStatusChange?.();
         return;
       } catch (error) {
         signal?.throwIfAborted();
@@ -344,7 +340,7 @@ export class CorePool {
     // The upstream file watcher reloads asynchronously; acknowledge only the applied configuration.
     for (let attempt = 0; attempt < 60; attempt++) {
       if (applied(expected, await this.management(profileId, "/config"))) {
-        this.onStatusChange?.();
+        this.options.onStatusChange?.();
         return;
       }
       await delay(100);
@@ -396,13 +392,8 @@ export class CorePool {
         })
       : [];
   }
-  report(message: string): void {
-    this.errors = [...this.errors.filter((e) => e !== message), message].slice(
-      -5,
-    );
-  }
   /** Stops cores a crashed instance left running on this data directory, then starts every enabled profile. */
-  async restore(signal?: AbortSignal): Promise<void> {
+  async restore(report: Report, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     await reapOrphanedCores(this.store.directory);
     for (const profile of this.store.profiles().filter((p) => p.enabled)) {
@@ -411,7 +402,7 @@ export class CorePool {
         await this.start(profile.id, signal);
       } catch (error) {
         signal?.throwIfAborted();
-        this.report(`${profile.name}: ${errorMessage(error)}`);
+        report(`${profile.name}: ${errorMessage(error)}`);
       }
     }
   }
@@ -443,21 +434,5 @@ export class CorePool {
         `Profiles did not stop cleanly: ${failures.map(errorMessage).join(" ")}`,
       );
     if (failures.length) throw failures[0];
-  }
-  async verifyBinary(requirePinnedCore = false): Promise<void> {
-    const manifest = record(
-      parse(await readFile(join(this.binary, "..", "manifest.json"), "utf8")),
-    );
-    const digest = createHash("sha256");
-    for await (const chunk of createReadStream(this.binary))
-      digest.update(chunk);
-    const hash = digest.digest("hex");
-    // Headless releases must also match the compiled pin. Desktop signing
-    // changes the binary and refreshes its manifest after packaging verifies it.
-    const pin = new Map(Object.entries(coreRelease.binaries)).get(
-      `${process.platform}_${process.arch}`,
-    );
-    if (manifest.binarySha256 !== hash || (requirePinnedCore && pin !== hash))
-      throw new AppError("The bundled core failed its integrity check.", 503);
   }
 }

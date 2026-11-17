@@ -2,7 +2,7 @@ const { readFileSync } = require("node:fs");
 const { createHash } = require("node:crypto");
 const { join } = require("node:path");
 const { Arch } = require("electron-builder");
-const release = require("./core-release.json");
+const release = require("../src/server/core-release.json");
 
 module.exports = async function validateCore(context) {
   const root = join(context.packager.projectDir, ".vendor/core");

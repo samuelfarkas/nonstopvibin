@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
 import { record, type JsonObject } from "../src/server/json.ts";
-import { CorePool } from "../src/server/core.ts";
+import { verifyCore } from "../src/server/core-binary.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
 const schema = {
@@ -450,13 +450,14 @@ test(
       directory,
       agentHome: join(directory, "home"),
       binary: localCatalogBinary,
+      allowMissingCore: true,
       clientDirectory: resolve("dist/client"),
       port: 0,
     });
     try {
       // Verify the underlying pinned core separately; the wrapper is test-only
       // and catalog-pinned, so Application.create cannot verify it before write.
-      await new CorePool(app.store, binary).verifyBinary();
+      await verifyCore(binary);
       await writeFile(
         localCatalogBinary,
         `#!/bin/sh\nexec '${binary.replaceAll("'", "'\\''")}' "$@" --local-model\n`,

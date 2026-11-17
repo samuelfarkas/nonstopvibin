@@ -8,7 +8,7 @@ import { parseQuota } from "../src/server/quota.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { csvCell, isQuotaStale, resetIn } from "../src/client/format.ts";
-import { goModelProtocol } from "../src/server/server.ts";
+import { goModelProtocol } from "../src/server/api-accounts.ts";
 
 const now = Date.parse("2026-09-05T12:00:00Z");
 test("quota freshness preserves failed readings and the five-minute boundary", () => {
@@ -209,7 +209,7 @@ test("Antigravity fractions and Grok weekly/monthly limits preserve independent 
 test("OpenCode Go quota errors do not persist invalid response excerpts", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-quota-"));
   const store = new Store(directory, fileKeyCodec(directory));
-  const { quotas } = new Cores(store, "unused");
+  const { quotas } = new Cores(store, "unused", { report: () => {} });
   const profile = store.createProfile("Fixture");
   const accountId = "opencode-go-fixture";
   store.saveApiAccount(

@@ -3,6 +3,7 @@ import http from "node:http";
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { Application } from "../src/server/server.ts";
+import { runHost } from "../src/server/host.ts";
 
 await mkdir(".test-runtime", { recursive: true });
 const directory = await mkdtemp(resolve(".test-runtime/preview-"));
@@ -62,13 +63,19 @@ const upstream = http.createServer(async (req, res) => {
 await new Promise<void>((resolve) =>
   upstream.listen(4322, "127.0.0.1", resolve),
 );
-const app = await Application.create({
-  directory,
-  agentHome: join(directory, "agent-home"),
-  binary: resolve(".vendor/core/cli-proxy-api"),
-  clientDirectory: resolve("dist/client"),
-  port: 4321,
-});
+// The simulator's own port, beside the fixture upstream's.
+const app = await runHost(({ binary, clientDirectory }, signal) =>
+  Application.create(
+    {
+      directory,
+      agentHome: join(directory, "agent-home"),
+      binary,
+      clientDirectory,
+      port: 4321,
+    },
+    signal,
+  ),
+);
 const work = app.store.createProfile("Work");
 const personal = app.store.createProfile("Personal");
 for (const [profile, accounts] of [
@@ -173,10 +180,3 @@ await writeFile(
 );
 console.log(`SIMULATOR: ${app.origin}/#session=${app.token}`);
 console.log(`Test directory: ${directory}`);
-for (const signal of ["SIGTERM", "SIGINT"])
-  process.on(signal, () => {
-    void app.close().then(() => {
-      upstream.close(() => process.exit(0));
-      upstream.closeAllConnections();
-    });
-  });

@@ -78,6 +78,7 @@ test(
     const attempts: number[] = [];
     let failing = true;
     const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
       usageTiming: { ...usageTiming, coalesce: 20, usageBackoff: 160 },
       management: async (request) => {
         if (!request.path.startsWith("/usage-queue"))
@@ -128,6 +129,7 @@ test(
     let drained = () => {};
     let inFlight = 0;
     const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
       // Activity keeps the queue draining for 100 ms instead of 10 s.
       usageTiming: { ...usageTiming, coalesce: 20, activity: 100 },
       inFlight: () => inFlight,
@@ -214,6 +216,7 @@ async function runningPool(prefix: string, count: number) {
   const store = new Store(directory, fileKeyCodec(directory));
   const drained = new Set<string>();
   const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    report: () => {},
     management: (request) => {
       if (request.path.startsWith("/usage-queue"))
         drained.add(request.profileId);
@@ -339,6 +342,7 @@ test(
     });
     let gated = false;
     const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
       management: async (request) => {
         if (!gated || !request.path.startsWith("/usage-queue"))
           return httpManagement(request);
@@ -389,6 +393,7 @@ test(
     // Once set, this profile's management calls reach the fixture instead of its core.
     let fixturePort: number | undefined;
     const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
       management: (request) =>
         httpManagement(
           fixturePort === undefined
@@ -479,7 +484,9 @@ test(
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-shutdown-order-"));
     const store = new Store(directory, fileKeyCodec(directory));
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"));
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
+    });
     const profile = store.createProfile("Order fixture");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {

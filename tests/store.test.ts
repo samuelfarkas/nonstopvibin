@@ -3,10 +3,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store, clientKeyPattern, secretIds } from "../src/server/store.ts";
+import {
+  Store,
+  clientKeyPattern,
+  secretIds,
+  type UsageCursor,
+} from "../src/server/store.ts";
 import type { SecretCodec } from "../src/server/vault.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
+import { usageSummary } from "./usage-summary.ts";
 import { Application } from "../src/server/server.ts";
 
 test("existing databases never receive a replacement vault key", async () => {
@@ -34,18 +40,20 @@ test("existing databases never receive a replacement vault key", async () => {
   }
 });
 
-test("profile writes bump the generation that tray name caches use", async () => {
+test("profile writes refresh the cached profile names the tray reads", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-generation-"));
   const store = new Store(directory, fileKeyCodec(directory));
   try {
-    const start = store.profileGeneration;
+    const empty = store.profileNames();
     const profile = store.createProfile("Fixture");
-    assert.equal(store.profileGeneration, start + 1);
+    const names = store.profileNames();
+    assert.notEqual(names, empty);
+    assert.deepEqual([...names], [[profile.id, "Fixture"]]);
     store.profiles();
     store.clientKey(profile.id);
-    assert.equal(store.profileGeneration, start + 1, "reads do not bump it");
+    assert.equal(store.profileNames(), names, "reads keep the cache");
     store.saveProfile({ ...profile, name: "Renamed" });
-    assert.equal(store.profileGeneration, start + 2);
+    assert.deepEqual([...store.profileNames()], [[profile.id, "Renamed"]]);
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });
@@ -57,6 +65,7 @@ test("desktop secrets persist using an owner-only local key", async () => {
   const options = {
     directory,
     binary: join(directory, "unused-core"),
+    allowMissingCore: true,
     clientDirectory: directory,
     agentHome: join(directory, "agent-home"),
     port: 0,
@@ -114,7 +123,7 @@ test("moving summaries match stored history through late inserts, changing perio
           | "reasoningTokens"
           | "totalTokens",
       ) => rows.reduce((n, row) => n + row[field], 0);
-      assert.deepEqual(store.summary(id, since), {
+      assert.deepEqual(usageSummary(store, id, since), {
         requests: rows.length,
         failed: rows.filter((row) => row.failed).length,
         inputTokens: sum("inputTokens"),
@@ -209,7 +218,8 @@ test("history cleanup is opt-in, persists, and is reflected in each affected sum
         stream: false,
       })),
     );
-    for (const p of profiles) assert.equal(store.summary(p.id).requests, 0);
+    for (const p of profiles)
+      assert.equal(usageSummary(store, p.id).requests, 0);
     // Each profile holds one 5-day-old and one 40-day-old record.
     const both = {
       requests: 2,
@@ -221,9 +231,10 @@ test("history cleanup is opt-in, persists, and is reflected in each affected sum
       totalTokens: 6,
     };
     store.addUsage(records);
-    for (const p of profiles) assert.deepEqual(store.summary(p.id), both);
+    for (const p of profiles) assert.deepEqual(usageSummary(store, p.id), both);
     store.addUsage(records);
-    for (const p of profiles) assert.equal(store.summary(p.id).requests, 2);
+    for (const p of profiles)
+      assert.equal(usageSummary(store, p.id).requests, 2);
     store.db.exec(`CREATE TRIGGER reject_fixture BEFORE INSERT ON usage
       WHEN NEW.id='reject' BEGIN SELECT RAISE(ABORT,'synthetic rejection'); END`);
     assert.throws(
@@ -234,22 +245,24 @@ test("history cleanup is opt-in, persists, and is reflected in each affected sum
         ]),
       /synthetic rejection/,
     );
-    assert.equal(store.usage(profiles[0].id).length, 2);
-    for (const p of profiles) assert.deepEqual(store.summary(p.id), both);
+    assert.equal(store.usage(profiles[0].id, "", 300).length, 2);
+    for (const p of profiles) assert.deepEqual(usageSummary(store, p.id), both);
     store.pruneUsage(now);
-    for (const p of profiles) assert.equal(store.summary(p.id).requests, 2);
+    for (const p of profiles)
+      assert.equal(usageSummary(store, p.id).requests, 2);
     assert.throws(() => store.setUsageRetentionDays(-1), /Unsupported/);
     assert.equal(store.usageRetentionDays(), 0);
     store.setUsageRetentionDays(30);
     for (const p of profiles) {
-      assert.equal(store.usage(p.id).length, 1);
-      assert.equal(store.summary(p.id).totalTokens, 3);
+      assert.equal(store.usage(p.id, "", 300).length, 1);
+      assert.equal(usageSummary(store, p.id).totalTokens, 3);
     }
     store.close();
     store = new Store(directory, fileKeyCodec(directory));
     assert.equal(store.usageRetentionDays(), 30);
     store.pruneUsage(now + 31 * 86_400_000);
-    for (const p of profiles) assert.equal(store.summary(p.id).requests, 0);
+    for (const p of profiles)
+      assert.equal(usageSummary(store, p.id).requests, 0);
     const changes = () =>
       store.db.prepare("SELECT total_changes() AS count").get()?.count;
     store.saveAccountMetadata(profiles[0].id, []);
@@ -354,30 +367,29 @@ test("time pagination seeks through tied timestamps without losing rows or cross
       "2026-01-02",
       JSON.stringify({ id: "later", timestamp: "2026-01-02" }),
     );
-    let timestamp = "2026-01-02";
-    let sequence = 0;
+    let from: UsageCursor | undefined;
     const ids: string[] = [];
     for (;;) {
-      const batch = store.usageTimeBatch(
+      const page = store.usageBetween(
         profile.id,
-        "2026-01-02",
-        "2026-01-04",
-        through,
-        timestamp,
-        sequence,
+        { since: "2026-01-02", before: "2026-01-04", through },
+        from,
       );
-      ids.push(...batch.map((item) => item.record.id));
-      if (batch.length < 500) break;
-      timestamp = batch[batch.length - 1].record.timestamp;
-      sequence = batch[batch.length - 1].sequence;
+      ids.push(...page.records.map((record) => record.id));
+      if (!page.next) break;
+      assert.equal(page.records.length, 500);
+      from = page.next;
     }
     assert.deepEqual(
       ids,
       Array.from({ length: 2003 }, (_, i) => String(i)),
     );
     assert.equal(
-      store.usageTimeBatch(profile.id, "2026-01-02", "2026-01-02", through)
-        .length,
+      store.usageBetween(profile.id, {
+        since: "2026-01-02",
+        before: "2026-01-02",
+        through,
+      }).records.length,
       0,
     );
   } finally {

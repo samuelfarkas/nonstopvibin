@@ -73,7 +73,7 @@ TypeScript wrapper does not audit the upstream Go implementation or binary.
 - Build from a reviewed revision with clean, frozen dependency installs. Record its
   source revision, core version and hashes, target OS/architecture, and artifact hash.
   The reviewed core pins are the archive and binary hashes in
-  `scripts/core-release.json`; the packaged manifest is derived data.
+  `src/server/core-release.json`; the packaged manifest is derived data.
 - Inspect the actual archive: include only built app code, production dependencies,
   reviewed assets/licenses, and the verified core. Exclude `.deepsec`, `.agents`,
   runtime data, environment files, signing keys, local review material, and raw scan

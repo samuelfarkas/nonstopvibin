@@ -1,24 +1,11 @@
-import { constants } from "node:fs";
-import {
-  lstat,
-  mkdir,
-  open,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { AppError } from "./errors.ts";
 import type { Agent } from "../shared/agents.ts";
 import type { JsonObject } from "./json.ts";
-
-export function isMissing(cause: unknown): boolean {
-  return cause instanceof Error && "code" in cause && cause.code === "ENOENT";
-}
+import { isMissing, ownEntry, readOwnFile, writeAtomic } from "./safe-files.ts";
 
 // The user selects the root; generated descendants must never traverse symlinks.
 export async function configPath(
@@ -28,13 +15,7 @@ export async function configPath(
 ): Promise<string> {
   const canonical = await realpath(root);
   const validateDirectory = async (folder: string) => {
-    const status = await lstat(folder);
-    if (
-      !status.isDirectory() ||
-      status.isSymbolicLink() ||
-      status.uid !== process.getuid?.() ||
-      (status.mode & 0o022) !== 0
-    )
+    if (!ownEntry(await lstat(folder), "directory", 0o022))
       throw new AppError(
         "Agent configuration needs a directory you own, without symbolic links or shared write access.",
       );
@@ -61,44 +42,19 @@ export async function configPath(
 
 export async function readConfig(path: string): Promise<string | undefined> {
   try {
-    const file = await open(
+    return await readOwnFile(
       path,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const status = await file.stat();
-      if (
-        !status.isFile() ||
-        status.uid !== process.getuid?.() ||
-        (status.mode & 0o022) !== 0 ||
-        status.size > 1_000_000
-      )
-        throw new AppError(
+      0o022,
+      1_000_000,
+      () =>
+        new AppError(
           "Agent configuration must be an ordinary file you own, under 1 MB, without shared write access.",
-        );
-      return await file.readFile("utf8");
-    } finally {
-      await file.close();
-    }
+        ),
+    );
   } catch (error) {
-    if (isMissing(error)) return undefined;
     if (error instanceof Error && "code" in error && error.code === "ELOOP")
       throw new AppError("Agent configuration cannot be a symbolic link.");
     throw error;
-  }
-}
-
-export async function writeAtomic(
-  path: string,
-  content: string,
-  mode = 0o600,
-): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, content, { flag: "wx", mode });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
   }
 }
 

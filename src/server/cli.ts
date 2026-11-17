@@ -10,13 +10,13 @@ import {
   realpathSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import coreRelease from "../../scripts/core-release.json";
 import { Application, validAllowHost } from "./server.ts";
+import { coreVersion } from "./core-binary.ts";
 import {
   dataDirectory,
   ownerOnlyDirectory,
@@ -24,7 +24,8 @@ import {
   sessionPath,
 } from "./data-directory.ts";
 import { agentEnvironment } from "./agents.ts";
-import { isMissing, writeAtomic } from "./native-config-files.ts";
+import { isMissing, ownEntry, readOwnFile, writeAtomic } from "./safe-files.ts";
+import { runHost } from "./host.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
 import type { RouteResponse } from "../shared/api.ts";
@@ -34,15 +35,13 @@ declare const NONSTOPVIBIN_PACKAGED: boolean;
 const packaged = typeof NONSTOPVIBIN_PACKAGED !== "undefined";
 // The packaged binary is reached through a ~/.local/bin symlink; its siblings
 // live beside the real file.
-const root = packaged
-  ? dirname(realpathSync(process.execPath))
-  : resolve(import.meta.dirname, "../..");
-const coreBinary = packaged
-  ? join(root, "core/cli-proxy-api")
-  : join(root, ".vendor/core/cli-proxy-api");
-const clientDirectory = packaged
-  ? join(root, "client")
-  : join(root, "dist/client");
+function packagedPaths() {
+  const root = dirname(realpathSync(process.execPath));
+  return {
+    binary: join(root, "core/cli-proxy-api"),
+    clientDirectory: join(root, "client"),
+  };
+}
 
 export const DEFAULT_PORT = 4320;
 const NOT_RUNNING = 3;
@@ -71,27 +70,20 @@ export async function readSession(
   directory: string,
 ): Promise<Session | undefined> {
   try {
-    const file = await open(
+    const content = await readOwnFile(
       sessionPath(directory),
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const status = await file.stat();
-      if (
-        !status.isFile() ||
-        status.uid !== process.getuid?.() ||
-        (status.mode & 0o077) !== 0 ||
-        status.size > 65536
-      )
-        throw new CliError(
+      0o077,
+      65536,
+      () =>
+        new CliError(
           "server.json must be an owner-only ordinary file you own (chmod 600).",
-        );
-      return sessionSchema.parse(JSON.parse(await file.readFile("utf8")));
-    } finally {
-      await file.close();
-    }
+        ),
+    );
+    return content === undefined
+      ? undefined
+      : sessionSchema.parse(JSON.parse(content));
   } catch (error) {
-    if (isMissing(error) || error instanceof SyntaxError) return undefined;
+    if (error instanceof SyntaxError) return undefined;
     if (error instanceof z.ZodError) return undefined;
     throw error;
   }
@@ -133,16 +125,12 @@ export async function probe(session: Session): Promise<ServerState | null> {
 // process exit/crash, without a stale-owner check/delete race. The separate
 // database leaves the application's WAL available to normal store operations.
 const ownedDirectories = new Set<string>();
-const reservations = new WeakMap<Application, () => void>();
+/** Holds the directory's lock until the returned release, which may run more than once. */
 function reserveDirectory(directory: string): () => void {
   // Tightened before the lock exists, and only once the directory is vetted.
   ownerOnlyDirectory(directory, () => {
-    const folder = lstatSync(directory);
-    if (
-      !folder.isDirectory() ||
-      folder.isSymbolicLink() ||
-      folder.uid !== process.getuid?.()
-    )
+    // Any mode: ownerOnlyDirectory tightens it next.
+    if (!ownEntry(lstatSync(directory), "directory", 0))
       throw new CliError(
         "The server data directory must be owner-only, owned by you, and not a symbolic link.",
       );
@@ -172,13 +160,7 @@ function reserveDirectory(directory: string): () => void {
       throw error;
   }
   const file = lstatSync(path);
-  if (
-    !file.isFile() ||
-    file.isSymbolicLink() ||
-    file.nlink !== 1 ||
-    file.uid !== process.getuid?.() ||
-    (file.mode & 0o077) !== 0
-  )
+  if (!ownEntry(file, "file", 0o077) || file.nlink !== 1)
     throw new CliError(
       "server.lock.sqlite must be an owner-only ordinary file you own, without links.",
     );
@@ -194,7 +176,10 @@ function reserveDirectory(directory: string): () => void {
     throw error;
   }
   ownedDirectories.add(canonical);
+  let held = true;
   return () => {
+    if (!held) return;
+    held = false;
     lock.close();
     ownedDirectories.delete(canonical);
   };
@@ -235,6 +220,14 @@ export async function startServer(
         desktop: false,
         development: false,
         requirePinnedCore: true,
+        // Closing the server also gives up its discovery file and directory lock.
+        afterClose: async () => {
+          try {
+            await removeSession(options.directory);
+          } finally {
+            release();
+          }
+        },
       },
       signal,
     );
@@ -251,7 +244,6 @@ export async function startServer(
       } satisfies Session),
     );
     signal?.throwIfAborted();
-    reservations.set(application, release);
     return application;
   } catch (error) {
     try {
@@ -277,22 +269,6 @@ export async function startServer(
     throw error;
   }
 }
-export async function stopServer(
-  application: Application,
-  directory: string,
-): Promise<void> {
-  try {
-    await application.close();
-  } finally {
-    await removeSession(directory);
-    const release = reservations.get(application);
-    if (release) {
-      reservations.delete(application);
-      release();
-    }
-  }
-}
-
 export function parseHost(value: string): string {
   const host = value.trim().toLowerCase();
   if (!validAllowHost(host))
@@ -700,7 +676,7 @@ export async function main(argv: string[]): Promise<number> {
   });
   const [command, subcommand, ...rest] = positionals;
   if (values.version) {
-    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreRelease.version})`);
+    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreVersion})`);
     return 0;
   }
   if (values.help || !command) {
@@ -714,49 +690,19 @@ export async function main(argv: string[]): Promise<number> {
       ? await discoveryDirectory()
       : dataDirectory();
   if (command === "serve" && !subcommand) {
-    const controller = new AbortController();
-    let application: Application | undefined;
-    let stopping = false;
-    let code = 0;
-    const stop = () => {
-      controller.abort();
-      if (!application || stopping) return;
-      stopping = true;
-      stopServer(application, directory).then(
-        () => process.exit(code),
-        (error) => {
-          console.error(error);
-          process.exit(1);
-        },
-      );
-    };
-    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-    // Receive termination before directory reservation, store creation or any
-    // core spawn. Startup cancellation itself awaits partial-app cleanup.
-    for (const signal of signals) process.on(signal, stop);
-    // A crash must still stop the profile cores; the watchdogs cover what this cannot.
-    for (const event of ["uncaughtException", "unhandledRejection"])
-      process.on(event, (error) => {
-        console.error(error);
-        code = 1;
-        stop();
-      });
-    try {
-      application = await startServer(
+    // Signals and crashes are received before directory reservation, store creation
+    // or any core spawn; closing the server releases its lock.
+    const application = await runHost((checkout, signal) =>
+      startServer(
         {
           directory,
-          binary: coreBinary,
-          clientDirectory,
+          ...(packaged ? packagedPaths() : checkout),
           port,
           allowHosts,
         },
-        controller.signal,
-      );
-    } catch (error) {
-      for (const signal of signals) process.removeListener(signal, stop);
-      if (error === controller.signal.reason) return code;
-      throw error;
-    }
+        signal,
+      ),
+    );
     // journald must never receive the session token.
     const session = await readSession(directory);
     if (process.stdout.isTTY && session)

@@ -18,7 +18,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import release from "./core-release.json" with { type: "json" };
+import release from "../src/server/core-release.json" with { type: "json" };
 import pkg from "../package.json" with { type: "json" };
 import verifyPackage from "./verify-package.cjs";
 

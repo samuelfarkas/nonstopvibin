@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsPage } from "../src/client/Settings.tsx";
-import coreRelease from "../scripts/core-release.json";
+import coreRelease from "../src/server/core-release.json";
 import http from "node:http";
 import { connect, type Socket } from "node:net";
 import { once } from "node:events";
@@ -34,6 +34,7 @@ import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
 import { Store, secretIds } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
+import { usageSummary } from "./usage-summary.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
 import { settle } from "./teardown.ts";
@@ -388,6 +389,7 @@ test(
     let collections = 0;
     let collected = () => {};
     const cores = new Cores(store, app.options.binary, {
+      report: () => {},
       usageTiming: { ...usageTiming, accounts: 200, coalesce: 20 },
       management: async (request) => {
         if (started && request.path === "/auth-files") {
@@ -578,7 +580,7 @@ test("agent setup remains management-only and checks the complete profile throug
     await assert.rejects(stat(file), { code: "ENOENT" });
 });
 test("dynamic agent discovery uses validated metadata and the authenticated live profile catalog", async () => {
-  const original = app.gateway.catalog;
+  const original = app.models.catalog;
   const catalog = new ModelCatalog(
     Object.assign(
       async () =>
@@ -605,7 +607,7 @@ test("dynamic agent discovery uses validated metadata and the authenticated live
       fetch,
     ),
   );
-  Object.defineProperty(app.gateway, "catalog", {
+  Object.defineProperty(app.models, "catalog", {
     value: catalog,
     configurable: true,
   });
@@ -667,7 +669,7 @@ test("dynamic agent discovery uses validated metadata and the authenticated live
       assert.equal(remove.status, 200);
     }
   } finally {
-    Object.defineProperty(app.gateway, "catalog", {
+    Object.defineProperty(app.models, "catalog", {
       value: original,
       configurable: true,
     });
@@ -766,14 +768,14 @@ test("SSE survives the real core and gateway with usage events and completion ma
 test("actual upstream accounting reaches durable SQLite exactly once", async () => {
   for (let attempt = 0; attempt < 30; attempt++) {
     await app.cores.usage.collect(company.id);
-    if (app.store.summary(company.id).requests >= 7) break;
+    if (usageSummary(app.store, company.id).requests >= 7) break;
     await delay(50);
   }
-  const summary = app.store.summary(company.id);
+  const summary = usageSummary(app.store, company.id);
   assert.equal(summary.requests, 7);
   assert.equal(summary.totalTokens, 98);
   assert.equal(summary.outputTokens, 21);
-  for (const entry of app.store.usage(company.id)) {
+  for (const entry of app.store.usage(company.id, "", 300)) {
     assert.equal(entry.upstreamModel, "fixture-model");
     assert.deepEqual(entry.pricingTokens, {
       input: 6,
@@ -783,11 +785,11 @@ test("actual upstream accounting reaches durable SQLite exactly once", async () 
       reasoning: 0,
     });
   }
-  const raw = JSON.stringify(app.store.usage(company.id));
+  const raw = JSON.stringify(app.store.usage(company.id, "", 300));
   assert.equal(raw.includes("company-one"), false);
   assert.equal(raw.includes("hello"), false);
   await app.cores.usage.collect(company.id);
-  assert.deepEqual(app.store.summary(company.id), summary);
+  assert.deepEqual(usageSummary(app.store, company.id), summary);
 });
 test("fill first stays on one eligible credential", async () => {
   const changed = await fetch(`${app.origin}/api/profiles/${company.id}`, {
@@ -891,12 +893,12 @@ test(
   async () => {
     const key = app.store.clientKey(personal.id);
     await app.cores.usage.collect(personal.id);
-    const summary = app.store.summary(personal.id);
+    const summary = usageSummary(app.store, personal.id);
     await app.cores.pool.stop(personal.id);
     assert.equal((await request(personal)).status, 503);
     await app.cores.pool.start(personal.id);
     assert.equal(app.store.clientKey(personal.id), key);
-    assert.deepEqual(app.store.summary(personal.id), summary);
+    assert.deepEqual(usageSummary(app.store, personal.id), summary);
     const result = await request(personal);
     assert.equal(result.status, 200);
     await result.text();
@@ -909,6 +911,7 @@ test("app startup refreshes an installed extension without starting its profile"
     directory: join(directory, "agent-update-fixture"),
     agentHome: join(directory, "agent-update-home"),
     binary: join(directory, "missing-core"),
+    allowMissingCore: true,
     port: 0,
   };
   let instance = await Application.create(options);
@@ -1196,7 +1199,7 @@ test(
       // Only the stop reads a stopping core's queue: 500, 500, then the short page.
       assert.equal(pages, 3);
       assert.equal(queue.length, 0);
-      assert.equal(app.store.summary(profile.id).requests, 1001);
+      assert.equal(usageSummary(app.store, profile.id).requests, 1001);
       assert.equal(runtime.state, "stopped");
       assert.ok(
         runtime.child.exitCode !== null || runtime.child.signalCode !== null,
@@ -1236,12 +1239,12 @@ test("activity API preserves one snapshot while usage arrives during aggregation
       id: `api-snapshot-${i}`,
     })),
   );
-  const read = app.store.usageTimeBatch.bind(app.store);
+  const read = app.store.usageBetween.bind(app.store);
   let signal!: () => void;
   const reading = new Promise<void>((resolve) => {
     signal = resolve;
   });
-  app.store.usageTimeBatch = (...args) => {
+  app.store.usageBetween = (...args) => {
     const batch = read(...args);
     if (args[0] === profile.id) signal();
     return batch;
@@ -1274,7 +1277,7 @@ test("activity API preserves one snapshot while usage arrives during aggregation
       false,
     );
   } finally {
-    app.store.usageTimeBatch = read;
+    app.store.usageBetween = read;
   }
 });
 
@@ -1308,7 +1311,7 @@ test(
       // Let the server's request catch observe the settled proxy.
       await new Promise((resolve) => setImmediate(resolve));
     };
-    const reported = [...app.cores.pool.errors];
+    const reported = [...app.errors];
     try {
       await app.cores.pool.start(profile.id);
       const hung = new Promise<void>((resolve) => {
@@ -1329,7 +1332,7 @@ test(
       await pending;
       await settled();
       assert.equal(app.gateway.active.get(profile.id), 0);
-      assert.deepEqual(app.cores.pool.errors, reported);
+      assert.deepEqual(app.errors, reported);
 
       // The gateway's own connection to a core has no production seam; to be rebuilt in the tests stage.
       const runtime = app.cores.pool["processes"].get(profile.id)!;
@@ -1352,7 +1355,7 @@ test(
           /profile proxy is unavailable\. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin\./,
         );
         assert.doesNotMatch(body, /ECONNREFUSED|hang up|Premature/i);
-        assert.deepEqual(app.cores.pool.errors, reported);
+        assert.deepEqual(app.errors, reported);
       } finally {
         runtime.port = port;
       }

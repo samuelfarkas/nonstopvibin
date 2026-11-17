@@ -16,7 +16,7 @@ import type { Credentials } from "./credentials.ts";
 import type { CorePool } from "./core.ts";
 import { reapOrphanedCores } from "./core-processes.ts";
 import { oauthPendingDirectory } from "./data-directory.ts";
-import { AppError } from "./errors.ts";
+import { AppError, type Report } from "./errors.ts";
 import { claudeIdentity, verifyClaudeIdentity } from "./identity.ts";
 import { number, record, text, type JsonObject } from "./json.ts";
 import type { Quotas } from "./quota.ts";
@@ -37,12 +37,20 @@ interface Sandbox {
   review?: OAuthReview;
 }
 
+export interface SignInOptions {
+  /** The clock sessions expire by. */
+  now?: () => number;
+  report: Report;
+  /** A browser sign-in callback was accepted; the desktop can bring the dialog forward. */
+  onCallback?: () => void;
+}
+
 /** Browser sign-in through a core, one at a time across all profiles. */
 export class SignIn {
   /** The sign-in in progress. */
   session: OAuthSession | undefined;
-  /** A browser sign-in callback was accepted; the desktop can bring the dialog forward. */
-  onCallback?: () => void;
+  private readonly onCallback?: () => void;
+  private readonly report: Report;
   private readonly pool: CorePool;
   private readonly accounts: Accounts;
   private readonly credentials: Credentials;
@@ -57,13 +65,15 @@ export class SignIn {
     accounts: Accounts,
     credentials: Credentials,
     quotas: Quotas,
-    now: () => number = Date.now,
+    options: SignInOptions,
   ) {
     this.pool = pool;
     this.accounts = accounts;
     this.credentials = credentials;
     this.quotas = quotas;
-    this.now = now;
+    this.now = options.now ?? Date.now;
+    this.report = options.report;
+    this.onCallback = options.onCallback;
   }
   /** The loopback server receiving the provider's redirect, while one is open. */
   get callbackServer(): HttpServer | undefined {
@@ -139,7 +149,7 @@ export class SignIn {
             void this.serialize(async () => {
               if (this.session === session) await this.clear();
             }).catch(() =>
-              this.pool.report(
+              this.report(
                 "Could not clean up an expired sign-in. Restart the app.",
               ),
             );

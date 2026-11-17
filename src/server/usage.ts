@@ -4,7 +4,7 @@ import type { Json, PricingTokens, UsageRecord } from "../shared/types.ts";
 import { quotaRefreshMs, usagePageSize } from "../shared/vocabulary.ts";
 import type { Accounts } from "./accounts.ts";
 import type { CorePool } from "./core.ts";
-import { AppError, errorMessage } from "./errors.ts";
+import { AppError, errorMessage, type Report } from "./errors.ts";
 import { number, record, text, unwrap } from "./json.ts";
 import type { Quotas } from "./quota.ts";
 import type { Store } from "./store.ts";
@@ -114,6 +114,7 @@ export interface UsageOptions {
   timing?: UsageTiming;
   /** Gateway requests or WebSockets still open for a profile; their usage arrives later. */
   inFlight?: (profileId: string) => number;
+  report: Report;
 }
 
 /** Drains every running core's usage queue into the store, and runs account, quota and history maintenance. */
@@ -124,6 +125,7 @@ export class Usage {
   private readonly quotas: Quotas;
   private readonly timing: UsageTiming;
   private readonly inFlight: (profileId: string) => number;
+  private readonly report: Report;
   private readonly cadences = new Map<string, Cadence>();
   private readonly collections = new Map<string, Promise<number>>();
   private timer?: NodeJS.Timeout;
@@ -134,7 +136,7 @@ export class Usage {
     pool: CorePool,
     accounts: Accounts,
     quotas: Quotas,
-    options: UsageOptions = {},
+    options: UsageOptions,
   ) {
     this.pool = pool;
     this.store = accounts.store;
@@ -142,6 +144,7 @@ export class Usage {
     this.quotas = quotas;
     this.timing = options.timing ?? { ...usageTiming };
     this.inFlight = options.inFlight ?? (() => 0);
+    this.report = options.report;
   }
   /** A new core answered: its drain cadence starts over. */
   started(profileId: string): void {
@@ -186,7 +189,7 @@ export class Usage {
         // Full destructive queue pages must be persisted before terminating the core.
       }
     } catch (error) {
-      this.pool.report(`Usage before stop: ${errorMessage(error)}`);
+      this.report(`Usage before stop: ${errorMessage(error)}`);
     }
   }
   /** Starts the scheduler. */
@@ -258,7 +261,7 @@ export class Usage {
                       this.timing.coalesce * 2 ** (cadence.failures - 1),
                       this.timing.usageBackoff,
                     );
-              this.pool.report(
+              this.report(
                 `${this.store.profile(profileId).name}: ${errorMessage(error)}`,
               );
             }
@@ -280,7 +283,7 @@ export class Usage {
             try {
               this.store.pruneUsage();
             } catch (error) {
-              this.pool.report(`History cleanup: ${errorMessage(error)}`);
+              this.report(`History cleanup: ${errorMessage(error)}`);
             }
           }
           for (const profileId of this.pool.runtimes.keys()) {
@@ -299,7 +302,7 @@ export class Usage {
                     account.quota?.status !== "unavailable",
                 );
             } catch (error) {
-              this.pool.report(
+              this.report(
                 `${this.store.profile(profileId).name}: ${errorMessage(error)}`,
               );
             }

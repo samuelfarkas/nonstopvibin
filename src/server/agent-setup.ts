@@ -30,15 +30,14 @@ import {
 import { openCodePlugin } from "./opencode-plugin.ts";
 import {
   configPath,
-  isMissing,
   jsonObject,
   matchingClaudeConfig,
   mergeNativeConfig,
   projectDirectory,
   readConfig,
   replaceConfig,
-  writeAtomic,
 } from "./native-config-files.ts";
+import { isMissing, ownEntry, writeAtomic } from "./safe-files.ts";
 
 const agentSchema = z.enum(agentIds);
 /** Claude Code connects one project at a time; the other agents take none. */
@@ -152,13 +151,7 @@ async function privateDirectory(
 ): Promise<boolean> {
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   try {
-    const status = await lstat(path);
-    if (
-      !status.isDirectory() ||
-      status.isSymbolicLink() ||
-      status.uid !== process.getuid?.() ||
-      (status.mode & 0o077) !== 0
-    )
+    if (!ownEntry(await lstat(path), "directory", 0o077))
       throw new AppError(
         "Agent setup needs an owner-only directory without symbolic links.",
       );

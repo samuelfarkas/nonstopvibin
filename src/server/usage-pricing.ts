@@ -1,5 +1,5 @@
 import { setImmediate as yieldToLoop } from "node:timers/promises";
-import type { Store } from "./store.ts";
+import type { Store, UsageCursor } from "./store.ts";
 import { z } from "zod";
 import type {
   CatalogModel,
@@ -252,44 +252,43 @@ export class UsagePrices {
       }
     };
     if (previous && since > previous.since) {
-      let timestamp = previous.since;
-      let sequence = 0;
+      let from: UsageCursor | undefined;
       for (;;) {
         if (this.closed) throw new Error("Activity pricing is shutting down");
-        const batch = store.usageTimeBatch(
+        const page = store.usageBetween(
           profileId,
-          previous.since,
-          since,
-          previous.sequence,
-          timestamp,
-          sequence,
+          { since: previous.since, before: since, through: previous.sequence },
+          from,
         );
-        for (const item of batch) include(item.record, -1);
-        if (batch.length < usagePageSize) break;
-        timestamp = batch[batch.length - 1].record.timestamp;
-        sequence = batch[batch.length - 1].sequence;
+        for (const record of page.records) include(record, -1);
+        if (!page.next) break;
+        from = page.next;
         await yieldToLoop();
       }
     }
-    let sequence = previous?.sequence ?? 0;
-    let timestamp = since;
+    let after = previous?.sequence ?? 0;
+    let from: UsageCursor | undefined;
+    const page = previous
+      ? () => {
+          const added = store.usageAfter(profileId, after, through);
+          after = added.next ?? after;
+          return added;
+        }
+      : () => {
+          const ranged = store.usageBetween(
+            profileId,
+            { since, before: "\uffff", through },
+            from,
+          );
+          from = ranged.next;
+          return ranged;
+        };
     for (;;) {
       if (this.closed) throw new Error("Activity pricing is shutting down");
-      const batch = previous
-        ? store.usageBatch(profileId, sequence, through)
-        : store.usageTimeBatch(
-            profileId,
-            since,
-            "\uffff",
-            through,
-            timestamp,
-            sequence,
-          );
-      for (const item of batch)
-        if (item.record.timestamp >= since) include(item.record, 1);
-      if (batch.length < usagePageSize) break;
-      sequence = batch[batch.length - 1].sequence;
-      timestamp = batch[batch.length - 1].record.timestamp;
+      const { records, next } = page();
+      for (const record of records)
+        if (record.timestamp >= since) include(record, 1);
+      if (next === undefined) break;
       await yieldToLoop();
     }
     // Retention may run while yielding; never publish a total containing deleted records.

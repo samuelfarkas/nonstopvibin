@@ -14,7 +14,7 @@ import {
 import { Arch } from "electron-builder";
 import validateCore from "../scripts/validate-core.cjs";
 import verifyPackage from "../scripts/verify-package.cjs";
-import release from "../scripts/core-release.json" with { type: "json" };
+import release from "../src/server/core-release.json" with { type: "json" };
 
 const project = resolve(import.meta.dirname, "..");
 
@@ -49,7 +49,7 @@ test("Git ignores private state while retaining source, skill copies and lockfil
     const kept = [
       "src/main.tsx",
       "bun.lock",
-      "scripts/core-release.json",
+      "src/server/core-release.json",
       ".env.example",
       ".deepsec/.env.example",
       ".deepsec/bun.lock",

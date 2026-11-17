@@ -32,7 +32,7 @@ target (pass `x64` or `arm64` to build one), stages the pinned Linux core in a
 temporary directory (your own `.vendor/core` is untouched), and writes
 `release/nonstopvibin-server-<version>-linux-<arch>.tar.gz`. It checks the ELF
 architecture of both binaries, the core's version, platform and hashes against
-`scripts/core-release.json`, and the exact archive contents, then prints each
+`src/server/core-release.json`, and the exact archive contents, then prints each
 archive's SHA-256. Run the CLI from source with `bun src/server/cli.ts`; it then
 uses `.vendor/core` and `dist/client`. See [Run on a Linux server](server.md).
 
@@ -61,7 +61,7 @@ toward instead of `unknown`, `typeof`, and casts.
 Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI builds, tests, and runs the Electron lifecycle smoke check, including the core-lifetime check, on Linux and macOS (`build (ubuntu-24.04)` and `build (macos-26)`; the macOS runner is pinned rather than `macos-latest`), plus the `test:ui` checks on macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
 
 The core installer pins 8.0.67 and all four supported archive checksums in
-`scripts/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. No automatic upstream update runs. Change the pinned version and reviewed hashes together, reinstall it, and run the tests before packaging.
+`src/server/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. No automatic upstream update runs. Change the pinned version and reviewed hashes together, reinstall it, and run the tests before packaging.
 
 ## Contributor guidance
 

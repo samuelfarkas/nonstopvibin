@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
+import { usageSummary } from "./usage-summary.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -272,17 +273,17 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
     store.addUsage([{ ...record, id: "other", profileId: second.id }]);
     await catalog.models([], []);
     let readRows = 0;
-    const bySequence = store.usageBatch.bind(store);
-    const byTime = store.usageTimeBatch.bind(store);
-    store.usageBatch = (...args) => {
-      const rows = bySequence(...args);
-      readRows += rows.length;
-      return rows;
+    const bySequence = store.usageAfter.bind(store);
+    const byTime = store.usageBetween.bind(store);
+    store.usageAfter = (...args) => {
+      const page = bySequence(...args);
+      readRows += page.records.length;
+      return page;
     };
-    store.usageTimeBatch = (...args) => {
-      const rows = byTime(...args);
-      readRows += rows.length;
-      return rows;
+    store.usageBetween = (...args) => {
+      const page = byTime(...args);
+      readRows += page.records.length;
+      return page;
     };
     const get = async (id: string, cutoff = "") => {
       const { pricing: result, summary } = await prices.history(
@@ -291,7 +292,7 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
         cutoff,
         catalog,
       );
-      assert.deepEqual(summary, store.summary(id, cutoff));
+      assert.deepEqual(summary, usageSummary(store, id, cutoff));
       const rows = store.usage(id, cutoff, 10000);
       const expected = rows.map((r) => estimateUsd(r, rate));
       assert.equal(result.totals?.requests, rows.length);

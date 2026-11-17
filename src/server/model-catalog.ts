@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CatalogModel, Model } from "../shared/types.ts";
 import { providerEntry } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
-import type { ApiAccount } from "./store.ts";
+import type { ApiAccount, Store } from "./store.ts";
 
 const source = "https://models.dev/api.json";
 const price = z.number().finite().nonnegative();
@@ -195,5 +195,19 @@ export class ModelCatalog {
       fetchedAt: cached ? new Date(cached.at).toISOString() : null,
       refreshing: !!this.pending,
     };
+  }
+}
+
+/** The application's models.dev catalog, applied to profiles' model lists. */
+export class ProfileModels {
+  readonly catalog: ModelCatalog;
+  private readonly store: Store;
+  constructor(store: Store, catalog = new ModelCatalog()) {
+    this.store = store;
+    this.catalog = catalog;
+  }
+  /** A profile's models as its core lists them, with models.dev metadata matched through its API accounts. */
+  enriched(profileId: string, models: Model[]): Promise<CatalogModel[]> {
+    return this.catalog.models(models, this.store.apiAccounts(profileId));
   }
 }

@@ -19,7 +19,7 @@
   },
   "scripts": {
     "dev": "bun scripts/dev.mjs",
-    "dev:web": "vite --host 127.0.0.1",
+    "dev:web": "vite",
     "dev:server": "bun src/server/standalone.ts",
     "core:install": "bun scripts/install-core.mjs",
     "check": "tsc --noEmit",

@@ -143,14 +143,14 @@ CLIProxyAPI ships inside every installer as a separate native executable at
 [storage and profile boundaries](architecture.md) describes how a core is tied to
 the app's lifetime.
 Users do not install the core separately. Settings shows the version pinned in
-`scripts/core-release.json`.
+`src/server/core-release.json`.
 
 Keep core upgrades part of an app release so the wrapper and core are tested and
 distributed together. To upgrade:
 
 1. Review the chosen [upstream release](https://github.com/router-for-me/CLIProxyAPI/releases)
    and its changes to configuration, management APIs, authentication and routing.
-2. Update `scripts/core-release.json`: the version, archive SHA-256 checksums, and
+2. Update `src/server/core-release.json`: the version, archive SHA-256 checksums, and
    SHA-256 hashes of the extracted unsigned executables for all four listed targets.
    Verify downloaded archives against upstream checksums before extracting and
    hashing their executables. Checksums published beside the downloads establish

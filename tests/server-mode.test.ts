@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { Application, validAllowHost } from "../src/server/server.ts";
-import { CorePool } from "../src/server/core.ts";
+import { verifyCore } from "../src/server/core-binary.ts";
 import { sessionPath } from "../src/server/data-directory.ts";
 import {
   parseHost,
@@ -14,7 +14,6 @@ import {
   removeSession,
   renderUnit,
   startServer,
-  stopServer,
   tunnelCommand,
   updateUnit,
 } from "../src/server/cli.ts";
@@ -201,7 +200,7 @@ test("server.json is owner-only, discoverable, guarded and pid-scoped", async ()
     await removeSession(data, process.pid + 1);
     assert.ok(await readSession(data), "another pid must not remove it");
   } finally {
-    await stopServer(server, data);
+    await server.close();
   }
   assert.equal(await readSession(data), undefined);
   await assert.rejects(
@@ -255,12 +254,12 @@ test("a core matching only its adjacent manifest fails the compiled-in pin", asy
     }),
   );
   await assert.rejects(
-    new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary(true),
+    verifyCore(join(core, "cli-proxy-api"), true),
     /integrity check/,
   );
   // Desktop signing legitimately rewrites the binary and the adjacent
   // manifest; preserve that pre-existing validation path explicitly.
-  await new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary();
+  await verifyCore(join(core, "cli-proxy-api"));
   await assert.rejects(
     startServer({
       directory: join(directory, "pinned-server"),
@@ -273,10 +272,10 @@ test("a core matching only its adjacent manifest fails the compiled-in pin", asy
   );
   await writeFile(join(core, "cli-proxy-api"), "different bytes");
   await assert.rejects(
-    new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary(),
+    verifyCore(join(core, "cli-proxy-api")),
     /integrity check/,
   );
-  await new CorePool(app.store, binary).verifyBinary(true);
+  await verifyCore(binary, true);
 });
 
 test("service updates preserve custom paths, arguments and agent directories", () => {

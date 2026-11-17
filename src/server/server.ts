@@ -5,7 +5,6 @@ import { existsSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
-import coreRelease from "../../scripts/core-release.json";
 import type { AppState, Json, ProfileState } from "../shared/types.ts";
 import type {
   ApiError,
@@ -20,7 +19,6 @@ import {
   oauthProviders,
   protocols,
   providerEntry,
-  type Protocol,
 } from "../shared/providers.ts";
 import { agents } from "../shared/agents.ts";
 import {
@@ -36,9 +34,13 @@ import { ownerOnlyDirectory } from "./data-directory.ts";
 import { offeredModels } from "./agents.ts";
 import { fileKeyCodec } from "./vault.ts";
 import { Cores, type CoresOptions } from "./cores.ts";
+import { coreVersion, verifyCore } from "./core-binary.ts";
 import { Gateway } from "./gateway.ts";
+import { ProfileModels } from "./model-catalog.ts";
+import { devHost } from "./host-defaults.ts";
+import { discoverModels, goModelProtocol } from "./api-accounts.ts";
 import { AppError, errorMessage } from "./errors.ts";
-import { userAgent, version } from "./config.ts";
+import { version } from "./config.ts";
 import { parse, record, responseJson, text } from "./json.ts";
 import { ImportCatalog } from "./imports.ts";
 import {
@@ -77,15 +79,6 @@ const apiSchema = z
       .max(500),
   })
   .strict();
-// OpenCode Go publishes different wire protocols per model. Prefer live endpoint metadata.
-export function goModelProtocol(id: string, endpoint?: string): Protocol {
-  if (endpoint?.includes("/messages")) return "anthropic";
-  if (endpoint?.includes("/responses")) return "responses";
-  if (endpoint?.includes("/chat/completions")) return "openai";
-  if (/^(gpt-|grok-|muse-)/.test(id)) return "responses";
-  if (/^(minimax-|qwen)/.test(id)) return "anthropic";
-  return "openai";
-}
 function providerURL(raw: string): URL {
   const url = new URL(raw);
   if (
@@ -210,7 +203,7 @@ interface ServerOptions {
   directory: string;
   binary: string;
   clientDirectory: string;
-  port?: number;
+  port: number;
   desktop?: boolean;
   development?: boolean;
   agentHome?: string;
@@ -218,9 +211,22 @@ interface ServerOptions {
   // Tailscale Serve). The agent gateway stays loopback-only.
   allowHosts?: string[];
   requirePinnedCore?: boolean;
+  /** Starts without a core binary, so development and tests run without one; profiles then cannot start. */
+  allowMissingCore?: boolean;
+  /** Runs once after the application closed, even if closing failed: the host's own resources. */
+  afterClose?: () => Promise<void>;
   /** How the profile cores are reached and timed; tests answer and shorten them. */
-  cores?: CoresOptions;
+  cores?: Omit<CoresOptions, "report" | "onStatusChange" | "onSignInCallback">;
 }
+/** What a host shows at a glance. */
+export interface HostStatus {
+  /** Names of the profiles whose core runs, in profile order. */
+  running: string[];
+  /** Whether any running profile has a gateway request or WebSocket open. */
+  streaming: boolean;
+}
+/** `status`: `status()` may have changed. `sign-in`: a browser sign-in callback was accepted. */
+export type HostEvent = "status" | "sign-in";
 export class Application {
   readonly options: ServerOptions;
   readonly store: Store;
@@ -232,20 +238,33 @@ export class Application {
   private readonly assetVersion = randomUUID();
   readonly imports = new ImportCatalog();
   readonly usagePrices = new UsagePrices();
+  readonly models: ProfileModels;
   readonly agentSetup: AgentSetup;
   private readonly endpoints: Endpoint[];
   port = 0;
   closing = false;
   private closePromise?: Promise<void>;
+  private reported: string[] = [];
+  private readonly listeners: Record<HostEvent, Set<() => void>> = {
+    status: new Set(),
+    "sign-in": new Set(),
+  };
   constructor(options: ServerOptions, store: Store) {
     this.options = options;
     this.store = store;
-    // The scheduler drains slowly while the gateway still has requests open.
     this.cores = new Cores(store, options.binary, {
       ...options.cores,
+      // The scheduler drains slowly while the gateway still has requests open.
       inFlight: (profileId) => this.gateway.active.get(profileId) ?? 0,
+      report: (message) => this.report(message),
+      onStatusChange: () => this.emit("status"),
+      onSignInCallback: () => this.emit("sign-in"),
     });
-    this.gateway = new Gateway(store, this.cores.pool, this.cores.usage);
+    this.models = new ProfileModels(store);
+    this.gateway = new Gateway(store, this.cores.pool, this.cores.usage, {
+      models: this.models,
+      onActivityChange: () => this.emit("status"),
+    });
     this.agentSetup = new AgentSetup(
       options.directory,
       (profileId) => {
@@ -289,7 +308,7 @@ export class Application {
             : error instanceof AppError
               ? error.message
               : "The operation failed. Check the profile status and try again.";
-        if (status === 500) this.cores.pool.report(errorMessage(error));
+        if (status === 500) this.report(errorMessage(error));
         // A departed client cannot receive the error; only the report above matters.
         if (res.destroyed) return;
         json<ApiError>(
@@ -327,15 +346,15 @@ export class Application {
       store.pruneUsage();
       await new Promise<void>((resolve, reject) => {
         app.server.once("error", reject);
-        app.server.listen(options.port ?? 4318, "127.0.0.1", resolve);
+        app.server.listen(options.port, "127.0.0.1", resolve);
       });
       signal?.throwIfAborted();
       const address = app.server.address();
       if (!(address instanceof Object))
         throw new Error("Gateway failed to bind.");
       app.port = address.port;
-      if (existsSync(options.binary))
-        await app.cores.pool.verifyBinary(options.requirePinnedCore);
+      if (!options.allowMissingCore || existsSync(options.binary))
+        await verifyCore(options.binary, options.requirePinnedCore);
       signal?.throwIfAborted();
       await app.cores.restore(signal);
       signal?.throwIfAborted();
@@ -344,9 +363,9 @@ export class Application {
           store.profiles(),
           app.port,
         ))
-          app.cores.pool.report(failure);
+          app.report(failure);
       } catch {
-        app.cores.pool.report(
+        app.report(
           "Agent connections are unavailable. Open Connect agents and reconnect the agent.",
         );
       }
@@ -364,6 +383,40 @@ export class Application {
       }
       throw error;
     }
+  }
+  /** The last five distinct errors, oldest first, for the UI. */
+  get errors(): readonly string[] {
+    return this.reported;
+  }
+  report(message: string): void {
+    this.reported = [
+      ...this.reported.filter((e) => e !== message),
+      message,
+    ].slice(-5);
+  }
+  /** Calls `listener` after each `event` until the returned function is called. */
+  on(event: HostEvent, listener: () => void): () => void {
+    this.listeners[event].add(listener);
+    return () => {
+      this.listeners[event].delete(listener);
+    };
+  }
+  private emit(event: HostEvent): void {
+    for (const listener of this.listeners[event]) listener();
+  }
+  /** Read on every gateway activity edge: no query once the profile names are cached. */
+  status(): HostStatus {
+    const running: string[] = [];
+    let streaming = false;
+    for (const [id, name] of this.store.profileNames()) {
+      if (!this.cores.pool.running(id)) continue;
+      running.push(name);
+      if ((this.gateway.active.get(id) ?? 0) > 0) streaming = true;
+    }
+    return { running, streaming };
+  }
+  hasProfile(profileId: string): boolean {
+    return this.store.profileNames().has(profileId);
   }
   get origin(): string {
     return `http://127.0.0.1:${this.port}`;
@@ -384,20 +437,19 @@ export class Application {
     });
     return {
       profiles,
-      coreVersion: coreRelease.version,
+      coreVersion,
       gateway: this.origin,
       usageRetentionDays: this.store.usageRetentionDays(),
       version,
       desktop: Boolean(this.options.desktop),
-      errors: this.cores.pool.errors,
+      errors: [...this.errors],
     };
   }
   validHost(req: IncomingMessage): boolean {
     return (
       req.headers.host === `127.0.0.1:${this.port}` ||
       req.headers.host === `localhost:${this.port}` ||
-      (Boolean(this.options.development) &&
-        req.headers.host === "127.0.0.1:5173") ||
+      (Boolean(this.options.development) && req.headers.host === devHost) ||
       this.allowedHost(req)
     );
   }
@@ -418,7 +470,7 @@ export class Application {
         (this.allowedHost(req)
           ? origin !== `https://${req.headers.host}`
           : origin !== this.origin &&
-            !(this.options.development && origin === "http://127.0.0.1:5173"))
+            !(this.options.development && origin === `http://${devHost}`))
       )
         throw new AppError(
           "Cross-origin management requests are not allowed.",
@@ -596,7 +648,7 @@ export class Application {
           const id = param("profileId");
           const models = await this.cores.pool.models(id);
           return query.get("metadata") === "1"
-            ? this.gateway.catalog.models(models, this.store.apiAccounts(id))
+            ? this.models.enriched(id, models)
             : models;
         },
       },
@@ -617,7 +669,7 @@ export class Application {
             this.store,
             param("profileId"),
             since,
-            this.gateway.catalog,
+            this.models.catalog,
           );
         },
       },
@@ -646,8 +698,7 @@ export class Application {
             body.agent,
             models,
             body.otherProviders ?? true,
-            (models) =>
-              this.gateway.catalog.models(models, this.store.apiAccounts(id)),
+            (models) => this.models.enriched(id, models),
           );
           // Only an agent with a native vendor can be left without models.
           if (!offered.length)
@@ -838,51 +889,7 @@ export class Application {
                 protocol: goModelProtocol(m.id),
               }))
             : input.models;
-          if (!models.length) {
-            const response = await fetch(
-              `${input.baseUrl.replace(/\/$/, "")}/models`,
-              {
-                headers: {
-                  ...(input.provider === "anthropic" ||
-                  input.protocol === "anthropic"
-                    ? {
-                        "x-api-key": input.apiKey,
-                        "anthropic-version": "2023-06-01",
-                      }
-                    : { Authorization: `Bearer ${input.apiKey}` }),
-                  "User-Agent": userAgent,
-                },
-                redirect: "error",
-                signal: AbortSignal.timeout(20_000),
-              },
-            );
-            if (!response.ok)
-              throw new AppError(
-                `Model discovery returned HTTP ${response.status}. Verify the API key, or enter model IDs manually.`,
-                502,
-              );
-            const data = record(await responseJson(response));
-            models = Array.isArray(data.data)
-              ? data.data
-                  .flatMap((raw) => {
-                    const r = record(raw);
-                    const id = text(r.id);
-                    return id === undefined
-                      ? []
-                      : [
-                          {
-                            id,
-                            protocol: preset?.fixedEndpoint
-                              ? goModelProtocol(id, text(r.endpoint))
-                              : input.provider === "anthropic"
-                                ? ("anthropic" as const)
-                                : input.protocol,
-                          },
-                        ];
-                  })
-                  .slice(0, 500)
-              : [];
-          }
+          if (!models.length) models = await discoverModels(input);
           if (!models.length)
             throw new AppError(
               "No models were found. Enter the model IDs your provider supports.",
@@ -931,8 +938,12 @@ export class Application {
         try {
           await this.usagePrices.close();
         } finally {
-          this.server.closeAllConnections();
-          this.store.close();
+          try {
+            this.server.closeAllConnections();
+            this.store.close();
+          } finally {
+            await this.options.afterClose?.();
+          }
         }
       }
     }

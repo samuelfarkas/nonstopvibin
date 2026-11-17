@@ -6,7 +6,7 @@ import type { CorePool } from "./core.ts";
 import type { Usage } from "./usage.ts";
 import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
-import { ModelCatalog } from "./model-catalog.ts";
+import type { ProfileModels } from "./model-catalog.ts";
 import { agentModels, offeredModels } from "./agents.ts";
 import { agents, isAgent } from "../shared/agents.ts";
 import type { Profile } from "../shared/types.ts";
@@ -102,12 +102,23 @@ export class Gateway {
   readonly core: CorePool;
   private readonly usage: Usage;
   readonly active = new Map<string, number>();
-  readonly catalog = new ModelCatalog();
-  onActivityChange?: () => void;
-  constructor(store: Store, core: CorePool, usage: Usage) {
+  private readonly models: ProfileModels;
+  private readonly onActivityChange?: () => void;
+  constructor(
+    store: Store,
+    core: CorePool,
+    usage: Usage,
+    options: {
+      models: ProfileModels;
+      /** A profile's first request opened or its last one closed. */
+      onActivityChange?: () => void;
+    },
+  ) {
     this.store = store;
     this.core = core;
     this.usage = usage;
+    this.models = options.models;
+    this.onActivityChange = options.onActivityChange;
   }
   private acquire(profileId: string): () => void {
     const count = this.active.get(profileId) ?? 0;
@@ -148,8 +159,7 @@ export class Gateway {
           "codex",
           await this.core.models(profileId),
           false,
-          (models) =>
-            this.catalog.models(models, this.store.apiAccounts(profileId)),
+          (models) => this.models.enriched(profileId, models),
         );
         res.writeHead(200, {
           "Content-Type": "application/json",
@@ -179,8 +189,7 @@ export class Gateway {
           agent,
           await this.core.models(profileId),
           false,
-          (models) =>
-            this.catalog.models(models, this.store.apiAccounts(profileId)),
+          (models) => this.models.enriched(profileId, models),
         );
         const payload = { models: agentModels(models, agent) };
         res.writeHead(200, {

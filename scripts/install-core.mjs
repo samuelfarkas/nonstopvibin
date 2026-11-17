@@ -12,7 +12,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import release from "./core-release.json" with { type: "json" };
+import release from "../src/server/core-release.json" with { type: "json" };
 
 const CORE_VERSION = release.version;
 const platform = process.env.CORE_PLATFORM || process.platform;

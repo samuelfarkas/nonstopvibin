@@ -4,6 +4,7 @@ import { CorePool, type CoreTiming, type Management } from "./core.ts";
 import { Quotas } from "./quota.ts";
 import { CodexResets } from "./reset-credits.ts";
 import { SignIn } from "./sign-in.ts";
+import type { Report } from "./errors.ts";
 import type { Store } from "./store.ts";
 import { Usage, type UsageTiming } from "./usage.ts";
 
@@ -16,6 +17,12 @@ export interface CoresOptions {
   inFlight?: (profileId: string) => number;
   /** The sign-in clock. */
   now?: () => number;
+  /** Where the features report errors the UI shows. */
+  report: Report;
+  /** A core became running, failed, exited, or applied new settings. */
+  onStatusChange?: () => void;
+  /** A browser sign-in callback was accepted. */
+  onSignInCallback?: () => void;
 }
 
 /** The profile cores and the features that run on them, wired together. */
@@ -27,7 +34,9 @@ export class Cores {
   readonly signIn: SignIn;
   readonly resets: CodexResets;
   readonly usage: Usage;
-  constructor(store: Store, binary: string, options: CoresOptions = {}) {
+  private readonly report: Report;
+  constructor(store: Store, binary: string, options: CoresOptions) {
+    this.report = options.report;
     this.pool = new CorePool(store, binary, {
       management: options.management,
       timing: options.timing,
@@ -38,6 +47,7 @@ export class Cores {
       },
       // The usage queue lives only in the core's memory.
       beforeStop: (profileId) => this.usage.drain(profileId),
+      onStatusChange: options.onStatusChange,
     });
     this.accounts = new Accounts(this.pool, store);
     this.quotas = new Quotas(this.pool, this.accounts);
@@ -47,18 +57,23 @@ export class Cores {
       this.accounts,
       this.credentials,
       this.quotas,
-      options.now,
+      {
+        now: options.now,
+        report: options.report,
+        onCallback: options.onSignInCallback,
+      },
     );
     this.resets = new CodexResets(this.pool, this.accounts, this.quotas);
     this.usage = new Usage(this.pool, this.accounts, this.quotas, {
       timing: options.usageTiming,
       inFlight: options.inFlight,
+      report: options.report,
     });
   }
   async restore(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     await this.signIn.discardPending();
-    await this.pool.restore(signal);
+    await this.pool.restore(this.report, signal);
     signal?.throwIfAborted();
     this.usage.begin();
   }

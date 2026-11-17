@@ -6,13 +6,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import type {
-  Account,
-  Profile,
-  Quota,
-  UsageRecord,
-  UsageSummary,
-} from "../shared/types.ts";
+import type { Account, Profile, Quota, UsageRecord } from "../shared/types.ts";
 import type { Protocol, Provider } from "../shared/providers.ts";
 import {
   retentionDays,
@@ -46,6 +40,16 @@ const settingIds = {
     `codex-reset:${JSON.stringify([identity, creditId])}`,
   retention: "usage-retention-days",
 };
+/** One page of usage rows; `next` continues after it and is absent after the last page. */
+export interface UsagePage<Cursor> {
+  records: UsageRecord[];
+  next?: Cursor;
+}
+/** Where a time-ordered page of usage rows continues. */
+export interface UsageCursor {
+  timestamp: string;
+  sequence: number;
+}
 /** A profile's client key: `nv_` and 32 random bytes in base64url. */
 export const clientKeyPattern = /^nv_[A-Za-z0-9_-]{43}$/;
 
@@ -69,8 +73,7 @@ export class Store {
   readonly directory: string;
   readonly codec: SecretCodec;
   usageGeneration = 0;
-  /** Bumped on every profile write, so readers can cache profile rows. */
-  profileGeneration = 0;
+  private names?: Map<string, string>;
   private clients?: Map<string, string>;
   constructor(directory: string, codec: SecretCodec) {
     this.directory = directory;
@@ -112,6 +115,11 @@ export class Store {
     if (!row) throw new AppError("Profile not found.", 404);
     return stored<Profile>(row.body);
   }
+  /** Profile id to name, in creation order; kept until the next profile write. */
+  profileNames(): ReadonlyMap<string, string> {
+    this.names ??= new Map(this.profiles().map(({ id, name }) => [id, name]));
+    return this.names;
+  }
   createProfile(name: string): Profile {
     const stem =
       name
@@ -151,12 +159,12 @@ export class Store {
         randomBytes(32).toString("base64url"),
       );
     });
-    this.profileGeneration++;
+    this.names = undefined;
     return profile;
   }
   saveProfile(profile: Profile): void {
     this.clients = undefined;
-    this.profileGeneration++;
+    this.names = undefined;
     this.db
       .prepare("UPDATE profiles SET body=? WHERE id=?")
       .run(JSON.stringify(profile), profile.id);
@@ -280,7 +288,7 @@ export class Store {
         stmt.run(r.id, r.profileId, r.timestamp, JSON.stringify(r));
     });
   }
-  usage(profileId: string, since = "", limit = 300): UsageRecord[] {
+  usage(profileId: string, since: string, limit: number): UsageRecord[] {
     return this.db
       .prepare(
         "SELECT body FROM usage WHERE profile_id=? AND timestamp>=? ORDER BY timestamp DESC LIMIT ?",
@@ -295,34 +303,34 @@ export class Store {
         .get()?.sequence,
     );
   }
-  usageBatch(
+  /** Rows stored after sequence `after` and up to `through`, in sequence order. */
+  usageAfter(
     profileId: string,
     after: number,
     through: number,
-  ): Array<{ sequence: number; record: UsageRecord }> {
-    return this.db
+  ): UsagePage<number> {
+    const rows = this.db
       .prepare(`SELECT rowid AS sequence, body FROM usage INDEXED BY usage_profile_sequence
       WHERE profile_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?`)
-      .all(profileId, after, through, usagePageSize)
-      .map((row) => ({
-        sequence: Number(row.sequence),
-        record: stored<UsageRecord>(row.body),
-      }));
+      .all(profileId, after, through, usagePageSize);
+    return {
+      records: rows.map((row) => stored<UsageRecord>(row.body)),
+      next:
+        rows.length < usagePageSize ? undefined : Number(rows.at(-1)?.sequence),
+    };
   }
-  usageTimeBatch(
+  /** Rows stored up to `through` with `since <= timestamp < before`, in time order. */
+  usageBetween(
     profileId: string,
-    since: string,
-    before: string,
-    through: number,
-    timestamp = since,
-    sequence = 0,
-  ): Array<{ sequence: number; record: UsageRecord }> {
+    range: { since: string; before: string; through: number },
+    from: UsageCursor = { timestamp: range.since, sequence: 0 },
+  ): UsagePage<UsageCursor> {
+    const { since, before, through } = range;
+    // A cursor before the range starts at the range.
+    const { timestamp, sequence } =
+      from.timestamp < since ? { timestamp: since, sequence: 0 } : from;
     // Seek ties by rowid, then later timestamps; a tuple filter rescans the prefix on each page.
-    if (timestamp < since) {
-      timestamp = since;
-      sequence = 0;
-    }
-    return this.db
+    const rows = this.db
       .prepare(`SELECT rowid AS sequence, body, timestamp FROM usage INDEXED BY usage_profile_time
       WHERE profile_id=? AND timestamp=? AND timestamp<? AND rowid>? AND rowid<=?
       UNION ALL
@@ -340,34 +348,17 @@ export class Store {
         before,
         through,
         usagePageSize,
-      )
-      .map((row) => ({
-        sequence: Number(row.sequence),
-        record: stored<UsageRecord>(row.body),
-      }));
-  }
-  /** Stored totals since an ISO time. Tests' accounting oracle; the app aggregates in UsagePrices. */
-  summary(profileId: string, since = ""): UsageSummary {
-    const row = this.db
-      .prepare(
-        `SELECT count(*) AS requests,
-      coalesce(sum(json_extract(body,'$.failed')),0) AS failed,
-      coalesce(sum(json_extract(body,'$.inputTokens')),0) AS inputTokens,
-      coalesce(sum(json_extract(body,'$.outputTokens')),0) AS outputTokens,
-      coalesce(sum(json_extract(body,'$.cachedTokens')),0) AS cachedTokens,
-      coalesce(sum(json_extract(body,'$.reasoningTokens')),0) AS reasoningTokens,
-      coalesce(sum(json_extract(body,'$.totalTokens')),0) AS totalTokens
-      FROM usage WHERE profile_id=? AND timestamp>=?`,
-      )
-      .get(profileId, since);
+      );
+    const last = rows.at(-1);
     return {
-      requests: Number(row?.requests ?? 0),
-      failed: Number(row?.failed ?? 0),
-      inputTokens: Number(row?.inputTokens ?? 0),
-      outputTokens: Number(row?.outputTokens ?? 0),
-      cachedTokens: Number(row?.cachedTokens ?? 0),
-      reasoningTokens: Number(row?.reasoningTokens ?? 0),
-      totalTokens: Number(row?.totalTokens ?? 0),
+      records: rows.map((row) => stored<UsageRecord>(row.body)),
+      next:
+        rows.length < usagePageSize || !last
+          ? undefined
+          : {
+              timestamp: String(last.timestamp),
+              sequence: Number(last.sequence),
+            },
     };
   }
   usageRetentionDays(): RetentionDays {

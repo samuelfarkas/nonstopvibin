@@ -17,12 +17,7 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
-import {
-  probe,
-  readSession,
-  startServer,
-  stopServer,
-} from "../src/server/cli.ts";
+import { probe, readSession, startServer } from "../src/server/cli.ts";
 
 const binary = resolve(".vendor/core/cli-proxy-api");
 const clientDirectory = resolve("dist/client");
@@ -309,16 +304,13 @@ test(
         ...options,
         directory: failedDirectory,
       });
-      await stopServer(recovered, failedDirectory);
+      await recovered.close();
       const profile = app.store.createProfile("Concurrent close");
       await app.cores.pool.start(profile.id);
       const pid = app.cores.pool.runtimes.get(profile.id)?.child.pid;
       assert.ok(pid);
       signal(pid, "SIGSTOP");
-      const closing = Promise.all([
-        stopServer(app, directory),
-        stopServer(app, directory),
-      ]);
+      const closing = Promise.all([app.close(), app.close()]);
       let contender: RunningCli | undefined;
       try {
         const peer = await launch(directory);
@@ -343,7 +335,7 @@ test(
       }
       assert.deepEqual(corePids(directory), []);
       const replacement = await startServer(options);
-      await stopServer(replacement, directory);
+      await replacement.close();
       const reservation = join(directory, "server.lock.sqlite");
       await chmod(reservation, 0o644);
       await assert.rejects(startServer(options), /owner-only ordinary file/);
