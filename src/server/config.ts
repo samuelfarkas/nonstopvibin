@@ -155,14 +155,16 @@ export class ConfigWriter {
     profileId: string,
     port: number,
   ): Promise<CoreConfiguration> {
-    const profile = this.store.profile(profileId);
+    // An unknown profile fails before any directory is created.
+    this.store.profile(profileId);
     const directory = profileDirectory(this.store.directory, profileId);
     const authDir = credentialDirectory(this.store.directory, profileId);
     await mkdir(authDir, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
     await chmod(authDir, 0o700);
+    // Read after the awaits above, so a settings change saved meanwhile is written.
     const config = coreConfiguration(
-      profile,
+      this.store.profile(profileId),
       port,
       authDir,
       {

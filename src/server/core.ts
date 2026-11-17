@@ -111,6 +111,7 @@ export class CorePool {
   readonly store: Store;
   readonly binary: string;
   private readonly processes = new Map<string, CoreRuntime>();
+  /** Each profile's current core. A restart makes a new record, so an unchanged record means the same core. */
   readonly runtimes: ReadonlyMap<string, Readonly<CoreRuntime>> =
     this.processes;
   private readonly starts = new Map<string, Promise<void>>();
@@ -392,10 +393,12 @@ export class CorePool {
         })
       : [];
   }
-  /** Stops cores a crashed instance left running on this data directory, then starts every enabled profile. */
-  async restore(report: Report, signal?: AbortSignal): Promise<void> {
-    signal?.throwIfAborted();
+  /** Stops cores a crashed instance left running on this data directory. */
+  async reapOrphans(): Promise<void> {
     await reapOrphanedCores(this.store.directory);
+  }
+  /** Starts every enabled profile; a profile that fails is reported, not thrown. */
+  async restore(report: Report, signal?: AbortSignal): Promise<void> {
     for (const profile of this.store.profiles().filter((p) => p.enabled)) {
       signal?.throwIfAborted();
       try {

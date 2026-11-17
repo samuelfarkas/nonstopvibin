@@ -33,6 +33,8 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
     const accounts = new Accounts(
       {
         usable: () => true,
+        // No restarts: the core's record stays the same.
+        runtimes: new Map(),
         management: async (_profileId, path) => {
           assert.equal(path, "/auth-files");
           return {
@@ -89,6 +91,8 @@ test("account sync re-reads a Claude identity only when its file changes and rep
     const accounts = new Accounts(
       {
         usable: () => true,
+        // No restarts: the core's record stays the same.
+        runtimes: new Map(),
         management: async () => ({
           files: [
             { name: "seat.json", provider: "claude", auth_index: "seat" },

@@ -3,12 +3,20 @@ import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { CorePool } from "../src/server/core.ts";
+import { Cores } from "../src/server/cores.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import {
@@ -173,7 +181,7 @@ test(
     const { root, data } = await fixture();
     const processes = new Processes();
     let store: Store | undefined;
-    let pool: CorePool | undefined;
+    let cores: Cores | undefined;
     try {
       const instance = await owner(root, data, 1, processes);
       // Defeat layer 1 so the core really outlives its owner.
@@ -215,13 +223,13 @@ test(
           { mode: 0o600 },
         );
       store = new Store(data, fileKeyCodec(data));
-      pool = new CorePool(store, binary);
-      await pool.restore(() => {});
+      cores = new Cores(store, binary, { report: () => {} });
+      await cores.restore();
       assert.ok(
         !(await alive(orphan)),
         "the orphan is stopped before restore returns",
       );
-      const restarted = [...pool.runtimes.values()];
+      const restarted = [...cores.pool.runtimes.values()];
       assert.equal(restarted.length, 1, "the enabled profile starts again");
       assert.notEqual(restarted[0]!.child.pid, orphan.pid);
       assert.deepEqual(
@@ -232,7 +240,7 @@ test(
       for (const bystander of bystanders)
         assert.ok(await alive(bystander), "a reused PID is never signalled");
     } finally {
-      await pool?.shutdown();
+      await cores?.shutdown();
       store?.close();
       await processes.cleanup(root);
       await rm(root, { recursive: true, force: true });
@@ -447,6 +455,47 @@ test(
       }
     } finally {
       await pool.shutdown();
+      store.close();
+      await processes.cleanup(root);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an undeletable pending sign-in does not keep restore from reaping the data directory's orphans",
+  // Root may delete anything, so the cleanup would not fail.
+  { timeout: 20_000, skip: process.getuid?.() === 0 },
+  async () => {
+    const { root, data } = await fixture();
+    const processes = new Processes();
+    const stuck = join(data, "oauth-pending", "claude-stuck");
+    const store = new Store(data, fileKeyCodec(data));
+    try {
+      // A shell blocked in its builtin read, with the command line of a core of this directory.
+      const child = spawn(
+        "/bin/sh",
+        ["-c", "read _", "core", "--config", coreConfig(data)],
+        { stdio: ["pipe", "ignore", "ignore"] },
+      );
+      processes.children.push(child);
+      const core = await processes.track(child.pid);
+      await mkdir(ledger(data), { mode: 0o700 });
+      await writeFile(
+        join(ledger(data), `${core.pid}.json`),
+        JSON.stringify({
+          ...core,
+          owner: { pid: process.pid, identity: fakeIdentity(process.pid) },
+        }),
+        { mode: 0o600 },
+      );
+      await mkdir(join(stuck, "entry"), { recursive: true });
+      await chmod(stuck, 0o500);
+      const cores = new Cores(store, binary, { report: () => {} });
+      await assert.rejects(cores.restore());
+      assert.ok(!(await alive(core)), "the orphan was reaped first");
+    } finally {
+      await chmod(stuck, 0o700).catch(() => undefined);
       store.close();
       await processes.cleanup(root);
       await rm(root, { recursive: true, force: true });

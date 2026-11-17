@@ -59,3 +59,19 @@ test("config writes return the saved snapshot, serialize, and recover after fail
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a settings change saved while the config's directories are prepared is in the written config", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-config-"));
+  const store = new Store(directory, fileKeyCodec(directory));
+  try {
+    const profile = store.createProfile("Fixture");
+    const writing = new ConfigWriter(store).write(profile.id, 1234);
+    // Only microtasks pass here, so the write is started but none of its filesystem calls has finished.
+    for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+    store.saveProfile({ ...profile, strategy: "round-robin" });
+    assert.equal((await writing).routing.strategy, "round-robin");
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

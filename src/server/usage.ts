@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Json, PricingTokens, UsageRecord } from "../shared/types.ts";
 import { quotaRefreshMs, usagePageSize } from "../shared/vocabulary.ts";
 import type { Accounts } from "./accounts.ts";
-import type { CorePool } from "./core.ts";
+import type { CorePool, CoreRuntime } from "./core.ts";
 import { AppError, errorMessage, type Report } from "./errors.ts";
 import { number, record, text, unwrap } from "./json.ts";
 import type { Quotas } from "./quota.ts";
@@ -104,6 +104,8 @@ export const usageTiming: UsageTiming = {
   activity: 10_000,
 };
 interface Cadence {
+  /** The core this cadence belongs to. */
+  core: Readonly<CoreRuntime> | undefined;
   nextAt: number;
   activeUntil: number;
   /** Consecutive failed drains. */
@@ -146,9 +148,16 @@ export class Usage {
     this.inFlight = options.inFlight ?? (() => 0);
     this.report = options.report;
   }
-  /** A new core answered: its drain cadence starts over. */
+  /** A core answered: a new core's drain cadence starts over; a readiness retry of the same core keeps it. */
   started(profileId: string): void {
-    this.cadences.set(profileId, { nextAt: 0, activeUntil: 0, failures: 0 });
+    const core = this.pool.runtimes.get(profileId);
+    if (this.cadences.get(profileId)?.core !== core)
+      this.cadences.set(profileId, {
+        core,
+        nextAt: 0,
+        activeUntil: 0,
+        failures: 0,
+      });
     this.schedule?.();
   }
   /** The scheduler's view of one profile. */

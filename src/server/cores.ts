@@ -40,7 +40,7 @@ export class Cores {
     this.pool = new CorePool(store, binary, {
       management: options.management,
       timing: options.timing,
-      // A new core's drain cadence starts over, and its accounts are read before start resolves.
+      // Runs on each readiness attempt: usage starts once per core; a failed account sync is retried.
       ready: async (profileId, signal) => {
         this.usage.started(profileId);
         await this.accounts.sync(profileId, signal);
@@ -72,6 +72,8 @@ export class Cores {
   }
   async restore(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
+    // Orphans first: if the pending sign-ins cannot be removed, startup fails without leaving one running.
+    await this.pool.reapOrphans();
     await this.signIn.discardPending();
     await this.pool.restore(this.report, signal);
     signal?.throwIfAborted();

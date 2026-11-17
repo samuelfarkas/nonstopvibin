@@ -545,3 +545,86 @@ test(
     }
   },
 );
+
+test(
+  "an account sync that outlives its core does not overwrite the restarted core's accounts",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-stale-sync-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    let hold: Promise<void> | undefined;
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    let release!: () => void;
+    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+      report: () => {},
+      // The held listing is the old core's: one subscription the new core no longer has.
+      management: async (request) => {
+        if (request.path !== "/auth-files" || !hold)
+          return httpManagement(request);
+        const gate = hold;
+        hold = undefined;
+        held();
+        await gate;
+        return { files: [{ name: "old.json", provider: "codex" }] };
+      },
+    });
+    const profile = store.createProfile("Stale sync fixture");
+    try {
+      await cores.pool.start(profile.id);
+      hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const stale = cores.accounts.sync(profile.id);
+      await holding;
+      await cores.pool.stop(profile.id);
+      await cores.pool.start(profile.id);
+      release();
+      await stale;
+      assert.deepEqual(cores.accounts.list(profile.id), []);
+      assert.deepEqual(store.accountMetadata(profile.id), []);
+    } finally {
+      release?.();
+      await cores.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "readiness retries of one core keep its usage cadence",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-ready-retry-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    let failed = false;
+    const cores: Cores = new Cores(
+      store,
+      resolve(".vendor/core/cli-proxy-api"),
+      {
+        report: () => {},
+        // The first account sync fails after activity was marked, so readiness retries.
+        management: async (request) => {
+          if (request.path !== "/auth-files" || failed)
+            return httpManagement(request);
+          failed = true;
+          cores.usage.markActivity(profile.id);
+          throw new Error("synthetic account list failure");
+        },
+      },
+    );
+    const profile = store.createProfile("Retry fixture");
+    try {
+      await cores.pool.start(profile.id);
+      assert.ok(failed, "readiness retried");
+      assert.ok((cores.usage.cadence(profile.id)?.activeUntil ?? 0) > 0);
+    } finally {
+      await cores.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
