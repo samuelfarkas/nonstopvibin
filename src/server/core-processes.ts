@@ -48,6 +48,16 @@ export type Identify = (pid: number) => Promise<string | undefined>;
 function identityCommand(identity: string): string {
   return identity.slice(24).trimStart();
 }
+/** Whether an identity is a core started with a profile config inside `directory`. */
+function coreOf(directory: string, identity: string): boolean {
+  const command = identityCommand(identity);
+  const prefix = ` --config ${join(directory, "profiles")}/`;
+  const at = command.lastIndexOf(prefix);
+  return (
+    at > 0 &&
+    /^[0-9a-f-]{36}\/config\.yaml$/.test(command.slice(at + prefix.length))
+  );
+}
 
 // $1 core PID, $2 its exact command line. Captures the core's identity, then sleeps in
 // read until EOF: the write end lives only in the owning process (pipes are close-on-exec).
@@ -131,7 +141,15 @@ export async function recordCore(
   }
   const [identity, owner] = await Promise.all([identify(pid), ownerIdentity]);
   // Exit can win the race; an entry for an exited core would only be dropped later.
-  if (!identity || !owner || core.exitCode !== null || core.signalCode !== null)
+  // A read before the core's exec settles (spawn can return first, e.g. Bun under
+  // qemu-user) shows another command line that could never be reaped: record nothing.
+  if (
+    !identity ||
+    !owner ||
+    !coreOf(directory, identity) ||
+    core.exitCode !== null ||
+    core.signalCode !== null
+  )
     return undefined;
   const ledger = ledgerDirectory(directory);
   mkdirSync(ledger, { recursive: true, mode: 0o700 });
@@ -164,8 +182,6 @@ export async function reapOrphanedCores(
   } catch {
     return;
   }
-  // Only cores started with a profile config inside this data directory.
-  const prefix = ` --config ${join(directory, "profiles")}/`;
   for (const name of names) {
     const path = join(ledger, name);
     let entry: Entry;
@@ -178,12 +194,9 @@ export async function reapOrphanedCores(
     try {
       // Its owner still runs and manages it.
       if ((await identify(entry.owner.pid)) === entry.owner.identity) continue;
-      const command = identityCommand(entry.identity);
-      const at = command.lastIndexOf(prefix);
+      // Only cores started with a profile config inside this data directory.
       const ours =
-        name === `${entry.pid}.json` &&
-        at > 0 &&
-        /^[0-9a-f-]{36}\/config\.yaml$/.test(command.slice(at + prefix.length));
+        name === `${entry.pid}.json` && coreOf(directory, entry.identity);
       if (ours && (await identify(entry.pid)) === entry.identity)
         await stopOrphan(entry, identify);
       await rm(path, { force: true });

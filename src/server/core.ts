@@ -306,6 +306,10 @@ export class CorePool {
           signal,
         );
         signal?.throwIfAborted();
+        // An answering core has finished its exec: record it if the first read came too early.
+        runtime.ledger ??= await recordCore(this.store.directory, child).catch(
+          () => undefined,
+        );
         runtime.state = "running";
         this.schedulePolling?.();
         const profile = this.store.profile(profileId);

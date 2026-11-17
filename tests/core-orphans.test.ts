@@ -32,7 +32,14 @@ class Processes {
   readonly children: ChildProcess[] = [];
   async track(pid: number | undefined): Promise<Tracked> {
     assert.ok(pid);
-    const identity = await processIdentity(pid);
+    // While macOS's /bin/sh re-executes the selected shell, ps cannot read its arguments and
+    // prints `(sh)`: track the identity only once the full command line is readable.
+    let identity = await processIdentity(pid);
+    for (let waited = 0; identity && !readable(identity); waited += 10) {
+      assert.ok(waited < 2000, `process ${pid} has no readable command line`);
+      await delay(10);
+      identity = await processIdentity(pid);
+    }
     assert.ok(identity, `process ${pid} is running`);
     const entry = { pid, identity };
     this.tracked.push(entry);
@@ -61,6 +68,9 @@ class Processes {
     }
   }
 }
+/** False for `(comm)` or `[comm]`: ps could not read the process's arguments. */
+const readable = (identity: string) =>
+  !/^.{24}\s+[([][^ ]*[)\]]$/.test(identity);
 async function alive(entry: Tracked): Promise<boolean> {
   return (await processIdentity(entry.pid)) === entry.identity;
 }
@@ -274,6 +284,12 @@ test(
 /** A synthetic identity: `lstart` width, then a command. */
 const fakeIdentity = (pid: number) =>
   `Thu Jan  1 00:00:00 1970     process ${pid}`;
+/** The config path a core of `data` is started with. */
+const coreConfig = (data: string) =>
+  join(data, "profiles", "00000000-0000-4000-8000-000000000000", "config.yaml");
+/** A synthetic identity of a core of `data`. */
+const coreIdentity = (data: string) =>
+  `Thu Jan  1 00:00:00 1970     core --config ${coreConfig(data)}`;
 /** The real lookup, but `ps` cannot be executed (as under descriptor exhaustion in Bun). */
 const psUnavailable = (root: string) => (pid: number) =>
   processIdentity(pid, join(root, "missing-ps"));
@@ -286,7 +302,8 @@ test("a failed owner identity lookup is retried by the next record", async () =>
     processes.children.push(core);
     let failures = 1;
     const identify: Identify = async (pid) => {
-      if (pid === process.pid && failures-- > 0)
+      if (pid !== process.pid) return coreIdentity(data);
+      if (failures-- > 0)
         throw Object.assign(new Error("spawn ps EMFILE"), { code: "EMFILE" });
       return fakeIdentity(pid);
     };
@@ -310,11 +327,13 @@ test("an owner identity lookup without ps writes nothing and is retried", async 
     processes.children.push(core);
     const unavailable = psUnavailable(root);
     let calls = 0;
-    // Only the first owner lookup lacks ps; everything else is the real lookup.
-    const identify: Identify = (pid) =>
-      pid === process.pid && calls++ === 0
-        ? unavailable(pid)
-        : processIdentity(pid);
+    // Only the first owner lookup lacks ps; later owner lookups are real.
+    const identify: Identify = async (pid) =>
+      pid !== process.pid
+        ? coreIdentity(data)
+        : calls++ === 0
+          ? unavailable(pid)
+          : processIdentity(pid);
     await assert.rejects(recordCore(data, core, identify), { code: "ENOENT" });
     assert.deepEqual(await readdir(data), [], "no entry for that core");
     assert.equal(
@@ -322,6 +341,37 @@ test("an owner identity lookup without ps writes nothing and is retried", async 
       join(ledger(data), `${core.pid}.json`),
     );
     assert.equal(calls, 2, "the owner was looked up again");
+  } finally {
+    await processes.cleanup(root);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a core identity read before its exec settles is not recorded", async () => {
+  const { root, data } = await fixture();
+  const processes = new Processes();
+  try {
+    const core = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
+    processes.children.push(core);
+    // Until exec settles, ps can show the parent's command line (Bun under qemu-user).
+    let settled = false;
+    const identify: Identify = async (pid) =>
+      pid === process.pid
+        ? fakeIdentity(pid)
+        : settled
+          ? coreIdentity(data)
+          : "Thu Jan  1 00:00:00 1970     bun server.ts";
+    assert.equal(await recordCore(data, core, identify), undefined);
+    assert.deepEqual(
+      await readdir(data),
+      [],
+      "no entry that could never be reaped",
+    );
+    settled = true;
+    assert.equal(
+      await recordCore(data, core, identify),
+      join(ledger(data), `${core.pid}.json`),
+    );
   } finally {
     await processes.cleanup(root);
     await rm(root, { recursive: true, force: true });
@@ -336,15 +386,9 @@ test(
     const processes = new Processes();
     try {
       // A shell blocked in its builtin read, with the command line of a core of this directory.
-      const config = join(
-        data,
-        "profiles",
-        "00000000-0000-4000-8000-000000000000",
-        "config.yaml",
-      );
       const child = spawn(
         "/bin/sh",
-        ["-c", "read _", "core", "--config", config],
+        ["-c", "read _", "core", "--config", coreConfig(data)],
         { stdio: ["pipe", "ignore", "ignore"] },
       );
       processes.children.push(child);
