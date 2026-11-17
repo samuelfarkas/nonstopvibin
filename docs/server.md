@@ -345,10 +345,13 @@ translation are **different acceptance paths**.
   429 with `rate_limit_error`. The app's own 32-in-flight **per-profile** cap is
   429 with `Retry-After: 2`, not a per-task limit or global coding-session policy.
 - After streaming headers are committed, an error cannot change HTTP 200.
-  Explicit native provider error events survive without a `message_stop`.
-  **Pinned native clean EOF can silently end an incomplete stream without an
-  error event**. A consumer must require the protocol completion terminal,
-  distinguish truncation/error/unknown outcomes, and avoid uncontrolled retries.
+  Explicit native provider error events survive without a `message_stop`, and
+  the pinned core ends a clean upstream EOF before `message_stop` with an
+  `api_error` event. **Either failure cools down that account for the model**,
+  so a profile without another available account returns 503
+  `auth_unavailable` until the cooldown ends. A consumer must require the
+  protocol completion terminal, distinguish truncation/error/unknown outcomes,
+  and avoid uncontrolled retries.
 - `count_tokens` is **not uniformly authoritative**. Pinned source uses native
   upstream counting only at the first-party Anthropic origin with credentials;
   that live branch was not exercised. A custom origin uses the core's local

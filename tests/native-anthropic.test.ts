@@ -563,36 +563,41 @@ test("native provider errors retain status and type/message but the pinned core 
   });
 });
 
-test("pinned native clean EOF is silently truncated; explicit error events survive and neither is a success terminal", async () => {
-  for (const label of ["truncated", "stream-error"]) {
-    const response = await send({ stream: true, messages: message(label) });
+test("native clean EOF and provider error events end with an error, not message_stop, and cool down the account", async () => {
+  for (const [label, error] of [
+    [
+      "truncated",
+      {
+        type: "api_error",
+        message: "upstream stream closed before message_stop",
+      },
+    ],
+    [
+      "stream-error",
+      { type: "overloaded_error", message: "synthetic stream failure" },
+    ],
+  ] as const) {
+    // A failed stream cools down its account, so each case gets its own profile.
+    const profile = app.store.createProfile(`Failing ${label}`, "forest");
+    addAccount(profile);
+    await app.core.start(profile.id);
+    const response = await send(
+      { stream: true, messages: message(label) },
+      profile,
+    );
     assert.equal(
       response.status,
       200,
       "HTTP status is already committed after message_start",
     );
-    const received = events(await response.text());
-    assert.equal(received[0].type, "message_start");
-    assert.equal(
-      received.some((event) => event.type === "message_stop"),
-      false,
-    );
-    // Pinned native-stream branch returns on a clean scanner EOF without
-    // validating completion. Consumers MUST require message_stop, not HTTP 200.
+    // Consumers MUST require message_stop, not HTTP 200.
     assert.deepEqual(
-      received,
-      label === "truncated"
-        ? events(start)
-        : events(
-            start +
-              frame("error", {
-                error: {
-                  type: "overloaded_error",
-                  message: "synthetic stream failure",
-                },
-              }),
-          ),
+      events(await response.text()),
+      events(start + frame("error", { error })),
     );
+    const next = await send({ messages: message("after failure") }, profile);
+    assert.equal(next.status, 503);
+    assert.match((await next.json()).error.message, /^auth_unavailable/);
   }
 });
 

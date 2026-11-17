@@ -17,8 +17,9 @@ version/beta forwarding, provider error normalization, profile exhaustion and
 idle transport cleanup after graceful FIN, TCP reset, Fetch abort and
 ClientRequest destroy. They are not live-provider or native Claude-process
 acceptance, nor proof of remote computation/billing cancellation. Custom-origin
-`count_tokens` is a local text estimate that omits image tokens; pinned native
-clean EOF can truncate without an error terminal. See the
+`count_tokens` is a local text estimate that omits image tokens; a truncated or
+failed native stream ends with an error event, not `message_stop`, and cools
+down its account. See the
 [protected-upstream limitations](server.md#native-anthropic-transport-and-limitations)
 before admitting unattended consumers.
 
