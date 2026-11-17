@@ -5,6 +5,7 @@ import {
   chmod,
   lstat,
   mkdtemp,
+  readdir,
   rm,
   symlink,
   writeFile,
@@ -242,6 +243,36 @@ test(
       assert.equal((await lstat(reservation)).ino, before.ino);
       successor.child.kill("SIGTERM");
       assert.equal(await successor.exited, 0, successor.output());
+      assert.equal(await readSession(directory), undefined);
+    } finally {
+      await cleanup(directory, processes);
+    }
+  },
+);
+
+test(
+  "a hangup stops a CLI with a running profile through its orderly close",
+  { timeout: 20000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-cli-hangup-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const profile = store.createProfile("Hangup", "forest");
+    store.saveProfile({ ...profile, enabled: true });
+    store.close();
+    const processes: RunningCli[] = [];
+    try {
+      const owner = await launch(directory);
+      processes.push(owner);
+      await waitFor(
+        async () =>
+          (await readSession(directory))?.pid === owner.child.pid &&
+          corePids(directory).length > 0,
+      );
+      // A closed SSH terminal sends SIGHUP; it must not skip the accounting drain.
+      owner.child.kill("SIGHUP");
+      assert.equal(await owner.exited, 0, owner.output());
+      assert.deepEqual(corePids(directory), [], "no core or watchdog remains");
+      assert.deepEqual(await readdir(join(directory, "core-processes")), []);
       assert.equal(await readSession(directory), undefined);
     } finally {
       await cleanup(directory, processes);

@@ -714,22 +714,30 @@ export async function main(argv: string[]): Promise<number> {
     const controller = new AbortController();
     let application: Application | undefined;
     let stopping = false;
+    let code = 0;
     const stop = () => {
       controller.abort();
       if (!application || stopping) return;
       stopping = true;
       stopServer(application, directory).then(
-        () => process.exit(0),
+        () => process.exit(code),
         (error) => {
           console.error(error);
           process.exit(1);
         },
       );
     };
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
     // Receive termination before directory reservation, store creation or any
     // core spawn. Startup cancellation itself awaits partial-app cleanup.
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
+    for (const signal of signals) process.on(signal, stop);
+    // A crash must still stop the profile cores; the watchdogs cover what this cannot.
+    for (const event of ["uncaughtException", "unhandledRejection"])
+      process.on(event, (error) => {
+        console.error(error);
+        code = 1;
+        stop();
+      });
     try {
       application = await startServer(
         {
@@ -742,9 +750,8 @@ export async function main(argv: string[]): Promise<number> {
         controller.signal,
       );
     } catch (error) {
-      process.removeListener("SIGINT", stop);
-      process.removeListener("SIGTERM", stop);
-      if (error === controller.signal.reason) return 0;
+      for (const signal of signals) process.removeListener(signal, stop);
+      if (error === controller.signal.reason) return code;
       throw error;
     }
     // journald must never receive the session token.

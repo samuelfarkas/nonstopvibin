@@ -301,7 +301,8 @@ export class CorePool {
           "/config",
           "GET",
           undefined,
-          deadline - Date.now(),
+          // The clock can pass the deadline after the loop check; a negative timeout throws.
+          Math.max(0, deadline - Date.now()),
           signal,
         );
         signal?.throwIfAborted();
