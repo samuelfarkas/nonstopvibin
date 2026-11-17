@@ -1,7 +1,7 @@
 {
   "name": "nonstopvibin",
-  "version": "0.1.1",
-  "updatesEnabled": false,
+  "version": "0.2.0",
+  "updatesEnabled": true,
   "description": "A local desktop proxy for using AI subscriptions with coding agents.",
   "private": true,
   "homepage": "https://github.com/samuelfarkas/nonstopvibin",
