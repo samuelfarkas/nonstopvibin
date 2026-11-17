@@ -10,6 +10,12 @@ export async function initializeSession(): Promise<void> {
     if (token) sessionStorage.setItem("nv-session", token);
     if (params.has("session"))
       history.replaceState(null, "", location.pathname + location.search);
+    // Pasting a new session link into an open tab only changes the fragment;
+    // reload so it replaces the stale token.
+    addEventListener("hashchange", () => {
+      if (new URLSearchParams(location.hash.slice(1)).has("session"))
+        location.reload();
+    });
   }
 }
 export async function api<T>(

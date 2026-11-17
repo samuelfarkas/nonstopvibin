@@ -65,6 +65,21 @@ not demonstrate a live Codex conversation.
 Closing the window leaves the proxy running in the menu bar. **Quit** stops it.
 **Start at login** is optional in Settings.
 
+## Run on a Linux server
+
+Install the headless build on a glibc-based Linux server for trusted co-located
+agents, or under a dedicated protected user behind a separate consumer-owned
+private inference gate. Open its operator UI from your laptop through SSH:
+
+```sh
+bun run server:deploy myserver   # build, copy, install a systemd user service
+bun run server:open myserver     # tunnel and open the UI
+```
+
+See [Run on a Linux server](docs/server.md) for manual installation, provider
+sign-in, Tailscale, upgrades, and the [protected-upstream contract](docs/server.md#protected-upstream)
+(with Homeplane as a planned consumer example, not a bundled gate).
+
 ## Build from source
 
 This is a prerelease. Install [Bun 1.4.2](https://bun.com/docs/installation) and

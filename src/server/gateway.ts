@@ -190,7 +190,13 @@ export class Gateway {
           res.writeHead(response.statusCode ?? 502, headers);
           pipeline(response, res).then(resolve, reject);
         });
-        pipeline(req, upstream).catch(reject);
+        pipeline(req, upstream)
+          .then(() => {
+            // Bun can leave native reads paused after unpiping a complete body,
+            // hiding a peer FIN during idle SSE. Restore socket reads once.
+            req.socket.resume();
+          })
+          .catch(reject);
       });
     } finally {
       res.off("close", close);
