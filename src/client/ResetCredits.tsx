@@ -68,9 +68,9 @@ export function ResetCredits({
       setMessage(
         {
           reset:
-            "Reset applied. If requests still report exhausted quota, stop and start this profile to clear the proxy’s saved cooldown.",
+            "Reset applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy and clear its saved cooldown.",
           already_redeemed:
-            "This reset was already applied. If requests still report exhausted quota, stop and start this profile.",
+            "This reset was already applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy.",
           nothing_to_reset:
             "There are no eligible usage windows to reset. No reset was used.",
           no_credit: "This reset is no longer available. No reset was used.",

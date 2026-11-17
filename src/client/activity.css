@@ -18,15 +18,6 @@
   padding: 0;
 }
 
-.activity-stat:first-child {
-  padding-left: 0;
-}
-
-.activity-stat:last-child {
-  padding-right: 0;
-  border-right: 0;
-}
-
 .activity-stat > span,
 .activity-stat > strong,
 .activity-stat > code {
@@ -331,9 +322,12 @@
 }
 
 .activity-value > strong {
+  display: block;
   font-family: var(--mono);
   font-size: var(--text-heading);
   font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
 }
 
 .token-mix-bar .cache-write,
@@ -355,12 +349,6 @@
 .activity-value .activity-section-heading {
   min-height: 0;
   margin-bottom: 5px;
-}
-
-.activity-value > strong {
-  display: block;
-  line-height: 1.2;
-  letter-spacing: -0.035em;
 }
 
 .pricing-details {

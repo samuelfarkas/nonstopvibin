@@ -1,6 +1,6 @@
 # DeepSec for nonstopvibin
 
-This isolated workspace pins Vercel DeepSec 2.3.9. The source root is `..`; priority
+This isolated workspace pins Vercel DeepSec 2.3.10. The source root is `..`; priority
 areas and exclusions are in `data/nonstopvibin/config.json`, and the short manually
 reviewed threat context is `data/nonstopvibin/INFO.md`.
 

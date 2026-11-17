@@ -56,7 +56,7 @@ test("Git ignores private state while retaining source, skill copies and lockfil
       ".deepsec/data/app/INFO.md",
       ".deepsec/data/app/config.json",
       ".agents/skills/vite/SKILL.md",
-      "docs/screenshots/subscriptions.png",
+      "docs/media/subscriptions.png",
     ];
     const actual = execFileSync(
       "git",

@@ -6,6 +6,7 @@ import {
   enrichModels,
 } from "../src/server/model-catalog.ts";
 import { modelsFor } from "../src/shared/providers.ts";
+import { AppError } from "../src/server/errors.ts";
 import type { ApiAccount } from "../src/shared/types.ts";
 
 const entry = {
@@ -148,6 +149,26 @@ test("models.dev fetching is credential-free, bounded, cached, coalesced and ret
   assert.equal(two[0].id, "fixture-b");
   await service.models([], []);
   assert.equal(calls, 2);
+});
+
+test("concurrent callers of a failed models.dev fetch all get the 502 error", async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = Object.assign(async () => {
+    calls++;
+    await Promise.resolve();
+    return new Response("unavailable", { status: 503 });
+  }, fetch);
+  const service = new ModelCatalog(fetcher);
+  const results = await Promise.allSettled([
+    service.models([], []),
+    service.models([], []),
+  ]);
+  assert.equal(calls, 1);
+  for (const result of results) {
+    assert.equal(result.status, "rejected");
+    assert.ok(result.reason instanceof AppError);
+    assert.equal(result.reason.status, 502);
+  }
 });
 
 test("pricing tiers retain their published thresholds and missing cache prices are not fabricated", () => {

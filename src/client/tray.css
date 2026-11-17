@@ -59,6 +59,7 @@
   cursor: pointer;
   list-style: none;
   transition: background 120ms ease;
+  --focus-offset: -3px;
 }
 .tray-profile::-webkit-details-marker {
   display: none;
@@ -69,9 +70,6 @@
 .tray-profile:hover,
 .tray-profile-group[open] > .tray-profile {
   background: var(--bg-3);
-}
-.tray-profile {
-  --focus-offset: -3px;
 }
 .tray-profile-title {
   display: grid;
@@ -181,6 +179,7 @@
   cursor: pointer;
   list-style: none;
   transition: background 120ms ease;
+  --focus-offset: -3px;
 }
 .tray-account-summary::before {
   content: none;
@@ -191,9 +190,6 @@
 .tray-account-summary:hover,
 .tray-account[open] > summary {
   background: var(--bg-3);
-}
-.tray-account-summary {
-  --focus-offset: -3px;
 }
 .tray-account-summary .provider-icon {
   width: 26px;

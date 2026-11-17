@@ -1,6 +1,6 @@
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
-import { randomUUID, randomBytes } from "node:crypto";
+import { createHash, randomUUID, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type {
   Account,
@@ -13,6 +13,10 @@ import type {
 import type { SecretCodec } from "./vault.ts";
 import { AppError } from "./errors.ts";
 
+/** One-way index key for a client key; the index never holds the key itself. */
+export function clientDigest(key: string): string {
+  return createHash("sha256").update(key).digest("base64");
+}
 function stored<T>(body: SQLOutputValue): T {
   // SAFETY: bodies are written only by this Store via JSON.stringify of the
   // typed value each reader requests, so decoding yields that type back.
@@ -23,7 +27,9 @@ export class Store {
   readonly directory: string;
   readonly codec: SecretCodec;
   usageGeneration = 0;
-  private summaries = new Map<string, UsageSummary>();
+  /** Bumped on every profile write, so readers can cache profile rows. */
+  profileGeneration = 0;
+  private clients?: Map<string, string>;
   constructor(directory: string, codec: SecretCodec) {
     this.directory = directory;
     this.codec = codec;
@@ -105,9 +111,12 @@ export class Store {
         randomBytes(32).toString("base64url"),
       );
     });
+    this.profileGeneration++;
     return profile;
   }
   saveProfile(profile: Profile): void {
+    this.clients = undefined;
+    this.profileGeneration++;
     this.db
       .prepare("UPDATE profiles SET body=? WHERE id=?")
       .run(JSON.stringify(profile), profile.id);
@@ -131,7 +140,22 @@ export class Store {
     if (!row) throw new AppError("Credential not found.", 404);
     return this.codec.decrypt(String(row.encrypted));
   }
+  /**
+   * Client-key digest to profile id, so a request costs one lookup instead of a
+   * decrypt per profile. A hint only: callers verify the live rows. Every profile
+   * or secret write (including createProfile, via setSecret) drops it.
+   */
+  clientIndex(): Map<string, string> {
+    this.clients ??= new Map(
+      this.profiles().map((profile) => [
+        clientDigest(this.secret(`${profile.id}:client`)),
+        profile.id,
+      ]),
+    );
+    return this.clients;
+  }
   setSecret(id: string, value: string): void {
+    this.clients = undefined;
     this.db
       .prepare("INSERT OR REPLACE INTO secrets VALUES (?,?)")
       .run(id, this.codec.encrypt(value));
@@ -194,35 +218,11 @@ export class Store {
     const stmt = this.db.prepare(
       "INSERT OR IGNORE INTO usage VALUES (?,?,?,?)",
     );
-    const summaries = this.transaction(() => {
-      const updated = new Map<string, UsageSummary>();
-      for (const r of records) {
-        const result = stmt.run(
-          r.id,
-          r.profileId,
-          r.timestamp,
-          JSON.stringify(r),
-        );
-        if (!result.changes) continue;
-        let summary = updated.get(r.profileId);
-        if (!summary) {
-          const cached = this.summaries.get(r.profileId);
-          if (!cached) continue;
-          summary = { ...cached };
-          updated.set(r.profileId, summary);
-        }
-        summary.requests++;
-        summary.failed += Number(r.failed);
-        summary.inputTokens += r.inputTokens;
-        summary.outputTokens += r.outputTokens;
-        summary.cachedTokens += r.cachedTokens;
-        summary.reasoningTokens += r.reasoningTokens;
-        summary.totalTokens += r.totalTokens;
-      }
-      return updated;
+    // One batch commits or rolls back whole; duplicate IDs are ignored.
+    this.transaction(() => {
+      for (const r of records)
+        stmt.run(r.id, r.profileId, r.timestamp, JSON.stringify(r));
     });
-    // Publish only after commit; duplicates and rolled-back batches never change totals.
-    for (const [id, summary] of summaries) this.summaries.set(id, summary);
   }
   usage(profileId: string, since = "", limit = 300): UsageRecord[] {
     return this.db
@@ -289,16 +289,8 @@ export class Store {
         record: stored<UsageRecord>(row.body),
       }));
   }
+  /** Stored totals since an ISO time. Tests' accounting oracle; the app aggregates in UsagePrices. */
   summary(profileId: string, since = ""): UsageSummary {
-    // Activity periods are aggregated by UsagePrices; only state() needs this cache.
-    if (since) return this.readSummary(profileId, since);
-    const cached = this.summaries.get(profileId);
-    if (cached) return cached;
-    const summary = this.readSummary(profileId, since);
-    this.summaries.set(profileId, summary);
-    return summary;
-  }
-  private readSummary(profileId: string, since: string): UsageSummary {
     const row = this.db
       .prepare(
         `SELECT count(*) AS requests,
@@ -311,7 +303,7 @@ export class Store {
       FROM usage WHERE profile_id=? AND timestamp>=?`,
       )
       .get(profileId, since);
-    const summary: UsageSummary = {
+    return {
       requests: Number(row?.requests ?? 0),
       failed: Number(row?.failed ?? 0),
       inputTokens: Number(row?.inputTokens ?? 0),
@@ -320,7 +312,6 @@ export class Store {
       reasoningTokens: Number(row?.reasoningTokens ?? 0),
       totalTokens: Number(row?.totalTokens ?? 0),
     };
-    return summary;
   }
   usageRetentionDays(): number {
     const row = this.db
@@ -348,10 +339,7 @@ export class Store {
       "DELETE FROM usage WHERE profile_id=? AND timestamp<?",
     );
     for (const profile of this.profiles()) {
-      if (remove.run(profile.id, cutoff).changes) {
-        this.usageGeneration++;
-        this.summaries.delete(profile.id);
-      }
+      if (remove.run(profile.id, cutoff).changes) this.usageGeneration++;
     }
   }
   close(): void {

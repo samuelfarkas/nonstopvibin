@@ -7,14 +7,15 @@ import {
 } from "../src/client/format.ts";
 
 test("reused formatters preserve number boundaries and local date output", () => {
-  for (const n of [-1, 0, 1.25, 99_999, 100_000, 1_000_000])
-    assert.equal(
-      count(n),
-      new Intl.NumberFormat("en", {
-        notation: n >= 100_000 ? "compact" : "standard",
-        maximumFractionDigits: 1,
-      }).format(n),
-    );
+  for (const [n, expected] of [
+    [-1, "-1"],
+    [0, "0"],
+    [1.25, "1.3"],
+    [99_999, "99,999"],
+    [100_000, "100K"],
+    [1_250_000, "1.3M"],
+  ] as const)
+    assert.equal(count(n), expected);
   for (const locale of ["en-US", "cs-CZ"])
     for (const timeZone of ["Europe/Prague", "America/New_York"]) {
       const options = {

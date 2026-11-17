@@ -6,10 +6,13 @@
 - `bun run security:deps` runs Bun's dependency audit at high severity.
 - Gitleaks 8.30.1 scans the working tree and Git history. The installer verifies
   pinned official archive hashes before placing it under `.vendor/security`.
-- DeepSec 2.3.9 has a separate locked Bun workspace under `.deepsec`. Its local
+- DeepSec 2.3.10 has a separate locked Bun workspace under `.deepsec`. Its local
   pattern scan produces candidates, not confirmed vulnerabilities. Read
   [the workspace runbook](../.deepsec/README.md) before using AI processing.
-- Dependabot proposes dependency and GitHub Actions updates for review.
+- Dependabot proposes dependency and GitHub Actions updates for review. Bun version
+  updates for both workspaces wait seven days after publication, matching
+  `minimumReleaseAge` in `bunfig.toml`. The cooldown does not apply to Dependabot
+  security updates, so Bun can reject a security update younger than seven days.
 
 See [SECURITY.md](../SECURITY.md) for the required checks and release policy.
 

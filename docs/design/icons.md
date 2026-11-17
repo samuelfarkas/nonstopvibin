@@ -6,7 +6,8 @@ Edit these scripts rather than the generated files.
 
 | Asset                                             | Use                               |
 | ------------------------------------------------- | --------------------------------- |
-| `public/icon.png`, `public/icon.icns`             | App icon and favicon              |
+| `public/icon.png`                                 | App icon and favicon              |
+| `build/icon.icns`                                 | macOS app icon (packaging only)   |
 | `public/tray/ball.svg`, `public/tray/stopped.svg` | Renderer logo                     |
 | `public/tray/mac-{ball,stopped}[@2x].png`         | macOS menu bar, 18pt at 1× and 2× |
 | `public/tray/linux-{ball,stopped}.png`            | Linux tray, 22px                  |

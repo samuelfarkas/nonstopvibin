@@ -492,3 +492,32 @@ test("queued history responses keep records, summary and prices in one insertion
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a queued history caller runs its own request after the caller ahead of it fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nv-history-failure-"));
+  const store = new Store(directory, fileKeyCodec(directory));
+  const unavailable = Object.assign(
+    async () => new Response(null, { status: 503 }),
+    fetch,
+  );
+  const prices = new UsagePrices(unavailable);
+  const catalog = new ModelCatalog(unavailable);
+  const usage = store.usage.bind(store);
+  let failures = 1;
+  store.usage = (...args) => {
+    if (failures-- > 0) throw new Error("synthetic storage failure");
+    return usage(...args);
+  };
+  try {
+    const profile = store.createProfile("Queued failure", "forest");
+    store.addUsage([{ ...record, profileId: profile.id }]);
+    const first = prices.history(store, profile.id, "", catalog);
+    const queued = prices.history(store, profile.id, "", catalog);
+    await assert.rejects(first, /synthetic storage failure/);
+    assert.equal((await queued).summary.requests, 1);
+  } finally {
+    await prices.close();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

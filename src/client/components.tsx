@@ -7,18 +7,23 @@ import type { Account, QuotaWindow } from "../shared/types.ts";
 import { copy } from "./api.ts";
 import { accountLabel, exactTime, resetIn } from "./format.ts";
 
+// Main can only hold a deferred close after a guard vetoed an unload.
+let closeVetoed = false;
 export function useKeepDraft(needed: boolean) {
   useEffect(() => {
     if (!needed || !window.nonstopvibin) return;
     const preventClose = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = true;
+      closeVetoed = true;
     };
     window.addEventListener("beforeunload", preventClose);
     return () => {
       window.removeEventListener("beforeunload", preventClose);
       // Other guards installed in this commit still get to veto the close.
       queueMicrotask(() => {
+        if (!closeVetoed) return;
+        closeVetoed = false;
         void window.nonstopvibin?.releaseWindow().catch(() => {
           // The renderer can disappear before the IPC reply during normal unload.
         });
@@ -31,23 +36,22 @@ export function Modal({
   title,
   description,
   children,
-  open,
   onClose,
   wide = false,
 }: {
   title: string;
   description?: string;
   children: ReactNode;
-  open: boolean;
   onClose(): void;
   wide?: boolean;
 }) {
-  useKeepDraft(open);
+  // Callers mount a Modal only while it is open.
+  useKeepDraft(true);
   // Capture before an autoFocus input mounts; callers mount dialogs when opened.
   const [opener] = useState(() => document.activeElement);
   return (
     <Dialog.Root
-      open={open}
+      open
       onOpenChange={(value) => {
         if (!value) onClose();
       }}
@@ -254,7 +258,9 @@ export function Status({ value }: { value: string }) {
           ? "Stopped"
           : value === "starting"
             ? "Starting…"
-            : value}
+            : value === "error"
+              ? "Error"
+              : value}
     </span>
   );
 }
@@ -341,19 +347,16 @@ export function Empty({
   icon,
   title,
   children,
-  action,
 }: {
   icon?: ReactNode;
   title: string;
   children: ReactNode;
-  action?: ReactNode;
 }) {
   return (
     <div className="empty-state">
       <div className="empty-icon">{icon || <Activity size={22} />}</div>
       <h2>{title}</h2>
       <p>{children}</p>
-      {action}
     </div>
   );
 }

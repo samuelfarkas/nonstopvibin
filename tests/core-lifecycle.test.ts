@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { CorePool } from "../src/server/core.ts";
@@ -28,6 +28,150 @@ test("profile cores refresh model catalogs without overriding the pinned core's 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test(
+  "a core that never becomes ready and ignores SIGTERM is killed before start fails",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-unready-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    // Never listens and survives SIGTERM, like a wedged core.
+    const binary = join(directory, "wedged-core");
+    await writeFile(
+      binary,
+      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => {}, 1000);\n`,
+    );
+    await chmod(binary, 0o700);
+    const core = new CorePool(store, binary);
+    core.timing.ready = 1000;
+    core.timing.kill = 300;
+    const profile = store.createProfile("Wedged fixture", "forest");
+    try {
+      const started = Date.now();
+      await assert.rejects(core.start(profile.id), /did not become ready/);
+      assert.ok(Date.now() - started < 5000, "readiness has an overall bound");
+      const runtime = core.runtimes.get(profile.id)!;
+      assert.equal(runtime.child.signalCode, "SIGKILL");
+      assert.equal(runtime.state, "error");
+    } finally {
+      await core.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a failing usage drain retries once promptly, then backs off to a bound and resets on success",
+  { timeout: 10_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-usage-backoff-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    core.timing.coalesce = 20;
+    core.timing.usageBackoff = 160;
+    const profile = store.createProfile("Backoff fixture", "forest");
+    const attempts: number[] = [];
+    let failing = true;
+    core.collectUsage = async () => {
+      attempts.push(Date.now());
+      if (failing) throw new Error("usage queue unavailable");
+      return 0;
+    };
+    try {
+      await core.start(profile.id);
+      const runtime = core.runtimes.get(profile.id)!;
+      core.beginPolling();
+      core.markUsageActivity(profile.id);
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
+      // Unbounded 20 ms retries would make about 45 attempts here.
+      assert.ok(attempts.length >= 5 && attempts.length <= 10, `${gaps}`);
+      assert.ok(gaps[0]! < 80, `first retry stays prompt: ${gaps}`);
+      assert.ok(gaps[2]! >= 70, `retries back off: ${gaps}`);
+      assert.ok(
+        gaps.every((gap) => gap < 160 + 80),
+        `backoff is bounded: ${gaps}`,
+      );
+      failing = false;
+      core.markUsageActivity(profile.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(runtime.usageFailures, 0, "a success resets the backoff");
+    } finally {
+      await core.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "idle profiles stop draining usage after one trailing drain unless a request is in flight",
+  { timeout: 10_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-idle-drain-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    core.timing.coalesce = 20;
+    const profile = store.createProfile("Idle fixture", "forest");
+    const collectUsage = core.collectUsage;
+    let drains = 0;
+    let drained = () => {};
+    core.collectUsage = async (id) => {
+      const count = await collectUsage.call(core, id);
+      drains++;
+      drained();
+      return count;
+    };
+    // Resolves once the scheduler has acted on a drain that began after the window closed.
+    const trailingDrain = (runtime: { usageActiveUntil: number }) =>
+      new Promise<void>((resolve) => {
+        const opened = Date.now();
+        drained = () => {
+          if (
+            opened >= runtime.usageActiveUntil ||
+            Date.now() >= runtime.usageActiveUntil
+          )
+            setImmediate(resolve);
+        };
+      });
+    try {
+      await core.start(profile.id);
+      const runtime = core.runtimes.get(profile.id)!;
+      core.beginPolling();
+      core.markUsageActivity(profile.id);
+      runtime.usageActiveUntil = Date.now() + 100;
+      await trailingDrain(runtime);
+      assert.equal(
+        runtime.nextUsageAt,
+        Infinity,
+        "idle after the trailing drain",
+      );
+      const settled = drains;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(drains, settled, "no usage wakeups while idle");
+
+      core.usageInFlight = () => 1;
+      core.markUsageActivity(profile.id);
+      runtime.usageActiveUntil = Date.now() + 100;
+      await trailingDrain(runtime);
+      assert.ok(
+        Number.isFinite(runtime.nextUsageAt) &&
+          runtime.nextUsageAt > Date.now(),
+        "an open stream or WebSocket keeps its periodic drain",
+      );
+      core.usageInFlight = () => 0;
+
+      const beforeStop = drains;
+      await core.stop(profile.id);
+      assert.equal(drains, beforeStop + 1, "stop still drains the queue");
+    } finally {
+      await core.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "queued starts reject shutdown after a pending accounting drain",
@@ -88,13 +232,12 @@ test(
     const store = new Store(directory, fileKeyCodec(directory));
     const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
     const profile = store.createProfile("OAuth fixture", "forest");
-    const listener = http.createServer();
-    await new Promise<void>((resolve) =>
-      listener.listen(0, "127.0.0.1", resolve),
-    );
-    const address = listener.address();
-    assert.ok(address instanceof Object);
-    await new Promise<void>((resolve) => listener.close(() => resolve()));
+    // Port 0 lets the callback server pick a free port itself; reserving one first races.
+    const callbackPort = () => {
+      const address = core["callbackServer"]?.address();
+      assert.ok(address instanceof Object);
+      return address.port;
+    };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -113,7 +256,7 @@ test(
         JSON.stringify(
           req.url?.startsWith("/v0/management/codex-auth-url")
             ? {
-                url: `https://example.invalid/auth?redirect_uri=${encodeURIComponent(`http://127.0.0.1:${address.port}/callback`)}`,
+                url: `https://example.invalid/auth?redirect_uri=${encodeURIComponent("http://127.0.0.1:0/callback")}`,
                 state: "synthetic-state",
               }
             : {},
@@ -130,6 +273,7 @@ test(
       assert.ok(managementAddress instanceof Object);
       core.runtimes.get(profile.id)!.port = managementAddress.port;
       await core.beginOAuth(profile.id, "codex");
+      const port = callbackPort();
       const cancel = core.cancelOAuth(profile.id, "synthetic-state");
       await cancelling;
       let received!: () => void;
@@ -142,7 +286,7 @@ test(
         return callback(...args);
       };
       request = http.get(
-        `http://127.0.0.1:${address.port}/callback?state=synthetic-state`,
+        `http://127.0.0.1:${port}/callback?state=synthetic-state`,
         (res) => res.resume(),
       );
       request.on("error", () => {}); // Cancellation deliberately closes the socket.
@@ -151,7 +295,7 @@ test(
       await cancel;
       const next = await core.beginOAuth(profile.id, "codex");
       const successful = await fetch(
-        `http://127.0.0.1:${address.port}/callback?state=${next.state}`,
+        `http://127.0.0.1:${callbackPort()}/callback?state=${next.state}`,
       );
       assert.equal(successful.status, 200);
       assert.match(await successful.text(), /Sign-in received/);

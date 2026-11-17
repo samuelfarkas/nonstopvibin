@@ -1,6 +1,9 @@
 import type { ApiAccount, Profile } from "../shared/types.ts";
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { version } from "../../package.json";
+
+export { version };
+export const userAgent = `nonstopvibin/${version}`;
 
 // Upstream CLIProxyAPI config entries. Type aliases keep them assignable to Json.
 type ModelEntry = { name: string; alias: string };
@@ -36,7 +39,7 @@ export function coreConfiguration(
     const headers: Record<string, string> =
       account.provider === "opencode-go"
         ? {
-            "User-Agent": "nonstopvibin/0.1.1 (coding-agent-gateway)",
+            "User-Agent": `${userAgent} (coding-agent-gateway)`,
             "x-opencode-session": "$x-opencode-session",
           }
         : {};
@@ -50,13 +53,9 @@ export function coreConfiguration(
         const identity = createHash("sha256")
           .update(JSON.stringify([account.baseUrl, account.prefix, models]))
           .digest("hex");
+        // The name hashes the base URL, prefix and models, so a match shares all three.
         const name = `${account.provider}-${identity}`;
-        const existing = compatible.find(
-          (p) =>
-            p.name === name &&
-            p["base-url"] === account.baseUrl &&
-            isDeepStrictEqual(p.models, models),
-        );
+        const existing = compatible.find((p) => p.name === name);
         if (existing) existing["api-key-entries"].push({ "api-key": key });
         else
           compatible.push({

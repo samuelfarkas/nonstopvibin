@@ -8,6 +8,7 @@ import {
   nativeImage,
   nativeTheme,
   screen,
+  session,
   shell,
   Tray,
   type IpcMainInvokeEvent,
@@ -23,6 +24,7 @@ import { errorMessage } from "../server/errors.ts";
 import { dataDirectory } from "../server/data-directory.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
+import type { Profile } from "../shared/types.ts";
 
 app.setName("NonstopVibin");
 const userData = dataDirectory();
@@ -40,7 +42,6 @@ let application: Application;
 let mainWindow: BrowserWindow | undefined;
 let trayWindow: BrowserWindow | undefined;
 let mainLoading: Promise<void> | undefined;
-let trayLoading: Promise<void> | undefined;
 let mainBounds: Electron.Rectangle | undefined;
 const deferredCloses = new WeakSet<BrowserWindow>();
 let ready = false;
@@ -60,6 +61,9 @@ else {
   app.on("window-all-closed", () => {
     /* The menu bar and proxy intentionally continue until Quit. */
   });
+  // Route termination signals through the orderly quit, which stops every core.
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const)
+    process.on(signal, () => app.quit());
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -229,9 +233,6 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
       devTools: !app.isPackaged,
     },
   });
-  window.webContents.session.setPermissionRequestHandler(
-    (_contents, _permission, callback) => callback(false),
-  );
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       void shell.openExternal(safeExternal(url)).catch(reportDesktopError);
@@ -274,10 +275,7 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
       mainWindow = undefined;
       mainLoading = undefined;
     }
-    if (trayWindow === window) {
-      trayWindow = undefined;
-      trayLoading = undefined;
-    }
+    if (trayWindow === window) trayWindow = undefined;
   });
   return window;
 }
@@ -295,6 +293,10 @@ function assertSender(event: IpcMainInvokeEvent): void {
     throw new Error("Untrusted desktop request.");
 }
 async function start(): Promise<void> {
+  // Every window uses the default session; deny permissions before any can exist.
+  session.defaultSession.setPermissionRequestHandler(
+    (_contents, _permission, callback) => callback(false),
+  );
   const root = app.getAppPath();
   application = await Application.create({
     directory: userData,
@@ -471,11 +473,20 @@ async function start(): Promise<void> {
   tray.setToolTip("NonstopVibin · proxy off");
   let trayState = "";
   let trayTooltip = "";
+  // Gateway idle/active edges run this per request; reread profiles only after a profile write.
+  let trayProfiles: Pick<Profile, "id" | "name">[] = [];
+  let trayGeneration = -1;
   const syncTray = () => {
     if (quitting) return;
-    const running = application.store
-      .profiles()
-      .filter((p) => application.core.runtimes.get(p.id)?.state === "running");
+    if (trayGeneration !== application.store.profileGeneration) {
+      trayProfiles = application.store
+        .profiles()
+        .map(({ id, name }) => ({ id, name }));
+      trayGeneration = application.store.profileGeneration;
+    }
+    const running = trayProfiles.filter(
+      (p) => application.core.runtimes.get(p.id)?.state === "running",
+    );
     const streaming = running.some(
       (p) => (application.gateway.active.get(p.id) ?? 0) > 0,
     );
@@ -508,9 +519,14 @@ async function start(): Promise<void> {
     }
     if (trayWindow) return;
     trayWindow = createWindow("tray");
-    trayLoading = trayWindow.loadURL(`${application.origin}/?view=tray`);
     const window = trayWindow;
-    await trayLoading;
+    try {
+      await window.loadURL(`${application.origin}/?view=tray`);
+    } catch (error) {
+      // Destroying emits "closed", which clears trayWindow so a later click can retry.
+      if (!window.isDestroyed()) window.destroy();
+      throw error;
+    }
     if (window.isDestroyed() || quitting) return;
     if (process.platform === "darwin") await watchOutsideClicks(window);
     if (window.isDestroyed() || quitting) return;

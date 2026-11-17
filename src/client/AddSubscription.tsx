@@ -16,6 +16,7 @@ import {
 import { apiPresets, oauthProviders } from "../shared/providers.ts";
 import type {
   Account,
+  AppState,
   ImportSource,
   OAuthProvider,
   OAuthReview,
@@ -52,7 +53,7 @@ export function AddSubscription({
   reconnectAccount?: Account;
   onSelectProfile(id: string): void;
   onClose(): void;
-  onSaved(): Promise<void>;
+  onSaved(next?: AppState): Promise<void>;
 }) {
   const [destinationId, setDestinationId] = useState(initialProfile.id);
   const profile =
@@ -244,7 +245,6 @@ export function AddSubscription({
   }
   return (
     <Modal
-      open
       onClose={() => {
         void close();
       }}
@@ -364,7 +364,7 @@ export function AddSubscription({
             >
               Choose another organization
             </button>
-            {review.action !== "blocked" ? (
+            {review.action !== "blocked" && (
               <button
                 className="button primary"
                 disabled={busy}
@@ -395,21 +395,6 @@ export function AddSubscription({
                     ? "Reconnect subscription"
                     : "Connect organization"}
               </button>
-            ) : (
-              review.existingProfileId && (
-                <button
-                  className="button primary"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      await chooseAgain();
-                      onSelectProfile(review.existingProfileId!);
-                    })
-                  }
-                >
-                  Open existing profile
-                </button>
-              )
             )}
           </div>
         </div>
@@ -560,7 +545,11 @@ export function AddSubscription({
             </label>
           )}
           {!claudeOnly && (
-            <div className="segmented" aria-label="Connection method">
+            <div
+              className="segmented"
+              role="group"
+              aria-label="Connection method"
+            >
               {(
                 [
                   ["oauth", "Sign in"],
@@ -569,8 +558,10 @@ export function AddSubscription({
                 ] as const
               ).map(([id, label]) => (
                 <button
+                  type="button"
                   key={id}
                   className={tab === id ? "active" : ""}
+                  aria-pressed={tab === id}
                   onClick={() => {
                     setTab(id);
                     setError("");
@@ -636,21 +627,25 @@ export function AddSubscription({
               onSubmit={(e) => {
                 e.preventDefault();
                 void run(async () => {
-                  await api(`/profiles/${profile.id}/api-account`, "POST", {
-                    name,
-                    provider: presetId,
-                    baseUrl,
-                    apiKey: key,
-                    protocol,
-                    prefix,
-                    models: models
-                      .split(/[\n,]/)
-                      .map((m) => m.trim())
-                      .filter(Boolean)
-                      .map((id) => ({ id, protocol })),
-                  });
+                  const next = await api<AppState>(
+                    `/profiles/${profile.id}/api-account`,
+                    "POST",
+                    {
+                      name,
+                      provider: presetId,
+                      baseUrl,
+                      apiKey: key,
+                      protocol,
+                      prefix,
+                      models: models
+                        .split(/[\n,]/)
+                        .map((m) => m.trim())
+                        .filter(Boolean)
+                        .map((id) => ({ id, protocol })),
+                    },
+                  );
                   setKey("");
-                  await onSaved();
+                  await onSaved(next);
                   onSelectProfile(profile.id);
                 });
               }}
@@ -852,8 +847,9 @@ export function AddSubscription({
                   onClick={() =>
                     run(async () => {
                       let imported = 0;
+                      let next: AppState | undefined;
                       for (const sourceId of selectedSources) {
-                        await api(
+                        next = await api<AppState>(
                           `/profiles/${profile.id}/import-source`,
                           "POST",
                           { sourceId },
@@ -867,12 +863,14 @@ export function AddSubscription({
                           );
                         // The server validates the credential; the client only forwards the file.
                         const contents: Json = JSON.parse(await file.text());
-                        await api(`/profiles/${profile.id}/import`, "POST", {
-                          contents,
-                        });
+                        next = await api<AppState>(
+                          `/profiles/${profile.id}/import`,
+                          "POST",
+                          { contents },
+                        );
                         imported++;
                       }
-                      await onSaved();
+                      await onSaved(next);
                       onSelectProfile(profile.id);
                     })
                   }

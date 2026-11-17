@@ -34,7 +34,11 @@ import type {
   UsageRecord,
 } from "../shared/types.ts";
 import { oauthProviders, providerLabel } from "../shared/providers.ts";
-import { coreConfiguration, type CoreConfiguration } from "./config.ts";
+import {
+  coreConfiguration,
+  userAgent,
+  type CoreConfiguration,
+} from "./config.ts";
 import { AppError, errorMessage } from "./errors.ts";
 import { number, parse, record, responseJson, text, unwrap } from "./json.ts";
 import { pricingTokens } from "./usage-pricing.ts";
@@ -42,6 +46,12 @@ import { resetCreditsSchema, resetResultSchema } from "./reset-credits.ts";
 import { parseQuota } from "./quota.ts";
 import { Store } from "./store.ts";
 import { claudeIdentity, sameSeat, verifyClaudeIdentity } from "./identity.ts";
+import {
+  forgetCore,
+  reapOrphanedCores,
+  recordCore,
+  watchCore,
+} from "./core-processes.ts";
 
 interface Runtime {
   child: ChildProcess;
@@ -52,9 +62,14 @@ interface Runtime {
   accounts: Account[];
   /** ChatGPT account IDs by credential file; Codex quota calls need them. */
   chatgptAccountIds: Map<string, string>;
-  lastSyncedAt?: string;
   nextUsageAt: number;
   usageActiveUntil: number;
+  /** Consecutive failed usage drains; resets on success. */
+  usageFailures?: number;
+  /** Kills the core if this process dies without stopping it. */
+  watchdog?: ChildProcess;
+  /** Ledger entry naming the core for the next instance if both die. */
+  ledger?: string;
 }
 const quotaEndpoints: Record<OAuthProvider, string> = {
   claude: "https://api.anthropic.com/api/oauth/usage",
@@ -117,6 +132,33 @@ export class CorePool {
   private schedulePolling?: () => void;
   errors: string[] = [];
   timer?: NodeJS.Timeout;
+  /** Lifecycle and maintenance periods in milliseconds; tests shorten them. */
+  readonly timing = {
+    /** Overall bound on a new core answering its management API. */
+    ready: 15_000,
+    /** SIGTERM grace before SIGKILL. */
+    kill: 5000,
+    /** Account status refresh for running profiles. */
+    accounts: 20_000,
+    /** Shortest wait between scheduler wakeups. */
+    coalesce: 2000,
+    /** Longest wait between retries of a usage drain that keeps failing. */
+    usageBackoff: 60_000,
+  };
+  /** Gateway requests or WebSockets still open for a profile; their usage arrives later. */
+  usageInFlight: (profileId: string) => number = () => 0;
+  /** Parsed Claude display identity per profile and credential file, keyed by file version. */
+  private claudeIdentities = new Map<
+    string,
+    Map<
+      string,
+      {
+        mtimeMs: number;
+        size: number;
+        identity: ReturnType<typeof claudeIdentity>;
+      }
+    >
+  >();
   constructor(store: Store, binary: string) {
     this.store = store;
     this.binary = binary;
@@ -218,6 +260,8 @@ export class CorePool {
       chatgptAccountIds: new Map(),
       nextUsageAt: 0,
       usageActiveUntil: 0,
+      // Same tick as spawn: the core cannot have been reaped and its PID reused yet.
+      watchdog: watchCore(child),
     };
     this.runtimes.set(profileId, runtime);
     child.once("error", (error) => {
@@ -226,16 +270,32 @@ export class CorePool {
       this.onStatusChange?.();
     });
     child.once("exit", (code, signal) => {
+      // The core is gone, so its watchdog (our own child) has nothing left to guard.
+      runtime.watchdog?.kill("SIGKILL");
+      forgetCore(runtime.ledger);
+      runtime.ledger = undefined;
       runtime.state = runtime.stopping ? "stopped" : "error";
       if (!runtime.stopping)
         runtime.error = `Proxy exited (${signal ?? code}). Restart this profile to reconnect.`;
       this.onStatusChange?.();
     });
+    try {
+      runtime.ledger = await recordCore(this.store.directory, child);
+    } catch {
+      // The watchdog still guards this core; only the restart backstop is lost.
+    }
     let lastError = "";
-    for (let attempt = 0; attempt < 80; attempt++) {
+    const deadline = Date.now() + this.timing.ready;
+    while (Date.now() < deadline) {
       if (runtime.state === "error") break;
       try {
-        await this.management(profileId, "/config");
+        await this.management(
+          profileId,
+          "/config",
+          "GET",
+          undefined,
+          deadline - Date.now(),
+        );
         runtime.state = "running";
         this.schedulePolling?.();
         const profile = this.store.profile(profileId);
@@ -249,7 +309,8 @@ export class CorePool {
       }
     }
     runtime.stopping = true;
-    child.kill("SIGTERM");
+    // A later start replaces this runtime entry, so shutdown could no longer reach the child.
+    await this.terminate(child);
     runtime.state = "error";
     runtime.error = runtime.error ?? `Proxy did not become ready. ${lastError}`;
     throw new AppError(runtime.error, 503);
@@ -296,20 +357,25 @@ export class CorePool {
         }
       }
       // The process can exit while the final usage request is in flight.
-      if (
-        runtime.child.exitCode === null &&
-        runtime.child.signalCode === null
-      ) {
-        const exited = new Promise<void>((resolve) =>
-          runtime.child.once("exit", () => resolve()),
-        );
-        runtime.child.kill("SIGTERM");
-        const force = setTimeout(() => runtime.child.kill("SIGKILL"), 5000);
-        await exited;
-        clearTimeout(force);
-      }
+      await this.terminate(runtime.child);
       runtime.state = "stopped";
     }
+  }
+  private async terminate(child: ChildProcess): Promise<void> {
+    // A child that never spawned has no process to signal and may never emit exit.
+    if (
+      child.pid === undefined ||
+      child.exitCode !== null ||
+      child.signalCode !== null
+    )
+      return;
+    const exited = new Promise<void>((resolve) =>
+      child.once("exit", () => resolve()),
+    );
+    child.kill("SIGTERM");
+    const force = setTimeout(() => child.kill("SIGKILL"), this.timing.kill);
+    await exited;
+    clearTimeout(force);
   }
   port(profileId: string): number {
     const runtime = this.runtimes.get(profileId);
@@ -375,6 +441,7 @@ export class CorePool {
     path: string,
     method = "GET",
     body?: Json,
+    timeout = 15_000,
   ): Promise<Json> {
     const runtime = this.runtimes.get(profileId);
     if (!runtime) throw new AppError("Start this profile first.", 409);
@@ -388,7 +455,7 @@ export class CorePool {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(timeout),
         redirect: "error",
       },
     );
@@ -413,6 +480,8 @@ export class CorePool {
     if (!Array.isArray(response.files))
       throw new AppError("The proxy returned an unexpected account list.", 502);
     const identities = new Map<string, ReturnType<typeof claudeIdentity>>();
+    const known = this.claudeIdentities.get(profileId);
+    const parsed: NonNullable<typeof known> = new Map();
     for (const value of response.files) {
       const file = record(value);
       const name = text(file.name);
@@ -423,19 +492,32 @@ export class CorePool {
       )
         continue;
       try {
-        identities.set(
-          name,
-          claudeIdentity(await this.readCredential(profileId, name)),
+        // Stat before reading: a later rewrite always shows a newer version.
+        const { mtimeMs, size } = await lstat(
+          this.credentialPath(profileId, name),
         );
+        const cached = known?.get(name);
+        const identity =
+          cached?.mtimeMs === mtimeMs && cached.size === size
+            ? cached.identity
+            : claudeIdentity(await this.readCredential(profileId, name));
+        parsed.set(name, { mtimeMs, size, identity });
+        identities.set(name, identity);
       } catch {
         // Display enrichment is optional: refresh can replace a file during a read.
         // The row explicitly shows unverified identity until a later sync succeeds.
         identities.set(name, {});
       }
     }
+    this.claudeIdentities.set(profileId, parsed);
     const dir = join(this.directory(profileId), "auth");
-    for (const entry of await readdir(dir, { withFileTypes: true }))
-      if (entry.isFile()) await chmod(join(dir, entry.name), 0o600);
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(dir, entry.name);
+      // A no-op chmod still writes inode metadata; repair only what differs.
+      if (((await lstat(path)).mode & 0o777) !== 0o600)
+        await chmod(path, 0o600);
+    }
     runtime.chatgptAccountIds.clear();
     runtime.accounts = response.files.flatMap((value) => {
       const file = record(value);
@@ -470,7 +552,6 @@ export class CorePool {
       };
       return [account];
     });
-    runtime.lastSyncedAt = new Date().toISOString();
     this.store.saveAccountMetadata(profileId, runtime.accounts);
   }
   accounts(profileId: string): Account[] {
@@ -880,10 +961,7 @@ export class CorePool {
       });
     });
   }
-  private async readCredential(
-    profileId: string,
-    name: string,
-  ): Promise<JsonObject> {
+  private credentialPath(profileId: string, name: string): string {
     if (
       !name.endsWith(".json") ||
       name.includes("/") ||
@@ -891,7 +969,13 @@ export class CorePool {
       name === ".json"
     )
       throw new AppError("Unsupported credential filename.");
-    const path = join(this.directory(profileId), "auth", name);
+    return join(this.directory(profileId), "auth", name);
+  }
+  private async readCredential(
+    profileId: string,
+    name: string,
+  ): Promise<JsonObject> {
+    const path = this.credentialPath(profileId, name);
     const file = await lstat(path);
     if (!file.isFile() || file.size > 2_000_000)
       throw new AppError("The credential is not a supported regular file.");
@@ -931,7 +1015,7 @@ export class CorePool {
     credential: JsonObject,
     reconnectAccountId?: string,
   ): Promise<
-    Pick<OAuthReview, "action" | "message" | "existingProfileId"> & {
+    Pick<OAuthReview, "action" | "message"> & {
       accountId?: string;
     }
   > {
@@ -1173,7 +1257,7 @@ export class CorePool {
           Authorization: "Bearer $TOKEN$",
           "Content-Type": "application/json",
           "Chatgpt-Account-Id": identity,
-          "User-Agent": "nonstopvibin/0.1.1",
+          "User-Agent": userAgent,
         },
         data: creditId
           ? JSON.stringify({
@@ -1262,7 +1346,7 @@ export class CorePool {
         const response = await fetch("https://opencode.ai/zen/go/v1/usage", {
           headers: {
             Authorization: `Bearer ${this.store.secret(`${accountId}:api`)}`,
-            "User-Agent": "nonstopvibin/0.1.1",
+            "User-Agent": userAgent,
           },
           signal: AbortSignal.timeout(15_000),
           redirect: "error",
@@ -1297,7 +1381,7 @@ export class CorePool {
         if (provider === "claude")
           header["anthropic-beta"] = "oauth-2025-04-20";
         if (provider === "codex") {
-          header["User-Agent"] = "nonstopvibin/0.1.1";
+          header["User-Agent"] = userAgent;
           header["Chatgpt-Account-Id"] = this.runtimes
             .get(profileId)
             ?.chatgptAccountIds.get(accountId);
@@ -1416,7 +1500,7 @@ export class CorePool {
   }
   beginPolling(): void {
     clearTimeout(this.timer);
-    let nextAccounts = Date.now() + 20_000;
+    let nextAccounts = Date.now() + this.timing.accounts;
     let nextQuotas = Date.now() + 120_000;
     let nextPrune = Date.now() + 86_400_000;
     let scheduledAt = Infinity;
@@ -1430,8 +1514,8 @@ export class CorePool {
         this.maintenance || !running.length ? Infinity : nextAccounts,
         ...(this.polling ? [] : running.map((runtime) => runtime.nextUsageAt)),
       );
-      // Coalesce active work at two seconds; idle work sleeps until its deadline.
-      const at = Math.max(Date.now() + 2000, due);
+      // Coalesce active work; idle work sleeps until its deadline.
+      const at = Math.max(Date.now() + this.timing.coalesce, due);
       if (at >= scheduledAt) return;
       clearTimeout(this.timer);
       scheduledAt = at;
@@ -1448,15 +1532,31 @@ export class CorePool {
             if (this.shuttingDown) return;
             if (runtime.state !== "running" || Date.now() < runtime.nextUsageAt)
               continue;
-            // Reserve the idle deadline before awaiting: activity during collection
-            // must be able to bring the next drain forward again.
-            runtime.nextUsageAt = Date.now() + 30_000;
+            // Usage only arises from gateway traffic, which marks activity. Once it has
+            // been quiet for the whole window, this drain was the trailing one: sleep
+            // until new activity or stop (which drains). Open requests keep a slow
+            // cadence because their usage lands only as each response completes.
+            // Set before awaiting so activity during collection can reset it to 0.
+            runtime.nextUsageAt = this.usageInFlight(profileId)
+              ? Date.now() + 30_000
+              : Infinity;
             try {
               const count = await this.collectUsage(profileId);
+              runtime.usageFailures = 0;
               if (count === 500 || Date.now() < runtime.usageActiveUntil)
                 runtime.nextUsageAt = 0;
             } catch (error) {
-              runtime.nextUsageAt = 0;
+              // Retry the first failure at once, then back off up to timing.usageBackoff.
+              const failures = (runtime.usageFailures ?? 0) + 1;
+              runtime.usageFailures = failures;
+              runtime.nextUsageAt =
+                failures === 1
+                  ? 0
+                  : Date.now() +
+                    Math.min(
+                      this.timing.coalesce * 2 ** (failures - 1),
+                      this.timing.usageBackoff,
+                    );
               this.report(
                 `${this.store.profile(profileId).name}: ${errorMessage(error)}`,
               );
@@ -1471,7 +1571,7 @@ export class CorePool {
         (Date.now() >= nextAccounts || Date.now() >= nextPrune)
       ) {
         const quotasDue = Date.now() >= nextQuotas;
-        nextAccounts = Date.now() + 20_000;
+        nextAccounts = Date.now() + this.timing.accounts;
         if (quotasDue) nextQuotas = Date.now() + 120_000;
         this.maintenance = (async () => {
           if (Date.now() >= nextPrune) {
@@ -1513,11 +1613,13 @@ export class CorePool {
     schedule();
   }
   async restore(): Promise<void> {
+    // Stop cores a crashed instance left running on this data directory before starting ours.
+    await reapOrphanedCores(this.store.directory);
+    const pending = join(this.store.directory, "oauth-pending");
+    for (const entry of await readdir(pending).catch(() => []))
+      await reapOrphanedCores(join(pending, entry));
     // Pending sign-ins never survive an app restart or enter an active profile.
-    await rm(join(this.store.directory, "oauth-pending"), {
-      recursive: true,
-      force: true,
-    });
+    await rm(pending, { recursive: true, force: true });
     for (const profile of this.store.profiles().filter((p) => p.enabled)) {
       try {
         await this.start(profile.id);

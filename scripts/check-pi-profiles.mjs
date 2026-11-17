@@ -1,4 +1,4 @@
-// Run: node scripts/check-pi-profiles.mjs /path/to/@earendil-works/pi-coding-agent
+// Run: bun scripts/check-pi-profiles.mjs /path/to/@earendil-works/pi-coding-agent
 // Uses only disposable settings, synthetic credentials and a loopback provider.
 import assert from "node:assert/strict";
 import {
@@ -21,7 +21,10 @@ import { nativeConfiguration } from "../src/server/agent-config.ts";
 
 if (!process.argv[2])
   throw new Error("Pass the installed pi-coding-agent package directory.");
+const tempRoot = /^\/tmp\/nv-pi-runtime-[^/]+$/;
 if (process.argv[3] !== "--isolated") {
+  // The temp root doubles as HOME so pi cannot resolve the real home directory.
+  const home = await mkdtemp("/tmp/nv-pi-runtime-");
   const child = spawnSync(
     process.execPath,
     [process.argv[1], resolve(process.argv[2]), "--isolated"],
@@ -29,12 +32,14 @@ if (process.argv[3] !== "--isolated") {
       stdio: "inherit",
       env: {
         PATH: process.env.PATH,
+        HOME: home,
         PI_OFFLINE: "1",
         PI_SKIP_VERSION_CHECK: "1",
       },
       timeout: 90_000,
     },
   );
+  await rm(home, { recursive: true, force: true });
   if (child.error) throw child.error;
   process.exit(child.status ?? 1);
 }
@@ -48,7 +53,9 @@ const {
   SessionManager,
   SettingsManager,
 } = await import(pathToFileURL(join(packageDir, "dist/index.js")));
-const root = await mkdtemp("/tmp/nv-pi-runtime-");
+const root = process.env.HOME ?? "";
+// Refuse to treat (and later delete) anything but the parent's temp root as home.
+assert.match(root, tempRoot, "Run without --isolated");
 const agentDir = join(root, "agent");
 const extensionDir = join(agentDir, "extensions");
 await mkdir(extensionDir, { recursive: true });

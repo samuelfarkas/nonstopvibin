@@ -129,21 +129,25 @@ export function App() {
       : "subscriptions";
   });
   const [error, setError] = useState("");
+  // Poll failures clear on the next successful poll; action errors stay until dismissed.
+  const [pollError, setPollError] = useState("");
+  const shownError = error || pollError;
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState("");
-  useKeepDraft(Boolean(busy || error || notice));
+  const tray = new URLSearchParams(location.search).get("view") === "tray";
+  // Only the main window handles will-prevent-unload; the tray must stay closable.
+  useKeepDraft(!tray && Boolean(busy || shownError || notice));
   const [createOpen, setCreateOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [reconnecting, setReconnecting] = useState<Account>();
   const [accountId, setAccountId] = useState("");
-  const tray = new URLSearchParams(location.search).get("view") === "tray";
   useEffect(() => {
     if (!tray) localStorage.setItem("nv-page", page);
   }, [page, tray]);
-  const refresh = useCallback(async () => {
-    const next = await api<AppState>("/state");
-    setState(next);
+  // Mutating routes return the full state; pass it to skip a second /state fetch.
+  const refresh = useCallback(async (next?: AppState) => {
+    setState(next ?? (await api<AppState>("/state")));
   }, []);
   useEffect(() => {
     let mounted = true;
@@ -167,8 +171,9 @@ export function App() {
       polling = true;
       try {
         await refresh();
+        setPollError("");
       } catch (e) {
-        setError(
+        setPollError(
           e instanceof Error ? e.message : "The local service is unavailable.",
         );
       } finally {
@@ -196,14 +201,13 @@ export function App() {
   const account = profile?.accounts.find((a) => a.id === accountId);
   async function perform(
     label: string,
-    operation: () => Promise<void>,
+    operation: () => Promise<AppState>,
     success?: string,
   ) {
     setBusy(label);
     setError("");
     try {
-      await operation();
-      await refresh();
+      await refresh(await operation());
       if (success) setNotice(success);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The operation failed.");
@@ -335,7 +339,7 @@ export function App() {
                   disabled={Boolean(busy)}
                   onClick={() =>
                     void perform("runtime", () =>
-                      api(`/profiles/${profile.id}/start`, "POST"),
+                      api<AppState>(`/profiles/${profile.id}/start`, "POST"),
                     )
                   }
                 >
@@ -349,6 +353,7 @@ export function App() {
           <div className="sidebar-version">
             <button
               className={page === "settings" ? "selected" : ""}
+              aria-current={page === "settings" ? "page" : undefined}
               title="Settings"
               onClick={() => setPage("settings")}
             >
@@ -361,13 +366,16 @@ export function App() {
       </aside>
       <main className="main">
         <div className="window-drag" />
-        {error && (
+        {shownError && (
           <div className="global-alert" role="alert">
-            <span>{error}</span>
+            <span>{shownError}</span>
             <button
               className="icon-button"
               aria-label="Dismiss error"
-              onClick={() => setError("")}
+              onClick={() => {
+                setError("");
+                setPollError("");
+              }}
             >
               <X size={15} />
             </button>
@@ -428,7 +436,11 @@ export function App() {
                       onClick={() => {
                         void perform(
                           "quotas",
-                          () => api(`/profiles/${profile.id}/refresh`, "POST"),
+                          () =>
+                            api<AppState>(
+                              `/profiles/${profile.id}/refresh`,
+                              "POST",
+                            ),
                           "Quota check complete.",
                         );
                       }}
@@ -510,9 +522,11 @@ export function App() {
                             void perform(
                               "routing",
                               () =>
-                                api(`/profiles/${profile.id}`, "PATCH", {
-                                  strategy,
-                                }),
+                                api<AppState>(
+                                  `/profiles/${profile.id}`,
+                                  "PATCH",
+                                  { strategy },
+                                ),
                               "Routing updated for this profile.",
                             );
                           }}
@@ -747,7 +761,6 @@ function CreateProfile({
   const [error, setError] = useState("");
   return (
     <Modal
-      open
       title="Create a profile"
       description="A separate group of subscriptions with its own API key."
       onClose={onClose}
@@ -819,7 +832,7 @@ function AccountDetails({
   profile: ProfileState;
   onReconnect(): void;
   onClose(): void;
-  refresh(): Promise<void>;
+  refresh(next?: AppState): Promise<void>;
 }) {
   const [name, setName] = useState(account.name);
   const [priority, setPriority] = useState(account.priority);
@@ -834,12 +847,13 @@ function AccountDetails({
     setBusy(true);
     setError("");
     try {
-      await api(
-        `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
-        "PATCH",
-        patch,
+      await refresh(
+        await api<AppState>(
+          `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
+          "PATCH",
+          patch,
+        ),
       );
-      await refresh();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Could not update subscription.",
@@ -850,7 +864,6 @@ function AccountDetails({
   }
   return (
     <Modal
-      open
       onClose={onClose}
       title="Subscription details"
       description={`Managed inside ${profile.name}.`}
@@ -906,7 +919,7 @@ function AccountDetails({
         <p className="muted">
           {account.quota?.status === "unavailable"
             ? "This provider does not expose a supported quota window. Request and token history is still recorded."
-            : "Use Check quotas to fetch the provider’s current limits."}
+            : "Use Refresh to fetch the provider’s current limits."}
         </p>
       )}
       {account.provider === "codex" && account.kind === "oauth" && (
@@ -1000,11 +1013,12 @@ function AccountDetails({
                   setBusy(true);
                   setError("");
                   try {
-                    await api(
-                      `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
-                      "DELETE",
+                    await refresh(
+                      await api<AppState>(
+                        `/profiles/${profile.id}/accounts/${encodeURIComponent(account.id)}`,
+                        "DELETE",
+                      ),
                     );
-                    await refresh();
                     onClose();
                   } catch (e) {
                     setError(

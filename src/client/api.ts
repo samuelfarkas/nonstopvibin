@@ -26,7 +26,14 @@ export async function api<T>(
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await response.json();
+  // An unparseable error body still reports the status; bad success JSON fails loudly.
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (response.ok) throw error;
+    data = {};
+  }
   if (!response.ok)
     throw Object.assign(
       new Error(data.error?.message || `Request failed (${response.status}).`),

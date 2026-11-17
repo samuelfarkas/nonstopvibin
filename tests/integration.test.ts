@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsPage } from "../src/client/Settings.tsx";
 import coreRelease from "../scripts/core-release.json";
 import http from "node:http";
-import { connect } from "node:net";
+import { connect, type Socket } from "node:net";
 import { once } from "node:events";
 import {
   mkdtemp,
@@ -21,6 +21,9 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import { Application } from "../src/server/server.ts";
+import { CorePool } from "../src/server/core.ts";
+import { Store } from "../src/server/store.ts";
+import { fileKeyCodec } from "../src/server/vault.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
 
@@ -29,6 +32,7 @@ let company: Profile;
 let personal: Profile;
 let directory: string;
 let failCompany = false;
+let onHang: (() => void) | undefined;
 const observed: string[] = [];
 let upstream: http.Server;
 let upstreamBase: string;
@@ -70,6 +74,11 @@ before(
         return;
       }
       const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+      if (body.messages?.[0]?.content === "hang") {
+        // Never answer: the caller must give up before response headers arrive.
+        onHang?.();
+        return;
+      }
       if (body.stream) {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         res.write(
@@ -149,6 +158,71 @@ after(async () => {
       upstream.closeAllConnections();
     });
   if (directory) await rm(directory, { recursive: true, force: true });
+  if (app)
+    await rm(app.agentSetup.socketDirectory, {
+      recursive: true,
+      force: true,
+    });
+});
+test("a malformed static path is not found and not reported as an app error", async () => {
+  const reported = app.state().errors.length;
+  const response = await fetch(`${app.origin}/%E0`);
+  assert.equal(response.status, 404);
+  await response.text();
+  assert.equal(app.state().errors.length, reported);
+});
+test("a malformed API path parameter is rejected and not reported as an app error", async () => {
+  const reported = app.state().errors.length;
+  const response = await fetch(
+    `${app.origin}/api/profiles/${company.id}/accounts/%E0`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${app.token}` },
+    },
+  );
+  assert.equal(response.status, 400);
+  await response.text();
+  assert.equal(app.state().errors.length, reported);
+});
+test("a management client that aborts mid-body is not reported as an app error", async () => {
+  const reported = app.state().errors.length;
+  const { host, port } = new URL(app.origin);
+  const socket = connect(Number(port), "127.0.0.1");
+  await once(socket, "connect");
+  socket.write(
+    `POST /api/profiles HTTP/1.1\r\nHost: ${host}\r\nAuthorization: Bearer ${app.token}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"name":`,
+  );
+  await delay(100);
+  socket.destroy();
+  await delay(200);
+  assert.equal(app.state().errors.length, reported);
+});
+test("a rotated or deleted profile key is rejected on the very next request", async () => {
+  const profile = app.store.createProfile("Key rotation fixture", "plum");
+  const bystander = app.store.createProfile("Key bystander", "plum");
+  const status = async (key: string) => {
+    const response = await fetch(`${app.origin}/v1/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    await response.text();
+    return response.status;
+  };
+  // Accepted keys reach the stopped-profile check; rejected keys never do.
+  // Stopped profiles keep this off the running cores, whose activity later tests time.
+  const original = app.store.secret(`${profile.id}:client`);
+  assert.equal(await status(original), 503);
+  const rotated = `nv_${"R".repeat(43)}`;
+  app.store.setSecret(`${profile.id}:client`, rotated);
+  assert.equal(await status(original), 401);
+  assert.equal(await status(rotated), 503);
+  // Removal outside the Store's write methods must fail closed too.
+  app.store.db.prepare("DELETE FROM profiles WHERE id=?").run(profile.id);
+  assert.equal(await status(rotated), 401);
+  app.store.db
+    .prepare("DELETE FROM secrets WHERE id LIKE ?")
+    .run(`${profile.id}:%`);
+  assert.equal(await status(rotated), 401);
+  assert.equal(await status(app.store.secret(`${bystander.id}:client`)), 503);
 });
 test("static assets revalidate without caching management responses", async () => {
   const original = app.options.clientDirectory;
@@ -275,10 +349,18 @@ test("usage retention management rejects profile keys and invalid limits", async
 
 test(
   "slow account maintenance does not block usage collection",
-  { timeout: 30_000 },
+  { timeout: 10_000 },
   async () => {
-    const syncAccounts = app.core.syncAccounts;
-    const collectUsage = app.core.collectUsage;
+    // An isolated pool with short intervals; the shared app keeps production timing.
+    const root = join(directory, "maintenance-fixture");
+    await mkdir(root, { mode: 0o700 });
+    const store = new Store(root, fileKeyCodec(root));
+    const core = new CorePool(store, app.options.binary);
+    core.timing.accounts = 200;
+    core.timing.coalesce = 20;
+    const profile = store.createProfile("Maintenance fixture", "forest");
+    const syncAccounts = core.syncAccounts;
+    const collectUsage = core.collectUsage;
     let enter!: () => void;
     let resume!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -288,32 +370,39 @@ test(
       resume = resolve;
     });
     let collections = 0;
-    app.core.syncAccounts = async (id) => {
-      enter();
-      await release;
-      return syncAccounts.call(app.core, id);
-    };
-    app.core.collectUsage = async (id) => {
-      collections++;
-      return collectUsage.call(app.core, id);
-    };
+    let collected = () => {};
     try {
+      await core.start(profile.id);
+      core.syncAccounts = async (id) => {
+        enter();
+        await release;
+        return syncAccounts.call(core, id);
+      };
+      core.collectUsage = async (id) => {
+        collections++;
+        collected();
+        return collectUsage.call(core, id);
+      };
+      core.beginPolling();
       await entered;
       assert.ok(
         collections <= 2,
         "idle profiles do not authenticate every two seconds",
       );
       const before = collections;
-      app.core.markUsageActivity(company.id);
-      await delay(2500);
+      const next = new Promise<void>((resolve) => {
+        collected = resolve;
+      });
+      core.markUsageActivity(profile.id);
+      await next;
       assert.ok(
         collections > before,
         "accounting continues while maintenance is waiting",
       );
     } finally {
       resume();
-      app.core.syncAccounts = syncAccounts;
-      app.core.collectUsage = collectUsage;
+      await core.shutdown();
+      store.close();
     }
   },
 );
@@ -818,11 +907,18 @@ test("app startup refreshes an installed extension without starting its profile"
     assert.deepEqual(instance.state().errors, []);
   } finally {
     await instance.close();
+    await rm(instance.agentSetup.socketDirectory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
 
 test("Responses WebSocket upgrades enforce the same profile boundary", async () => {
-  async function handshake(profile: Profile, key: string): Promise<number> {
+  async function handshake(
+    profile: Profile,
+    key: string,
+  ): Promise<http.IncomingMessage> {
     return new Promise((resolve, reject) => {
       const req = http.get(`${app.endpoint(profile.id)}/responses`, {
         headers: {
@@ -835,11 +931,11 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
       });
       req.once("upgrade", (response, socket) => {
         socket.destroy();
-        resolve(response.statusCode!);
+        resolve(response);
       });
       req.once("response", (response) => {
         response.resume();
-        resolve(response.statusCode!);
+        resolve(response);
       });
       req.once("error", (error) =>
         reject(
@@ -855,13 +951,48 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
     });
   }
   assert.equal(
-    await handshake(personal, app.store.secret(`${company.id}:client`)),
+    (await handshake(personal, app.store.secret(`${company.id}:client`)))
+      .statusCode,
     403,
   );
-  assert.equal(
-    await handshake(personal, app.store.secret(`${personal.id}:client`)),
-    101,
+  const upgraded = await handshake(
+    personal,
+    app.store.secret(`${personal.id}:client`),
   );
+  assert.equal(upgraded.statusCode, 101);
+  assert.equal(upgraded.headers["x-nonstopvibin-profile"], personal.slug);
+  assert.ok(upgraded.headers["sec-websocket-accept"]);
+  // A core that sets browser-facing headers on the handshake must not reach the agent with them.
+  const runtime = app.core.runtimes.get(personal.id)!;
+  const fixture = http.createServer();
+  fixture.on("upgrade", (_req, socket) => {
+    socket.end(
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\nAccess-Control-Allow-Origin: *\r\nX-NonstopVibin-Profile: forged\r\n\r\n",
+    );
+  });
+  await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
+  const address = fixture.address();
+  assert.ok(address instanceof Object);
+  const port = runtime.port;
+  runtime.port = address.port;
+  try {
+    const filtered = await handshake(
+      personal,
+      app.store.secret(`${personal.id}:client`),
+    );
+    assert.equal(filtered.statusCode, 101);
+    assert.equal(filtered.headers["set-cookie"], undefined);
+    assert.equal(filtered.headers["access-control-allow-origin"], undefined);
+    assert.equal(filtered.headers["x-nonstopvibin-profile"], personal.slug);
+    assert.equal(
+      filtered.headers["sec-websocket-accept"],
+      "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+    );
+  } finally {
+    runtime.port = port;
+    fixture.close();
+    fixture.closeAllConnections();
+  }
 });
 
 test("account pause, resume and removal apply to the running model catalog", async () => {
@@ -1087,3 +1218,88 @@ test("activity API preserves one snapshot while usage arrives during aggregation
     app.store.usageTimeBatch = read;
   }
 });
+
+test(
+  "agent aborts and an unreachable core are not reported as application faults",
+  { timeout: 15_000 },
+  async () => {
+    const profile = app.store.createProfile("Abort fixture", "clay");
+    app.store.saveApiAccount(
+      profile.id,
+      {
+        id: "abort-one",
+        name: "abort-one",
+        provider: "custom",
+        baseUrl: upstreamBase,
+        prefix: "",
+        disabled: false,
+        models: [{ id: "fixture-model", protocol: "openai" }],
+      },
+      "abort-one",
+    );
+    const proxy = app.gateway.proxy;
+    let proxied: Promise<void> | undefined;
+    let agentSocket: Socket | undefined;
+    app.gateway.proxy = (req, res) => {
+      agentSocket = req.socket;
+      return (proxied = proxy.call(app.gateway, req, res));
+    };
+    const settled = async () => {
+      await proxied?.catch(() => {});
+      // Let the server's request catch observe the settled proxy.
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    const reported = [...app.core.errors];
+    try {
+      await app.core.start(profile.id);
+      const hung = new Promise<void>((resolve) => {
+        onHang = resolve;
+      });
+      const pending = request(profile, {
+        model: "fixture-model",
+        messages: [{ role: "user", content: "hang" }],
+      }).then(
+        () => assert.fail("an abandoned request has no response"),
+        () => undefined,
+      );
+      await hung;
+      // The agent's connection drops before any response header exists. Bun only
+      // notices a peer close lazily, so drop it from the server side, as Node would.
+      assert.ok(agentSocket);
+      agentSocket.destroy();
+      await pending;
+      await settled();
+      assert.equal(app.gateway.active.get(profile.id), 0);
+      assert.deepEqual(app.core.errors, reported);
+
+      const runtime = app.core.runtimes.get(profile.id)!;
+      const closed = http.createServer();
+      await new Promise<void>((resolve) =>
+        closed.listen(0, "127.0.0.1", resolve),
+      );
+      const address = closed.address();
+      assert.ok(address instanceof Object);
+      await new Promise<void>((resolve) => closed.close(() => resolve()));
+      const port = runtime.port;
+      runtime.port = address.port;
+      try {
+        const response = await request(profile);
+        await settled();
+        assert.equal(response.status, 502);
+        const body = await response.text();
+        assert.match(
+          body,
+          /profile proxy is unavailable\. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin\./,
+        );
+        assert.doesNotMatch(body, /ECONNREFUSED|hang up|Premature/i);
+        assert.deepEqual(app.core.errors, reported);
+      } finally {
+        runtime.port = port;
+      }
+    } finally {
+      onHang = undefined;
+      app.gateway.proxy = proxy;
+      await app.core.stop(profile.id);
+    }
+  },
+);

@@ -32,7 +32,6 @@ credentials.json
 tokens.json
 id_rsa
 id_ed25519
-.vercel/
 
 # Generated quality/security evidence (can contain sensitive source excerpts)
 /coverage/
@@ -40,7 +39,6 @@ id_ed25519
 /playwright-report/
 /artifacts/
 *.tsbuildinfo
-.eslintcache
 *.log
 *.sarif
 *.jsonl

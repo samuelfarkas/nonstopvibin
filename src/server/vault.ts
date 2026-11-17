@@ -5,7 +5,6 @@ import { join } from "node:path";
 export interface SecretCodec {
   encrypt(value: string): string;
   decrypt(value: string): string;
-  label: string;
 }
 // Desktop and development share an owner-only local encryption key.
 export function fileKeyCodec(directory: string): SecretCodec {
@@ -24,7 +23,6 @@ export function fileKeyCodec(directory: string): SecretCodec {
       "The local vault key is invalid. Restore vault.key from your backup.",
     );
   return {
-    label: "Local encryption key · owner-only files",
     encrypt(value) {
       const nonce = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", key, nonce);

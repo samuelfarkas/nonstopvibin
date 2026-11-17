@@ -20,10 +20,14 @@ export function TrayView({
   refresh,
 }: {
   state: AppState;
-  refresh(): Promise<void>;
+  refresh(next?: AppState): Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const subscriptions = state.profiles.reduce(
+    (sum, p) => sum + p.accounts.length,
+    0,
+  );
   return (
     <div className="tray-view">
       <header>
@@ -48,11 +52,12 @@ export function TrayView({
             setBusy(true);
             setError("");
             try {
+              let next: AppState | undefined;
               for (const p of state.profiles.filter(
                 (p) => p.runtime === "running",
               ))
-                await api(`/profiles/${p.id}/refresh`, "POST");
-              await refresh();
+                next = await api<AppState>(`/profiles/${p.id}/refresh`, "POST");
+              await refresh(next);
             } catch (e) {
               setError(e instanceof Error ? e.message : "Refresh failed.");
             } finally {
@@ -137,7 +142,7 @@ export function TrayView({
                           {enabled.length} enabled ·{" "}
                           {partial
                             ? `${readings.length}/${enabled.length} current readings`
-                            : `${readings.length} current readings`}
+                            : `${readings.length} current reading${readings.length === 1 ? "" : "s"}`}
                         </span>
                       </span>
                     );
@@ -270,8 +275,7 @@ export function TrayView({
       </div>
       <footer>
         <span>
-          {state.profiles.reduce((sum, p) => sum + p.accounts.length, 0)}{" "}
-          subscriptions
+          {subscriptions} subscription{subscriptions === 1 ? "" : "s"}
         </span>
         <button
           className="text-button"

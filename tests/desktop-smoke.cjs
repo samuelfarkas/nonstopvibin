@@ -36,6 +36,8 @@ if (typeof electron === "string") {
       );
       assert.equal(result.ok, true, result.error);
       console.log("Desktop lifecycle passed:", JSON.stringify(result.samples));
+      // Then check that profile cores never outlive a signalled or killed app.
+      require("./desktop-lifetime.cjs");
     } catch (error) {
       console.error(error);
       process.exitCode = 1;
@@ -114,6 +116,13 @@ if (typeof electron === "string") {
         milliseconds: Date.now() - started,
       });
       if (cycle === 0) {
+        assert.equal(
+          await window.webContents.executeJavaScript(
+            "Notification.requestPermission()",
+          ),
+          "denied",
+          "permission requests are denied",
+        );
         const request = async (path, method = "GET", body) => {
           const response = await fetch(`${origin}/api${path}`, {
             method,

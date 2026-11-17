@@ -13,7 +13,7 @@ export function SettingsPage({
 }: {
   state: AppState;
   profile?: ProfileState;
-  refresh(): Promise<void>;
+  refresh(next?: AppState): Promise<void>;
   onError(message: string): void;
 }) {
   const [login, setLogin] = useState(false);
@@ -170,8 +170,11 @@ export function SettingsPage({
                     event.preventDefault();
                     setSavingRetention(true);
                     try {
-                      await api("/usage-retention", "PUT", { days: retention });
-                      await refresh();
+                      await refresh(
+                        await api<AppState>("/usage-retention", "PUT", {
+                          days: retention,
+                        }),
+                      );
                     } catch (error) {
                       onError(
                         error instanceof Error
@@ -267,7 +270,7 @@ function ProfileSettings({
   onError,
 }: {
   profile: ProfileState;
-  refresh(): Promise<void>;
+  refresh(next?: AppState): Promise<void>;
   onError(message: string): void;
 }) {
   const [name, setName] = useState(profile.name);
@@ -299,8 +302,11 @@ function ProfileSettings({
             e.preventDefault();
             setSaving(true);
             try {
-              await api(`/profiles/${profile.id}`, "PATCH", { name });
-              await refresh();
+              await refresh(
+                await api<AppState>(`/profiles/${profile.id}`, "PATCH", {
+                  name,
+                }),
+              );
               setSaved(true);
             } catch (err) {
               onError(err instanceof Error ? err.message : "Rename failed.");
@@ -319,7 +325,10 @@ function ProfileSettings({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button className="button" disabled={saving}>
+          <button
+            className="button"
+            disabled={saving || name.trim() === profile.name}
+          >
             {saving ? "Saving…" : saved ? "Saved" : "Save name"}
           </button>
         </form>
@@ -339,10 +348,11 @@ function ProfileSettings({
           checked={profile.sessionAffinity}
           onChange={async (e) => {
             try {
-              await api(`/profiles/${profile.id}`, "PATCH", {
-                sessionAffinity: e.target.checked,
-              });
-              await refresh();
+              await refresh(
+                await api<AppState>(`/profiles/${profile.id}`, "PATCH", {
+                  sessionAffinity: e.target.checked,
+                }),
+              );
             } catch (err) {
               onError(err instanceof Error ? err.message : "Update failed.");
             }

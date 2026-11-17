@@ -91,7 +91,8 @@ const frames = await Promise.all(
     ["ic09", 512],
     ["ic11", 32],
     ["ic12", 64],
-    ["ic13", 512],
+    ["ic13", 256],
+    ["ic14", 512],
   ].map(async ([type, size]) => {
     const png = await sharp("public/icon.png")
       .resize(size, size)
@@ -109,4 +110,5 @@ header.writeUInt32BE(
   8 + frames.reduce((size, frame) => size + frame.length, 0),
   4,
 );
-await writeFile("public/icon.icns", Buffer.concat([header, ...frames]));
+// Only electron-builder reads the ICNS; keep it out of public/ and the renderer bundle.
+await writeFile("build/icon.icns", Buffer.concat([header, ...frames]));

@@ -7,10 +7,12 @@ import { dataDirectory } from "../src/server/data-directory.ts";
 test("desktop and standalone default to the home folder and allow isolated overrides", () => {
   assert.equal(dataDirectory(""), join(homedir(), ".nonstopvibin"));
   assert.equal(dataDirectory(".test-runtime"), resolve(".test-runtime"));
-  assert.equal(
-    dataDirectory(),
-    resolve(
-      process.env.NONSTOPVIBIN_DATA_DIR || join(homedir(), ".nonstopvibin"),
-    ),
-  );
+  const previous = process.env.NONSTOPVIBIN_DATA_DIR;
+  process.env.NONSTOPVIBIN_DATA_DIR = ".env-runtime";
+  try {
+    assert.equal(dataDirectory(), resolve(".env-runtime"));
+  } finally {
+    if (previous === undefined) delete process.env.NONSTOPVIBIN_DATA_DIR;
+    else process.env.NONSTOPVIBIN_DATA_DIR = previous;
+  }
 });

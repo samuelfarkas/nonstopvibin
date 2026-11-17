@@ -96,5 +96,3 @@ export async function writeMirrorballSpin() {
     .png()
     .toFile("public/mirrorball-spin.png");
 }
-
-if (import.meta.main) await writeMirrorballSpin();

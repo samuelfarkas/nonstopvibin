@@ -155,17 +155,17 @@ export class ModelCatalog {
       );
       this.cached = { data, at: Date.now() };
       return this.cached;
-    })();
-    try {
-      return await this.pending;
-    } catch {
-      throw new AppError(
-        "Could not refresh model metadata from models.dev. Try again before connecting or restarting the agent.",
-        502,
-      );
-    } finally {
-      this.pending = undefined;
-    }
+    })()
+      .catch(() => {
+        throw new AppError(
+          "Could not refresh model metadata from models.dev. Try again before connecting or restarting the agent.",
+          502,
+        );
+      })
+      .finally(() => {
+        this.pending = undefined;
+      });
+    return this.pending;
   }
   async models(models: Model[], accounts: ApiAccount[]): Promise<Model[]> {
     const { data, at } = await this.load();

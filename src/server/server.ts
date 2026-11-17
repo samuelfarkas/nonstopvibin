@@ -19,6 +19,7 @@ import { fileKeyCodec } from "./vault.ts";
 import { CorePool } from "./core.ts";
 import { Gateway, sameSecret } from "./gateway.ts";
 import { AppError, errorMessage } from "./errors.ts";
+import { userAgent, version } from "./config.ts";
 import { parse, record, responseJson, text } from "./json.ts";
 import { ImportCatalog } from "./imports.ts";
 import {
@@ -111,7 +112,7 @@ const mime = new Map([
   [".svg", "image/svg+xml"],
   [".woff2", "font/woff2"],
 ]);
-export function json<T>(res: ServerResponse, value: T, status = 200): void {
+function json<T>(res: ServerResponse, value: T, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Cache-Control": "no-store",
@@ -168,6 +169,11 @@ export class Application {
     );
     this.server = http.createServer((req, res) => {
       this.handle(req, res).catch((error) => {
+        // The client hung up mid-body, as the gateway treats it: nothing failed in the app.
+        if (req.readableAborted && !req.complete) {
+          res.destroy();
+          return;
+        }
         if (res.headersSent) {
           res.destroy();
           return;
@@ -188,6 +194,8 @@ export class Application {
               ? error.message
               : "The operation failed. Check the profile status and try again.";
         if (status === 500) this.core.report(errorMessage(error));
+        // A departed client cannot receive the error; only the report above matters.
+        if (res.destroyed) return;
         json(
           res,
           { error: { message, type: "nonstopvibin_error", code: status } },
@@ -254,19 +262,15 @@ export class Application {
         runtime: runtime?.state ?? "stopped",
         error: runtime?.error,
         accounts: this.core.accounts(profile.id),
-        usage: this.store.summary(profile.id),
         endpoint: this.endpoint(profile.id),
-        lastSyncedAt: runtime?.lastSyncedAt,
       };
     });
     return {
       profiles,
       coreVersion: coreRelease.version,
-      coreAvailable: existsSync(this.options.binary),
       gateway: this.origin,
-      storage: this.store.codec.label,
       usageRetentionDays: this.store.usageRetentionDays(),
-      version: "0.1.1",
+      version,
       desktop: Boolean(this.options.desktop),
       errors: this.core.errors,
     };
@@ -316,7 +320,12 @@ export class Application {
     }
     if (req.method !== "GET" && req.method !== "HEAD")
       throw new AppError("Method not allowed.", 405);
-    const requested = decodeURIComponent(url.pathname);
+    let requested;
+    try {
+      requested = decodeURIComponent(url.pathname);
+    } catch {
+      throw new AppError("Not found.", 404);
+    }
     const relative =
       requested === "/" || !extname(requested)
         ? "index.html"
@@ -366,7 +375,17 @@ export class Application {
     url: URL,
   ): Promise<void> {
     const method = req.method;
-    const segments = url.pathname.split("/").filter(Boolean);
+    // Split on raw "/" first so an encoded slash stays inside its segment.
+    const segments = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => {
+        try {
+          return decodeURIComponent(segment);
+        } catch {
+          throw new AppError("Malformed request path.", 400);
+        }
+      });
     if (url.pathname === "/api/state" && method === "GET") {
       json(res, this.state());
       return;
@@ -412,11 +431,6 @@ export class Application {
     }
     if (action === "start" && method === "POST") {
       await this.core.start(id);
-      json(res, this.state());
-      return;
-    }
-    if (action === "stop" && method === "POST") {
-      await this.core.stop(id);
       json(res, this.state());
       return;
     }
@@ -632,7 +646,7 @@ export class Application {
       segments[5] === "reset-credits" &&
       segments.length === 6
     ) {
-      const accountId = decodeURIComponent(segments[4]);
+      const accountId = segments[4];
       if (method === "GET") {
         json(res, await this.core.resetCredits(id, accountId));
         return;
@@ -648,7 +662,7 @@ export class Application {
       throw new AppError("Method not allowed.", 405);
     }
     if (action === "accounts" && segments[4] && method === "PATCH") {
-      const accountId = decodeURIComponent(segments[4]);
+      const accountId = segments[4];
       const patch = z
         .object({
           disabled: z.boolean().optional(),
@@ -662,7 +676,7 @@ export class Application {
       return;
     }
     if (action === "accounts" && segments[4] && method === "DELETE") {
-      await this.core.removeAccount(id, decodeURIComponent(segments[4]));
+      await this.core.removeAccount(id, segments[4]);
       json(res, this.state());
       return;
     }
@@ -690,7 +704,7 @@ export class Application {
                     "anthropic-version": "2023-06-01",
                   }
                 : { Authorization: `Bearer ${input.apiKey}` }),
-              "User-Agent": "nonstopvibin/0.1.1",
+              "User-Agent": userAgent,
             },
             redirect: "error",
             signal: AbortSignal.timeout(20_000),

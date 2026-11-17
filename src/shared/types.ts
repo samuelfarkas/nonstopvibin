@@ -61,7 +61,7 @@ export interface SeatIdentity {
 export interface Account extends SeatIdentity {
   id: string;
   name: string;
-  provider: Provider | string;
+  provider: string;
   email?: string;
   kind: "oauth" | "api-key";
   disabled: boolean;
@@ -136,16 +136,12 @@ export interface ProfileState extends Profile {
   runtime: "stopped" | "starting" | "running" | "error";
   error?: string;
   accounts: Account[];
-  usage: UsageSummary;
   endpoint: string;
-  lastSyncedAt?: string;
 }
 export interface AppState {
   profiles: ProfileState[];
   coreVersion: string;
-  coreAvailable: boolean;
   gateway: string;
-  storage: string;
   usageRetentionDays: number;
   version: string;
   desktop: boolean;
@@ -202,7 +198,6 @@ export interface OAuthReview {
   account: Account;
   action: "add" | "reconnect" | "blocked";
   message?: string;
-  existingProfileId?: string;
 }
 export type OAuthStatus =
   | { status: "wait" }

@@ -25,9 +25,10 @@
     "check": "tsc --noEmit",
     "test": "bun test",
     "test:desktop": "bun run build && bun tests/desktop-smoke.cjs",
+    "test:ui": "bun run build && bun tests/focus.cjs && bun tests/logo-animation.cjs && bun tests/page-layout.cjs && bun tests/tray-guard.cjs",
     "build": "bun run check && vite build && bun scripts/build-desktop.mjs",
     "start": "electron .",
-    "package": "bun run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
+    "package": "bun run build && install-electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
     "dist:mac": "bun run build && electron-builder --mac dmg zip --publish never",
     "dist:linux": "bun run build && electron-builder --linux AppImage deb --publish never",
     "format": "oxfmt --write src tests scripts *.json *.ts index.html .github .vscode .oxlintrc.json .oxfmtrc.json",
@@ -48,6 +49,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",
     "@fontsource-variable/geist-mono": "5.3.0",
+    "@fontsource-variable/space-grotesk": "5.3.0",
     "@radix-ui/react-dialog": "1.1.23",
     "@radix-ui/react-select": "2.3.7",
     "electron-updater": "6.8.9",
@@ -59,6 +61,7 @@
   },
   "devDependencies": {
     "@electron/asar": "3.4.1",
+    "@electron/osx-sign": "1.3.3",
     "@oxlint/plugins": "1.81.0",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
@@ -121,11 +124,13 @@
     "electronFuses": {
       "runAsNode": false,
       "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "grantFileProtocolExtraPrivileges": false,
       "resetAdHocDarwinSignature": true
     },
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "public/icon.icns",
+      "icon": "build/icon.icns",
       "target": [
         "dmg",
         "zip"

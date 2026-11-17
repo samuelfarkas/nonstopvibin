@@ -34,6 +34,24 @@ test("existing databases never receive a replacement vault key", async () => {
   }
 });
 
+test("profile writes bump the generation that tray name caches use", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-generation-"));
+  const store = new Store(directory, fileKeyCodec(directory));
+  try {
+    const start = store.profileGeneration;
+    const profile = store.createProfile("Fixture", "forest");
+    assert.equal(store.profileGeneration, start + 1);
+    store.profiles();
+    store.secret(`${profile.id}:client`);
+    assert.equal(store.profileGeneration, start + 1, "reads do not bump it");
+    store.saveProfile({ ...profile, name: "Renamed" });
+    assert.equal(store.profileGeneration, start + 2);
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("desktop secrets persist using an owner-only local key", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-vault-"));
   const options = {
@@ -162,7 +180,7 @@ test("moving summaries match stored history through late inserts, changing perio
   }
 });
 
-test("history cleanup is opt-in, persists, and invalidates each affected summary", async () => {
+test("history cleanup is opt-in, persists, and is reflected in each affected summary", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-retention-"));
   let store = new Store(directory, fileKeyCodec(directory));
   try {
@@ -192,9 +210,18 @@ test("history cleanup is opt-in, persists, and invalidates each affected summary
       })),
     );
     for (const p of profiles) assert.equal(store.summary(p.id).requests, 0);
+    // Each profile holds one 5-day-old and one 40-day-old record.
+    const both = {
+      requests: 2,
+      failed: 0,
+      inputTokens: 2,
+      outputTokens: 4,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 6,
+    };
     store.addUsage(records);
-    for (const p of profiles)
-      assert.deepEqual(store.summary(p.id), store.summary(p.id, "0000"));
+    for (const p of profiles) assert.deepEqual(store.summary(p.id), both);
     store.addUsage(records);
     for (const p of profiles) assert.equal(store.summary(p.id).requests, 2);
     store.db.exec(`CREATE TRIGGER reject_fixture BEFORE INSERT ON usage
@@ -208,8 +235,7 @@ test("history cleanup is opt-in, persists, and invalidates each affected summary
       /synthetic rejection/,
     );
     assert.equal(store.usage(profiles[0].id).length, 2);
-    for (const p of profiles)
-      assert.deepEqual(store.summary(p.id), store.summary(p.id, "0000"));
+    for (const p of profiles) assert.deepEqual(store.summary(p.id), both);
     store.pruneUsage(now);
     for (const p of profiles) assert.equal(store.summary(p.id).requests, 2);
     assert.throws(() => store.setUsageRetentionDays(-1), /Unsupported/);
@@ -244,7 +270,6 @@ test("saveApiAccount rolls back the account when encryption fails", async () => 
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-store-"));
   let rejectEncryption = false;
   const codec: SecretCodec = {
-    label: "test codec",
     encrypt(value) {
       if (rejectEncryption) throw new Error("encryption failed");
       return value;

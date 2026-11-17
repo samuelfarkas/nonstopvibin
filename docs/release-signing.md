@@ -33,14 +33,16 @@ Run the release build with all five values set:
 
 ```sh
 CSC_LINK=... CSC_KEY_PASSWORD=... APPLE_ID=... APPLE_APP_SPECIFIC_PASSWORD=... APPLE_TEAM_ID=... bun run dist:mac
-codesign --verify --deep --strict --verbose=2 release/mac-arm64/nonstopvibin.app
-xcrun stapler validate release/mac-arm64/nonstopvibin.app
-spctl -a -vv -t execute release/mac-arm64/nonstopvibin.app
+codesign --verify --deep --strict --verbose=2 release/mac-arm64/NonstopVibin.app
+xcrun stapler validate release/mac-arm64/NonstopVibin.app
+spctl -a -vv -t execute release/mac-arm64/NonstopVibin.app
 ```
 
 The `spctl` result should say `accepted, source=Notarized Developer ID`. Notarization usually takes 2 to 15 minutes. The DMG is not signed or stapled. Gatekeeper checks the app inside it.
 
 Signing rewrites the bundled core binary. `scripts/sign-mac.cjs` refreshes the packaged manifest hash during signing. This happens after `scripts/verify-package.cjs` compares the unsigned copy with the reviewed input.
+
+Electron's own binaries get `build/entitlements.mac.plist` (JIT and unsigned executable memory). The core and the tray click helper are signed with hardened runtime and the empty `build/entitlements.mac.minimal.plist`, so they get no such exceptions. Check with `codesign -d --entitlements - <file>`.
 
 Keep the `.p12` file and its password out of the repository. Rotate the certificate in the Apple portal if it leaks. Anyone with repository admin access can replace workflows and use the `.p12` stored in GitHub secrets to sign as you.
 

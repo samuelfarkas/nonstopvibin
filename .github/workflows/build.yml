@@ -14,7 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        # macos-26 is the arm64 image macos-latest pointed to when pinned.
+        os: [macos-26, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -25,15 +26,17 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
       - run: bun ci
       - run: bun run core:install
       - run: bun run quality
-      - run: bun run security:deps
       - run: bun run build
       - if: runner.os == 'macOS'
         run: bun tests/desktop-smoke.cjs
+      - if: runner.os == 'macOS'
+        name: UI checks (test:ui without its rebuild)
+        run: bun tests/focus.cjs && bun tests/logo-animation.cjs && bun tests/page-layout.cjs && bun tests/tray-guard.cjs
       - if: runner.os == 'Linux'
         name: Desktop smoke with Chromium sandbox
         run: |
@@ -60,4 +63,3 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
-            release/beta*.yml

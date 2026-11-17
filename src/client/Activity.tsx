@@ -1,7 +1,7 @@
 import "./activity.css";
 import { activityBuckets } from "./activity-buckets.ts";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Search } from "lucide-react";
 import type {
   ProfileState,
@@ -29,6 +29,27 @@ const percentile = (values: number[], value: number) => {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(sorted.length * value) - 1)];
 };
+
+// Built where used so a timezone change is picked up when rows are rebuilt.
+const timeFormat = () =>
+  new Intl.DateTimeFormat([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+const timestampFormat = () =>
+  new Intl.DateTimeFormat([], {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+  });
+
+type AccountNames = Map<string, { label: string; email: string }>;
+const recordAccount = (accounts: AccountNames, record: UsageRecord) =>
+  accounts.get(record.account)?.label || providerLabel(record.provider);
 
 export function ActivityPage({ profile }: { profile: ProfileState }) {
   const [days, setDays] = useState(7);
@@ -91,52 +112,52 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
     };
   }, [profile.id, days]);
 
-  // Reuse within a render, while picking up timezone changes on the next refresh.
-  const rowTime = new Intl.DateTimeFormat([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const rowTimestamp = new Intl.DateTimeFormat([], {
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-  });
-  const accounts = new Map(
+  // Every /state poll passes new account objects; key derived data on their content.
+  const accountKey = JSON.stringify(
     profile.accounts.map((account) => [
       account.authIndex || account.id,
-      account,
+      { label: accountLabel(account), email: account.email ?? "" },
     ]),
   );
-  const subscription = (record: UsageRecord) => {
-    const account = accounts.get(record.account);
-    return account ? accountLabel(account) : "";
-  };
-  const recordAccount = (record: UsageRecord) =>
-    subscription(record) || providerLabel(record.provider);
-  const filtered = records.filter(
-    (record) =>
-      (!failures || record.failed) &&
-      `${record.model} ${providerLabel(record.provider)} ${subscription(record)} ${accounts.get(record.account)?.email ?? ""}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
+  const accounts: AccountNames = useMemo(() => {
+    const entries: [string, { label: string; email: string }][] =
+      JSON.parse(accountKey);
+    return new Map(entries);
+  }, [accountKey]);
+  const filtered = useMemo(
+    () =>
+      records.filter(
+        (record) =>
+          (!failures || record.failed) &&
+          `${record.model} ${providerLabel(record.provider)} ${accounts.get(record.account)?.label ?? ""} ${accounts.get(record.account)?.email ?? ""}`
+            .toLowerCase()
+            .includes(query.toLowerCase()),
+      ),
+    [records, failures, query, accounts],
   );
 
-  const money = new Intl.NumberFormat([], {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 4,
-  });
-  const amount = (usd: number | null | undefined) => {
-    if (usd == null || (currency === "EUR" && !pricing?.eur)) return "—";
-    return money.format(
-      usd * (currency === "EUR" ? (pricing?.eur?.rate ?? 0) : 1),
-    );
-  };
-  const costOf = (record: UsageRecord) => pricing?.usd[record.id] ?? null;
+  const money = useMemo(
+    () =>
+      new Intl.NumberFormat([], {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 4,
+      }),
+    [currency],
+  );
+  const amount = useCallback(
+    (usd: number | null | undefined) => {
+      if (usd == null || (currency === "EUR" && !pricing?.eur)) return "—";
+      return money.format(
+        usd * (currency === "EUR" ? (pricing?.eur?.rate ?? 0) : 1),
+      );
+    },
+    [money, currency, pricing],
+  );
+  const costOf = useCallback(
+    (record: UsageRecord) => pricing?.usd[record.id] ?? null,
+    [pricing],
+  );
   const totals = pricing?.totals;
   const groupAmount = (usd: number, pricedCount: number, requests: number) =>
     `${amount(pricedCount ? usd : null)}${pricedCount > 0 && pricedCount < requests ? " + ?" : ""}`;
@@ -161,15 +182,6 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
               86_400_000,
           )
         : null;
-  const failedCodes = new Map<number, number>();
-  for (const record of records) {
-    if (record.failed)
-      failedCodes.set(
-        record.statusCode,
-        (failedCodes.get(record.statusCode) ?? 0) + 1,
-      );
-  }
-  const topStatus = [...failedCodes].sort((a, b) => b[1] - a[1])[0];
   const tokens = totals?.tokens;
   const cacheDenominator =
     (tokens?.input ?? 0) + (tokens?.cached ?? 0) + (tokens?.cacheWrite ?? 0);
@@ -179,10 +191,6 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
       ? ((tokens?.cached ?? 0) / cacheDenominator) * 100
       : 0
     : null;
-  const p95Latency = percentile(
-    records.map((record) => record.latencyMs),
-    0.95,
-  );
   const tokenParts = [
     { label: "cached", value: tokens?.cached ?? 0, className: "cached" },
     {
@@ -209,72 +217,129 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
       className: "unclassified",
     });
   const tokenMixTotal = tokenParts.reduce((sum, part) => sum + part.value, 0);
-  const buckets = activityBuckets(records, days);
-  const maxBucket = Math.max(1, ...buckets.map((bucket) => bucket.total));
 
-  const accountGroups = new Map<
-    string,
-    {
-      label: string;
-      requests: number;
-      latency: number;
-      failed: number;
-      usd: number;
-      priced: number;
-    }
-  >();
-  for (const record of records) {
-    const key = record.account || record.provider;
-    const group = accountGroups.get(key) ?? {
-      label: recordAccount(record),
-      usd: 0,
-      priced: 0,
-      requests: 0,
-      latency: 0,
-      failed: 0,
-    };
-    group.requests += 1;
-    group.latency += record.latencyMs;
-    group.usd += costOf(record) ?? 0;
-    group.priced += Number(costOf(record) !== null);
-    if (record.failed) group.failed += 1;
-    accountGroups.set(key, group);
-  }
-  const byAccount = [...accountGroups.values()].sort(
-    (a, b) => b.requests - a.requests,
-  );
+  // Bucket boundaries follow the clock; they move whenever the 5 s usage poll delivers records.
+  const { topStatus, p95Latency, buckets, maxBucket, byAccount, byModel } =
+    useMemo(() => {
+      const failedCodes = new Map<number, number>();
+      for (const record of records) {
+        if (record.failed)
+          failedCodes.set(
+            record.statusCode,
+            (failedCodes.get(record.statusCode) ?? 0) + 1,
+          );
+      }
+      const buckets = activityBuckets(records, days);
+      const accountGroups = new Map<
+        string,
+        {
+          label: string;
+          requests: number;
+          latency: number;
+          failed: number;
+          usd: number;
+          priced: number;
+        }
+      >();
+      for (const record of records) {
+        const key = record.account || record.provider;
+        const group = accountGroups.get(key) ?? {
+          label: recordAccount(accounts, record),
+          usd: 0,
+          priced: 0,
+          requests: 0,
+          latency: 0,
+          failed: 0,
+        };
+        group.requests += 1;
+        group.latency += record.latencyMs;
+        group.usd += costOf(record) ?? 0;
+        group.priced += Number(costOf(record) !== null);
+        if (record.failed) group.failed += 1;
+        accountGroups.set(key, group);
+      }
+      const modelGroups = new Map<
+        string,
+        {
+          requests: number;
+          tokens: number;
+          failed: number;
+          latencies: number[];
+          usd: number;
+          priced: number;
+        }
+      >();
+      for (const record of records) {
+        const group = modelGroups.get(record.model) ?? {
+          requests: 0,
+          tokens: 0,
+          failed: 0,
+          latencies: [],
+          usd: 0,
+          priced: 0,
+        };
+        group.requests += 1;
+        group.tokens += record.totalTokens;
+        group.usd += costOf(record) ?? 0;
+        group.priced += Number(costOf(record) !== null);
+        if (record.failed) group.failed += 1;
+        group.latencies.push(record.latencyMs);
+        modelGroups.set(record.model, group);
+      }
+      return {
+        topStatus: [...failedCodes].sort((a, b) => b[1] - a[1])[0],
+        p95Latency: percentile(
+          records.map((record) => record.latencyMs),
+          0.95,
+        ),
+        buckets,
+        maxBucket: Math.max(1, ...buckets.map((bucket) => bucket.total)),
+        byAccount: [...accountGroups].sort(
+          ([, a], [, b]) => b.requests - a.requests,
+        ),
+        byModel: [...modelGroups]
+          .sort((a, b) => b[1].requests - a[1].requests)
+          .map(
+            ([model, group]) =>
+              [
+                model,
+                { ...group, p50: percentile(group.latencies, 0.5) },
+              ] as const,
+          ),
+      };
+    }, [records, days, accounts, costOf]);
 
-  const modelGroups = new Map<
-    string,
-    {
-      requests: number;
-      tokens: number;
-      failed: number;
-      latencies: number[];
-      usd: number;
-      priced: number;
-    }
-  >();
-  for (const record of records) {
-    const group = modelGroups.get(record.model) ?? {
-      requests: 0,
-      tokens: 0,
-      failed: 0,
-      latencies: [],
-      usd: 0,
-      priced: 0,
-    };
-    group.requests += 1;
-    group.tokens += record.totalTokens;
-    group.usd += costOf(record) ?? 0;
-    group.priced += Number(costOf(record) !== null);
-    if (record.failed) group.failed += 1;
-    group.latencies.push(record.latencyMs);
-    modelGroups.set(record.model, group);
-  }
-  const byModel = [...modelGroups].sort(
-    (a, b) => b[1].requests - a[1].requests,
-  );
+  // The request log is the bulk of the page; reuse its rows when inputs are unchanged.
+  const requestRows = useMemo(() => {
+    const rowTime = timeFormat();
+    const rowTimestamp = timestampFormat();
+    return filtered.map((record) => (
+      <tr key={record.id}>
+        <td title={dateLabel(record.timestamp, rowTimestamp)}>
+          {dateLabel(record.timestamp, rowTime)}
+        </td>
+        <td>
+          {record.model}
+          {record.stream && <small className="stream-label"> · stream</small>}
+        </td>
+        <td>{recordAccount(accounts, record)}</td>
+        <td className="num">{count(record.totalTokens)}</td>
+        <td className="num">{amount(costOf(record))}</td>
+        <td className="num">{count(record.latencyMs)}</td>
+        <td
+          className={`num ${
+            record.statusCode >= 500
+              ? "text-bad"
+              : record.statusCode === 429
+                ? "text-warn"
+                : ""
+          }`}
+        >
+          {record.statusCode}
+        </td>
+      </tr>
+    ));
+  }, [filtered, accounts, amount, costOf]);
 
   function exportCSV() {
     const keys: Array<keyof UsageRecord> = [
@@ -325,7 +390,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
         <h2 className="label" id="usage-title">
           Usage overview
         </h2>
-        <div className="segmented" aria-label="Time range">
+        <div className="segmented" role="group" aria-label="Time range">
           {ranges.map((range) => (
             <button
               type="button"
@@ -398,7 +463,11 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
               </strong>
               <details className="pricing-details">
                 <summary>Pricing details · {currency}</summary>
-                <div className="segmented" aria-label="Display currency">
+                <div
+                  className="segmented"
+                  role="group"
+                  aria-label="Display currency"
+                >
                   {(["USD", "EUR"] as const).map((unit) => (
                     <button
                       type="button"
@@ -419,7 +488,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
                     " Missing prices or token breakdowns are excluded, not counted as free."}
                   {pricing?.refreshing && " Refreshing list prices…"}
                   {pricing?.fetchedAt &&
-                    ` Prices updated ${dateLabel(pricing.fetchedAt, rowTimestamp)}.`}
+                    ` Prices updated ${dateLabel(pricing.fetchedAt, timestampFormat())}.`}
                   {currency === "EUR" &&
                     (pricing?.eur
                       ? ` EUR rate dated ${pricing.eur.date}.`
@@ -563,8 +632,8 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {byAccount.map((group) => (
-                        <tr key={group.label}>
+                      {byAccount.map(([key, group]) => (
+                        <tr key={key}>
                           <td>{group.label}</td>
                           <td>
                             <div className="account-share">
@@ -645,10 +714,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
                             {percentage(group.failed, group.requests, 1)}
                           </td>
                           <td className="num">
-                            {(percentile(group.latencies, 0.5) / 1000).toFixed(
-                              2,
-                            )}
-                            s
+                            {(group.p50 / 1000).toFixed(2)}s
                           </td>
                         </tr>
                       ))}
@@ -711,41 +777,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
                           <th className="num">Code</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {filtered.map((record) => (
-                          <tr key={record.id}>
-                            <td
-                              title={dateLabel(record.timestamp, rowTimestamp)}
-                            >
-                              {dateLabel(record.timestamp, rowTime)}
-                            </td>
-                            <td>
-                              {record.model}
-                              {record.stream && (
-                                <small className="stream-label">
-                                  {" "}
-                                  · stream
-                                </small>
-                              )}
-                            </td>
-                            <td>{recordAccount(record)}</td>
-                            <td className="num">{count(record.totalTokens)}</td>
-                            <td className="num">{amount(costOf(record))}</td>
-                            <td className="num">{count(record.latencyMs)}</td>
-                            <td
-                              className={`num ${
-                                record.statusCode >= 500
-                                  ? "text-bad"
-                                  : record.statusCode === 429
-                                    ? "text-warn"
-                                    : ""
-                              }`}
-                            >
-                              {record.statusCode}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
+                      <tbody>{requestRows}</tbody>
                     </table>
                   </div>
                 )}

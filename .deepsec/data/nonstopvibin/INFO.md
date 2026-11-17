@@ -42,7 +42,7 @@ plaintext generated configuration and OAuth files in 0700/0600 storage.
 ## Project-specific patterns to flag
 
 - Forwarding a new core route without `routeRequest` restrictions, or forwarding
-  management paths / client credentials through `Gateway.forwardedHeaders` logic.
+  management paths / client credentials through `forwardedHeaders` logic in gateway.ts.
 - A `CorePool` fallback, retry, refresh, pause/resume, or usage attribution path
   that uses another profile's auth directory, management key, or account pool.
 - New `ipcMain.handle` handlers missing `assertSender`, broad context-bridge
@@ -51,6 +51,8 @@ plaintext generated configuration and OAuth files in 0700/0600 storage.
   token-bearing content reach error messages, logs, activity records, or exports.
 - Bypasses of `install-core.mjs` checksums or `validate-core.cjs` target/hash checks;
   credentials, local runtimes, scanner reports, or keys entering packaged resources.
+- Changes in `core-processes.ts` that signal a process without matching its recorded
+  PID, start time, and full command line, or that reap cores outside this data folder.
 
 ## Known false-positive context (verify rather than blanket-suppress)
 

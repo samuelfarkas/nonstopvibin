@@ -40,7 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
+          # macos-26 is the arm64 image macos-latest pointed to when pinned.
+          - os: macos-26
             target: --mac dmg zip --arm64
           - os: ubuntu-24.04
             target: --linux AppImage deb --x64
@@ -54,7 +55,7 @@ jobs:
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
       - run: bun ci
       - run: bun run core:install
@@ -100,6 +101,8 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - if: steps.signing.outputs.enabled == 'true'
+        run: codesign --verify --deep --strict --verbose=2 release/mac-arm64/NonstopVibin.app
+      - if: steps.signing.outputs.enabled == 'true'
         run: |
           xcrun stapler validate release/mac-arm64/NonstopVibin.app
           spctl -a -vv -t execute release/mac-arm64/NonstopVibin.app
@@ -115,7 +118,6 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
-            release/beta*.yml
           if-no-files-found: error
   release:
     needs: [build, security]

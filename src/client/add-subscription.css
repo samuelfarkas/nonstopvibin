@@ -287,10 +287,6 @@
   margin-top: 14px;
 }
 
-.modal.wide form .info-note {
-  margin: -5px 0 16px;
-}
-
 /* EasyCLIProxyAPI import */
 .import-flow {
   display: flex;

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./client/App.tsx";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/space-grotesk";
 import "./client/styles.css";
 import "./client/focus.ts";
 

@@ -55,10 +55,6 @@
   font-size: var(--text-body);
 }
 
-.setting-row > svg {
-  color: var(--ink-3);
-}
-
 .settings-page .field-note {
   margin: 8px 0 12px;
 }

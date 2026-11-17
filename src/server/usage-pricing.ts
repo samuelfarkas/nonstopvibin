@@ -194,7 +194,9 @@ export class UsagePrices {
     catalog: ModelCatalog,
   ): Promise<UsageHistory> {
     // Serialize only callers for this profile; retain one bounded aggregate, not history rows.
-    while (this.histories.has(profileId)) await this.histories.get(profileId);
+    // A predecessor's failure is its own caller's; waiters still run their own request.
+    while (this.histories.has(profileId))
+      await this.histories.get(profileId)?.catch(() => {});
     if (this.closed) throw new Error("Activity pricing is shutting down");
     const operation = this.summarize(store, profileId, since, catalog);
     this.histories.set(profileId, operation);

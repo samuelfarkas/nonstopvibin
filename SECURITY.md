@@ -48,7 +48,9 @@ to its test file and header line. Never suppress a whole test/source directory t
 hide a finding. Rotate exposed credentials; adding them to .gitignore is insufficient.
 
 Make desktop build, secret scanning, and dependency jobs required checks for
-protected branches. Review dependency and action updates before merging. Workflows
+protected branches: `build (macos-26)`, `build (ubuntu-24.04)`, `secrets`, and
+`dependencies`. The macOS check was named `build (macos-latest)` before the runner
+label was pinned. Review dependency and action updates before merging. Workflows
 use read-only repository permissions and do not receive signing or model credentials
 on pull requests. Raw scanner reports are not public artifacts.
 
@@ -77,6 +79,8 @@ TypeScript wrapper does not audit the upstream Go implementation or binary.
   [macOS release signing guide](docs/release-signing.md). Signing rewrites the core,
   so `scripts/sign-mac.cjs` refreshes its packaged manifest hash after
   `scripts/verify-package.cjs` checks the unsigned copy against the reviewed input.
+  The core and tray helper get hardened runtime without Electron's JIT and
+  executable-memory entitlements (`build/entitlements.mac.minimal.plist`).
   Until the first signed release, say that builds are unsigned in the README and
   release notes. Test installation, launch, quit, and reopen on a clean machine.
   Test owner-only storage permissions and credential persistence after reopening.

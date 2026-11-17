@@ -9,7 +9,8 @@ A developer with several paid coding subscriptions, terminal open beside this
 window, glancing at headroom before starting a long agent session. Dark,
 warm-charcoal surfaces; one amber accent; Geist (bundled via @fontsource-variable)
 for navigation, labels, prose, and account names. Geist Mono is reserved for
-numeric data, code, and paths.
+numeric data, code, and paths. Only the NonstopVibin wordmark uses Space Grotesk,
+also bundled via @fontsource-variable.
 Readability at actual size on a large monitor wins over matching tiny mockup text.
 
 ## Tokens (src/client/styles.css)
@@ -36,8 +37,7 @@ Readability at actual size on a large monitor wins over matching tiny mockup tex
   rounder.
 - Motion: 150–250ms, `--ease` (ease-out-expo). State changes only. Reduced
   motion is handled globally.
-- z-index scale: `--z-dropdown`, `--z-sticky`, `--z-overlay`, `--z-modal`,
-  `--z-toast`.
+- z-index scale: `--z-sticky`, `--z-overlay`, `--z-modal`, `--z-toast`.
 
 ## Vocabulary (reuse, don't re-invent)
 
@@ -53,7 +53,7 @@ Readability at actual size on a large monitor wins over matching tiny mockup tex
   nested panels.
 - `.quota-meter` / `QuotaMeter` — label, value, track, reset line.
 - `.field`, `.field-note`, `.inline-error`, `.info-note`, `.modal-footer`,
-  `.form-grid`, `.checkbox-label`, `<details>/<summary>`.
+  `.form-grid`, `<details>/<summary>`.
 - `.empty-state` — left-aligned, amber icon, h2, prose, optional `.empty-choices`
   list. Keep this separate from the `.empty` modifier for exhausted quotas.
   `.loading` — mono inline loading row.
