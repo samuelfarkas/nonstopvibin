@@ -1678,9 +1678,25 @@ export class CorePool {
     } finally {
       await this.polling;
       await this.maintenance;
-      for (const profile of this.store.profiles())
-        await this.stop(profile.id, false);
+      await this.stopAll();
     }
+  }
+  private async stopAll(): Promise<void> {
+    // Together, so quitting takes the slowest core's time rather than the sum. Settle
+    // every stop, even after a failure, so no drain outlives the caller closing the store.
+    const failures = (
+      await Promise.allSettled(
+        this.store.profiles().map((profile) => this.stop(profile.id, false)),
+      )
+    ).flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length > 1)
+      throw new AggregateError(
+        failures,
+        `Profiles did not stop cleanly: ${failures.map(errorMessage).join(" ")}`,
+      );
+    if (failures.length) throw failures[0];
   }
   async verifyBinary(requirePinnedCore = false): Promise<void> {
     const manifest = record(

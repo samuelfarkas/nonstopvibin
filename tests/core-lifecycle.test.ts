@@ -9,25 +9,31 @@ import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { record } from "../src/server/json.ts";
 
-test("profile cores refresh model catalogs without overriding the pinned core's Claude fingerprint", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
-  const store = new Store(directory, fileKeyCodec(directory));
-  const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
-  const profile = store.createProfile("Model refresh fixture", "forest");
-  try {
-    await core.start(profile.id);
-    assert.ok(
-      !core.runtimes.get(profile.id)!.child.spawnargs.includes("--local-model"),
-      "embedded-only mode prevents newly released models reaching profile catalogs",
-    );
-    const config = record(await core.management(profile.id, "/config"));
-    assert.equal(record(config["claude-header-defaults"])["user-agent"], "");
-  } finally {
-    await core.shutdown();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+test(
+  "profile cores refresh model catalogs without overriding the pinned core's Claude fingerprint",
+  { timeout: 15_000 },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
+    const store = new Store(directory, fileKeyCodec(directory));
+    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    const profile = store.createProfile("Model refresh fixture", "forest");
+    try {
+      await core.start(profile.id);
+      assert.ok(
+        !core.runtimes
+          .get(profile.id)!
+          .child.spawnargs.includes("--local-model"),
+        "embedded-only mode prevents newly released models reaching profile catalogs",
+      );
+      const config = record(await core.management(profile.id, "/config"));
+      assert.equal(record(config["claude-header-defaults"])["user-agent"], "");
+    } finally {
+      await core.shutdown();
+      store.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "a core that never becomes ready and ignores SIGTERM is killed before start fails",
@@ -193,6 +199,120 @@ test(
       await core.shutdown();
       store.close();
       await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+/** A pool with `count` running profiles whose drains are recorded. */
+async function runningPool(prefix: string, count: number) {
+  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const store = new Store(directory, fileKeyCodec(directory));
+  const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+  const drained = new Set<string>();
+  const collectUsage = core.collectUsage.bind(core);
+  core.collectUsage = (profileId) => {
+    drained.add(profileId);
+    return collectUsage(profileId);
+  };
+  const profiles = [];
+  for (let i = 0; i < count; i++) {
+    const profile = store.createProfile(`Shutdown ${i}`, "forest");
+    await core.start(profile.id);
+    profiles.push(profile);
+  }
+  const close = async () => {
+    await core.shutdown();
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  };
+  return { core, profiles, drained, close };
+}
+const exited = (child: { exitCode: number | null; signalCode: unknown }) =>
+  child.exitCode !== null || child.signalCode !== null;
+
+test(
+  "shutdown stops slow-exiting profiles together, in about the time of the slowest",
+  { timeout: 20_000 },
+  async () => {
+    const pool = await runningPool("nv-shutdown-together-", 3);
+    try {
+      const exitDelay = 1000;
+      const signalled: number[] = [];
+      const exits: number[] = [];
+      for (const profile of pool.profiles) {
+        const child = pool.core.runtimes.get(profile.id)!.child;
+        const kill = child.kill.bind(child);
+        // As on a slow runner: each core exits a second after it is told to.
+        child.kill = (signal) => {
+          signalled.push(Date.now());
+          setTimeout(() => kill(signal), exitDelay);
+          return true;
+        };
+        child.once("exit", () => exits.push(Date.now()));
+      }
+      const started = Date.now();
+      await pool.core.shutdown();
+      const elapsed = Date.now() - started;
+      assert.ok(
+        Math.max(...signalled) < Math.min(...exits),
+        "every core is told to exit before the first one has",
+      );
+      assert.ok(
+        elapsed < 2 * exitDelay,
+        `shutdown took ${elapsed} ms; one at a time takes over ${3 * exitDelay} ms`,
+      );
+      assert.equal(pool.drained.size, 3, "every profile's usage was drained");
+      for (const profile of pool.profiles) {
+        const runtime = pool.core.runtimes.get(profile.id)!;
+        assert.equal(runtime.state, "stopped");
+        assert.ok(exited(runtime.child));
+      }
+    } finally {
+      await pool.close();
+    }
+  },
+);
+
+test(
+  "a failing stop does not keep shutdown from draining and stopping the other profiles",
+  { timeout: 20_000 },
+  async () => {
+    // The failing profiles come first, where one-at-a-time shutdown gave up on the rest.
+    for (const failing of [[0], [0, 1]]) {
+      const pool = await runningPool("nv-shutdown-failure-", 3);
+      const broken = failing.map(
+        (i) => pool.core.runtimes.get(pool.profiles[i]!.id)!.child,
+      );
+      try {
+        broken.forEach((child, i) => {
+          child.kill = () => {
+            throw new Error(`synthetic stop failure ${i}`);
+          };
+        });
+        await assert.rejects(pool.core.shutdown(), (error: Error) => {
+          const errors =
+            error instanceof AggregateError ? error.errors : [error];
+          assert.equal(error instanceof AggregateError, failing.length > 1);
+          assert.deepEqual(
+            errors.map((e: Error) => e.message),
+            failing.map((i) => `synthetic stop failure ${i}`),
+          );
+          for (const e of errors)
+            assert.match(error.message, RegExp(e.message));
+          return true;
+        });
+        assert.equal(pool.drained.size, 3, "every profile's usage was drained");
+        for (const profile of pool.profiles.slice(failing.length)) {
+          const runtime = pool.core.runtimes.get(profile.id)!;
+          assert.equal(runtime.state, "stopped");
+          assert.ok(exited(runtime.child));
+        }
+      } finally {
+        // Restore the real kill so the second shutdown in close() ends these cores.
+        for (const child of broken) Reflect.deleteProperty(child, "kill");
+        await pool.close();
+      }
+      for (const child of broken) assert.ok(exited(child));
     }
   },
 );
