@@ -69,6 +69,62 @@ if (typeof electron === "string") {
       await delay(50);
     }
   }
+  // A call into a page never settles if the page goes away first; fail at once instead.
+  function live(window, label, call) {
+    if (window.isDestroyed())
+      return Promise.reject(new Error(`${label}: the window is destroyed`));
+    const contents = window.webContents;
+    return new Promise((resolve, reject) => {
+      const destroyed = () =>
+        reject(
+          new Error(`${label}: the window was destroyed before it answered`),
+        );
+      const gone = (_event, details) =>
+        reject(new Error(`${label}: the renderer ended (${details.reason})`));
+      contents.once("destroyed", destroyed);
+      contents.once("render-process-gone", gone);
+      call(contents)
+        .then(resolve, reject)
+        .finally(() => {
+          contents.off("destroyed", destroyed);
+          contents.off("render-process-gone", gone);
+        });
+    });
+  }
+  const run = (window, code) =>
+    live(
+      window,
+      `Renderer call ${JSON.stringify(code.slice(0, 80))}`,
+      (contents) => contents.executeJavaScript(code),
+    );
+  // Counts the page's beforeunload listeners. The attached debugger also keeps Chromium from
+  // closing a page that takes over 500 ms to answer beforeunload, which a slow runner hits;
+  // that heuristic is Chromium's, not the deferred close under test.
+  const guards = (window) =>
+    live(window, "Counting beforeunload guards", async (contents) => {
+      if (!contents.debugger.isAttached()) contents.debugger.attach();
+      const send = (method, params) =>
+        contents.debugger.sendCommand(method, params);
+      const { result } = await send("Runtime.evaluate", {
+        expression: "window",
+        objectGroup: "guards",
+      });
+      const { listeners } = await send("DOMDebugger.getEventListeners", {
+        objectId: result.objectId,
+      });
+      await send("Runtime.releaseObjectGroup", { objectGroup: "guards" });
+      return listeners.filter((listener) => listener.type === "beforeunload")
+        .length;
+    });
+  // Closes the main window once `count` guards can veto it, then waits for the deferred close.
+  async function closeGuarded(window, count, retained) {
+    await until(async () => (await guards(window)) >= count);
+    window.close();
+    await until(() => {
+      assert.equal(window.isDestroyed(), false, retained);
+      return !window.isVisible();
+    });
+  }
   const viewMenu = () =>
     Menu.getApplicationMenu()?.items.find((item) => item.label === "View")
       ?.submenu;
@@ -104,9 +160,7 @@ if (typeof electron === "string") {
       const window = BrowserWindow.getAllWindows()[0];
       await until(() => !window.webContents.isLoading());
       stage(`c${cycle}:bootstrap`);
-      const { token } = await window.webContents.executeJavaScript(
-        "window.nonstopvibin.bootstrap()",
-      );
+      const { token } = await run(window, "window.nonstopvibin.bootstrap()");
       const origin = new URL(window.webContents.getURL()).origin;
       if (cycle === 0) api(origin, token);
       const state = await fetch(`${origin}/api/state`, {
@@ -125,9 +179,7 @@ if (typeof electron === "string") {
       if (cycle === 0) {
         stage("c0:create-profile");
         assert.equal(
-          await window.webContents.executeJavaScript(
-            "Notification.requestPermission()",
-          ),
+          await run(window, "Notification.requestPermission()"),
           "denied",
           "permission requests are denied",
         );
@@ -147,11 +199,11 @@ if (typeof electron === "string") {
           name: "Desktop fixture",
         });
         await until(() =>
-          window.webContents.executeJavaScript(
-            "Boolean(document.querySelector('.proxy-card button'))",
-          ),
+          run(window, "Boolean(document.querySelector('.proxy-card button'))"),
         );
-        await window.webContents.executeJavaScript(`{
+        await run(
+          window,
+          `{
           const original = window.fetch;
           window.fetch = (url, options) => {
             if (!String(url).endsWith('/start')) return original(url, options);
@@ -163,16 +215,14 @@ if (typeof electron === "string") {
             });
           };
           document.querySelector('.proxy-card button').click();
-        }`);
-        stage("c0:background-failure");
-        await delay(100);
-        window.close();
-        await until(() => !window.isVisible());
-        await window.webContents.executeJavaScript(
-          "window.finishFixtureOperation()",
+        }`,
         );
+        stage("c0:background-failure");
+        await closeGuarded(window, 1, "a pending operation defers the close");
+        await run(window, "window.finishFixtureOperation()");
         await until(() =>
-          window.webContents.executeJavaScript(
+          run(
+            window,
             "document.querySelector('.global-alert')?.textContent.includes('Fixture operation failed')",
           ),
         );
@@ -184,7 +234,8 @@ if (typeof electron === "string") {
         );
         app.emit("activate");
         await until(() => window.isVisible());
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"Dismiss error\"]').click()",
         );
         await delay(100);
@@ -198,18 +249,18 @@ if (typeof electron === "string") {
         const { key } = await request(`/profiles/${profile.id}/key`);
         proxy = { endpoint: `${origin}/p/${profile.slug}/v1`, key };
         await until(() =>
-          window.webContents.executeJavaScript(
+          run(
+            window,
             "Boolean(document.querySelector('[aria-label=\"New profile\"]'))",
           ),
         );
         // Exercise the real modal beforeunload guard, then discard through its close button.
         stage("c0:unsaved-form");
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"New profile\"]').click()",
         );
-        await delay(100);
-        window.close();
-        await until(() => !window.isVisible());
+        await closeGuarded(window, 1, "unfinished form is retained");
         assert.equal(
           window.isDestroyed(),
           false,
@@ -217,56 +268,62 @@ if (typeof electron === "string") {
         );
         app.emit("activate");
         await until(() => window.isVisible());
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"Close dialog\"]').click()",
         );
         await delay(100);
       }
       stage(`c${cycle}:logo`);
       await until(() =>
-        window.webContents.executeJavaScript(
-          "Boolean(document.querySelector('.nv-ball'))",
-        ),
+        run(window, "Boolean(document.querySelector('.nv-ball'))"),
       );
       assert.equal(
-        await window.webContents.executeJavaScript(`(async () => {
+        await run(
+          window,
+          `(async () => {
           const logo = document.querySelector('.nv-logo');
           const animations = logo.getAnimations({subtree:true});
           if (animations.some(animation => animation.effect.getTiming().iterations === Infinity)) return -1;
           await Promise.all(animations.map(animation => animation.finished));
           return logo.getAnimations({subtree:true}).length;
-        })()`),
+        })()`,
+        ),
         0,
         "logo finishes its finite animation and stays idle",
       );
       if (cycle === 1) {
         stage("c1:settings");
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[title=\"Settings\"]').click()",
         );
         await until(() =>
-          window.webContents.executeJavaScript(
-            "Boolean(document.querySelector('#usage-retention'))",
-          ),
+          run(window, "Boolean(document.querySelector('#usage-retention'))"),
         );
         const retention = async (days) => {
-          await window.webContents.executeJavaScript(`{
+          await run(
+            window,
+            `{
             const select = document.querySelector('#usage-retention');
             select.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
-          }`);
-          await until(() =>
-            window.webContents.executeJavaScript(
-              "Boolean(document.querySelector('[role=\"option\"]'))",
-            ),
+          }`,
           );
-          await window.webContents.executeJavaScript(`{
+          await until(() =>
+            run(window, "Boolean(document.querySelector('[role=\"option\"]'))"),
+          );
+          await run(
+            window,
+            `{
             const label = ${JSON.stringify({ 0: "Keep all history", 30: "30 days", 90: "90 days", 365: "1 year" })}[${days}];
             const option = [...document.querySelectorAll('[role="option"]')].find(item => item.textContent === label);
             option.focus();
             option.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
-          }`);
+          }`,
+          );
           await until(() =>
-            window.webContents.executeJavaScript(
+            run(
+              window,
               "document.querySelector('#usage-retention').getAttribute('aria-expanded') === 'false'",
             ),
           );
@@ -283,47 +340,57 @@ if (typeof electron === "string") {
         assert.equal(created.status, 201);
         const settingsProfile = await created.json();
         await until(() =>
-          window.webContents.executeJavaScript(
+          run(
+            window,
             "Boolean(document.querySelector('[title=\"Settings fixture\"]'))",
           ),
         );
-        const sidebarProfile = await window.webContents.executeJavaScript(
+        const sidebarProfile = await run(
+          window,
           "document.querySelector('.profiles [aria-current]').title",
         );
-        await window.webContents.executeJavaScript(`{
+        await run(
+          window,
+          `{
           const picker = document.querySelector('#settings-profile');
           picker.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true}));
-        }`);
-        await until(() =>
-          window.webContents.executeJavaScript(
-            "Boolean(document.querySelector('[role=\"option\"]'))",
-          ),
+        }`,
         );
-        await window.webContents.executeJavaScript(`{
+        await until(() =>
+          run(window, "Boolean(document.querySelector('[role=\"option\"]'))"),
+        );
+        await run(
+          window,
+          `{
           const option = [...document.querySelectorAll('[role="option"]')].find(item => item.textContent.includes('Settings fixture'));
           option.focus();
           option.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
-        }`);
+        }`,
+        );
         await until(() =>
-          window.webContents.executeJavaScript(
+          run(
+            window,
             "document.querySelector('#profile-name')?.value === 'Settings fixture'",
           ),
         );
         assert.equal(
-          await window.webContents.executeJavaScript(
+          await run(
+            window,
             "document.querySelector('.profiles [aria-current]').title",
           ),
           sidebarProfile,
           "settings picker leaves sidebar profile unchanged",
         );
         assert.equal(
-          await window.webContents.executeJavaScript(
+          await run(
+            window,
             "document.querySelector('#usage-retention').textContent",
           ),
           "30 days",
           "switching settings profile preserves global draft",
         );
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"Keep sessions on the same account\"]').click()",
         );
         await until(async () => {
@@ -355,9 +422,7 @@ if (typeof electron === "string") {
         );
         console.log("Settings profile switching and isolated updates passed.");
         stage("c1:unsaved-settings");
-        await delay(100);
-        window.close();
-        await until(() => !window.isVisible());
+        await closeGuarded(window, 1, "unsaved settings are retained");
         assert.equal(
           window.isDestroyed(),
           false,
@@ -366,7 +431,8 @@ if (typeof electron === "string") {
         app.emit("activate");
         await until(() => window.isVisible());
         assert.equal(
-          await window.webContents.executeJavaScript(
+          await run(
+            window,
             "document.querySelector('#usage-retention').textContent",
           ),
           "30 days",
@@ -375,12 +441,15 @@ if (typeof electron === "string") {
         await delay(100);
         // One cleared guard must not discard another form in the same window.
         await retention(30);
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"New profile\"]').click()",
         );
-        await delay(100);
-        window.close();
-        await until(() => !window.isVisible());
+        await closeGuarded(
+          window,
+          2,
+          "settings and dialog drafts defer the close",
+        );
         await retention(0);
         await delay(100);
         assert.equal(
@@ -388,7 +457,8 @@ if (typeof electron === "string") {
           false,
           "remaining dialog keeps its draft",
         );
-        await window.webContents.executeJavaScript(
+        await run(
+          window,
           "document.querySelector('[aria-label=\"Close dialog\"]').click()",
         );
         await until(() => window.isDestroyed());
@@ -400,12 +470,11 @@ if (typeof electron === "string") {
       if (cycle === 2) {
         stage("c2:settings-restored");
         await until(() =>
-          window.webContents.executeJavaScript(
-            "Boolean(document.querySelector('#usage-retention'))",
-          ),
+          run(window, "Boolean(document.querySelector('#usage-retention'))"),
         );
         assert.equal(
-          await window.webContents.executeJavaScript(
+          await run(
+            window,
             "document.querySelector('#usage-retention').textContent",
           ),
           "Keep all history",
@@ -453,9 +522,7 @@ if (typeof electron === "string") {
       }
       if (cycle === 1) click("Subscription quotas");
       else if (cycle === 2) {
-        await popup.webContents.executeJavaScript(
-          "window.nonstopvibin.showWindow()",
-        );
+        await run(popup, "window.nonstopvibin.showWindow()");
         await until(() => popup.isDestroyed());
         BrowserWindow.getAllWindows()[0].close();
       } else
