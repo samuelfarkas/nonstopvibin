@@ -6,6 +6,12 @@ import { connect, createServer } from "node:net";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pkg from "../package.json" with { type: "json" };
+import { notRunningExit, serverArchive } from "../src/server/host-defaults.ts";
+import {
+  architectures,
+  serverArchiveName,
+  serverPrefix,
+} from "./distribution.ts";
 
 const SIGN_IN_PORTS = [1455, 54545]; // Codex, Claude
 const [command, destination, ...rest] = process.argv.slice(2);
@@ -38,19 +44,16 @@ const ssh = (script) =>
 if (command === "deploy") {
   const machine = ssh("uname -m");
   if (machine.status !== 0) fail(`Could not run commands on ${destination}.`);
-  const arch = {
-    x86_64: "x64",
-    amd64: "x64",
-    aarch64: "arm64",
-    arm64: "arm64",
-  }[machine.stdout.trim()];
+  const arch = Object.entries(architectures).find(([, names]) =>
+    names.uname.includes(machine.stdout.trim()),
+  )?.[0];
   if (!arch) fail(`Unsupported server architecture: ${machine.stdout.trim()}`);
   const repo = resolve(import.meta.dirname, "..");
   execFileSync("bun", ["run", "dist:server", arch], {
     cwd: repo,
     stdio: "inherit",
   });
-  const name = `nonstopvibin-server-${pkg.version}-linux-${arch}`;
+  const name = serverArchiveName(pkg.version, arch);
   const created = ssh("mktemp -d");
   const temporary = created.stdout.trim();
   if (created.status !== 0 || !/^\/[\w./-]+$/.test(temporary))
@@ -91,14 +94,15 @@ const unknown = rest.filter(
   (arg) => !["--sign-in", "--no-browser"].includes(arg),
 );
 if (unknown.length) fail(`Unknown option: ${unknown.join(" ")}`);
+const executable = serverArchive.executable;
 const remote = ssh(
-  'if command -v nonstopvibin >/dev/null 2>&1; then exec nonstopvibin url --json; else exec "$HOME/.local/bin/nonstopvibin" url --json; fi',
+  `if command -v ${executable} >/dev/null 2>&1; then exec ${executable} url --json; else exec "$HOME/${serverPrefix}/bin/${executable}" url --json; fi`,
 );
 if (remote.status === 127)
   fail(
     `NonstopVibin is not installed on ${destination}. Run bun run server:deploy ${destination}.`,
   );
-if (remote.status === 3)
+if (remote.status === notRunningExit)
   fail(
     `NonstopVibin is not running on ${destination}. Check systemctl --user status nonstopvibin there.`,
   );

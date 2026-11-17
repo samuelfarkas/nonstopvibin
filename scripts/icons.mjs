@@ -1,4 +1,9 @@
-import { mirrorballSvg, writeMirrorballSpin } from "./mirrorball.mjs";
+import {
+  body,
+  mirrorballSvg,
+  palette,
+  writeMirrorballSpin,
+} from "./mirrorball.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SquareTerminal } from "lucide-react";
@@ -19,19 +24,7 @@ await writeFile(
 // Menu bar / tray icon (docs/design/icons.md): a still render of the 3D
 // mirrorball from Logo — tiled facets on a dark body with black seams, key
 // light top-left. Orthographic projection, tilted 16° like the app logo.
-const traySvg = mirrorballSvg(
-  [
-    "#f0bc63",
-    "#e0a33f",
-    "#f5d08c",
-    "#c98a2e",
-    "#e0a33f",
-    "#e88ab8",
-    "#f0bc63",
-    "#e0a33f",
-  ],
-  "#1a1610",
-);
+const traySvg = mirrorballSvg(palette, body);
 // App icon uses the same mirrorball as the renderer and tray.
 await sharp({
   create: { width: 512, height: 512, channels: 4, background: "#171614" },

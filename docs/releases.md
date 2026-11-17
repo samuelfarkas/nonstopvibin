@@ -25,9 +25,10 @@ Remaining owner steps:
    signing step. Ordinary CI and local packaging still build unsigned installers.
 2. Protect `main`. It has no branch protection, although this document and
    [SECURITY.md](../SECURITY.md) assume reviewed changes and required checks:
-   require pull requests with review, and require the `build (macos-26)`,
-   `build (ubuntu-24.04)`, `dependencies` and `secrets` checks. The macOS check was
-   named `build (macos-latest)` before the runner label was pinned to `macos-26`.
+   require pull requests with review, and require the `build / desktop (macos-26)`,
+   `build / desktop (ubuntu-24.04)`, `dependencies` and `secrets` checks. The desktop
+   checks were named `build (macos-26)` and `build (ubuntu-24.04)` before they moved
+   into the shared [checks workflow](../.github/workflows/checks.yml).
 3. Run an actual signed upgrade between two versions before advertising updates.
    The first chance is 0.2.0 to the next release.
 
@@ -48,15 +49,17 @@ git push origin vX.Y.Z
 The tag must equal `v` plus the package version. Normal versions, including `0.x`,
 are regular releases. `0.2.0-beta.1` / `v0.2.0-beta.1` creates a prerelease; only
 installed beta builds opt into prerelease discovery. Other prerelease names are
-not supported by this workflow.
+not supported; `src/shared/release-channel.ts` is the rule the workflow and the
+updater share.
 
 The pinned builder uses `latest-mac.yml` and `latest-linux.yml` even on GitHub
 prereleases; the updater selects the release first and falls back to these names.
 
-CI runs quality, tests, desktop smoke tests and security checks, builds macOS arm64
-and Linux x64 packages and the headless Linux server archives (x64 and arm64), and
-signs/notarizes macOS. After all checks pass, the final job verifies metadata
-versions, payload sizes and SHA-512 hashes, generates
+The [Release workflow](../.github/workflows/release.yml) runs the same checks as every
+pull request ([checks.yml](../.github/workflows/checks.yml) and
+[security.yml](../.github/workflows/security.yml)), with macOS signed and notarized.
+After all checks pass, the final job verifies the assets `scripts/verify-release.mjs`
+expects from `package.json`, metadata versions, payload sizes and SHA-512 hashes, generates
 SHA256SUMS and provenance attestations, uploads a draft release, then publishes it.
 Only the final job can publish. A failed upload leaves a draft, not a partial public
 update. Remove the failed draft before retrying the publish job; never overwrite
@@ -116,11 +119,11 @@ section. Work through these steps in order.
    ```
 
 5. **The Release workflow** then verifies the tag, version, `updatesEnabled` and
-   update feed; runs the dependency, tooling and secret scans; builds, tests and
-   smoke-tests on `macos-26` and `ubuntu-24.04`; signs, notarizes and verifies the
-   macOS app; builds the AppImage, the deb and the two headless server archives; and
-   finally verifies the update metadata, writes `SHA256SUMS`, attests provenance,
-   and publishes the release with generated notes. If a job fails for a reason that needs no source change, such as
+   update feed; runs the pull-request checks (security scans, the desktop build,
+   tests and smoke tests on both runners, and the server archives with their smoke
+   test); signs, notarizes and verifies the macOS app; and finally verifies the
+   assets and update metadata, writes `SHA256SUMS`, attests provenance, and
+   publishes the release with generated notes. If a job fails for a reason that needs no source change, such as
    a missing secret, fix it and re-run the failed jobs. If the source must change,
    release 0.2.1 instead; the tag cannot be moved.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
@@ -159,9 +162,9 @@ distributed together. To upgrade:
    pin into `.vendor/core`; it does not select the latest upstream release.
    For another packaging target, set `CORE_PLATFORM` and `CORE_ARCH`, for example
    `CORE_PLATFORM=linux CORE_ARCH=x64 bun run core:install`.
-4. Run `bun run quality`, `bun test`, `bun run build`, and the release checks in
-   [SECURITY.md](../SECURITY.md). Exercise the synthetic-provider integration tests
-   against the new core and verify the packaged app on each shipping target.
+4. Run the checks of the first-release checklist above. Exercise the
+   synthetic-provider integration tests against the new core and verify the
+   packaged app on each shipping target.
 5. Bump the app version, record the core upgrade in `CHANGELOG.md`, and publish
    through the normal release workflow above.
 
@@ -181,8 +184,8 @@ and builds older than 0.2.0 install the newer app manually. Development checkout
 
 ## Installed behavior
 
-Enabled packaged macOS and AppImage builds check 30 seconds after startup and
-every six hours. **Check for updates…** is available in the app menu and the tray's
+Enabled packaged macOS and AppImage builds check shortly after startup and then
+periodically (the delays are in `src/desktop/main.ts`). **Check for updates…** is available in the app menu and the tray's
 right-click menu; it is disabled on unsupported or unconfigured builds.
 
 Downloads happen in the background. A native dialog offers **Restart to update**
@@ -198,8 +201,7 @@ Linux deb users continue installing newer deb packages manually.
 
 ## Verification before the first public release
 
-Run `bun run quality`, affected tests, `bun run build`, `bun run security:deps`,
-and the remaining release checks in `SECURITY.md`. Verify the packaged archive and
+Run the checks of the first-release checklist above. Verify the packaged archive and
 launch the actual Electron build; the desktop bundle includes the updater and
 does not ship a separate node_modules tree.
 

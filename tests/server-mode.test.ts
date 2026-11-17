@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { Application, validAllowHost } from "../src/server/server.ts";
 import { verifyCore } from "../src/server/core-binary.ts";
@@ -13,6 +13,7 @@ import {
   readSession,
   removeSession,
   renderUnit,
+  serviceUnit,
   startServer,
   tunnelCommand,
   updateUnit,
@@ -224,6 +225,28 @@ test("unit files quote paths and environment values for systemd", () => {
   );
   assert.doesNotMatch(unit, /^(PrivateTmp|ProtectHome|ProtectSystem)=/m);
   assert.throws(() => renderUnit("/bin/x", ["a\nb"], []), /control character/);
+});
+
+test("the installer's unit query finds the unit and refuses one that runs another executable", async () => {
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = join(directory, "config");
+  try {
+    const executable = `/opt/a b/50%$"\\x/nonstopvibin`;
+    assert.equal(await serviceUnit(executable), undefined);
+    const path = join(directory, "config/systemd/user/nonstopvibin.service");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, renderUnit(executable, ["serve"], []));
+    assert.equal(await serviceUnit(executable), path);
+    for (const other of [
+      "/opt/other/nonstopvibin",
+      `${executable}2`,
+      `/opt/a b/50%$"\\x`,
+    ])
+      await assert.rejects(serviceUnit(other), /another executable/);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previous;
+  }
 });
 
 test("tunnel commands use the server's own port on both ends", () => {

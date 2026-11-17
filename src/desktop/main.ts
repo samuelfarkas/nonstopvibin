@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { Application } from "../server/server.ts";
+import { coreLayout } from "../server/core-binary.ts";
 import { linuxLoginItem, setLinuxLoginItem } from "./autostart.ts";
 import { AppError, errorMessage } from "../server/errors.ts";
 import {
@@ -34,6 +35,7 @@ import {
   type BridgeResult,
 } from "../shared/desktop-bridge.ts";
 import { mainUrl, trayUrl } from "../shared/renderer-url.ts";
+import { releaseChannel } from "../shared/release-channel.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
 import {
@@ -313,8 +315,8 @@ async function start(): Promise<void> {
   application = await Application.create({
     directory: userData,
     binary: app.isPackaged
-      ? join(process.resourcesPath, "core/cli-proxy-api")
-      : join(root, checkoutLayout.core),
+      ? join(process.resourcesPath, coreLayout.packaged, coreLayout.binary)
+      : join(root, coreLayout.checkout, coreLayout.binary),
     clientDirectory: join(root, checkoutLayout.client),
     port: hostPort(),
     desktop: true,
@@ -348,7 +350,8 @@ async function start(): Promise<void> {
     const { autoUpdater } = await import("electron-updater");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
-    autoUpdater.allowPrerelease = app.getVersion().includes("-");
+    autoUpdater.allowPrerelease =
+      releaseChannel(app.getVersion()) === "prerelease";
     autoUpdater.allowDowngrade = false;
     autoUpdater.logger = null;
     let installing = false;

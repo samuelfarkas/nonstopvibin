@@ -128,7 +128,7 @@ tar -xzf nonstopvibin-server-<version>-linux-<arch>.tar.gz
 `install.sh` copies the files to `~/.local/lib/nonstopvibin`, links
 `~/.local/bin/nonstopvibin`, installs and starts a systemd user service, and
 prints the session link. Options: `--prefix DIR`, `--no-service`, `--port N`
-(default 4320), `--allow-host FQDN`. It warns when `curl` or CA certificates are
+(default: see `./install.sh --help`), `--allow-host FQDN`. It warns when `curl` or CA certificates are
 missing, and tells you when `~/.local/bin` is not on your `PATH`. The checksums in
 the archive's `core/manifest.json` show that the core matches the reviewed pin;
 they are integrity evidence, not independent proof of the publisher.
@@ -273,7 +273,8 @@ worker with consumer-issued scoped credential
 
 ### Existing API and non-spending readiness
 
-The headless CLI defaults to **4320** (desktop/development defaults to 4318).
+The headless CLI's default port (`nonstopvibin --help`; the examples here use it)
+differs from the desktop/development default.
 Use the configured port and discover profile identity from authenticated state:
 `id` is the UUID used in `/api/profiles/<id>/…`; `slug` is used in
 `/p/<slug>/v1`. `endpoint` in state is authoritative. Do not infer an endpoint

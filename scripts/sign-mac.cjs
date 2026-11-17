@@ -1,7 +1,12 @@
 const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
-const { readFileSync, writeFileSync } = require("node:fs");
+const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
+const {
+  coreLayout,
+  readCoreManifest,
+  writeCoreManifest,
+} = require("../src/server/core-binary.ts");
 
 // electron-builder calls this instead of @electron/osx-sign when mac.sign is set.
 // Signing rewrites the core binary, so its manifest hash is refreshed here,
@@ -12,8 +17,8 @@ const minimal = join(__dirname, "../build/entitlements.mac.minimal.plist");
 
 module.exports = async function signMac(opts) {
   const { signAsync } = require("@electron/osx-sign");
-  const coreDir = join(opts.app, "Contents/Resources/core");
-  const core = join(coreDir, "cli-proxy-api");
+  const coreDir = join(opts.app, "Contents/Resources", coreLayout.packaged);
+  const core = join(coreDir, coreLayout.binary);
   const helper = join(
     opts.app,
     "Contents/Resources/app.asar.unpacked/dist/desktop/tray-click-monitor",
@@ -34,12 +39,11 @@ module.exports = async function signMac(opts) {
   args.push("--entitlements", minimal, core);
   execFileSync("codesign", args, { stdio: "inherit" });
 
-  const manifestPath = join(coreDir, "manifest.json");
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const manifest = readCoreManifest(coreDir);
   manifest.binarySha256 = createHash("sha256")
     .update(readFileSync(core))
     .digest("hex");
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  writeCoreManifest(coreDir, manifest);
 
   const ignore = opts.ignore;
   const optionsForFile = opts.optionsForFile;

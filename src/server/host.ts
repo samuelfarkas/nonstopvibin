@@ -1,5 +1,6 @@
 import { join, resolve } from "node:path";
 import type { Application } from "./server.ts";
+import { coreLayout } from "./core-binary.ts";
 import {
   checkoutLayout,
   hostPort,
@@ -59,7 +60,7 @@ export async function runHost(
   try {
     application = await start(
       {
-        binary: join(root, checkoutLayout.core),
+        binary: join(root, coreLayout.checkout, coreLayout.binary),
         clientDirectory: join(root, checkoutLayout.client),
         port: hostPort(),
       },

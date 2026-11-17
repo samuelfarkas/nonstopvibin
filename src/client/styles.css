@@ -786,6 +786,7 @@ input[role="switch"]:disabled {
   content: "";
   position: absolute;
   inset: 0;
+  /* Frames and duration: `spin` in scripts/mirrorball.mjs (tests/mirrorball.test.mjs). */
   background: url("/mirrorball-spin.png") 0 0 / 7300% 100% no-repeat;
   opacity: 0;
   pointer-events: none;

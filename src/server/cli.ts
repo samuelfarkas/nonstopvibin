@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { Application, validAllowHost } from "./server.ts";
-import { coreVersion } from "./core-binary.ts";
+import { coreLayout, coreVersion } from "./core-binary.ts";
 import {
   dataDirectory,
   ownerOnlyDirectory,
@@ -26,6 +26,7 @@ import {
 import { agentEnvironment } from "./agents.ts";
 import { isMissing, ownEntry, readOwnFile, writeAtomic } from "./safe-files.ts";
 import { runHost } from "./host.ts";
+import { notRunningExit, serverArchive, serverPort } from "./host-defaults.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
 import type { RouteResponse } from "../shared/api.ts";
@@ -39,13 +40,11 @@ const packaged = typeof NONSTOPVIBIN_PACKAGED !== "undefined";
 function packagedPaths() {
   const root = dirname(realpathSync(process.execPath));
   return {
-    binary: join(root, "core/cli-proxy-api"),
-    clientDirectory: join(root, "client"),
+    binary: join(root, serverArchive.core, coreLayout.binary),
+    clientDirectory: join(root, serverArchive.client),
   };
 }
 
-export const DEFAULT_PORT = 4320;
-const NOT_RUNNING = 3;
 const UNIT = "nonstopvibin.service";
 const SIGN_IN_PORTS = [1455, 54545]; // Codex, Claude
 
@@ -280,7 +279,7 @@ export function parseHost(value: string): string {
   return host;
 }
 function parsePort(value: string | undefined): number {
-  if (value === undefined) return DEFAULT_PORT;
+  if (value === undefined) return serverPort;
   const port = Number(value);
   if (!/^\d+$/.test(value) || port < 1 || port > 65535)
     throw new CliError(`--port must be between 1 and 65535.`, 2);
@@ -563,7 +562,7 @@ async function serviceInstall(
   const args = [
     "serve",
     "--port",
-    String(port ?? DEFAULT_PORT),
+    String(port ?? serverPort),
     ...(allowHosts ?? []).flatMap((host) => ["--allow-host", host]),
   ];
   const environment = SERVICE_ENVIRONMENT.flatMap(
@@ -605,6 +604,25 @@ async function serviceInstall(
   ensureLinger();
   console.log("Run `nonstopvibin url` for the session link.");
 }
+/**
+ * The installed unit's path, if there is one, refusing a unit that runs another executable.
+ * install.sh asks `nonstopvibin service unit <executable>` before an upgrade.
+ */
+export async function serviceUnit(
+  executable: string,
+): Promise<string | undefined> {
+  const path = unitPath();
+  const unit = await readFile(path, "utf8").catch((error) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  if (unit === undefined) return undefined;
+  if (!unit.includes(unitQuote(executable, false)))
+    throw new CliError(
+      `The existing service uses another executable. Upgrade at its original --prefix, or edit ${path} first. Nothing was changed.`,
+    );
+  return path;
+}
 async function serviceUninstall() {
   requireUserManager();
   const directory = await discoveryDirectory();
@@ -633,23 +651,23 @@ async function serviceUninstall() {
 const HELP = `NonstopVibin ${version} — headless server
 
 Usage:
-  nonstopvibin serve [--port ${DEFAULT_PORT}] [--allow-host FQDN]
+  nonstopvibin serve [--port ${serverPort}] [--allow-host FQDN]
       Run in the foreground (Ctrl+C stops it).
   nonstopvibin url [--json]
       Print the session link and the SSH tunnel command.
   nonstopvibin status
-      Show whether the server is running (exit 0) or not (exit 3).
-  nonstopvibin service install [--port ${DEFAULT_PORT}] [--allow-host FQDN]
+      Show whether the server is running (exit 0) or not (exit ${notRunningExit}).
+  nonstopvibin service install [--port ${serverPort}] [--allow-host FQDN]
       Install and start a systemd user service.
   nonstopvibin service uninstall
       Stop and remove the user service. Your data is kept.
   nonstopvibin --version
 
 Options:
-  --port N           Loopback port (default ${DEFAULT_PORT}). Changing it later
+  --port N           Loopback port (default ${serverPort}). Changing it later
                      requires restarting running agents.
   --allow-host FQDN  Also accept this exact HTTPS host name for the web UI,
-                     e.g. from \`tailscale serve --bg ${DEFAULT_PORT}\`.
+                     e.g. from \`tailscale serve --bg ${serverPort}\`.
 
 Manage the service with systemd:
   systemctl --user status nonstopvibin
@@ -715,7 +733,7 @@ export async function main(argv: string[]): Promise<number> {
     if (!current)
       throw new CliError(
         `NonstopVibin is not running for ${directory}.\nCheck \`systemctl --user status nonstopvibin\`, or start it with \`nonstopvibin serve\`.`,
-        NOT_RUNNING,
+        notRunningExit,
       );
     const { session, state } = current;
     if (values.json) {
@@ -742,7 +760,7 @@ export async function main(argv: string[]): Promise<number> {
       console.log(
         `NonstopVibin is not running for ${directory}.${unit ? ` Unit nonstopvibin.service: ${unit}.` : ""}`,
       );
-      return NOT_RUNNING;
+      return notRunningExit;
     }
     const { session, state } = current;
     console.log(
@@ -751,6 +769,17 @@ export async function main(argv: string[]): Promise<number> {
         `Core: CLIProxyAPI ${state.coreVersion}.${unit ? ` Unit nonstopvibin.service: ${unit}.` : ""}`,
       ].join("\n"),
     );
+    return 0;
+  }
+  const [executable, ...extra] = rest;
+  if (
+    command === "service" &&
+    subcommand === "unit" &&
+    executable &&
+    !extra.length
+  ) {
+    const path = await serviceUnit(executable);
+    if (path) console.log(path);
     return 0;
   }
   if (command === "service" && !rest.length) {

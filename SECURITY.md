@@ -30,19 +30,11 @@ No response-time commitment is currently offered.
 
 ## Required checks
 
-```sh
-bun ci
-bun run core:install
-bun run quality
-bun test
-bun run build
-bun run security:deps
-bun run security:install
-bun run security:secrets
-bun run security:history
-```
-
-If DeepSec is installed, also run `bun run security:tooling`. Dependency audits fail
+Every pull request and every release runs them: the build, test, smoke and packaging
+checks in [checks.yml](.github/workflows/checks.yml) and the dependency, tooling and
+secret scans in [security.yml](.github/workflows/security.yml). To run them locally,
+follow the checklist in [releases](docs/releases.md#first-release-020); if DeepSec is
+installed, also run `bun run security:tooling`. Dependency audits fail
 at high severity; inspect moderate findings too. Secret scans redact output.
 The directory scan excludes generated local state through `.gitleaks-source.toml`;
 the history scan uses `.gitleaks.toml` and has no directory exclusions. The only
@@ -50,10 +42,9 @@ fixture exception is the exact public RFC 6455 example WebSocket nonce, constrai
 to its test file and header line. Never suppress a whole test/source directory to
 hide a finding. Rotate exposed credentials; adding them to .gitignore is insufficient.
 
-Make desktop build, secret scanning, and dependency jobs required checks for
-protected branches: `build (macos-26)`, `build (ubuntu-24.04)`, `secrets`, and
-`dependencies`. The macOS check was named `build (macos-latest)` before the runner
-label was pinned. Review dependency and action updates before merging. Workflows
+Make the desktop build, secret scanning, and dependency jobs required checks for
+protected branches; [releases](docs/releases.md#enable-releases-and-updates) names
+them. Review dependency and action updates before merging. Workflows
 use read-only repository permissions and do not receive signing or model credentials
 on pull requests. Raw scanner reports are not public artifacts.
 

@@ -20,6 +20,7 @@ bun run build
 bun run start       # Launch the built Electron app
 bun run test:desktop # Isolated Electron lifecycle check (requires a desktop)
 bun run test:ui      # Isolated Electron focus, logo, page layout, and tray close-guard checks (requires a desktop)
+bun run test:server  # Installs and runs the linux-x64 server archive (Linux x64, after dist:server)
 bun run package      # Unsigned app folder in release/ for local checks
 bun run dist:mac     # DMG and ZIP, on macOS
 bun run dist:linux   # AppImage and deb, on Linux
@@ -58,9 +59,9 @@ an identifier operand. It remains excluded from linting and formatting.
 `src/server/json.ts` holds the shared `Json` boundary accessors the rules steer
 toward instead of `unknown`, `typeof`, and casts.
 
-Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI builds, tests, and runs the Electron lifecycle smoke check, including the core-lifetime check, on Linux and macOS (`build (ubuntu-24.04)` and `build (macos-26)`; the macOS runner is pinned rather than `macos-latest`), plus the `test:ui` checks on macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
+Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI ([checks.yml](../.github/workflows/checks.yml)) builds, tests, and runs the Electron lifecycle smoke check, including the core-lifetime check, on Linux and macOS, plus the `test:ui` checks on macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
 
-The core installer pins 8.0.67 and all four supported archive checksums in
+The core installer pins the version and all four supported archive checksums in
 `src/server/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. No automatic upstream update runs. Change the pinned version and reviewed hashes together, reinstall it, and run the tests before packaging.
 
 ## Contributor guidance
