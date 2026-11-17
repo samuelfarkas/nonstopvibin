@@ -1,51 +1,52 @@
 // Run with `bun run test:desktop`; the child uses real Electron with isolated data.
 const assert = require("node:assert/strict");
 const {
-  mkdtempSync,
   readFileSync,
   writeFileSync,
   rmSync,
   realpathSync,
 } = require("node:fs");
 const { join, resolve } = require("node:path");
-const { tmpdir } = require("node:os");
 const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
+const harness = require("./desktop-harness.cjs");
 
 if (typeof electron === "string") {
-  const { spawn } = require("node:child_process");
-  const directory = mkdtempSync(join(tmpdir(), "nonstopvibin-desktop-"));
-  const child = spawn(electron, [__filename, "--background"], {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      NONSTOPVIBIN_DATA_DIR: directory,
-      NONSTOPVIBIN_PORT: "0",
-    },
-  });
-  child.on("error", (error) => {
-    console.error(error);
-    rmSync(directory, { recursive: true, force: true });
-    process.exitCode = 1;
-  });
-  child.on("exit", (code) => {
+  // The first phase takes about 20 s on the macOS runner and the child's own checks give up
+  // at 50 s; past 90 s it is stalled where only this limit can stop it.
+  const limit = 90_000;
+  rmSync(harness.artifactRoot, { recursive: true, force: true });
+  (async () => {
+    const run = harness.launch("smoke", __filename, "inherit");
+    const cancel = harness.limit(limit, "Desktop smoke", () => run);
+    const { code, error } = await run.exited;
+    cancel();
+    if (run.expired) return;
     try {
-      assert.equal(code, 0);
-      const result = JSON.parse(
-        readFileSync(join(directory, "result.json"), "utf8"),
-      );
+      if (error) throw error;
+      let result;
+      try {
+        result = JSON.parse(
+          readFileSync(join(run.directory, "result.json"), "utf8"),
+        );
+      } catch {
+        result = { error: "The Electron child wrote no result." };
+      }
       assert.equal(result.ok, true, result.error);
+      assert.equal(code, 0);
       console.log("Desktop lifecycle passed:", JSON.stringify(result.samples));
-      // Then check that profile cores never outlive a signalled or killed app.
-      require("./desktop-lifetime.cjs");
     } catch (error) {
       console.error(error);
-      process.exitCode = 1;
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
+      await harness.diagnose(run, "failure");
+      await harness.terminate(run);
+      process.exit(1);
     }
-  });
+    await harness.terminate(run);
+    // Then check that profile cores never outlive a signalled or killed app.
+    require("./desktop-lifetime.cjs");
+  })();
 } else {
+  const { stage, api } = harness.instrument("result.json");
   const { app, BrowserWindow, Menu } = electron;
   const directory = process.env.NONSTOPVIBIN_DATA_DIR;
   const samples = [];
@@ -58,7 +59,9 @@ if (typeof electron === "string") {
     return child;
   };
   app.setAppPath(resolve(__dirname, ".."));
+  stage("load-main");
   require("../dist/desktop/main.cjs");
+  void app.whenReady().then(() => stage("app-ready"));
   const deadline = Date.now() + 50_000;
   async function until(check) {
     while (!(await check())) {
@@ -82,6 +85,7 @@ if (typeof electron === "string") {
         realpathSync(app.getPath(name)),
         realpathSync(join(directory, name)),
       );
+    stage("wait-menu");
     await until(() =>
       viewMenu()?.items.some((item) => item.label === "Open main window"),
     );
@@ -92,16 +96,19 @@ if (typeof electron === "string") {
     );
     for (let cycle = 0; cycle < 3; cycle++) {
       const started = Date.now();
+      stage(`c${cycle}:open-main`);
       click("Open main window");
       await until(() =>
         BrowserWindow.getAllWindows().some((window) => window.isVisible()),
       );
       const window = BrowserWindow.getAllWindows()[0];
       await until(() => !window.webContents.isLoading());
+      stage(`c${cycle}:bootstrap`);
       const { token } = await window.webContents.executeJavaScript(
         "window.nonstopvibin.bootstrap()",
       );
       const origin = new URL(window.webContents.getURL()).origin;
+      if (cycle === 0) api(origin, token);
       const state = await fetch(`${origin}/api/state`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -116,6 +123,7 @@ if (typeof electron === "string") {
         milliseconds: Date.now() - started,
       });
       if (cycle === 0) {
+        stage("c0:create-profile");
         assert.equal(
           await window.webContents.executeJavaScript(
             "Notification.requestPermission()",
@@ -156,6 +164,7 @@ if (typeof electron === "string") {
           };
           document.querySelector('.proxy-card button').click();
         }`);
+        stage("c0:background-failure");
         await delay(100);
         window.close();
         await until(() => !window.isVisible());
@@ -184,6 +193,7 @@ if (typeof electron === "string") {
           true,
           "reopening cancels deferred close",
         );
+        stage("c0:start-profile");
         await request(`/profiles/${profile.id}/start`, "POST");
         const { key } = await request(`/profiles/${profile.id}/key`);
         proxy = { endpoint: `${origin}/p/${profile.slug}/v1`, key };
@@ -193,6 +203,7 @@ if (typeof electron === "string") {
           ),
         );
         // Exercise the real modal beforeunload guard, then discard through its close button.
+        stage("c0:unsaved-form");
         await window.webContents.executeJavaScript(
           "document.querySelector('[aria-label=\"New profile\"]').click()",
         );
@@ -211,6 +222,7 @@ if (typeof electron === "string") {
         );
         await delay(100);
       }
+      stage(`c${cycle}:logo`);
       await until(() =>
         window.webContents.executeJavaScript(
           "Boolean(document.querySelector('.nv-ball'))",
@@ -228,6 +240,7 @@ if (typeof electron === "string") {
         "logo finishes its finite animation and stays idle",
       );
       if (cycle === 1) {
+        stage("c1:settings");
         await window.webContents.executeJavaScript(
           "document.querySelector('[title=\"Settings\"]').click()",
         );
@@ -341,6 +354,7 @@ if (typeof electron === "string") {
           "global retention draft was not applied",
         );
         console.log("Settings profile switching and isolated updates passed.");
+        stage("c1:unsaved-settings");
         await delay(100);
         window.close();
         await until(() => !window.isVisible());
@@ -384,6 +398,7 @@ if (typeof electron === "string") {
         });
       }
       if (cycle === 2) {
+        stage("c2:settings-restored");
         await until(() =>
           window.webContents.executeJavaScript(
             "Boolean(document.querySelector('#usage-retention'))",
@@ -397,6 +412,7 @@ if (typeof electron === "string") {
           "settings page restores without applying the discarded limit",
         );
       }
+      stage(`c${cycle}:close-main`);
       if (!window.isDestroyed()) window.close();
       await until(() => BrowserWindow.getAllWindows().length === 0);
       const response = await fetch(`${origin}/api/state`, {
@@ -415,6 +431,7 @@ if (typeof electron === "string") {
         200,
         "profile proxy remains available with both windows closed",
       );
+      stage(`c${cycle}:quota-popup`);
       click("Subscription quotas");
       await until(() =>
         BrowserWindow.getAllWindows().some((entry) => entry.isVisible()),
@@ -454,6 +471,7 @@ if (typeof electron === "string") {
       samples.push({ phase: "closed", cycle, renderers: 0 });
     }
     if (process.platform === "darwin") {
+      stage("outside-click");
       click("Subscription quotas");
       click("Subscription quotas");
       await until(() =>
@@ -491,10 +509,12 @@ if (typeof electron === "string") {
       );
       samples.push({ phase: "outside-click", monitorsReleased: true });
     }
+    stage("second-instance");
     app.emit("second-instance", {}, [], "");
     await until(() =>
       BrowserWindow.getAllWindows().some((entry) => entry.isVisible()),
     );
+    stage("quit");
     writeFileSync(
       join(directory, "result.json"),
       JSON.stringify({ ok: true, samples }),

@@ -2,35 +2,21 @@
 // profile cores never outlive the app: SIGTERM, SIGINT and SIGHUP quit in order,
 // and after SIGKILL the watchdog stops the core.
 const assert = require("node:assert/strict");
-const { execFileSync, spawn } = require("node:child_process");
 const {
   existsSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } = require("node:fs");
-const { basename, join, resolve } = require("node:path");
-const { tmpdir } = require("node:os");
+const { join, resolve } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
+const harness = require("./desktop-harness.cjs");
 
 if (typeof electron === "string") {
   // Processes whose command line names this run's fresh temp directory; only this run creates those.
   const owned = (marker) =>
-    execFileSync("ps", ["-ax", "-ww", "-o", "pid=,command="], {
-      encoding: "utf8",
-    })
-      .split("\n")
-      .map((line) => /^\s*(\d+) (.*)$/.exec(line))
-      .filter(
-        (match) =>
-          match &&
-          match[2].includes(marker) &&
-          Number(match[1]) !== process.pid,
-      )
-      .map(([, pid, command]) => ({ pid: Number(pid), command }));
+    harness.processes(marker).map(({ pid, command }) => ({ pid, command }));
   async function until(check, label, timeout = 30_000) {
     const deadline = Date.now() + timeout;
     while (!(await check())) {
@@ -38,21 +24,17 @@ if (typeof electron === "string") {
       await delay(100);
     }
   }
+  // Four launches take about 15 s locally; each one's own waits end within 80 s.
+  const limit = 150_000;
+  let active;
   async function scenario(signal) {
-    const directory = mkdtempSync(join(tmpdir(), "nonstopvibin-lifetime-"));
-    const marker = basename(directory);
-    const launched = Date.now();
-    const child = spawn(electron, [__filename, "--background"], {
-      stdio: ["ignore", "inherit", "inherit"],
-      env: {
-        ...process.env,
-        NONSTOPVIBIN_DATA_DIR: directory,
-        NONSTOPVIBIN_PORT: "0",
-      },
-    });
-    const exited = new Promise((done) =>
-      child.on("exit", (code, signalCode) => done({ code, signalCode })),
-    );
+    const run = harness.launch(`lifetime-${signal}`, __filename, [
+      "ignore",
+      "inherit",
+      "inherit",
+    ]);
+    active = run;
+    const { child, directory, marker, launched, exited } = run;
     try {
       const ready = join(directory, "ready.json");
       await until(() => existsSync(ready), "profile core running", 50_000);
@@ -100,31 +82,35 @@ if (typeof electron === "string") {
         );
       }
       return { signal, milliseconds: Date.now() - signalled };
+    } catch (error) {
+      if (!run.expired) {
+        console.error(error);
+        await harness.diagnose(run, "failure");
+      }
+      throw error;
     } finally {
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGKILL");
-      for (const { pid } of owned(marker))
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
-      rmSync(directory, { recursive: true, force: true });
+      await harness.terminate(run);
+      active = undefined;
     }
   }
+  const cancel = harness.limit(limit, "Desktop core lifetime", () => active);
   (async () => {
     const results = [];
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGKILL"])
       results.push(await scenario(signal));
     console.log("Desktop core lifetime passed:", JSON.stringify(results));
-  })().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  })()
+    .catch(() => {
+      process.exitCode = 1; // The failing scenario printed its error and diagnostics.
+    })
+    .finally(cancel);
 } else {
+  // Four short launches; their stages print only when one fails.
+  const { stage, api } = harness.instrument("ready.json", { quiet: true });
   const { app, BrowserWindow, Menu } = electron;
   const directory = process.env.NONSTOPVIBIN_DATA_DIR;
   app.setAppPath(resolve(__dirname, ".."));
+  stage("load-main");
   require("../dist/desktop/main.cjs");
   const deadline = Date.now() + 40_000;
   async function until(check) {
@@ -138,7 +124,9 @@ if (typeof electron === "string") {
       ?.items.find((item) => item.label === "View")
       ?.submenu.items.find((item) => item.label === "Open main window");
   async function main() {
+    stage("wait-menu");
     await until(() => openItem());
+    stage("open-main");
     openItem().click();
     await until(() => BrowserWindow.getAllWindows().length > 0);
     const window = BrowserWindow.getAllWindows()[0];
@@ -147,6 +135,7 @@ if (typeof electron === "string") {
       "window.nonstopvibin.bootstrap()",
     );
     const origin = new URL(window.webContents.getURL()).origin;
+    api(origin, token);
     const request = async (path, method = "GET", body) => {
       const response = await fetch(`${origin}/api${path}`, {
         method,
@@ -160,7 +149,9 @@ if (typeof electron === "string") {
       return response.json();
     };
     const profile = await request("/profiles", "POST", { name: "Lifetime" });
+    stage("start-profile");
     await request(`/profiles/${profile.id}/start`, "POST");
+    stage("ready");
     window.close();
     writeFileSync(join(directory, "ready.json"), JSON.stringify({ ok: true }));
   }

@@ -68,7 +68,17 @@ jobs:
         timeout-minutes: 5
         run: bun run install-electron
       - if: runner.os == 'macOS'
+        # Backstop above the test's own limits (90 s, then 150 s for the lifetime runs).
+        timeout-minutes: 6
         run: bun tests/desktop-smoke.cjs
+      - if: runner.os == 'macOS' && (failure() || cancelled())
+        name: Upload desktop smoke diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          retention-days: 7
+          if-no-files-found: ignore
+          name: desktop-smoke-diagnostics-${{ runner.os }}
+          path: test-results/desktop-smoke/
       - if: runner.os == 'Linux'
         name: Desktop smoke with Chromium sandbox
         run: |
