@@ -21,25 +21,29 @@ const psEnvironment = {
 };
 
 /**
- * `ps` start time and full command line, or undefined if no such process (or no
- * `ps`, which makes nothing provable). Other failures throw rather than read as "gone".
+ * `ps` start time and full command line, or undefined if `ps` reports no such process.
+ * Every other failure throws, including `ps` not running at all (ENOENT, also how Bun
+ * reports descriptor exhaustion), so nothing unprovable reads as "gone". `ps` is for tests.
  */
 export async function processIdentity(
   pid: number,
+  ps = "ps",
 ): Promise<string | undefined> {
   try {
     const { stdout } = await run(
-      "ps",
+      ps,
       ["-ww", "-o", "lstart=", "-o", "command=", "-p", String(pid)],
       { env: psEnvironment },
     );
     return stdout.trim() || undefined;
   } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code === 1 || code === "ENOENT") return undefined;
+    if (error instanceof Error && "code" in error && error.code === 1)
+      return undefined;
     throw error;
   }
 }
+/** Identity lookup used by the ledger; injectable so tests can make `ps` fail. */
+export type Identify = (pid: number) => Promise<string | undefined>;
 /** The command part of an identity; `lstart` is fixed-width in the C locale. */
 function identityCommand(identity: string): string {
   return identity.slice(24).trimStart();
@@ -103,7 +107,8 @@ const entrySchema = z
   .strict();
 type Entry = z.infer<typeof entrySchema>;
 
-let ownerIdentity: Promise<string | undefined> | undefined;
+// Per lookup, so an injected one never shares this process's cached identity.
+const ownerIdentities = new WeakMap<Identify, Promise<string | undefined>>();
 function ledgerDirectory(directory: string): string {
   return join(directory, "core-processes");
 }
@@ -112,18 +117,19 @@ function ledgerDirectory(directory: string): string {
 export async function recordCore(
   directory: string,
   core: ChildProcess,
+  identify: Identify = processIdentity,
 ): Promise<string | undefined> {
   const pid = core.pid;
   if (pid === undefined) return undefined;
+  let ownerIdentity = ownerIdentities.get(identify);
   if (!ownerIdentity) {
-    ownerIdentity = processIdentity(process.pid);
-    // A failed lookup (e.g. EMFILE) is not cached, so the next record retries it.
-    ownerIdentity.catch(() => (ownerIdentity = undefined));
+    ownerIdentity = identify(process.pid);
+    ownerIdentities.set(identify, ownerIdentity);
+    // Only a determined identity is cached; a failed or empty lookup is retried by the next record.
+    const forget = () => ownerIdentities.delete(identify);
+    ownerIdentity.then((owner) => owner || forget(), forget);
   }
-  const [identity, owner] = await Promise.all([
-    processIdentity(pid),
-    ownerIdentity,
-  ]);
+  const [identity, owner] = await Promise.all([identify(pid), ownerIdentity]);
   // Exit can win the race; an entry for an exited core would only be dropped later.
   if (!identity || !owner || core.exitCode !== null || core.signalCode !== null)
     return undefined;
@@ -147,7 +153,10 @@ export function forgetCore(path: string | undefined): void {
  * Stops cores recorded under this data directory whose owner has exited. Live
  * owners, other directories and reused PIDs are never signalled; stale entries go.
  */
-export async function reapOrphanedCores(directory: string): Promise<void> {
+export async function reapOrphanedCores(
+  directory: string,
+  identify: Identify = processIdentity,
+): Promise<void> {
   const ledger = ledgerDirectory(directory);
   let names: string[];
   try {
@@ -167,16 +176,16 @@ export async function reapOrphanedCores(directory: string): Promise<void> {
       continue;
     }
     try {
-      if ((await processIdentity(entry.owner.pid)) === entry.owner.identity)
-        continue; // Its owner still runs and manages it.
+      // Its owner still runs and manages it.
+      if ((await identify(entry.owner.pid)) === entry.owner.identity) continue;
       const command = identityCommand(entry.identity);
       const at = command.lastIndexOf(prefix);
       const ours =
         name === `${entry.pid}.json` &&
         at > 0 &&
         /^[0-9a-f-]{36}\/config\.yaml$/.test(command.slice(at + prefix.length));
-      if (ours && (await processIdentity(entry.pid)) === entry.identity)
-        await stopOrphan(entry);
+      if (ours && (await identify(entry.pid)) === entry.identity)
+        await stopOrphan(entry, identify);
       await rm(path, { force: true });
     } catch {
       // Unprovable this time (e.g. ps could not run): keep the entry for the next start.
@@ -190,13 +199,13 @@ function signal(pid: number, name: NodeJS.Signals): void {
     // It exited between the identity check and the signal.
   }
 }
-async function stopOrphan(entry: Entry): Promise<void> {
+async function stopOrphan(entry: Entry, identify: Identify): Promise<void> {
   signal(entry.pid, "SIGTERM");
   // Not our child, so exit cannot be awaited; this bounded wait runs only while reaping.
   for (let waited = 0; waited < 5000; waited += 100) {
     await delay(100);
-    if ((await processIdentity(entry.pid)) !== entry.identity) return;
+    if ((await identify(entry.pid)) !== entry.identity) return;
   }
-  if ((await processIdentity(entry.pid)) === entry.identity)
+  if ((await identify(entry.pid)) === entry.identity)
     signal(entry.pid, "SIGKILL");
 }

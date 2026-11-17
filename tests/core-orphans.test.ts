@@ -14,6 +14,8 @@ import { fileKeyCodec } from "../src/server/vault.ts";
 import {
   processIdentity,
   reapOrphanedCores,
+  recordCore,
+  type Identify,
 } from "../src/server/core-processes.ts";
 
 const run = promisify(execFile);
@@ -269,61 +271,101 @@ test(
   },
 );
 
+/** A synthetic identity: `lstart` width, then a command. */
+const fakeIdentity = (pid: number) =>
+  `Thu Jan  1 00:00:00 1970     process ${pid}`;
+/** The real lookup, but `ps` cannot be executed (as under descriptor exhaustion in Bun). */
+const psUnavailable = (root: string) => (pid: number) =>
+  processIdentity(pid, join(root, "missing-ps"));
+
+test("a failed owner identity lookup is retried by the next record", async () => {
+  const { root, data } = await fixture();
+  const processes = new Processes();
+  try {
+    const core = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
+    processes.children.push(core);
+    let failures = 1;
+    const identify: Identify = async (pid) => {
+      if (pid === process.pid && failures-- > 0)
+        throw Object.assign(new Error("spawn ps EMFILE"), { code: "EMFILE" });
+      return fakeIdentity(pid);
+    };
+    await assert.rejects(recordCore(data, core, identify), { code: "EMFILE" });
+    assert.equal(
+      await recordCore(data, core, identify),
+      join(ledger(data), `${core.pid}.json`),
+    );
+    assert.deepEqual(await readdir(ledger(data)), [`${core.pid}.json`]);
+  } finally {
+    await processes.cleanup(root);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an owner identity lookup without ps writes nothing and is retried", async () => {
+  const { root, data } = await fixture();
+  const processes = new Processes();
+  try {
+    const core = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
+    processes.children.push(core);
+    const unavailable = psUnavailable(root);
+    let calls = 0;
+    // Only the first owner lookup lacks ps; everything else is the real lookup.
+    const identify: Identify = (pid) =>
+      pid === process.pid && calls++ === 0
+        ? unavailable(pid)
+        : processIdentity(pid);
+    await assert.rejects(recordCore(data, core, identify), { code: "ENOENT" });
+    assert.deepEqual(await readdir(data), [], "no entry for that core");
+    assert.equal(
+      await recordCore(data, core, identify),
+      join(ledger(data), `${core.pid}.json`),
+    );
+    assert.equal(calls, 2, "the owner was looked up again");
+  } finally {
+    await processes.cleanup(root);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test(
-  "a failed owner identity lookup is retried by the next record",
+  "reaping without ps keeps the entry and signals nothing",
   { timeout: 20_000 },
   async () => {
     const { root, data } = await fixture();
     const processes = new Processes();
     try {
-      // A separate process nearly exhausts its own descriptors so spawning ps fails with EMFILE.
-      const script = join(root, "record.ts");
-      await writeFile(
-        script,
-        `import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
-import { recordCore } from ${source("core-processes.ts")};
-const core = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
-try {
-  const held = [];
-  try {
-    for (;;) held.push(openSync("/dev/null", "r"));
-  } catch (error) {
-    if (error.code !== "EMFILE") throw error;
-  }
-  // With none free Bun reports ps as missing (ENOENT); one free fails at socketpair.
-  closeSync(held.pop());
-  const first = await recordCore(${JSON.stringify(data)}, core).then(
-    () => "recorded",
-    (error) => error.code ?? "failed",
-  );
-  for (const fd of held) closeSync(fd);
-  const second = await recordCore(${JSON.stringify(data)}, core);
-  console.log(JSON.stringify({ first, second, pid: core.pid }));
-} finally {
-  core.kill("SIGKILL");
-}
-`,
+      // A shell blocked in its builtin read, with the command line of a core of this directory.
+      const config = join(
+        data,
+        "profiles",
+        "00000000-0000-4000-8000-000000000000",
+        "config.yaml",
       );
       const child = spawn(
         "/bin/sh",
-        ["-c", 'ulimit -n 256 && exec "$0" "$1"', process.execPath, script],
-        { stdio: ["ignore", "pipe", "inherit"] },
+        ["-c", "read _", "core", "--config", config],
+        { stdio: ["pipe", "ignore", "ignore"] },
       );
       processes.children.push(child);
-      let output = "";
-      child.stdout!.on("data", (chunk) => (output += chunk));
-      const [code] = await once(child, "exit");
-      assert.equal(code, 0);
-      // SAFETY: the script above prints exactly this shape.
-      const result = JSON.parse(output) as {
-        first: string;
-        second: string | null;
-        pid: number;
-      };
-      assert.equal(result.first, "EMFILE", "the first lookup fails");
-      assert.equal(result.second, join(ledger(data), `${result.pid}.json`));
-      assert.deepEqual(await readdir(ledger(data)), [`${result.pid}.json`]);
+      const core = await processes.track(child.pid);
+      await mkdir(ledger(data), { mode: 0o700 });
+      const name = `${core.pid}.json`;
+      await writeFile(
+        join(ledger(data), name),
+        JSON.stringify({
+          ...core,
+          owner: { pid: process.pid, identity: fakeIdentity(process.pid) },
+        }),
+        { mode: 0o600 },
+      );
+      await reapOrphanedCores(data, psUnavailable(root));
+      assert.deepEqual(await readdir(ledger(data)), [name], "the entry stays");
+      assert.ok(await alive(core), "nothing is signalled");
+      // Control: with ps, the same entry is an orphan of a dead owner and is reaped.
+      await reapOrphanedCores(data);
+      assert.ok(!(await alive(core)));
+      assert.deepEqual(await readdir(ledger(data)), []);
     } finally {
       await processes.cleanup(root);
       await rm(root, { recursive: true, force: true });
