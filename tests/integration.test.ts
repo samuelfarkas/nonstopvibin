@@ -1122,6 +1122,8 @@ test(
       }
       pages++;
       assert.throws(() => app.core.port(profile.id), /stopped/);
+      // A gateway request finishing during the stop makes a scheduled drain due at once.
+      app.core.markUsageActivity(profile.id);
       // Yield so both stop callers overlap the same destructive drain.
       await delay(10);
       res.setHeader("Content-Type", "application/json");
@@ -1135,8 +1137,17 @@ test(
     // Finish any poll of the real core before replacing its queue with the fixture.
     await app.core.collectUsage(profile.id);
     runtime.port = address.port;
+    const coalesce = app.core.timing.coalesce;
+    app.core.timing.coalesce = 0;
+    // As on a slow runner, the core takes a while to exit after the stop's final drain.
+    const kill = runtime.child.kill.bind(runtime.child);
+    runtime.child.kill = (signal) => {
+      setTimeout(() => kill(signal), 300);
+      return true;
+    };
     try {
       await Promise.all([app.core.stop(profile.id), app.core.stop(profile.id)]);
+      // Only the stop reads a stopping core's queue: 500, 500, then the short page.
       assert.equal(pages, 3);
       assert.equal(queue.length, 0);
       assert.equal(app.store.summary(profile.id).requests, 1001);
@@ -1145,6 +1156,7 @@ test(
         runtime.child.exitCode !== null || runtime.child.signalCode !== null,
       );
     } finally {
+      app.core.timing.coalesce = coalesce;
       fixture.close();
       fixture.closeAllConnections();
       await app.core.stop(profile.id);

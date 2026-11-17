@@ -1556,7 +1556,12 @@ export class CorePool {
         this.polling = (async () => {
           for (const [profileId, runtime] of this.runtimes) {
             if (this.shuttingDown) return;
-            if (runtime.state !== "running" || Date.now() < runtime.nextUsageAt)
+            // A stopping profile's own stop drains its queue until a short page.
+            if (
+              runtime.state !== "running" ||
+              runtime.stopping ||
+              Date.now() < runtime.nextUsageAt
+            )
               continue;
             // Usage only arises from gateway traffic, which marks activity. Once it has
             // been quiet for the whole window, this drain was the trailing one: sleep
