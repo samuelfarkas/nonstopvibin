@@ -1,4 +1,6 @@
-import { after, before, test } from "node:test";
+// node:test hooks ignore their timeout option under Bun (5 s default); these start and stop cores.
+import { afterAll, beforeAll } from "bun:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { connect } from "node:net";
@@ -8,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
 import { record } from "../src/server/json.ts";
 import type { JsonObject, Profile } from "../src/shared/types.ts";
+import { settle } from "./teardown.ts";
 
 // Mock only the external Anthropic provider. Every request below traverses the
 // real application gateway and the verified, compiled release-pinned core.
@@ -119,122 +122,120 @@ function send(
   });
 }
 const message = (text: string) => [{ role: "user", content: text }];
-before(
-  async () => {
-    directory = await mkdtemp("/tmp/nv-native-anthropic-");
-    upstream = http.createServer(async (req, res) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(Buffer.from(chunk));
-      const body = JSON.parse(Buffer.concat(chunks).toString());
-      observed.push({ path: req.url ?? "", body, headers: req.headers });
-      if (
-        req.headers.authorization ===
-        `Bearer synthetic-native-${exhausted.slug}`
-      ) {
-        res.writeHead(429, {
-          "Content-Type": "application/json",
-          "Retry-After": "60",
-        });
-        res.end(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "rate_limit_error",
-              message: "synthetic quota exhausted",
-            },
-          }),
-        );
-        return;
-      }
-      const content = body.messages[0].content;
-      const label = Array.isArray(content)
-        ? content.find((block: JsonObject) => block.type === "text")?.text
-        : content;
-      if (label === "reject") {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: "synthetic invalid request",
-            },
-            request_id: "req_fixture",
-          }),
-        );
-      } else if (body.stream) {
-        res.writeHead(200, {
-          "Content-Type": "text/event-stream",
-          "Access-Control-Allow-Origin": "https://fixture.invalid",
-          "Set-Cookie": "fixture=not-forwarded",
-        });
-        if (label === "hold") {
-          heldConnections++;
-          res.once("close", () => heldConnections--);
-          res.write(start);
-          return; // Deliberately held until the real client's disconnect cancels it.
-        }
-        if (label === "truncated") res.end(start);
-        else if (label === "stream-error")
-          res.end(
-            start +
-              frame("error", {
-                error: {
-                  type: "overloaded_error",
-                  message: "synthetic stream failure",
-                },
-              }),
-          );
-        else {
-          const wire = toolStream();
-          // Fragment transport chunks inside JSON and SSE delimiters.
-          res.write(wire.slice(0, 37));
-          res.write(wire.slice(37, 421));
-          res.end(wire.slice(421));
-        }
-      } else {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            id: "msg_native_fixture",
-            type: "message",
-            role: "assistant",
-            model,
-            content: [{ type: "text", text: "fixture replay accepted" }],
-            stop_reason: "end_turn",
-            stop_sequence: null,
-            usage: { input_tokens: 12, output_tokens: 8 },
-          }),
-        );
-      }
-    });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const address = upstream.address();
-    assert.ok(address instanceof Object);
-    providerUrl = `http://127.0.0.1:${address.port}`;
-    app = await Application.create({
-      directory,
-      agentHome: join(directory, "home"),
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
-      port: 0,
-      requirePinnedCore: true,
-    });
-    primary = app.store.createProfile("Native fixture", "forest");
-    other = app.store.createProfile("Other native fixture", "blue");
-    exhausted = app.store.createProfile("Exhausted native fixture", "forest");
-    for (const profile of [primary, other, exhausted]) {
-      addAccount(profile);
-      await app.core.start(profile.id);
+beforeAll(async () => {
+  directory = await mkdtemp("/tmp/nv-native-anthropic-");
+  upstream = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    observed.push({ path: req.url ?? "", body, headers: req.headers });
+    if (
+      req.headers.authorization === `Bearer synthetic-native-${exhausted.slug}`
+    ) {
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": "60",
+      });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "synthetic quota exhausted",
+          },
+        }),
+      );
+      return;
     }
-  },
-  { timeout: 30000 },
-);
-after(async () => {
+    const content = body.messages[0].content;
+    const label = Array.isArray(content)
+      ? content.find((block: JsonObject) => block.type === "text")?.text
+      : content;
+    if (label === "reject") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "synthetic invalid request",
+          },
+          request_id: "req_fixture",
+        }),
+      );
+    } else if (body.stream) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Access-Control-Allow-Origin": "https://fixture.invalid",
+        "Set-Cookie": "fixture=not-forwarded",
+      });
+      if (label === "hold") {
+        heldConnections++;
+        res.once("close", () => heldConnections--);
+        res.write(start);
+        return; // Deliberately held until the real client's disconnect cancels it.
+      }
+      if (label === "truncated") res.end(start);
+      else if (label === "stream-error")
+        res.end(
+          start +
+            frame("error", {
+              error: {
+                type: "overloaded_error",
+                message: "synthetic stream failure",
+              },
+            }),
+        );
+      else {
+        const wire = toolStream();
+        // Fragment transport chunks inside JSON and SSE delimiters.
+        res.write(wire.slice(0, 37));
+        res.write(wire.slice(37, 421));
+        res.end(wire.slice(421));
+      }
+    } else {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "msg_native_fixture",
+          type: "message",
+          role: "assistant",
+          model,
+          content: [{ type: "text", text: "fixture replay accepted" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 12, output_tokens: 8 },
+        }),
+      );
+    }
+  });
+  await new Promise<void>((resolve) =>
+    upstream.listen(0, "127.0.0.1", resolve),
+  );
+  const address = upstream.address();
+  assert.ok(address instanceof Object);
+  providerUrl = `http://127.0.0.1:${address.port}`;
+  app = await Application.create({
+    directory,
+    agentHome: join(directory, "home"),
+    binary: resolve(".vendor/core/cli-proxy-api"),
+    clientDirectory: resolve("dist/client"),
+    port: 0,
+    requirePinnedCore: true,
+  });
+  primary = app.store.createProfile("Native fixture", "forest");
+  other = app.store.createProfile("Other native fixture", "blue");
+  exhausted = app.store.createProfile("Exhausted native fixture", "forest");
+  for (const profile of [primary, other, exhausted]) {
+    addAccount(profile);
+    await app.core.start(profile.id);
+  }
+}, 30_000);
+// A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
+// settle names whatever is still running well before this hook's own limit.
+afterAll(async () => {
   if (app) {
-    await app.close();
+    await settle("app.close()", app.close(), app.core, 25_000);
     await rm(app.agentSetup.socketDirectory, { recursive: true, force: true });
   }
   if (upstream)
@@ -243,90 +244,96 @@ after(async () => {
       upstream.closeAllConnections();
     });
   if (directory) await rm(directory, { recursive: true, force: true });
-});
+}, 30_000);
 
-test("protected readiness uses management UUIDs and profile slugs without spending inference", async () => {
-  const before = observed.length;
-  const management = {
-    Authorization: `Bearer ${app.token}`,
-    "Content-Type": "application/json",
-  };
-  const state = await fetch(`${app.origin}/api/state`, { headers: management });
-  assert.equal(state.status, 200);
-  const projected = (await state.json()).profiles.find(
-    (profile: Profile) => profile.id === primary.id,
-  );
-  assert.equal(projected.slug, primary.slug);
-  assert.equal(projected.endpoint, app.endpoint(primary.id));
-  assert.equal(projected.runtime, "running");
-  const models = await fetch(
-    `${app.origin}/api/profiles/${primary.id}/models`,
-    { headers: management },
-  );
-  assert.equal(models.status, 200);
-  assert.ok(
-    (await models.json()).some((entry: { id: string }) => entry.id === model),
-  );
-  const catalog = await fetch(`${app.endpoint(primary.id)}/models`, {
-    headers: { "x-api-key": app.store.secret(`${primary.id}:client`) },
-  });
-  assert.equal(catalog.status, 200);
-  const catalogBody = await catalog.json();
-  assert.equal(catalogBody.object, "list");
-  assert.ok(
-    catalogBody.data.some((entry: { id: string }) => entry.id === model),
-  );
-  const checkUrl = `${app.origin}/api/profiles/${primary.id}/agent-check`;
-  const check = await fetch(checkUrl, {
-    method: "POST",
-    headers: management,
-    body: "{}",
-  });
-  assert.equal(check.status, 200);
-  assert.deepEqual(await check.json(), { ok: true });
-  const managementCannotInfer = await fetch(
-    `${app.endpoint(primary.id)}/models`,
-    { headers: management },
-  );
-  assert.equal(managementCannotInfer.status, 401);
-  const missing = await fetch(
-    `${app.origin}/api/profiles/00000000-0000-4000-8000-000000000000/models`,
-    { headers: management },
-  );
-  assert.equal(missing.status, 404);
-  const empty = app.store.createProfile("Empty native fixture", "blue");
-  await app.core.start(empty.id);
-  const emptyCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
-    headers: headers(empty),
-  });
-  assert.equal(emptyCatalog.status, 200);
-  assert.deepEqual(await emptyCatalog.json(), {
-    data: [],
-    first_id: "",
-    has_more: false,
-    last_id: "",
-  });
-  const emptyCheck = await fetch(
-    `${app.origin}/api/profiles/${empty.id}/agent-check`,
-    { method: "POST", headers: management, body: "{}" },
-  );
-  assert.equal(emptyCheck.status, 400);
-  assert.equal(
-    (await emptyCheck.json()).error.message,
-    "No models are available. Refresh the profile catalog.",
-  );
-  await app.core.stop(empty.id);
-  const stoppedCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
-    headers: headers(empty),
-  });
-  assert.equal(stoppedCatalog.status, 503);
-  const stoppedCheck = await fetch(
-    `${app.origin}/api/profiles/${empty.id}/agent-check`,
-    { method: "POST", headers: management, body: "{}" },
-  );
-  assert.equal(stoppedCheck.status, 502);
-  assert.equal(observed.length, before);
-});
+test(
+  "protected readiness uses management UUIDs and profile slugs without spending inference",
+  { timeout: 15_000 },
+  async () => {
+    const before = observed.length;
+    const management = {
+      Authorization: `Bearer ${app.token}`,
+      "Content-Type": "application/json",
+    };
+    const state = await fetch(`${app.origin}/api/state`, {
+      headers: management,
+    });
+    assert.equal(state.status, 200);
+    const projected = (await state.json()).profiles.find(
+      (profile: Profile) => profile.id === primary.id,
+    );
+    assert.equal(projected.slug, primary.slug);
+    assert.equal(projected.endpoint, app.endpoint(primary.id));
+    assert.equal(projected.runtime, "running");
+    const models = await fetch(
+      `${app.origin}/api/profiles/${primary.id}/models`,
+      { headers: management },
+    );
+    assert.equal(models.status, 200);
+    assert.ok(
+      (await models.json()).some((entry: { id: string }) => entry.id === model),
+    );
+    const catalog = await fetch(`${app.endpoint(primary.id)}/models`, {
+      headers: { "x-api-key": app.store.secret(`${primary.id}:client`) },
+    });
+    assert.equal(catalog.status, 200);
+    const catalogBody = await catalog.json();
+    assert.equal(catalogBody.object, "list");
+    assert.ok(
+      catalogBody.data.some((entry: { id: string }) => entry.id === model),
+    );
+    const checkUrl = `${app.origin}/api/profiles/${primary.id}/agent-check`;
+    const check = await fetch(checkUrl, {
+      method: "POST",
+      headers: management,
+      body: "{}",
+    });
+    assert.equal(check.status, 200);
+    assert.deepEqual(await check.json(), { ok: true });
+    const managementCannotInfer = await fetch(
+      `${app.endpoint(primary.id)}/models`,
+      { headers: management },
+    );
+    assert.equal(managementCannotInfer.status, 401);
+    const missing = await fetch(
+      `${app.origin}/api/profiles/00000000-0000-4000-8000-000000000000/models`,
+      { headers: management },
+    );
+    assert.equal(missing.status, 404);
+    const empty = app.store.createProfile("Empty native fixture", "blue");
+    await app.core.start(empty.id);
+    const emptyCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
+      headers: headers(empty),
+    });
+    assert.equal(emptyCatalog.status, 200);
+    assert.deepEqual(await emptyCatalog.json(), {
+      data: [],
+      first_id: "",
+      has_more: false,
+      last_id: "",
+    });
+    const emptyCheck = await fetch(
+      `${app.origin}/api/profiles/${empty.id}/agent-check`,
+      { method: "POST", headers: management, body: "{}" },
+    );
+    assert.equal(emptyCheck.status, 400);
+    assert.equal(
+      (await emptyCheck.json()).error.message,
+      "No models are available. Refresh the profile catalog.",
+    );
+    await app.core.stop(empty.id);
+    const stoppedCatalog = await fetch(`${app.endpoint(empty.id)}/models`, {
+      headers: headers(empty),
+    });
+    assert.equal(stoppedCatalog.status, 503);
+    const stoppedCheck = await fetch(
+      `${app.origin}/api/profiles/${empty.id}/agent-check`,
+      { method: "POST", headers: management, body: "{}" },
+    );
+    assert.equal(stoppedCheck.status, 502);
+    assert.equal(observed.length, before);
+  },
+);
 
 test("native Messages SSE preserves ordering, tool IDs, fragmented arguments and tool-result replay", async () => {
   const response = await send({

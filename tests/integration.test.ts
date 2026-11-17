@@ -1,4 +1,6 @@
-import { after, before, test } from "node:test";
+// node:test hooks ignore their timeout option under Bun (5 s default); these start and stop cores.
+import { afterAll, beforeAll } from "bun:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -26,6 +28,7 @@ import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
+import { settle } from "./teardown.ts";
 
 let app: Application;
 let company: Profile;
@@ -53,105 +56,104 @@ async function request(
     signal: AbortSignal.timeout(20_000),
   });
 }
-before(
-  async () => {
-    directory = await mkdtemp(join(tmpdir(), "nonstopvibin-test-"));
-    upstream = http.createServer(async (req, res) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(Buffer.from(chunk));
-      const key = req.headers.authorization?.replace("Bearer ", "") ?? "";
-      observed.push(key);
-      if (failCompany && key.startsWith("company")) {
-        res.writeHead(429, {
-          "Content-Type": "application/json",
-          "Retry-After": "60",
-        });
-        res.end(
-          JSON.stringify({
-            error: { message: "quota exhausted", type: "rate_limit_error" },
-          }),
-        );
-        return;
-      }
-      const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-      if (body.messages?.[0]?.content === "hang") {
-        // Never answer: the caller must give up before response headers arrive.
-        onHang?.();
-        return;
-      }
-      if (body.stream) {
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.write(
-          `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture-model", choices: [{ index: 0, delta: { role: "assistant", content: `hello from ${key}` }, finish_reason: null }] })}\n\n`,
-        );
-        res.end(
-          `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14, prompt_tokens_details: { cached_tokens: 5 } } })}\n\ndata: [DONE]\n\n`,
-        );
-      } else {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            id: "fixture",
-            object: "chat.completion",
-            created: 1,
-            model: "fixture-model",
-            choices: [
-              {
-                index: 0,
-                message: { role: "assistant", content: `hello from ${key}` },
-                finish_reason: "stop",
-              },
-            ],
-            usage: {
-              prompt_tokens: 11,
-              completion_tokens: 3,
-              total_tokens: 14,
-              prompt_tokens_details: { cached_tokens: 5 },
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), "nonstopvibin-test-"));
+  upstream = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const key = req.headers.authorization?.replace("Bearer ", "") ?? "";
+    observed.push(key);
+    if (failCompany && key.startsWith("company")) {
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": "60",
+      });
+      res.end(
+        JSON.stringify({
+          error: { message: "quota exhausted", type: "rate_limit_error" },
+        }),
+      );
+      return;
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    if (body.messages?.[0]?.content === "hang") {
+      // Never answer: the caller must give up before response headers arrive.
+      onHang?.();
+      return;
+    }
+    if (body.stream) {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(
+        `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture-model", choices: [{ index: 0, delta: { role: "assistant", content: `hello from ${key}` }, finish_reason: null }] })}\n\n`,
+      );
+      res.end(
+        `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14, prompt_tokens_details: { cached_tokens: 5 } } })}\n\ndata: [DONE]\n\n`,
+      );
+    } else {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "fixture",
+          object: "chat.completion",
+          created: 1,
+          model: "fixture-model",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: `hello from ${key}` },
+              finish_reason: "stop",
             },
-          }),
-        );
-      }
-    });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const addr = upstream.address();
-    assert.ok(addr instanceof Object);
-    upstreamBase = `http://127.0.0.1:${addr.port}/v1`;
-    app = await Application.create({
-      agentHome: join(directory, "agent-home"),
-      directory,
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
-      port: 0,
-    });
-    company = app.store.createProfile("Company A", "forest");
-    personal = app.store.createProfile("Personal", "blue");
-    for (const [profile, keys] of [
-      [company, ["company-one", "company-two"]],
-      [personal, ["personal-one"]],
-    ] as const)
-      for (const key of keys)
-        app.store.saveApiAccount(
-          profile.id,
-          {
-            id: key,
-            name: key,
-            provider: "custom",
-            baseUrl: upstreamBase,
-            prefix: "",
-            disabled: false,
-            models: [{ id: "fixture-model", protocol: "openai" }],
+          ],
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 3,
+            total_tokens: 14,
+            prompt_tokens_details: { cached_tokens: 5 },
           },
-          key,
-        );
-    await app.core.start(company.id);
-    await app.core.start(personal.id);
-  },
-  { timeout: 30_000 },
-);
-after(async () => {
-  if (app) await app.close();
+        }),
+      );
+    }
+  });
+  await new Promise<void>((resolve) =>
+    upstream.listen(0, "127.0.0.1", resolve),
+  );
+  const addr = upstream.address();
+  assert.ok(addr instanceof Object);
+  upstreamBase = `http://127.0.0.1:${addr.port}/v1`;
+  app = await Application.create({
+    agentHome: join(directory, "agent-home"),
+    directory,
+    binary: resolve(".vendor/core/cli-proxy-api"),
+    clientDirectory: resolve("dist/client"),
+    port: 0,
+  });
+  company = app.store.createProfile("Company A", "forest");
+  personal = app.store.createProfile("Personal", "blue");
+  for (const [profile, keys] of [
+    [company, ["company-one", "company-two"]],
+    [personal, ["personal-one"]],
+  ] as const)
+    for (const key of keys)
+      app.store.saveApiAccount(
+        profile.id,
+        {
+          id: key,
+          name: key,
+          provider: "custom",
+          baseUrl: upstreamBase,
+          prefix: "",
+          disabled: false,
+          models: [{ id: "fixture-model", protocol: "openai" }],
+        },
+        key,
+      );
+  await app.core.start(company.id);
+  await app.core.start(personal.id);
+}, 30_000);
+// A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
+// settle names whatever is still running well before this hook's own limit.
+afterAll(async () => {
+  if (app) await settle("app.close()", app.close(), app.core, 25_000);
   if (upstream)
     await new Promise<void>((resolve) => {
       upstream.close(() => resolve());
@@ -163,7 +165,7 @@ after(async () => {
       recursive: true,
       force: true,
     });
-});
+}, 30_000);
 test("a malformed static path is not found and not reported as an app error", async () => {
   const reported = app.state().errors.length;
   const response = await fetch(`${app.origin}/%E0`);
@@ -863,19 +865,23 @@ test("quota exhaustion fails inside Company A while Personal remains available",
   assert.equal(other.status, 200);
   assert.match(await other.text(), /personal-one/);
 });
-test("stopping a profile fails closed and a restart preserves its key and usage", async () => {
-  const key = app.store.secret(`${personal.id}:client`);
-  await app.core.collectUsage(personal.id);
-  const summary = app.store.summary(personal.id);
-  await app.core.stop(personal.id);
-  assert.equal((await request(personal)).status, 503);
-  await app.core.start(personal.id);
-  assert.equal(app.store.secret(`${personal.id}:client`), key);
-  assert.deepEqual(app.store.summary(personal.id), summary);
-  const result = await request(personal);
-  assert.equal(result.status, 200);
-  await result.text();
-});
+test(
+  "stopping a profile fails closed and a restart preserves its key and usage",
+  { timeout: 15_000 },
+  async () => {
+    const key = app.store.secret(`${personal.id}:client`);
+    await app.core.collectUsage(personal.id);
+    const summary = app.store.summary(personal.id);
+    await app.core.stop(personal.id);
+    assert.equal((await request(personal)).status, 503);
+    await app.core.start(personal.id);
+    assert.equal(app.store.secret(`${personal.id}:client`), key);
+    assert.deepEqual(app.store.summary(personal.id), summary);
+    const result = await request(personal);
+    assert.equal(result.status, 200);
+    await result.text();
+  },
+);
 
 test("app startup refreshes an installed extension without starting its profile", async () => {
   const options = {
@@ -1056,49 +1062,53 @@ test(
   },
 );
 
-test("the same API subscription can be added to multiple profiles, with duplicates scoped locally", async () => {
-  const profiles = [
-    app.store.createProfile("Shared A", "forest"),
-    app.store.createProfile("Shared B", "blue"),
-  ];
-  try {
-    for (const profile of profiles) {
-      const add = () =>
-        fetch(`${app.origin}/api/profiles/${profile.id}/api-account`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${app.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            name: "Shared subscription",
-            provider: "custom",
-            baseUrl: upstreamBase,
-            apiKey: "synthetic-shared-key",
-            prefix: "",
-            models: [{ id: "fixture-model", protocol: "openai" }],
-          }),
-        });
-      const response = await add();
-      assert.equal(response.status, 201, await response.text());
-      const duplicate = await add();
-      assert.equal(duplicate.status, 409);
-      await duplicate.text();
-      assert.equal(app.store.apiAccounts(profile.id).length, 1);
-      const routed = await request(profile);
-      assert.equal(routed.status, 200);
-      assert.match(await routed.text(), /synthetic-shared-key/);
+test(
+  "the same API subscription can be added to multiple profiles, with duplicates scoped locally",
+  { timeout: 15_000 },
+  async () => {
+    const profiles = [
+      app.store.createProfile("Shared A", "forest"),
+      app.store.createProfile("Shared B", "blue"),
+    ];
+    try {
+      for (const profile of profiles) {
+        const add = () =>
+          fetch(`${app.origin}/api/profiles/${profile.id}/api-account`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${app.token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              name: "Shared subscription",
+              provider: "custom",
+              baseUrl: upstreamBase,
+              apiKey: "synthetic-shared-key",
+              prefix: "",
+              models: [{ id: "fixture-model", protocol: "openai" }],
+            }),
+          });
+        const response = await add();
+        assert.equal(response.status, 201, await response.text());
+        const duplicate = await add();
+        assert.equal(duplicate.status, 409);
+        await duplicate.text();
+        assert.equal(app.store.apiAccounts(profile.id).length, 1);
+        const routed = await request(profile);
+        assert.equal(routed.status, 200);
+        assert.match(await routed.text(), /synthetic-shared-key/);
+      }
+      assert.notEqual(
+        app.store.apiAccounts(profiles[0]!.id)[0]!.id,
+        app.store.apiAccounts(profiles[1]!.id)[0]!.id,
+      );
+    } finally {
+      for (const profile of profiles) {
+        await app.core.stop(profile.id);
+      }
     }
-    assert.notEqual(
-      app.store.apiAccounts(profiles[0]!.id)[0]!.id,
-      app.store.apiAccounts(profiles[1]!.id)[0]!.id,
-    );
-  } finally {
-    for (const profile of profiles) {
-      await app.core.stop(profile.id);
-    }
-  }
-});
+  },
+);
 
 test(
   "orderly concurrent stops drain every queued page and reject new gateway requests",
