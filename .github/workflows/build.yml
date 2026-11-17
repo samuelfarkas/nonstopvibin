@@ -33,6 +33,11 @@ jobs:
       - run: bun run quality
       - run: bun run build
       - if: runner.os == 'macOS'
+        name: Fetch the Electron binary
+        # Fetched here with a limit; inside the smoke test a stalled download hangs the job.
+        timeout-minutes: 5
+        run: bun run install-electron
+      - if: runner.os == 'macOS'
         run: bun tests/desktop-smoke.cjs
       - if: runner.os == 'macOS'
         name: UI checks (test:ui without its rebuild)
