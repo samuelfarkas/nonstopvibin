@@ -270,6 +270,68 @@ test(
 );
 
 test(
+  "a failed owner identity lookup is retried by the next record",
+  { timeout: 20_000 },
+  async () => {
+    const { root, data } = await fixture();
+    const processes = new Processes();
+    try {
+      // A separate process nearly exhausts its own descriptors so spawning ps fails with EMFILE.
+      const script = join(root, "record.ts");
+      await writeFile(
+        script,
+        `import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
+import { recordCore } from ${source("core-processes.ts")};
+const core = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
+try {
+  const held = [];
+  try {
+    for (;;) held.push(openSync("/dev/null", "r"));
+  } catch (error) {
+    if (error.code !== "EMFILE") throw error;
+  }
+  // With none free Bun reports ps as missing (ENOENT); one free fails at socketpair.
+  closeSync(held.pop());
+  const first = await recordCore(${JSON.stringify(data)}, core).then(
+    () => "recorded",
+    (error) => error.code ?? "failed",
+  );
+  for (const fd of held) closeSync(fd);
+  const second = await recordCore(${JSON.stringify(data)}, core);
+  console.log(JSON.stringify({ first, second, pid: core.pid }));
+} finally {
+  core.kill("SIGKILL");
+}
+`,
+      );
+      const child = spawn(
+        "/bin/sh",
+        ["-c", 'ulimit -n 256 && exec "$0" "$1"', process.execPath, script],
+        { stdio: ["ignore", "pipe", "inherit"] },
+      );
+      processes.children.push(child);
+      let output = "";
+      child.stdout!.on("data", (chunk) => (output += chunk));
+      const [code] = await once(child, "exit");
+      assert.equal(code, 0);
+      // SAFETY: the script above prints exactly this shape.
+      const result = JSON.parse(output) as {
+        first: string;
+        second: string | null;
+        pid: number;
+      };
+      assert.equal(result.first, "EMFILE", "the first lookup fails");
+      assert.equal(result.second, join(ledger(data), `${result.pid}.json`));
+      assert.deepEqual(await readdir(ledger(data)), [`${result.pid}.json`]);
+    } finally {
+      await processes.cleanup(root);
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "normal start, stop and restart leave no watchdog, core or ledger entry",
   { timeout: 20_000 },
   async () => {

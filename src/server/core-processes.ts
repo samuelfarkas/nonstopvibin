@@ -115,7 +115,11 @@ export async function recordCore(
 ): Promise<string | undefined> {
   const pid = core.pid;
   if (pid === undefined) return undefined;
-  ownerIdentity ??= processIdentity(process.pid);
+  if (!ownerIdentity) {
+    ownerIdentity = processIdentity(process.pid);
+    // A failed lookup (e.g. EMFILE) is not cached, so the next record retries it.
+    ownerIdentity.catch(() => (ownerIdentity = undefined));
+  }
   const [identity, owner] = await Promise.all([
     processIdentity(pid),
     ownerIdentity,
