@@ -294,6 +294,13 @@ if (typeof electron === "string") {
       );
       if (cycle === 1) {
         stage("c1:settings");
+        // The start screen shows the logo too; the sidebar exists once state has loaded.
+        await until(() =>
+          run(
+            window,
+            "Boolean(document.querySelector('[title=\"Settings\"]'))",
+          ),
+        );
         await run(
           window,
           "document.querySelector('[title=\"Settings\"]').click()",
