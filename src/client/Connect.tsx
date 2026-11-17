@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { LoaderCircle, Plug } from "lucide-react";
 import type { Model, ProfileState } from "../shared/types.ts";
 import { agentIds, agents, type Agent } from "../shared/agents.ts";
-import { api, copy } from "./api.ts";
-import { CopyButton, Empty } from "./components.tsx";
+import { api } from "./api.ts";
+import { messageOf } from "./action.ts";
+import { Empty } from "./components.tsx";
+import { CopyButton } from "./controls.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
 import "./connect.css";
 
@@ -18,8 +20,6 @@ export function Connect({ profile }: { profile: ProfileState }) {
   const [search, setSearch] = useState("");
   const [revealed, setRevealed] = useState(false);
   const [key, setKey] = useState("");
-  const [keyCopying, setKeyCopying] = useState(false);
-  const [keyCopied, setKeyCopied] = useState(false);
   const accountCatalog = JSON.stringify(
     profile.accounts.map((account) => [
       account.id,
@@ -68,7 +68,7 @@ export function Connect({ profile }: { profile: ProfileState }) {
         icon={<Plug size={27} />}
         title="Start this profile to connect an agent"
       >
-        Its model catalog and connection settings will appear here.
+        <p>Its model catalog and connection settings will appear here.</p>
       </Empty>
     );
   return (
@@ -128,8 +128,10 @@ export function Connect({ profile }: { profile: ProfileState }) {
           </div>
         ) : !models.length ? (
           <Empty title="Connect a subscription first">
-            The proxy has no models available in this profile yet. Add an
-            account from Subscriptions.
+            <p>
+              The proxy has no models available in this profile yet. Add an
+              account from Subscriptions.
+            </p>
           </Empty>
         ) : (
           <QuickSetup
@@ -212,38 +214,13 @@ export function Connect({ profile }: { profile: ProfileState }) {
                       if (!revealed) await getProfileKey();
                       setRevealed(!revealed);
                     } catch (e) {
-                      setError(
-                        e instanceof Error
-                          ? e.message
-                          : "Could not reveal key.",
-                      );
+                      setError(messageOf(e, "Could not reveal key."));
                     }
                   }}
                 >
                   {revealed ? "Hide" : "Reveal"}
                 </button>
-                <button
-                  className="button small"
-                  disabled={keyCopying}
-                  onClick={async () => {
-                    setKeyCopying(true);
-                    try {
-                      await copy(await getProfileKey());
-                      setKeyCopied(true);
-                      setTimeout(() => setKeyCopied(false), 1800);
-                    } catch (e) {
-                      setError(
-                        e instanceof Error
-                          ? e.message
-                          : "Clipboard unavailable. Select and copy the key.",
-                      );
-                    } finally {
-                      setKeyCopying(false);
-                    }
-                  }}
-                >
-                  {keyCopying ? "Copying…" : keyCopied ? "Copied" : "Copy"}
-                </button>
+                <CopyButton text={getProfileKey} onError={setError} />
               </div>
             </div>
           </div>

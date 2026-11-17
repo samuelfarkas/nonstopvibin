@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./add-subscription.css";
 import {
   ArrowLeft,
@@ -36,16 +36,13 @@ import type {
   ProfileState,
   Json,
 } from "../shared/types.ts";
-import { api, openExternal } from "./api.ts";
-import {
-  AccountSummary,
-  CopyButton,
-  Modal,
-  ProviderIcon,
-  Select,
-} from "./components.tsx";
+import { api, desktop, openExternal } from "./api.ts";
+import { messageOf, useAction } from "./action.ts";
+import { usePolling } from "./feed.tsx";
+import { AccountSummary, ProviderIcon } from "./components.tsx";
+import { CopyButton, Modal, Select } from "./controls.tsx";
 
-import { accountLabel } from "./format.ts";
+import { accountLabel, organizationLabel } from "./format.ts";
 
 /** Whether accounts of this provider are seats in separate organizations. */
 const organizations = (provider: string) =>
@@ -81,8 +78,9 @@ export function AddSubscription({
   const [verificationFailed, setVerificationFailed] = useState(false);
   const [selectedTab, setTab] = useState<"oauth" | "api" | "import">("oauth");
   const tab = claudeOnly ? "oauth" : selectedTab;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { busy, error, setError, run: runAction } = useAction();
+  const run = (action: () => Promise<void>) =>
+    runAction(action, "Could not connect subscription.");
   const [session, setSession] = useState<OAuthSession>();
   const [complete, setComplete] =
     useState<Extract<OAuthStatus, { status: "ok" }>>();
@@ -117,13 +115,13 @@ export function AddSubscription({
     return () => {
       cancelled = true;
     };
-  }, [profile.id]);
+  }, [profile.id, setError]);
   useEffect(() => {
     if (tab === "import")
       api("GET /import-sources")
         .then(setSources)
         .catch((e) => setError(e.message));
-  }, [tab]);
+  }, [tab, setError]);
   async function cancelSignIn() {
     if (!session || complete) return;
     try {
@@ -148,23 +146,19 @@ export function AddSubscription({
       else onClose();
     });
   }
-  useEffect(() => {
+  const checkSignIn = useMemo(() => {
     if (!session || complete || review || verificationFailed) return;
-    let cancelled = false;
-    let pending = false;
-    const timer = setInterval(async () => {
-      if (pending || cancelled) return;
-      pending = true;
+    return async (signal: AbortSignal) => {
       try {
         const result = await api("GET /profiles/:profileId/oauth", {
           params: { profileId: profile.id },
           query: { state: session.state },
         });
-        if (!cancelled && result.status === "ok") {
+        if (!signal.aborted && result.status === "ok") {
           setComplete(result);
           await onSaved();
         }
-        if (!cancelled && result.status === "review") {
+        if (!signal.aborted && result.status === "review") {
           if (result.review.action === "reconnect" && reconnectId) {
             // The verified seat already matches the chosen connection; a confirm
             // click adds nothing and users miss it. Fall back to manual review on failure.
@@ -177,17 +171,13 @@ export function AddSubscription({
               if (confirmed.status !== "ok")
                 throw new Error("The connection was not completed. Try again.");
             } catch (e) {
-              if (cancelled) return;
+              if (signal.aborted) return;
               setReview(result.review);
-              setError(
-                e instanceof Error
-                  ? e.message
-                  : "Could not reconnect the subscription.",
-              );
+              setError(messageOf(e, "Could not reconnect the subscription."));
               return;
             }
             // The server has already replaced the credential; show the result even
-            // if a profile refresh restarted this effect while confirming.
+            // if a profile refresh restarted this poll while confirming.
             setComplete(confirmed);
             await onSaved();
             return;
@@ -195,24 +185,18 @@ export function AddSubscription({
           setReview(result.review);
           setError("");
         }
-        if (!cancelled && result.status === "error") {
+        if (!signal.aborted && result.status === "error") {
           setError(
             result.error || "Sign-in did not complete. Start a new sign-in.",
           );
           setSession(undefined);
         }
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Could not check sign-in.");
+        if (!signal.aborted) {
+          setError(messageOf(e, "Could not check sign-in."));
           setVerificationFailed(true);
         }
-      } finally {
-        pending = false;
       }
-    }, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
     };
   }, [
     session,
@@ -222,20 +206,11 @@ export function AddSubscription({
     profile.id,
     reconnectId,
     onSaved,
+    setError,
   ]);
-  async function run(action: () => Promise<void>) {
-    setError("");
-    setBusy(true);
-    try {
-      await action();
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Could not connect subscription.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Sign-in happens in a browser that usually covers this window; keep checking
+  // while it is hidden so the dialog has the result when the user returns.
+  usePolling(checkSignIn, 2000, { whileHidden: true });
   async function begin(provider: OAuthProvider) {
     const next = await api("POST /profiles/:profileId/oauth", {
       params: { profileId: profile.id },
@@ -509,8 +484,8 @@ export function AddSubscription({
           </p>
           {/* In a browser the server may be remote, so its loopback callback
               cannot be reached; pasting is the expected path there. */}
-          <details open={!window.nonstopvibin && !session.userCode}>
-            {window.nonstopvibin ? (
+          <details open={!desktop && !session.userCode}>
+            {desktop ? (
               <>
                 <summary>Browser did not return to the app?</summary>
                 <p>
@@ -568,7 +543,6 @@ export function AddSubscription({
             <label className="field">
               Destination profile
               <Select
-                name="destinationProfile"
                 value={profile.id}
                 disabled={busy}
                 onValueChange={setDestinationId}
@@ -815,10 +789,9 @@ export function AddSubscription({
                       />
                       <span>
                         <strong>
-                          {source.organizationName ||
-                            (source.organizationUuid
-                              ? `Organization ${source.organizationUuid.slice(0, 8)}`
-                              : source.email || source.provider)}
+                          {organizationLabel(source) ||
+                            source.email ||
+                            source.provider}
                         </strong>
                         <small>
                           {source.organizationUuid

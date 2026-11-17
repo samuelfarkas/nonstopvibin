@@ -219,19 +219,3 @@ export interface AgentSetup extends AgentSetupInput {
   provider: string;
   instructions: string;
 }
-export interface DesktopBridge {
-  bootstrap(): Promise<{ token: string; desktop: boolean }>;
-  openExternal(url: string): Promise<void>;
-  copy(text: string): Promise<void>;
-  showWindow(profileId?: string): Promise<void>;
-  releaseWindow(): Promise<void>;
-  setLoginItem(enabled: boolean): Promise<boolean>;
-  getLoginItem(): Promise<boolean>;
-  revealData(): Promise<void>;
-  chooseProject(): Promise<string | null>;
-}
-declare global {
-  interface Window {
-    nonstopvibin?: DesktopBridge;
-  }
-}

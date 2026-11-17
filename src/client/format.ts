@@ -1,5 +1,4 @@
-import type { Account, Quota } from "../shared/types.ts";
-import { quotaStaleMs } from "../shared/vocabulary.ts";
+import type { Account, SeatIdentity } from "../shared/types.ts";
 
 export function groupAccountsByProvider(
   accounts: Account[],
@@ -13,16 +12,6 @@ export function groupAccountsByProvider(
   return groups;
 }
 
-/** Lowest remaining account-wide window: the limit a request hits first.
-    Model-scoped windows (Opus, Fable…) never mark the whole account out. */
-export function floor(account: Account): number | null {
-  const windows = account.quota?.windows ?? [];
-  const shared = windows.filter((w) => !w.scoped);
-  const values = (shared.length ? shared : windows)
-    .map((w) => w.remainingPercent)
-    .filter((v): v is number => v !== null);
-  return values.length ? Math.min(...values) : null;
-}
 const plans = new Map([
   ["plus", "Plus"],
   ["pro", "Pro"],
@@ -38,34 +27,22 @@ export function planLabel(plan: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** The organization of a seat, by name or by the start of its ID; "" without one. */
+export function organizationLabel(seat: SeatIdentity): string {
+  return (
+    seat.organizationName ||
+    (seat.organizationUuid
+      ? `Organization ${seat.organizationUuid.slice(0, 8)}`
+      : "")
+  );
+}
 export function accountLabel(account: Account): string {
-  const organization =
-    account.organizationName ||
-    (account.organizationUuid
-      ? `Organization ${account.organizationUuid.slice(0, 8)}`
-      : "");
+  const organization = organizationLabel(account);
   return organization
     ? `${organization}${account.name !== "Claude" ? ` · ${account.name}` : ""}`
     : account.name;
 }
 
-const standardCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
-const compactCount = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-export function count(n: number): string {
-  return (n >= 100_000 ? compactCount : standardCount).format(n);
-}
-export function dateLabel(value: string, format: Intl.DateTimeFormat): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Invalid Date" : format.format(date);
-}
-export function csvCell(value: string): string {
-  return `"${value
-    .replace(/^(\s*)([=+@\t\r-])/, "$1'$2")
-    .replaceAll('"', '""')}"`;
-}
 export function resetIn(value: string | null, now = Date.now()): string {
   if (!value) return "no reset time";
   const seconds = Math.ceil((new Date(value).getTime() - now) / 1000);
@@ -98,11 +75,4 @@ export function age(value?: string): string {
   return mins < 1
     ? "checked just now"
     : `checked ${mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`} ago`;
-}
-export function isQuotaStale(quota?: Quota, now = Date.now()): boolean {
-  return Boolean(
-    quota &&
-    (quota.status === "error" ||
-      now - new Date(quota.checkedAt).getTime() > quotaStaleMs),
-  );
 }

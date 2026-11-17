@@ -7,7 +7,9 @@ import { Cores } from "../src/server/cores.ts";
 import { parseQuota } from "../src/server/quota.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
-import { csvCell, isQuotaStale, resetIn } from "../src/client/format.ts";
+import { resetIn } from "../src/client/format.ts";
+import { csvCell } from "../src/client/Activity.tsx";
+import { isQuotaStale } from "../src/client/quota.ts";
 import { goModelProtocol } from "../src/server/api-accounts.ts";
 
 const now = Date.parse("2026-09-05T12:00:00Z");

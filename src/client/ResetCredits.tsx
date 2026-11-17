@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { ResetCredits as Credits } from "../shared/types.ts";
 import { api } from "./api.ts";
+import { messageOf } from "./action.ts";
 import { exactTime } from "./format.ts";
 import "./reset-credits.css";
 
@@ -35,8 +36,7 @@ export function ResetCredits({
         );
         if (!signal?.aborted) setCredits(result);
       } catch (e) {
-        if (!signal?.aborted)
-          setError(e instanceof Error ? e.message : "Could not check resets.");
+        if (!signal?.aborted) setError(messageOf(e, "Could not check resets."));
       } finally {
         if (!signal?.aborted) setBusy(false);
       }
@@ -86,9 +86,7 @@ export function ResetCredits({
       await refresh();
     } catch (e) {
       setError(
-        e instanceof Error
-          ? e.message
-          : "Reset outcome is unknown. Retry this same reset.",
+        messageOf(e, "Reset outcome is unknown. Retry this same reset."),
       );
     } finally {
       setBusy(false);

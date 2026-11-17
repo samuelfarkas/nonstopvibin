@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { Application } from "../src/server/server.ts";
 import { runHost } from "../src/server/host.ts";
+import { sessionUrl } from "../src/shared/renderer-url.ts";
 
 await mkdir(".test-runtime", { recursive: true });
 const directory = await mkdtemp(resolve(".test-runtime/preview-"));
@@ -178,5 +179,5 @@ await writeFile(
   }),
   { mode: 0o600 },
 );
-console.log(`SIMULATOR: ${app.origin}/#session=${app.token}`);
+console.log(`SIMULATOR: ${sessionUrl(app.origin, app.token)}`);
 console.log(`Test directory: ${directory}`);

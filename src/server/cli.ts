@@ -29,6 +29,7 @@ import { runHost } from "./host.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
 import type { RouteResponse } from "../shared/api.ts";
+import { sessionUrl } from "../shared/renderer-url.ts";
 
 // Replaced with `true` by scripts/build-server.mjs.
 declare const NONSTOPVIBIN_PACKAGED: boolean;
@@ -305,9 +306,9 @@ export function tunnelCommand(
 
 export function sessionLinks(session: Session) {
   return {
-    url: `http://127.0.0.1:${session.port}/#session=${session.token}`,
-    httpsUrls: session.allowHosts.map(
-      (host) => `https://${host}/#session=${session.token}`,
+    url: sessionUrl(`http://127.0.0.1:${session.port}`, session.token),
+    httpsUrls: session.allowHosts.map((host) =>
+      sessionUrl(`https://${host}`, session.token),
     ),
   };
 }

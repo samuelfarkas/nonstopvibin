@@ -1,182 +1,12 @@
 import type { ReactNode } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import * as RadixSelect from "@radix-ui/react-select";
-import { Activity, Bot, Check, ChevronDown, Copy, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Activity, Bot } from "lucide-react";
+import { useState } from "react";
 import type { Account, ProfileState, QuotaWindow } from "../shared/types.ts";
 import { providerEntry } from "../shared/providers.ts";
-import { copy } from "./api.ts";
 import { accountLabel, exactTime, resetIn } from "./format.ts";
+import { meterLevel } from "./quota.ts";
 
-// Main can only hold a deferred close after a guard vetoed an unload.
-let closeVetoed = false;
-export function useKeepDraft(needed: boolean) {
-  useEffect(() => {
-    if (!needed || !window.nonstopvibin) return;
-    const preventClose = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = true;
-      closeVetoed = true;
-    };
-    window.addEventListener("beforeunload", preventClose);
-    return () => {
-      window.removeEventListener("beforeunload", preventClose);
-      // Other guards installed in this commit still get to veto the close.
-      queueMicrotask(() => {
-        if (!closeVetoed) return;
-        closeVetoed = false;
-        void window.nonstopvibin?.releaseWindow().catch(() => {
-          // The renderer can disappear before the IPC reply during normal unload.
-        });
-      });
-    };
-  }, [needed]);
-}
-
-export function Modal({
-  title,
-  description,
-  children,
-  onClose,
-  wide = false,
-}: {
-  title: string;
-  description?: string;
-  children: ReactNode;
-  onClose(): void;
-  wide?: boolean;
-}) {
-  // Callers mount a Modal only while it is open.
-  useKeepDraft(true);
-  // Capture before an autoFocus input mounts; callers mount dialogs when opened.
-  const [opener] = useState(() => document.activeElement);
-  return (
-    <Dialog.Root
-      open
-      onOpenChange={(value) => {
-        if (!value) onClose();
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay className="modal-overlay" />
-        <Dialog.Content
-          className={`modal ${wide ? "wide" : ""}`}
-          onCloseAutoFocus={(event) => {
-            if (opener instanceof HTMLElement && opener.isConnected) {
-              event.preventDefault();
-              opener.focus();
-            }
-          }}
-        >
-          <div className="modal-heading">
-            <div>
-              <Dialog.Title>{title}</Dialog.Title>
-              <Dialog.Description>{description || ""}</Dialog.Description>
-            </div>
-            <Dialog.Close className="icon-button" aria-label="Close dialog">
-              <X size={19} />
-            </Dialog.Close>
-          </div>
-          {children}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-export function Select<T extends string>({
-  value,
-  onValueChange,
-  options,
-  id,
-  name,
-  placeholder,
-  disabled,
-  title,
-}: {
-  value: T;
-  onValueChange(value: T): void;
-  options: { value: T; label: ReactNode; hint?: string }[];
-  id?: string;
-  name?: string;
-  placeholder?: string;
-  disabled?: boolean;
-  title?: string;
-}) {
-  return (
-    <RadixSelect.Root
-      value={value}
-      onValueChange={(next) =>
-        onValueChange(options.find((o) => o.value === next)?.value ?? value)
-      }
-      disabled={disabled}
-      name={name}
-    >
-      <RadixSelect.Trigger className="select" id={id} title={title}>
-        <RadixSelect.Value placeholder={placeholder} />
-        <RadixSelect.Icon className="select-chevron">
-          <ChevronDown size={14} />
-        </RadixSelect.Icon>
-      </RadixSelect.Trigger>
-      <RadixSelect.Portal>
-        <RadixSelect.Content
-          className="select-menu"
-          position="popper"
-          sideOffset={4}
-        >
-          <RadixSelect.Viewport>
-            {options.map((option) => (
-              <RadixSelect.Item
-                key={option.value}
-                value={option.value}
-                className="select-item"
-              >
-                <RadixSelect.ItemText>{option.label}</RadixSelect.ItemText>
-                {option.hint && (
-                  <span className="select-hint">{option.hint}</span>
-                )}
-                <RadixSelect.ItemIndicator className="select-check">
-                  <Check size={14} />
-                </RadixSelect.ItemIndicator>
-              </RadixSelect.Item>
-            ))}
-          </RadixSelect.Viewport>
-        </RadixSelect.Content>
-      </RadixSelect.Portal>
-    </RadixSelect.Root>
-  );
-}
-export function CopyButton({
-  text,
-  label = "Copy",
-  onError,
-}: {
-  text: string;
-  label?: string;
-  onError?(error: string): void;
-}) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className="button small"
-      onClick={async () => {
-        try {
-          await copy(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1800);
-        } catch (error) {
-          onError?.(
-            error instanceof Error
-              ? error.message
-              : "Clipboard unavailable. Select and copy the text.",
-          );
-        }
-      }}
-    >
-      {copied ? <Check size={14} /> : <Copy size={14} />}{" "}
-      {copied ? "Copied" : label}
-    </button>
-  );
-}
+// Display widgets both windows draw with. Main-window controls are in controls.tsx.
 export function AnimatedLogo({
   state,
 }: {
@@ -195,6 +25,16 @@ export function AnimatedLogo({
   );
 }
 
+/** The logo of a set of profiles: running while one runs, paused while one starts. */
+export function logoState(
+  profiles: Pick<ProfileState, "runtime">[],
+): "running" | "paused" | "stopped" {
+  return profiles.some((p) => p.runtime === "running")
+    ? "running"
+    : profiles.some((p) => p.runtime === "starting")
+      ? "paused"
+      : "stopped";
+}
 export function Logo({
   state = "stopped",
   size = 24,
@@ -228,7 +68,7 @@ export function Logo({
 export function ProviderIcon({ provider }: { provider: string }) {
   const asset = providerEntry(provider)?.icon;
   return (
-    <span className={`provider-icon ${provider}`}>
+    <span className="provider-icon">
       {asset ? (
         <img alt="" src={`/providers/${asset}.svg`} />
       ) : (
@@ -259,14 +99,6 @@ export function Status({
     </span>
   );
 }
-export const meterLevel = (pct: number | null | undefined) =>
-  pct === null || pct === undefined
-    ? "unknown"
-    : pct <= 0
-      ? "empty"
-      : pct < 20
-        ? "low"
-        : "";
 export function QuotaMeter({
   window,
   stale = false,
@@ -275,6 +107,7 @@ export function QuotaMeter({
 }: {
   window?: QuotaWindow;
   stale?: boolean;
+  /** A row without a window still holds a meter's place; these say why it is empty. */
   unavailable?: string;
   label?: string;
 }) {
@@ -351,7 +184,7 @@ export function Empty({
     <div className="empty-state">
       <div className="empty-icon">{icon || <Activity size={22} />}</div>
       <h2>{title}</h2>
-      <p>{children}</p>
+      {children}
     </div>
   );
 }

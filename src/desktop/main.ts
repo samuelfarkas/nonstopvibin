@@ -27,6 +27,13 @@ import {
   ownerOnlyDirectory,
 } from "../server/data-directory.ts";
 import { providers, type ProviderEntry } from "../shared/providers.ts";
+import {
+  bridgeChannels,
+  type BridgeArgument,
+  type BridgeMethod,
+  type BridgeResult,
+} from "../shared/desktop-bridge.ts";
+import { mainUrl, trayUrl } from "../shared/renderer-url.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
 import {
@@ -52,6 +59,8 @@ let trayWindow: BrowserWindow | undefined;
 let mainLoading: Promise<void> | undefined;
 let mainBounds: Electron.Rectangle | undefined;
 const deferredCloses = new WeakSet<BrowserWindow>();
+/** The menu-bar panel; its CSS fills whatever width the window has. */
+const trayWidth = 386;
 let ready = false;
 let openOnReady = !process.argv.includes("--background");
 let tray: Tray;
@@ -174,19 +183,13 @@ async function showMain(profileId?: string) {
   const existing = mainWindow;
   if (!mainWindow) {
     mainWindow = createWindow("main");
-    mainLoading = mainWindow.loadURL(
-      profileId
-        ? `${application.origin}/?profile=${encodeURIComponent(profileId)}`
-        : application.origin,
-    );
+    mainLoading = mainWindow.loadURL(mainUrl(application.origin, profileId));
   }
   const window = mainWindow;
   try {
     await mainLoading;
     if (existing && profileId)
-      await window.loadURL(
-        `${application.origin}/?profile=${encodeURIComponent(profileId)}`,
-      );
+      await window.loadURL(mainUrl(application.origin, profileId));
   } finally {
     if (!quitting && !window.isDestroyed()) {
       trayWindow?.close();
@@ -213,7 +216,7 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
         }
       : {
           title: "NonstopVibin quotas",
-          width: 386,
+          width: trayWidth,
           height: 640,
           frame: false,
           resizable: false,
@@ -251,7 +254,8 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
     });
     window.webContents.on("will-prevent-unload", (event) => {
       if (quitting) event.preventDefault();
-      // A form's beforeunload guard keeps its draft in memory until finished.
+      // A form's beforeunload guard keeps its draft in memory until finished;
+      // useKeepDraft (client/controls.tsx) vetoes, then calls releaseWindow.
       if (closing && !quitting) {
         deferredCloses.add(window);
         window.hide();
@@ -277,6 +281,16 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
   });
   return window;
 }
+interface BridgeHandler<M extends BridgeMethod> {
+  argument: z.ZodType<BridgeArgument<M>>;
+  run(
+    argument: BridgeArgument<M>,
+    event: IpcMainInvokeEvent,
+  ): BridgeResult<M> | Promise<BridgeResult<M>>;
+}
+type BridgeHandlers = { [M in BridgeMethod]: BridgeHandler<M> };
+const isBridgeMethod = (method: string): method is BridgeMethod =>
+  Object.hasOwn(bridgeChannels, method);
 function assertSender(event: IpcMainInvokeEvent): void {
   const sender = event.senderFrame;
   if (
@@ -388,76 +402,91 @@ async function start(): Promise<void> {
       clearInterval(interval);
     });
   }
-  ipcMain.handle("nv:bootstrap", (event) => {
-    assertSender(event);
-    return { token: application.token, desktop: true };
-  });
-  // Every privileged handler with a payload validates its sender, then its argument.
-  function handle<T, R>(
-    channel: string,
-    schema: z.ZodType<T>,
-    run: (value: T) => R,
-  ): void {
-    ipcMain.handle(channel, (event, argument) => {
+  const none = z.undefined();
+  const handlers: BridgeHandlers = {
+    bootstrap: { argument: none, run: () => ({ token: application.token }) },
+    openExternal: {
+      argument: z.string().max(20_000),
+      run: (url) => shell.openExternal(safeExternal(url)),
+    },
+    copy: {
+      argument: z.string().max(1_000_000),
+      run: (text) => clipboard.writeText(text),
+    },
+    showWindow: {
+      argument: z.string().uuid().optional(),
+      run: (profileId) => showMain(profileId),
+    },
+    // Closes a main window that useKeepDraft (client/controls.tsx) kept open.
+    releaseWindow: {
+      argument: none,
+      run: (_, event) => {
+        if (
+          mainWindow &&
+          event.sender === mainWindow.webContents &&
+          deferredCloses.has(mainWindow) &&
+          !mainWindow.isVisible()
+        )
+          mainWindow.close();
+      },
+    },
+    setLoginItem: {
+      argument: z.boolean(),
+      run: (value) => {
+        if (!app.isPackaged)
+          throw new Error("Use the packaged app to enable automatic startup.");
+        if (process.platform === "linux")
+          return setLinuxLoginItem(
+            app.getPath("appData"),
+            process.env.APPIMAGE || process.execPath,
+            value,
+          );
+        app.setLoginItemSettings({
+          openAtLogin: value,
+          args: ["--background"],
+        });
+        const actual = app.getLoginItemSettings().openAtLogin;
+        if (actual !== value)
+          throw new Error(
+            "macOS did not apply this setting. Add NonstopVibin in System Settings → General → Login Items.",
+          );
+        return actual;
+      },
+    },
+    getLoginItem: {
+      argument: none,
+      run: () =>
+        process.platform === "linux"
+          ? linuxLoginItem(app.getPath("appData"))
+          : app.getLoginItemSettings().openAtLogin,
+    },
+    revealData: {
+      argument: none,
+      run: () => shell.showItemInFolder(databasePath(userData)),
+    },
+    chooseProject: {
+      argument: none,
+      run: async () => {
+        if (!mainWindow) throw new Error("Open the main window first.");
+        const result = await dialog.showOpenDialog(mainWindow, {
+          title: "Connect Claude Code in a project",
+          properties: ["openDirectory"],
+          buttonLabel: "Choose project",
+        });
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    },
+  };
+  // Every privileged handler validates its sender, then its argument.
+  function handle<M extends BridgeMethod>(method: M): void {
+    const { argument, run } = handlers[method];
+    ipcMain.handle(bridgeChannels[method], (event, value) => {
       assertSender(event);
-      return run(schema.parse(argument));
+      return run(argument.parse(value), event);
     });
   }
-  handle("nv:open-external", z.string().max(20_000), (url) =>
-    shell.openExternal(safeExternal(url)),
-  );
-  handle("nv:copy", z.string().max(1_000_000), (text) =>
-    clipboard.writeText(text),
-  );
-  handle("nv:show-window", z.string().uuid().optional(), showMain);
-  ipcMain.handle("nv:release-window", (event, argument) => {
-    assertSender(event);
-    z.undefined().parse(argument);
-    if (
-      mainWindow &&
-      event.sender === mainWindow.webContents &&
-      deferredCloses.has(mainWindow) &&
-      !mainWindow.isVisible()
-    )
-      mainWindow.close();
-  });
-  handle("nv:login-item", z.boolean(), (value) => {
-    if (!app.isPackaged)
-      throw new Error("Use the packaged app to enable automatic startup.");
-    if (process.platform === "linux")
-      return setLinuxLoginItem(
-        app.getPath("appData"),
-        process.env.APPIMAGE || process.execPath,
-        value,
-      );
-    app.setLoginItemSettings({ openAtLogin: value, args: ["--background"] });
-    const actual = app.getLoginItemSettings().openAtLogin;
-    if (actual !== value)
-      throw new Error(
-        "macOS did not apply this setting. Add NonstopVibin in System Settings → General → Login Items.",
-      );
-    return actual;
-  });
-  ipcMain.handle("nv:get-login-item", (event) => {
-    assertSender(event);
-    return process.platform === "linux"
-      ? linuxLoginItem(app.getPath("appData"))
-      : app.getLoginItemSettings().openAtLogin;
-  });
-  ipcMain.handle("nv:reveal-data", (event) => {
-    assertSender(event);
-    shell.showItemInFolder(databasePath(userData));
-  });
-  ipcMain.handle("nv:choose-project", async (event) => {
-    assertSender(event);
-    if (!mainWindow) throw new Error("Open the main window first.");
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Connect Claude Code in a project",
-      properties: ["openDirectory"],
-      buttonLabel: "Choose project",
-    });
-    return result.canceled ? null : (result.filePaths[0] ?? null);
-  });
+  for (const method of Object.keys(bridgeChannels).filter(isBridgeMethod))
+    handle(method);
   // Mirrorball status item (docs/design/icons.md): still image, colored while
   // a proxy runs, grey when none does. Full color on every platform.
   const trayImage = (name: string) =>
@@ -508,7 +537,7 @@ async function start(): Promise<void> {
     trayWindow = createWindow("tray");
     const window = trayWindow;
     try {
-      await window.loadURL(`${application.origin}/?view=tray`);
+      await window.loadURL(trayUrl(application.origin));
     } catch (error) {
       // Destroying emits "closed", which clears trayWindow so a later click can retry.
       if (!window.isDestroyed()) window.destroy();
@@ -523,8 +552,8 @@ async function start(): Promise<void> {
     const x = Math.max(
       display.x + 8,
       Math.min(
-        bounds.x + bounds.width / 2 - 193,
-        display.x + display.width - 394,
+        bounds.x + bounds.width / 2 - trayWidth / 2,
+        display.x + display.width - trayWidth - 8,
       ),
     );
     window.setBounds({
@@ -534,7 +563,7 @@ async function start(): Promise<void> {
           ? bounds.y + bounds.height + 7
           : display.y + display.height - height - 8,
       ),
-      width: 386,
+      width: trayWidth,
       height,
     });
     window.show();

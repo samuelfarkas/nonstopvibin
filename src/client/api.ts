@@ -7,22 +7,23 @@ import type {
   RouteResponse,
   SessionRefused,
 } from "../shared/api.ts";
+import { openedWith } from "../shared/renderer-url.ts";
 
+/** The desktop shell's bridge; absent in a browser and in server-side test renders. */
+export const desktop = globalThis.window?.nonstopvibin;
 let token = "";
 export async function initializeSession(): Promise<void> {
-  if (window.nonstopvibin)
-    token = (await window.nonstopvibin.bootstrap()).token;
+  if (desktop) token = (await desktop.bootstrap()).token;
   else {
-    const params = new URLSearchParams(location.hash.slice(1));
-    token = params.get("session") || sessionStorage.getItem("nv-session") || "";
+    const { session } = openedWith(location);
+    token = session || sessionStorage.getItem("nv-session") || "";
     if (token) sessionStorage.setItem("nv-session", token);
-    if (params.has("session"))
+    if (session !== null)
       history.replaceState(null, "", location.pathname + location.search);
     // Pasting a new session link into an open tab only changes the fragment;
     // reload so it replaces the stale token.
     addEventListener("hashchange", () => {
-      if (new URLSearchParams(location.hash.slice(1)).has("session"))
-        location.reload();
+      if (openedWith(location).session !== null) location.reload();
     });
   }
 }
@@ -100,10 +101,10 @@ export function refusedSession(error: Error): boolean {
   return "status" in error && error.status === sessionRefused;
 }
 export async function copy(text: string): Promise<void> {
-  if (window.nonstopvibin) await window.nonstopvibin.copy(text);
+  if (desktop) await desktop.copy(text);
   else await navigator.clipboard.writeText(text);
 }
 export async function openExternal(url: string): Promise<void> {
-  if (window.nonstopvibin) await window.nonstopvibin.openExternal(url);
+  if (desktop) await desktop.openExternal(url);
   else window.open(url, "_blank", "noopener,noreferrer");
 }

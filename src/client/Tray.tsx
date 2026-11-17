@@ -1,19 +1,35 @@
-import { useState } from "react";
 import { ArrowRight, ChevronRight, RefreshCw } from "lucide-react";
 import type { AppState } from "../shared/types.ts";
 import { providerLabel } from "../shared/providers.ts";
-import { api } from "./api.ts";
-import { Empty, Logo, ProviderIcon, meterLevel } from "./components.tsx";
+import { api, desktop } from "./api.ts";
+import { useAction } from "./action.ts";
+import { Opening, useAppState } from "./feed.tsx";
+import { Empty, Logo, ProviderIcon, logoState } from "./components.tsx";
 import {
   accountLabel,
   age,
   exactTime,
-  floor,
   groupAccountsByProvider,
-  isQuotaStale,
   resetIn,
 } from "./format.ts";
+import {
+  currentHeadroom,
+  floor,
+  isQuotaStale,
+  meterLevel,
+  trayNotice,
+} from "./quota.ts";
 import "./tray.css";
+
+/** The menu-bar window's root. It never guards a close: the panel must stay closable. */
+export function TrayWindow() {
+  const { state, refresh, failure, sessionRefused } = useAppState();
+  return state ? (
+    <TrayView state={state} refresh={refresh} />
+  ) : (
+    <Opening failure={failure} sessionRefused={sessionRefused} />
+  );
+}
 
 export function TrayView({
   state,
@@ -22,8 +38,7 @@ export function TrayView({
   state: AppState;
   refresh(next?: AppState): Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { busy, error, run } = useAction();
   const subscriptions = state.profiles.reduce(
     (sum, p) => sum + p.accounts.length,
     0,
@@ -31,15 +46,7 @@ export function TrayView({
   return (
     <div className="tray-view">
       <header>
-        <Logo
-          state={
-            state.profiles.some((p) => p.runtime === "running")
-              ? "running"
-              : state.profiles.some((p) => p.runtime === "starting")
-                ? "paused"
-                : "stopped"
-          }
-        />
+        <Logo state={logoState(state.profiles)} />
         <div className="tray-heading">
           <strong>Headroom</strong>
           <span>What’s left to vibe with</span>
@@ -48,10 +55,8 @@ export function TrayView({
           className="icon-button"
           aria-label="Refresh all quotas"
           disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            setError("");
-            try {
+          onClick={() =>
+            run(async () => {
               let next: AppState | undefined;
               for (const p of state.profiles.filter(
                 (p) => p.runtime === "running",
@@ -60,12 +65,8 @@ export function TrayView({
                   params: { profileId: p.id },
                 });
               await refresh(next);
-            } catch (e) {
-              setError(e instanceof Error ? e.message : "Refresh failed.");
-            } finally {
-              setBusy(false);
-            }
-          }}
+            }, "Refresh failed.")
+          }
         >
           <RefreshCw size={15} className={busy ? "spin" : ""} />
         </button>
@@ -78,7 +79,7 @@ export function TrayView({
       <div className="tray-scroll">
         {!state.profiles.length && (
           <Empty title="Your subscriptions at a glance">
-            Create your first profile in the app to see its quotas here.
+            <p>Create your first profile in the app to see its quotas here.</p>
           </Empty>
         )}
         {state.profiles.map((p) => {
@@ -101,20 +102,8 @@ export function TrayView({
                 </span>
                 {[...groupAccountsByProvider(p.accounts)].map(
                   ([provider, accounts]) => {
-                    const enabled = accounts.filter((a) => !a.disabled);
-                    const readings = enabled
-                      .filter(
-                        (a) =>
-                          a.quota?.status === "available" &&
-                          !isQuotaStale(a.quota),
-                      )
-                      .map(floor)
-                      .filter((v): v is number => v !== null);
-                    const remaining = readings.length
-                      ? readings.reduce((sum, value) => sum + value, 0) /
-                        readings.length
-                      : null;
-                    const partial = readings.length < enabled.length;
+                    const { remaining, enabled, readings } =
+                      currentHeadroom(accounts);
                     return (
                       <span className="tray-provider" key={provider}>
                         <span className="tray-provider-name">
@@ -141,10 +130,10 @@ export function TrayView({
                           </span>
                         </span>
                         <span className="tray-profile-caption">
-                          {enabled.length} enabled ·{" "}
-                          {partial
-                            ? `${readings.length}/${enabled.length} current readings`
-                            : `${readings.length} current reading${readings.length === 1 ? "" : "s"}`}
+                          {enabled} enabled ·{" "}
+                          {readings < enabled
+                            ? `${readings}/${enabled} current readings`
+                            : `${readings} current reading${readings === 1 ? "" : "s"}`}
                         </span>
                       </span>
                     );
@@ -163,7 +152,7 @@ export function TrayView({
                 </p>
                 <button
                   className="button small tray-manage"
-                  onClick={() => window.nonstopvibin?.showWindow(p.id)}
+                  onClick={() => desktop?.showWindow(p.id)}
                 >
                   Open profile <ArrowRight size={13} aria-hidden="true" />
                 </button>
@@ -171,9 +160,10 @@ export function TrayView({
                   p.accounts.map((a) => {
                     const remaining = floor(a);
                     const stale = isQuotaStale(a.quota);
+                    const notice = trayNotice(a);
                     return (
                       <details
-                        className={`tray-account ${isQuotaStale(a.quota) ? "stale" : ""} ${a.disabled ? "disabled" : ""}`}
+                        className={`tray-account ${stale ? "stale" : ""} ${a.disabled ? "disabled" : ""}`}
                         key={a.id}
                       >
                         <summary className="tray-account-summary">
@@ -185,17 +175,9 @@ export function TrayView({
                             <small title={a.email || a.status}>
                               {a.email || a.status}
                             </small>
-                            {(a.disabled ||
-                              stale ||
-                              a.quota?.status === "unavailable") && (
+                            {notice && (
                               <small className="tray-account-notice">
-                                {a.disabled
-                                  ? "Disabled"
-                                  : a.quota?.status === "error"
-                                    ? "Check failed · last reading"
-                                    : stale
-                                      ? "Stale reading"
-                                      : "Quota unavailable"}
+                                {notice}
                               </small>
                             )}
                           </span>
@@ -260,7 +242,7 @@ export function TrayView({
                             </small>
                           )}
                           <small className="tray-age">
-                            {isQuotaStale(a.quota) && a.quota ? "stale · " : ""}
+                            {stale ? "stale · " : ""}
                             {age(a.quota?.checkedAt)}
                           </small>
                         </div>
@@ -279,10 +261,7 @@ export function TrayView({
         <span>
           {subscriptions} subscription{subscriptions === 1 ? "" : "s"}
         </span>
-        <button
-          className="text-button"
-          onClick={() => window.nonstopvibin?.showWindow()}
-        >
+        <button className="text-button" onClick={() => desktop?.showWindow()}>
           Open app <ArrowRight size={13} />
         </button>
       </footer>

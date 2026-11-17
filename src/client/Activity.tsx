@@ -12,8 +12,28 @@ import type {
 import { providerLabel } from "../shared/providers.ts";
 import { allHistoryDays, usagePageSize } from "../shared/vocabulary.ts";
 import { api } from "./api.ts";
+import { messageOf } from "./action.ts";
+import { usePolling } from "./feed.tsx";
 import { Empty } from "./components.tsx";
-import { accountLabel, count, csvCell, dateLabel } from "./format.ts";
+import { accountLabel } from "./format.ts";
+
+const standardCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
+const compactCount = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function count(n: number): string {
+  return (n >= 100_000 ? compactCount : standardCount).format(n);
+}
+export function dateLabel(value: string, format: Intl.DateTimeFormat): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Invalid Date" : format.format(date);
+}
+export function csvCell(value: string): string {
+  return `"${value
+    .replace(/^(\s*)([=+@\t\r-])/, "$1'$2")
+    .replaceAll('"', '""')}"`;
+}
 
 const ranges = [
   { days: 1, label: "24h" },
@@ -64,53 +84,33 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let stopped = false;
-    let busy = false;
-    let initial = true;
     setLoading(true);
     setRecords([]);
     setSummary(undefined);
     setPricing(undefined);
-    const load = async () => {
-      if (busy) return;
-      busy = true;
+  }, [profile.id, days]);
+  const load = useCallback(
+    async (signal: AbortSignal) => {
       try {
         const data = await api("GET /profiles/:profileId/usage", {
           params: { profileId: profile.id },
           query: { days },
         });
-        if (!stopped) {
+        if (!signal.aborted) {
           setRecords(data.records);
           setSummary(data.summary);
           setPricing(data.pricing);
           setError("");
         }
       } catch (e) {
-        if (!stopped)
-          setError(e instanceof Error ? e.message : "Could not load activity.");
+        if (!signal.aborted) setError(messageOf(e, "Could not load activity."));
       } finally {
-        busy = false;
-        if (initial && !stopped) setLoading(false);
-        initial = false;
+        if (!signal.aborted) setLoading(false);
       }
-    };
-    void load();
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const onVisibilityChange = () => {
-      clearInterval(timer);
-      if (!document.hidden) {
-        void load();
-        timer = setInterval(load, 5000);
-      }
-    };
-    if (!document.hidden) timer = setInterval(load, 5000);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      stopped = true;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [profile.id, days]);
+    },
+    [profile.id, days],
+  );
+  usePolling(load, 5000, { immediately: true });
 
   // Every /state poll passes new account objects; key derived data on their content.
   const accountKey = JSON.stringify(
@@ -607,8 +607,10 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
 
           {!records.length ? (
             <Empty title="Ready for your first request">
-              Connect an agent to this profile. Requests, token counts, and
-              timing will appear here.
+              <p>
+                Connect an agent to this profile. Requests, token counts, and
+                timing will appear here.
+              </p>
             </Empty>
           ) : (
             <>
@@ -760,8 +762,10 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
                 </div>
                 {!filtered.length ? (
                   <Empty title="No matching requests">
-                    Try a model, account, or email, or turn off the error
-                    filter.
+                    <p>
+                      Try a model, account, or email, or turn off the error
+                      filter.
+                    </p>
                   </Empty>
                 ) : (
                   <div className="table-scroll">

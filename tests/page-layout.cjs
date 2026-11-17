@@ -7,7 +7,7 @@ const electron = require("electron");
 
 if (typeof electron === "string") {
   const directory = mkdtempSync(join(tmpdir(), "nv-layout-"));
-  const css = ["styles", "connect", "settings", "activity"]
+  const css = ["styles", "subscriptions", "connect", "settings", "activity"]
     .map((name) =>
       readFileSync(resolve(__dirname, `../src/client/${name}.css`), "utf8"),
     )
@@ -50,7 +50,7 @@ if (typeof electron === "string") {
               const contentClass = {subscriptions: 'accounts', activity: 'activity-page', connect: 'connect-page', settings: 'settings-content'}[page];
               const body = '<div class="page-body"><div class="' + contentClass + '" style="height:' + (tall ? 1400 : 100) + 'px">Content</div></div>';
               document.getElementById('root').innerHTML = '<div class="app desktop"><aside class="sidebar"></aside><main class="main">' +
-                (page === 'settings' ? '<div class="settings-page">' + header + body + '</div>' : header + body) + '</main></div>';
+                header + body + '</main></div>';
               const rect = selector => {
                 const {x,y,width,height} = document.querySelector(selector).getBoundingClientRect();
                 return {x,y,width,height};

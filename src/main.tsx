@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./client/App.tsx";
+import { openedWith } from "./shared/renderer-url.ts";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "@fontsource-variable/space-grotesk";
@@ -29,10 +29,18 @@ class ErrorBoundary extends React.Component<
     );
   }
 }
-createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>,
+const root = createRoot(document.getElementById("root")!);
+// Each window loads only its own root and the modules and CSS it uses.
+void (
+  openedWith(location).tray
+    ? import("./client/Tray.tsx").then((module) => module.TrayWindow)
+    : import("./client/App.tsx").then((module) => module.App)
+).then((Root) =>
+  root.render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <Root />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  ),
 );

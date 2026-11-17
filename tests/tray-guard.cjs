@@ -9,18 +9,15 @@ const electron = require("electron");
 if (typeof electron === "string") {
   const directory = mkdtempSync(join(tmpdir(), "nv-tray-guard-"));
   require("esbuild").buildSync({
-    stdin: {
-      contents: `import React from 'react';
-        import {createRoot} from 'react-dom/client';
-        import {App} from './src/client/App.tsx';
-        createRoot(document.getElementById('root')).render(<App />);`,
-      resolveDir: resolve(__dirname, ".."),
-      loader: "tsx",
-    },
+    // The real entry: it picks the main or the tray root from the URL.
+    entryPoints: [resolve(__dirname, "../src/main.tsx")],
     bundle: true,
     outfile: join(directory, "app.js"),
     loader: { ".css": "empty" },
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      "import.meta.hot": "undefined",
+    },
   });
   const state = {
     profiles: [

@@ -1,4 +1,4 @@
-/* The fixed 386px menu-bar panel uses a smaller scale than the main window. */
+/* The fixed-width menu-bar panel (main.ts trayWidth) uses a smaller scale than the main window. */
 .tray-view {
   --text-caption: 0.75rem;
   --text-body: 0.875rem;
@@ -243,10 +243,10 @@
   font-variant-numeric: tabular-nums;
 }
 .tray-remaining.low {
-  color: var(--amber-text);
+  color: var(--level-low);
 }
 .tray-remaining.empty {
-  color: var(--red);
+  color: var(--level-empty);
 }
 .tray-remaining .meter-track > span {
   display: block;
@@ -254,10 +254,10 @@
   background: var(--ink-2);
 }
 .tray-remaining.low .meter-track > span {
-  background: var(--amber-text);
+  background: var(--level-low);
 }
 .tray-remaining.empty .meter-track > span {
-  background: var(--red);
+  background: var(--level-empty);
 }
 .tray-disclosure {
   color: var(--ink-3);
@@ -329,11 +329,11 @@
 }
 
 .tray-window > strong.low {
-  color: var(--amber-text);
+  color: var(--level-low);
 }
 
 .tray-window > strong.empty {
-  color: var(--red);
+  color: var(--level-empty);
 }
 
 .tray-window .meter-track {

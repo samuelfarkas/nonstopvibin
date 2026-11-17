@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { Check, FolderOpen, LoaderCircle } from "lucide-react";
 import type { AgentSetup, Model, ProfileState } from "../shared/types.ts";
 import { agents, type Agent } from "../shared/agents.ts";
-import { api } from "./api.ts";
+import { api, desktop } from "./api.ts";
+import { messageOf, useAction } from "./action.ts";
 import { modelsFor } from "../shared/providers.ts";
-import { CopyButton, Select, useKeepDraft } from "./components.tsx";
+import { CopyButton, Select, useKeepDraft } from "./controls.tsx";
 
 export function QuickSetup({
   profile,
@@ -17,8 +18,7 @@ export function QuickSetup({
 }) {
   const [setup, setSetup] = useState<AgentSetup | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { busy, error, setError, run } = useAction();
   const [checked, setChecked] = useState(false);
   const [projectDirectory, setProjectDirectory] = useState("");
   const [projects, setProjects] = useState<string[]>([]);
@@ -53,7 +53,7 @@ export function QuickSetup({
     return () => {
       cancelled = true;
     };
-  }, [profile.id, agent, selectedProject]);
+  }, [profile.id, agent, selectedProject, setError]);
   const offered = modelsFor(agent, models, otherProviders);
   const otherCount = models.length - modelsFor(agent, models, false).length;
   // Codex, pi and OpenCode discover models live; only Claude's picker is a
@@ -80,10 +80,8 @@ export function QuickSetup({
       ? models.filter((model) => !setup.models.includes(model.id))
       : [];
   async function changeSetup(remove = false) {
-    setBusy(true);
-    setError("");
-    setDisconnected(false);
-    try {
+    await run(async () => {
+      setDisconnected(false);
       if (remove) {
         await api("DELETE /profiles/:profileId/agent-setup", {
           params: { profileId: profile.id },
@@ -116,15 +114,7 @@ export function QuickSetup({
         setProjects(result.projects ?? []);
         setProjectDirectory(result.projectDirectory ?? "");
       }
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Could not change agent setup.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    }, "Could not change agent setup.");
   }
   const restart = `Restart ${title} to pick up the change.`;
   return (
@@ -194,7 +184,7 @@ export function QuickSetup({
                   disabled={loading || busy}
                   onChange={(event) => setProjectDirectory(event.target.value)}
                 />
-                {window.nonstopvibin?.chooseProject && (
+                {desktop && (
                   <button
                     className="button"
                     type="button"
@@ -202,14 +192,11 @@ export function QuickSetup({
                     onClick={async () => {
                       setError("");
                       try {
-                        const folder =
-                          await window.nonstopvibin?.chooseProject();
+                        const folder = await desktop?.chooseProject();
                         if (folder) setProjectDirectory(folder);
                       } catch (error) {
                         setError(
-                          error instanceof Error
-                            ? error.message
-                            : "Could not choose a project.",
+                          messageOf(error, "Could not choose a project."),
                         );
                       }
                     }}
@@ -376,26 +363,16 @@ export function QuickSetup({
           <button
             className="button small"
             disabled={busy || !models.length}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              setChecked(false);
-              try {
+            onClick={() =>
+              run(async () => {
+                setChecked(false);
                 await api("POST /profiles/:profileId/agent-check", {
                   params: { profileId: profile.id },
                   body: {},
                 });
                 setChecked(true);
-              } catch (error) {
-                setError(
-                  error instanceof Error
-                    ? error.message
-                    : "Connection check failed.",
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
+              }, "Connection check failed.")
+            }
           >
             Check connection
           </button>

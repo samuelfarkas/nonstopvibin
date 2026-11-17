@@ -1,8 +1,7 @@
 /* nonstopvibin — foundation.
    Dark warm-charcoal workbench. One accent (amber) for primary action, selection
    and attention. Sans for navigation and labels; mono for data and code.
-   View-specific rules live beside their component (activity.css, connect.css,
-   add-subscription.css, settings.css). */
+   View-specific rules live beside their component. */
 :root {
   --sans: "Geist Variable", system-ui, sans-serif;
   --mono: "Geist Mono Variable", ui-monospace, Menlo, monospace;
@@ -37,6 +36,15 @@
   --green-dim: oklch(0.76 0.13 140 / 0.16);
   --red: oklch(0.72 0.15 30);
   --red-dim: oklch(0.72 0.15 30 / 0.16);
+
+  /* Quota levels (meterLevel in quota.ts): text, and the main meters' fill. */
+  --level-low: var(--amber-text);
+  --level-low-fill: var(--amber);
+  --level-empty: var(--red);
+
+  /* Activity's token mix: two series outside the accent colours. */
+  --mix-cache-write: #b38b42;
+  --mix-unclassified: #858984;
 
   --fill: oklch(0.72 0.012 85);
   --fill-dim: oklch(0.52 0.012 85);
@@ -598,19 +606,6 @@ input[role="switch"]:disabled {
 .status.bad .status-dot {
   background: var(--red);
 }
-.tag {
-  font-family: var(--sans);
-  font-size: var(--text-caption);
-  font-weight: 600;
-  color: var(--ink-3);
-}
-.tag.warn,
-.tag.out {
-  color: var(--amber-text);
-}
-.tag.bad {
-  color: var(--red);
-}
 
 /* ---------- Meters ---------- */
 .meter-track {
@@ -626,10 +621,10 @@ input[role="switch"]:disabled {
   transition: width 0.4s var(--ease);
 }
 .meter-track.low > div {
-  background: var(--amber);
+  background: var(--level-low-fill);
 }
 .meter-track.empty > div {
-  background: var(--red);
+  background: var(--level-empty);
 }
 .quota-meter {
   display: flex;
@@ -657,10 +652,10 @@ input[role="switch"]:disabled {
   gap: 5px;
 }
 .quota-value.low {
-  color: var(--amber-text);
+  color: var(--level-low);
 }
 .quota-value.empty {
-  color: var(--red);
+  color: var(--level-empty);
 }
 .quota-value small {
   color: var(--ink-3);
@@ -1259,211 +1254,6 @@ input[role="switch"]:disabled {
   background: oklch(1 0 0 / 0.02);
 }
 
-/* ---------- Subscriptions view ---------- */
-.headroom {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.25rem 3rem;
-  padding: 0.25rem 0 1.75rem;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 1.5rem;
-}
-.headroom-heading {
-  flex-basis: 100%;
-}
-.headroom-provider,
-.headroom-routing {
-  flex: 1 1 10rem;
-  max-width: 20rem;
-}
-.headroom-routing {
-  margin-left: auto;
-}
-.headroom-provider {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-.headroom-provider > strong {
-  font-size: var(--text-body);
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-}
-.headroom-provider > strong code {
-  font-family: var(--sans);
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-  font-weight: 400;
-}
-.headroom-value {
-  font-family: var(--mono);
-  font-size: var(--text-metric);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-.headroom-value small {
-  font-size: var(--text-body);
-  color: var(--ink-3);
-  font-weight: 400;
-  margin-left: 2px;
-}
-.headroom-value.low,
-.headroom-value.empty {
-  color: var(--amber-text);
-}
-.headroom-segments {
-  display: flex;
-  gap: 3px;
-}
-.headroom-segments .meter-track {
-  flex: 1;
-}
-.headroom-provider > code {
-  font-family: var(--sans);
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-}
-.headroom-routing {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-.headroom-routing .select {
-  width: 100%;
-  max-width: 18rem;
-}
-.headroom-routing p {
-  font-family: var(--sans);
-  font-size: var(--text-caption);
-  color: var(--ink-3);
-}
-
-.accounts {
-  display: flex;
-  flex-direction: column;
-}
-.provider-group + .provider-group {
-  margin-top: 2rem;
-}
-.provider-group-heading {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.75rem;
-}
-.provider-group-heading h2 {
-  font-size: var(--text-subheading);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-.provider-group-heading > span {
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-}
-.accounts-columns,
-.account-row {
-  display: grid;
-  grid-template-columns: minmax(14rem, min(30%, 24rem)) minmax(0, 1fr) 2rem;
-  gap: 1.5rem;
-  align-items: center;
-}
-.accounts-columns {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.account-row {
-  padding: 1.25rem 0;
-  border-bottom: 1px solid var(--line);
-  position: relative;
-}
-.account-row.disabled .account-identity,
-.account-row.disabled .quota-meter {
-  opacity: 0.5;
-}
-.account-button {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  background: none;
-  border: 0;
-  padding: 4px 6px;
-  margin: -4px -6px;
-  text-align: left;
-  border-radius: var(--radius);
-  min-width: 0;
-  max-width: 100%;
-}
-.account-button:hover {
-  background: var(--bg-3);
-}
-.account-name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.account-name strong {
-  font-size: var(--text-subheading);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.account-name .tag {
-  flex-shrink: 0;
-}
-.account-name .tag code {
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  margin-left: 5px;
-}
-.account-meta {
-  display: flex;
-  flex-direction: column;
-  font-family: var(--sans);
-  font-size: var(--text-caption);
-  color: var(--ink-3);
-  overflow-wrap: anywhere;
-  max-width: 100%;
-}
-.account-resets {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 3px;
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-}
-.account-resets.available {
-  color: var(--amber-text);
-}
-.account-limits {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-.accounts-note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 20px 0 8px;
-}
-.accounts-note p {
-  color: var(--ink-3);
-  font-size: var(--text-body);
-  max-width: 62ch;
-}
-
 /* ---------- Empty state ---------- */
 .empty-state {
   max-width: 36rem;
@@ -1484,50 +1274,6 @@ input[role="switch"]:disabled {
 .empty-state p {
   color: var(--ink-2);
   font-size: var(--text-body);
-}
-.empty-choices {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--bg-2);
-  margin-top: 8px;
-  overflow: hidden;
-}
-.empty-choices button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: transparent;
-  padding: 12px 14px;
-  text-align: left;
-  color: var(--ink);
-}
-.empty-choices button:last-child {
-  border-bottom: 0;
-}
-.empty-choices button:hover {
-  background: var(--bg-3);
-}
-.empty-choices button:active {
-  background: var(--bg-4);
-}
-.empty-choices strong {
-  display: block;
-  font-size: var(--text-body);
-  font-weight: 600;
-}
-.empty-choices code {
-  display: block;
-  color: var(--ink-3);
-  font-size: var(--text-caption);
-  margin-top: 2px;
-}
-.empty-choices svg {
-  color: var(--ink-3);
 }
 .welcome {
   max-width: 36rem;
@@ -1650,22 +1396,6 @@ input[role="switch"]:disabled {
     box-shadow: 0 -1px 0 transparent;
   }
 }
-.info-note {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-1);
-  font-size: var(--text-caption);
-  color: var(--ink-2);
-  margin-bottom: 4px;
-}
-.info-note svg {
-  color: var(--ink-3);
-  margin-top: 1px;
-}
 details {
   margin: 10px 0;
 }
@@ -1710,46 +1440,6 @@ details > dl {
 .identity-details dd {
   color: var(--ink);
   overflow-wrap: anywhere;
-}
-
-/* Account details modal */
-.subscription-reconnect {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 16px 0;
-}
-.detail-status {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 16px 0 12px;
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-  color: var(--ink-3);
-}
-.detail-quota {
-  padding: 10px 0;
-  border-top: 1px solid var(--line);
-}
-.detail-quota .quota-meter {
-  gap: 6px;
-}
-.detail-quota .quota-value {
-  font-size: var(--text-subheading);
-}
-.detail-quota .field-note {
-  margin-top: 2px;
-}
-.remove-account {
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-.remove-account p {
-  font-size: var(--text-body);
-  color: var(--ink-2);
-  margin-bottom: 12px;
 }
 
 /* ---------- Fatal / boot ---------- */
@@ -1797,22 +1487,6 @@ details > dl {
 }
 
 /* ---------- Responsive ---------- */
-@media (max-width: 900px) {
-  .account-row {
-    grid-template-columns: minmax(0, 1fr) 32px;
-  }
-  .account-row .account-limits {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-  .account-row .icon-button {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  .accounts-columns > span:nth-child(2) {
-    display: none;
-  }
-}
 @media (max-width: 850px) {
   :root {
     --page-gutter: 1.125rem;
@@ -1832,10 +1506,6 @@ details > dl {
     grid-template-rows: 2rem minmax(3.5rem, auto);
     gap: 0.5rem;
   }
-  .accounts-note {
-    align-items: flex-start;
-    flex-direction: column;
-  }
   .page-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1844,9 +1514,6 @@ details > dl {
     padding-inline: 0.5rem;
     font-size: var(--text-caption);
     white-space: normal;
-  }
-  .account-limits {
-    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
   }
   .sidebar {
     width: 56px;
@@ -1861,7 +1528,6 @@ details > dl {
   .profile-count,
   .main-nav button > span,
   .sidebar-version > button > span,
-  .proxy-card .status,
   .proxy-card code,
   .sidebar-version code {
     display: none;
