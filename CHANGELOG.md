@@ -97,6 +97,9 @@
   account checks skip unchanged credential files, and request routing and the menu
   bar no longer read every profile from the database. The Activity page no longer
   recomputes its charts on every status refresh.
+- Quitting now stops all profiles at the same time instead of one after another, so
+  shutdown no longer takes longer with every profile, and one profile that fails to
+  stop no longer keeps the others from finishing their usage collection.
 - **Save name** in Settings stays disabled until the name changes.
 - This first published release exposes Claude Code, Codex, and pi as agents, and Claude, Codex, OpenCode Go, and custom API-key providers. Kimi, Antigravity, xAI, and the OpenCode agent stay in the code but are hidden from the app.
 - Packaged Electron builds now disable run-as-Node and `NODE_OPTIONS` environment overrides.
