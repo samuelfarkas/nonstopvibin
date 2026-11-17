@@ -38,7 +38,6 @@ type QuerySlot<Query> = [Query] extends [undefined]
 type BodySlot<Body> = [Body] extends [undefined]
   ? { body?: never }
   : { body: Body };
-/** What a call of route K sends, as the contract declares it. */
 export type ApiCall<K extends RouteKey> = ParamSlot<K> &
   QuerySlot<RouteQuery<K>> &
   BodySlot<RouteBody<K>> & { signal?: AbortSignal };
@@ -79,7 +78,6 @@ export async function api<K extends RouteKey>(
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  // An unparseable error body still reports the status; bad success JSON fails loudly.
   let data;
   try {
     data = await response.json();

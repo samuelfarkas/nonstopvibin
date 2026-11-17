@@ -5,11 +5,6 @@ import { api, initializeSession, refusedSession } from "./api.ts";
 import { messageOf } from "./action.ts";
 import { Logo } from "./components.tsx";
 
-/**
- * Runs `poll` every `ms`, one call at a time, while `poll` is set. A hidden page
- * stops the timer and polls once on becoming visible, unless `whileHidden`.
- * The signal aborts when `poll` changes or the component unmounts.
- */
 export function usePolling(
   poll: ((signal: AbortSignal) => Promise<void>) | undefined,
   ms: number,
@@ -49,11 +44,9 @@ export function usePolling(
   }, [poll, ms, immediately, whileHidden]);
 }
 
-/** The session and the 4 s `/state` feed both windows draw from. */
 export function useAppState() {
   const [state, setState] = useState<AppState>();
   const [ready, setReady] = useState(false);
-  // Poll failures clear on the next successful poll.
   const [pollError, setPollError] = useState("");
   const [failure, setFailure] = useState("");
   const [sessionRefused, setSessionRefused] = useState(false);
@@ -97,7 +90,6 @@ export function useAppState() {
   return { state, refresh, pollError, setPollError, failure, sessionRefused };
 }
 
-/** Shown until the first state arrives, or when the session is gone. */
 export function Opening({
   failure,
   sessionRefused,

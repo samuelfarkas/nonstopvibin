@@ -21,7 +21,7 @@ import {
 } from "./quota.ts";
 import "./tray.css";
 
-/** The menu-bar window's root. It never guards a close: the panel must stay closable. */
+/** It never guards a close: the panel must stay closable. */
 export function TrayWindow() {
   const { state, refresh, failure, sessionRefused } = useAppState();
   return state ? (

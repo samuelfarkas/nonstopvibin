@@ -64,7 +64,6 @@ const upstream = http.createServer(async (req, res) => {
 await new Promise<void>((resolve) =>
   upstream.listen(4322, "127.0.0.1", resolve),
 );
-// The simulator's own port, beside the fixture upstream's.
 const app = await runHost(({ binary, clientDirectory }, signal) =>
   Application.create(
     {
@@ -125,7 +124,6 @@ for (const [profile, accounts] of [
   await app.cores.pool.start(profile.id);
 }
 app.store.createProfile("Side projects");
-// Deterministic simulated request history so Activity has something to show.
 let seed = 7;
 const random = () => {
   seed = (seed * 48271) % 2147483647;

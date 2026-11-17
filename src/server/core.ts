@@ -16,7 +16,6 @@ import {
 } from "./core-processes.ts";
 import { coreArguments, profileDirectory } from "./data-directory.ts";
 
-/** One profile's core process. */
 export interface CoreRuntime {
   child: ChildProcess;
   port: number;
@@ -28,7 +27,6 @@ export interface CoreRuntime {
   /** Ledger entry naming the core for the next instance if both die. */
   ledger?: string;
 }
-/** One call to a core's management API. */
 export interface ManagementRequest {
   profileId: string;
   port: number;
@@ -79,7 +77,6 @@ export interface CorePoolOptions {
   timing?: CoreTiming;
   /** Runs once a new core answers, before start resolves; a failure retries until the deadline. */
   ready?: (profileId: string, signal?: AbortSignal) => Promise<void>;
-  /** Runs before a running core is told to exit. */
   beforeStop?: (profileId: string) => Promise<void>;
   /** A core became running, failed, exited, or applied new settings. */
   onStatusChange?: () => void;
@@ -106,7 +103,6 @@ async function unusedPort(): Promise<number> {
   );
   return address.port;
 }
-/** Every profile's CLIProxyAPI process: start, readiness, configuration, management calls and stop. */
 export class CorePool {
   readonly store: Store;
   readonly binary: string;
@@ -115,7 +111,6 @@ export class CorePool {
   readonly runtimes: ReadonlyMap<string, Readonly<CoreRuntime>> =
     this.processes;
   private readonly starts = new Map<string, Promise<void>>();
-  /** Starts in progress, by profile. */
   readonly starting: ReadonlyMap<string, Promise<void>> = this.starts;
   private readonly stops = new Map<string, Promise<void>>();
   /** Profiles whose core is held stopped while its files are replaced. */
@@ -393,7 +388,6 @@ export class CorePool {
         })
       : [];
   }
-  /** Stops cores a crashed instance left running on this data directory. */
   async reapOrphans(): Promise<void> {
     await reapOrphanedCores(this.store.directory);
   }

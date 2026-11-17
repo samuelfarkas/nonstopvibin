@@ -1,9 +1,6 @@
 import type { AgentSetupInput, Profile } from "../shared/types.ts";
 import { AppError } from "./errors.ts";
 
-// What every agent connection shares: the names and URLs an agent is given for a
-// profile, and the shape of one agent's definition (see agents.ts).
-
 /** Manifest versions releases have written; version 1 has its own schema. */
 export const manifestVersions = [2, 3, 4, 5, 6, 7] as const;
 
@@ -30,12 +27,10 @@ export const catalogRequest = {
 export const shellQuote = (value: string) =>
   `'${value.replaceAll("'", "'\\''")}'`;
 
-/** What generating an agent's configuration may use. */
 export interface ConnectionContext {
   profile: Profile;
   input: AgentSetupInput;
   port: number;
-  /** The credential helper this connection installs, for agents that have one. */
   helper: string;
   /** The credential socket, for OpenCode's plugin, which asks it directly. */
   socket: string;
@@ -43,7 +38,6 @@ export interface ConnectionContext {
   piPreferences: string;
 }
 
-/** The configuration a manifest recorded, for files derived from it. */
 export interface RecordedConnection {
   version: number;
   content: string;

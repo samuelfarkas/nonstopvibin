@@ -9,8 +9,6 @@ import { number, record, text, unwrap } from "./json.ts";
 import type { Quotas } from "./quota.ts";
 import type { Store } from "./store.ts";
 
-// The core's usage queue: what each record holds, how it is drained, and when.
-
 const counter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const breakdown = z.object({
   schema_version: z.literal(2),
@@ -104,11 +102,9 @@ export const usageTiming: UsageTiming = {
   activity: 10_000,
 };
 interface Cadence {
-  /** The core this cadence belongs to. */
   core: Readonly<CoreRuntime> | undefined;
   nextAt: number;
   activeUntil: number;
-  /** Consecutive failed drains. */
   failures: number;
 }
 export interface UsageOptions {
@@ -160,7 +156,6 @@ export class Usage {
       });
     this.schedule?.();
   }
-  /** The scheduler's view of one profile. */
   cadence(profileId: string): Readonly<Cadence> | undefined {
     return this.cadences.get(profileId);
   }
@@ -191,7 +186,6 @@ export class Usage {
     this.collections.set(profileId, collection);
     return collection;
   }
-  /** Reads the queue until a short page. The queue lives only in the core's memory, so this runs before it stops. */
   async drain(profileId: string): Promise<void> {
     try {
       while ((await this.collect(profileId)) === usagePageSize) {
@@ -201,7 +195,6 @@ export class Usage {
       this.report(`Usage before stop: ${errorMessage(error)}`);
     }
   }
-  /** Starts the scheduler. */
   begin(): void {
     clearTimeout(this.timer);
     let nextAccounts = Date.now() + this.timing.accounts;
@@ -222,7 +215,6 @@ export class Usage {
               (profileId) => this.cadences.get(profileId)?.nextAt ?? Infinity,
             )),
       );
-      // Coalesce active work; idle work sleeps until its deadline.
       const at = Math.max(Date.now() + this.timing.coalesce, due);
       if (at >= scheduledAt) return;
       clearTimeout(this.timer);
@@ -260,7 +252,6 @@ export class Usage {
               if (count === usagePageSize || Date.now() < cadence.activeUntil)
                 cadence.nextAt = 0;
             } catch (error) {
-              // Retry the first failure at once, then back off up to timing.usageBackoff.
               cadence.failures++;
               cadence.nextAt =
                 cadence.failures === 1

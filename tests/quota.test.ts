@@ -59,7 +59,6 @@ test("Claude keeps provider windows distinct and never converts a null reading t
   assert.equal(q.windows[0].remainingPercent, null);
   assert.equal(q.windows[1].remainingPercent, 100);
   assert.equal(q.windows[2].remainingPercent, 12.5);
-  // Account-wide windows decide headroom; model windows are marked scoped.
   assert.equal(q.windows[1].scoped, undefined);
   assert.equal(q.windows[2].scoped, true);
 });

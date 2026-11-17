@@ -25,7 +25,6 @@ export function AnimatedLogo({
   );
 }
 
-/** The logo of a set of profiles: running while one runs, paused while one starts. */
 export function logoState(
   profiles: Pick<ProfileState, "runtime">[],
 ): "running" | "paused" | "stopped" {

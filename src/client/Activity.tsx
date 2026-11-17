@@ -309,7 +309,6 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
       };
     }, [records, days, accounts, costOf]);
 
-  // The request log is the bulk of the page; reuse its rows when inputs are unchanged.
   const requestRows = useMemo(() => {
     const rowTime = timeFormat();
     const rowTimestamp = timestampFormat();

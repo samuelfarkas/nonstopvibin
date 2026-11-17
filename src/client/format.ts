@@ -21,13 +21,11 @@ const plans = new Map([
   ["edu", "Edu"],
   ["free", "Free"],
 ]);
-/** Provider plan identifiers such as self_serve_business_prolite, made readable. */
 export function planLabel(plan: string): string {
   const text = plans.get(plan) ?? plan.replace(/[_-]+/g, " ").trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** The organization of a seat, by name or by the start of its ID; "" without one. */
 export function organizationLabel(seat: SeatIdentity): string {
   return (
     seat.organizationName ||

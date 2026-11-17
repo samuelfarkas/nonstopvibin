@@ -19,7 +19,6 @@ export const allHistoryDays = 3650;
 export const usagePageSize = 500;
 /** How often the server refreshes every account's quota. */
 export const quotaRefreshMs = 120_000;
-/** A reading is stale once two refreshes plus a minute have passed without a new one. */
 export const quotaStaleMs = 2 * quotaRefreshMs + 60_000;
 export const resetResultCodes = [
   "reset",

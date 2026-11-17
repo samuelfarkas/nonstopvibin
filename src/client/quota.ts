@@ -1,6 +1,4 @@
-// Quota health: an account's floor, whether its reading is current, its level,
-// how each window words it, and a provider's headroom. Level colours are the
-// --level-* custom properties in styles.css.
+// Level colours are the --level-* custom properties in styles.css.
 import type { Account, Quota } from "../shared/types.ts";
 import { quotaStaleMs } from "../shared/vocabulary.ts";
 
@@ -24,7 +22,6 @@ export function isQuotaStale(quota?: Quota, now = Date.now()): boolean {
       now - new Date(quota.checkedAt).getTime() > quotaStaleMs),
   );
 }
-/** The class that colours a share left: "unknown", "empty", "low" or none. */
 export const meterLevel = (pct: number | null | undefined) =>
   pct === null || pct === undefined
     ? "unknown"
@@ -66,7 +63,6 @@ export function currentHeadroom(accounts: Account[]) {
   };
 }
 
-/** The tag beside an account on the Subscriptions page, most urgent first. */
 export function accountTag(
   a: Account,
 ): { text: string; tone: "out" | "bad" | "warn" | "" } | null {
@@ -85,7 +81,6 @@ export function accountTag(
               ? { text: "Stale", tone: "" }
               : null;
 }
-/** The tray's line under an account when its reading is not a current one. */
 export function trayNotice(a: Account): string | null {
   const stale = isQuotaStale(a.quota);
   return a.disabled

@@ -16,7 +16,6 @@ export interface DesktopBridge {
   chooseProject(): Promise<string | null>;
 }
 export type BridgeMethod = keyof DesktopBridge;
-/** What the renderer sends; undefined for a method without an argument. */
 export type BridgeArgument<M extends BridgeMethod> = Parameters<
   DesktopBridge[M]
 >[0];

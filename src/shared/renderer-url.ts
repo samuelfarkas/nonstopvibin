@@ -1,13 +1,11 @@
 // How the desktop shell, the CLI and the development hosts open the renderer,
 // and how the renderer reads it back.
 
-/** The main window, optionally on one profile's subscriptions. */
 export function mainUrl(origin: string, profileId?: string): string {
   return profileId
     ? `${origin}/?profile=${encodeURIComponent(profileId)}`
     : origin;
 }
-/** The menu-bar quota panel. */
 export const trayUrl = (origin: string) => `${origin}/?view=tray`;
 /** A browser link that carries the session token; the fragment never reaches the server. */
 export const sessionUrl = (origin: string, token: string) =>

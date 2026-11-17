@@ -56,7 +56,6 @@ function routeRequest(store: Store, req: IncomingMessage) {
     throw new AppError("Unsupported proxy endpoint.", 404);
   return { profileId: profile.id, slug: profile.slug, path: path + url.search };
 }
-/** Upstream response headers an agent may see, for HTTP and WebSocket alike. */
 function responseHeaders(
   upstream: http.IncomingHttpHeaders,
   slug: string,

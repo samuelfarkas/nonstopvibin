@@ -33,7 +33,6 @@ export const architectures = {
   },
 } as const satisfies Record<string, Architecture>;
 const known = new Map<string, Architecture>(Object.entries(architectures));
-/** The names of a Node architecture; throws for one this project does not ship. */
 export function architecture(arch: string): Architecture {
   const names = known.get(arch);
   if (!names) throw new Error(`Unsupported architecture: ${arch}`);
@@ -47,7 +46,6 @@ export const privateFilePattern =
 /** The headless server archive's directory name; the archive adds `.tar.gz`. */
 export const serverArchiveName = (version: string, arch: string): string =>
   `nonstopvibin-server-${version}-linux-${arch}`;
-/** The headless server's architectures, in build order. */
 export const serverArchitectures = ["x64", "arm64"];
 /** install.sh's default prefix, relative to $HOME. */
 export const serverPrefix = ".local";

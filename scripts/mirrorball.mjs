@@ -48,7 +48,6 @@ export const mirrorballSvg = (palette, body, phase = 0) => {
         project(lat + half, lon + w),
         project(lat + half, lon - w),
       ];
-      // Lambert shading from a key light top-left-front.
       const light = { x: -0.45, y: 0.55, z: 0.7 };
       const lum = Math.max(
         0,

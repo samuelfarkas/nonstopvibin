@@ -22,7 +22,6 @@ export const databasePath = (directory: string) =>
 export const vaultKeyPath = (directory: string) => join(directory, "vault.key");
 export const profileDirectory = (directory: string, profileId: string) =>
   join(directory, "profiles", profileId);
-/** The core's credential files for one profile. */
 export const credentialDirectory = (directory: string, profileId: string) =>
   join(profileDirectory(directory, profileId), "auth");
 export const coreConfigPath = (directory: string, profileId: string) =>

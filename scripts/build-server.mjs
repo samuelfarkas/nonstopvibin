@@ -183,7 +183,6 @@ Licenses are in \`licenses/\`.
     ])
       await chmod(path, 0o755);
 
-    // Verify the staged tree before archiving it.
     await assertElf(join(out, serverArchive.executable), arch);
     await assertElf(binary, arch);
     checkCoreDirectory(core, "linux", arch);

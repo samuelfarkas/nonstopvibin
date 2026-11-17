@@ -9,23 +9,17 @@ import type { Store } from "./store.ts";
 import { Usage, type UsageTiming } from "./usage.ts";
 
 export interface CoresOptions {
-  /** How management calls reach a core; tests answer some of them. */
   management?: Management;
   timing?: CoreTiming;
   usageTiming?: UsageTiming;
-  /** Gateway requests or WebSockets still open for a profile; their usage arrives later. */
   inFlight?: (profileId: string) => number;
   /** The sign-in clock. */
   now?: () => number;
-  /** Where the features report errors the UI shows. */
   report: Report;
-  /** A core became running, failed, exited, or applied new settings. */
   onStatusChange?: () => void;
-  /** A browser sign-in callback was accepted. */
   onSignInCallback?: () => void;
 }
 
-/** The profile cores and the features that run on them, wired together. */
 export class Cores {
   readonly pool: CorePool;
   readonly accounts: Accounts;

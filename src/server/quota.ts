@@ -263,7 +263,6 @@ export interface UpstreamRequest {
   header: Record<string, string | undefined>;
   data?: string;
 }
-/** Sends `request` through the core's /api-call with an account's credential. */
 export async function callUpstream(
   pool: CorePool,
   profileId: string,
@@ -312,7 +311,6 @@ interface QuotaSource {
   ask(asking: Asking): Promise<Json | undefined>;
   read(body: JsonObject, now: number): Read;
 }
-// How to ask each provider for its quota, and how to read the answer.
 const quotaSources = {
   claude: {
     oauth: true,
@@ -430,7 +428,6 @@ export function parseQuota(
   };
 }
 
-/** Each account's quota, asked of its provider and kept in the store. */
 export class Quotas {
   private readonly pool: CorePool;
   private readonly store: Store;

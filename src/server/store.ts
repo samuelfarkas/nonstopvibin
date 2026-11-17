@@ -45,7 +45,6 @@ export interface UsagePage<Cursor> {
   records: UsageRecord[];
   next?: Cursor;
 }
-/** Where a time-ordered page of usage rows continues. */
 export interface UsageCursor {
   timestamp: string;
   sequence: number;
@@ -290,7 +289,6 @@ export class Store {
     const stmt = this.db.prepare(
       "INSERT OR IGNORE INTO usage VALUES (?,?,?,?)",
     );
-    // One batch commits or rolls back whole; duplicate IDs are ignored.
     this.transaction(() => {
       for (const r of records)
         stmt.run(r.id, r.profileId, r.timestamp, JSON.stringify(r));

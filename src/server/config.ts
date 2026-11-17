@@ -63,7 +63,6 @@ export function coreConfiguration(
         const identity = createHash("sha256")
           .update(JSON.stringify([account.baseUrl, account.prefix, models]))
           .digest("hex");
-        // The name hashes the base URL, prefix and models, so a match shares all three.
         const name = `${account.provider}-${identity}`;
         const existing = compatible.find((p) => p.name === name);
         if (existing) existing["api-key-entries"].push({ "api-key": key });
@@ -131,7 +130,6 @@ export function coreConfiguration(
   };
 }
 
-/** Writes each profile's core config from the store, one write per profile at a time. */
 export class ConfigWriter {
   private readonly store: Store;
   private readonly writes = new Map<string, Promise<CoreConfiguration>>();

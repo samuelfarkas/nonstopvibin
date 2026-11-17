@@ -21,11 +21,8 @@ await writeFile(
     }),
   ),
 );
-// Menu bar / tray icon (docs/design/icons.md): a still render of the 3D
-// mirrorball from Logo — tiled facets on a dark body with black seams, key
-// light top-left. Orthographic projection, tilted 16° like the app logo.
+// Menu bar / tray icon (docs/design/icons.md).
 const traySvg = mirrorballSvg(palette, body);
-// App icon uses the same mirrorball as the renderer and tray.
 await sharp({
   create: { width: 512, height: 512, channels: 4, background: "#171614" },
 })

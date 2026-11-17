@@ -51,7 +51,7 @@ export function Modal({
 }) {
   // Callers mount a Modal only while it is open.
   useKeepDraft(true);
-  // Capture before an autoFocus input mounts; callers mount dialogs when opened.
+  // Capture before an autoFocus input mounts.
   const [opener] = useState(() => document.activeElement);
   return (
     <Dialog.Root
@@ -146,7 +146,6 @@ export function Select<T extends string>({
     </RadixSelect.Root>
   );
 }
-/** Copies `text`, or what `text()` fetches when clicked (shown as "Copying…"). */
 export function CopyButton({
   text,
   label = "Copy",

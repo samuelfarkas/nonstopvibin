@@ -1,7 +1,5 @@
-/* nonstopvibin — foundation.
-   Dark warm-charcoal workbench. One accent (amber) for primary action, selection
-   and attention. Sans for navigation and labels; mono for data and code.
-   View-specific rules live beside their component. */
+/* Dark warm-charcoal workbench. One accent (amber) for primary action, selection
+   and attention. Sans for navigation and labels; mono for data and code. */
 :root {
   --sans: "Geist Variable", system-ui, sans-serif;
   --mono: "Geist Mono Variable", ui-monospace, Menlo, monospace;
@@ -1570,7 +1568,6 @@ details > dl {
   font-weight: 600;
   text-transform: uppercase;
 }
-/* Reduced motion removes movement and scaling; colour and opacity fades stay. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *:before,

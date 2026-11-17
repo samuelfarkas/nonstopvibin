@@ -44,7 +44,6 @@ import { CopyButton, Modal, Select } from "./controls.tsx";
 
 import { accountLabel, organizationLabel } from "./format.ts";
 
-/** Whether accounts of this provider are seats in separate organizations. */
 const organizations = (provider: string) =>
   providerEntry(provider)?.organizations === true;
 

@@ -30,7 +30,6 @@ interface Sandbox {
   pool: CorePool;
   accounts: Accounts;
   profileId: string;
-  /** The core reported the authorization finished. */
   authorized?: boolean;
   credentialId?: string;
   credential?: JsonObject;
@@ -47,7 +46,6 @@ export interface SignInOptions {
 
 /** Browser sign-in through a core, one at a time across all profiles. */
 export class SignIn {
-  /** The sign-in in progress. */
   session: OAuthSession | undefined;
   private readonly onCallback?: () => void;
   private readonly report: Report;
@@ -84,7 +82,6 @@ export class SignIn {
     this.actions = operation;
     return operation;
   }
-  /** Waits for the sign-in actions already queued. */
   async settled(): Promise<void> {
     await this.actions.catch(() => undefined);
   }

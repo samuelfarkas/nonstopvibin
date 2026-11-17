@@ -19,7 +19,6 @@ import type {
   UsageSummary,
 } from "./types.ts";
 
-/** The answer of a route whose caller needs only success. */
 export interface Ok {
   ok: true;
 }
@@ -115,7 +114,6 @@ export interface Routes {
     body: { state: string };
     response: OAuthStatus;
   };
-  /** The sign-in in progress for this profile, if any. */
   "GET /profiles/:profileId/oauth-session": { response: OAuthSession | null };
   "POST /profiles/:profileId/callback": { body: { url: string }; response: Ok };
   "POST /profiles/:profileId/import": {

@@ -220,7 +220,6 @@ test("history cleanup is opt-in, persists, and is reflected in each affected sum
     );
     for (const p of profiles)
       assert.equal(usageSummary(store, p.id).requests, 0);
-    // Each profile holds one 5-day-old and one 40-day-old record.
     const both = {
       requests: 2,
       failed: 0,

@@ -220,7 +220,6 @@ export async function startServer(
         desktop: false,
         development: false,
         requirePinnedCore: true,
-        // Closing the server also gives up its discovery file and directory lock.
         afterClose: async () => {
           try {
             await removeSession(options.directory);
@@ -347,7 +346,6 @@ export function urlText(session: Session, sshConnection?: string): string {
   return lines.join("\n");
 }
 
-/** The session of a server answering for `directory`, or undefined. */
 async function running(directory: string) {
   const session = await readSession(directory);
   const state = session && (await probe(session));
@@ -368,7 +366,6 @@ function unitQuote(value: string, dollar: boolean): string {
   if (dollar) quoted = quoted.replaceAll("$", "$$$$");
   return `"${quoted}"`;
 }
-// Agent configuration lands where the user's agents read it.
 export const SERVICE_ENVIRONMENT = [
   "NONSTOPVIBIN_DATA_DIR",
   ...agentEnvironment,

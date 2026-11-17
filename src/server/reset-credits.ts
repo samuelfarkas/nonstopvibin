@@ -9,8 +9,6 @@ import { callUpstream, codexApi, codexHeader, type Quotas } from "./quota.ts";
 import type { Store } from "./store.ts";
 
 // OpenAI's backend-client/src/types.rs; these are ChatGPT subscription APIs.
-// Checked against the renderer's dependency-free shared type: every field it
-// reads must be validated here with the same type.
 export const resetCreditsSchema = z.object({
   available_count: z.number().int().nonnegative(),
   credits: z.array(
@@ -28,13 +26,11 @@ export const resetResultSchema = z.object({
   code: z.enum(resetResultCodes),
 });
 
-/** Codex banked resets: list and redeem them for a signed-in Codex subscription. */
 export class CodexResets {
   private readonly pool: CorePool;
   private readonly store: Store;
   private readonly accounts: Accounts;
   private readonly quotas: Quotas;
-  /** ChatGPT accounts with a redemption in flight. */
   private readonly redeeming = new Set<string>();
   constructor(pool: CorePool, accounts: Accounts, quotas: Quotas) {
     this.pool = pool;

@@ -292,10 +292,8 @@ test(
 /** A synthetic identity: `lstart` width, then a command. */
 const fakeIdentity = (pid: number) =>
   `Thu Jan  1 00:00:00 1970     process ${pid}`;
-/** The config path a core of `data` is started with. */
 const coreConfig = (data: string) =>
   join(data, "profiles", "00000000-0000-4000-8000-000000000000", "config.yaml");
-/** A synthetic identity of a core of `data`. */
 const coreIdentity = (data: string) =>
   `Thu Jan  1 00:00:00 1970     core --config ${coreConfig(data)}`;
 /** The real lookup, but `ps` cannot be executed (as under descriptor exhaustion in Bun). */

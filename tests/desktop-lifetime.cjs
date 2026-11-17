@@ -105,7 +105,6 @@ if (typeof electron === "string") {
     })
     .finally(cancel);
 } else {
-  // Four short launches; their stages print only when one fails.
   const { stage, api } = harness.instrument("ready.json", { quiet: true });
   const { app, BrowserWindow, Menu } = electron;
   const directory = process.env.NONSTOPVIBIN_DATA_DIR;

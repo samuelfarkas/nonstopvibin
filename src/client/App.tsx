@@ -94,7 +94,6 @@ export function App() {
   if (!state)
     return <Opening failure={failure} sessionRefused={sessionRefused} />;
   const providers = new Set(profile?.accounts.map((a) => a.provider)).size;
-  // The page header: Settings, or the selected profile; none before a profile exists.
   const heading =
     page === "settings"
       ? { title: "Settings", subtitle: `NonstopVibin ${state.version} · local` }

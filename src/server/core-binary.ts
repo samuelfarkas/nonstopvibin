@@ -10,10 +10,8 @@ import type { Json } from "../shared/types.ts";
 // The core artifact for the app and for the build scripts (install-core, validate-core,
 // verify-package, sign-mac, build-server), which import this module: no build tooling here.
 
-/** The CLIProxyAPI version this build pins. */
 export const coreVersion = coreRelease.version;
 
-/** Where the core's two files live: in a source checkout and inside the desktop app. */
 export const coreLayout = {
   /** Written by `bun run core:install`, relative to the checkout. */
   checkout: ".vendor/core",
@@ -35,7 +33,6 @@ const matches = (
   const pin = table.get(`${platform}_${arch}`);
   return pin !== undefined && pin === sha256;
 };
-/** Whether the pin covers this Node platform and architecture. */
 export const pinned = (platform: string, arch: string): boolean =>
   binaryPins.has(`${platform}_${arch}`);
 /** Whether `sha256` is the reviewed checksum of the upstream archive for this target. */

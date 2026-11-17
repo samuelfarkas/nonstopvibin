@@ -80,7 +80,6 @@ else {
   app.on("window-all-closed", () => {
     /* The menu bar and proxy intentionally continue until Quit. */
   });
-  // Route termination signals through the orderly quit, which stops every core.
   for (const signal of terminationSignals) process.on(signal, () => app.quit());
   app.on("before-quit", (event) => {
     if (quitting) return;
@@ -106,7 +105,6 @@ else {
       app.quit();
     });
 }
-// Each provider's sign-in and account pages.
 const externalHosts = new Set(
   Object.values<ProviderEntry>(providers).flatMap(
     (provider) => provider.hosts ?? [],

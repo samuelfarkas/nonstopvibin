@@ -137,7 +137,6 @@ interface RouteCall<K extends RouteKey> {
   body: RouteBody<K>;
 }
 interface RouteDefinition<K extends RouteKey> {
-  /** Validates the request body at run time. */
   body: z.ZodType<RouteBody<K>>;
   handle: (call: RouteCall<K>) => Awaitable<RouteResponse<K>>;
   status?: number;
@@ -147,7 +146,6 @@ type RouteTable = { [K in RouteKey]: RouteDefinition<K> };
 const noBody: z.ZodType<undefined> = z.undefined();
 interface Endpoint {
   method: string;
-  /** The path parameters when the path is this route's. */
   match(
     pathname: string,
     segments: string[],
@@ -219,7 +217,6 @@ interface ServerOptions {
   /** How the profile cores are reached and timed; tests answer and shorten them. */
   cores?: Omit<CoresOptions, "report" | "onStatusChange" | "onSignInCallback">;
 }
-/** What a host shows at a glance. */
 export interface HostStatus {
   /** Names of the profiles whose core runs, in profile order. */
   running: string[];
@@ -310,7 +307,6 @@ export class Application {
               ? error.message
               : "The operation failed. Check the profile status and try again.";
         if (status === 500) this.report(errorMessage(error));
-        // A departed client cannot receive the error; only the report above matters.
         if (res.destroyed) return;
         json<ApiError>(
           res,
@@ -395,7 +391,6 @@ export class Application {
       message,
     ].slice(-5);
   }
-  /** Calls `listener` after each `event` until the returned function is called. */
   on(event: HostEvent, listener: () => void): () => void {
     this.listeners[event].add(listener);
     return () => {

@@ -14,7 +14,6 @@ export function goModelProtocol(id: string, endpoint?: string): Protocol {
   return "openai";
 }
 
-/** The models an API-key provider lists, each with the protocol it is reached by. */
 export async function discoverModels(
   input: Pick<ApiAccount, "provider" | "baseUrl"> & {
     apiKey: string;

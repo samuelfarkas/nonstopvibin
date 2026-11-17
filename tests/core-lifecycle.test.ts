@@ -210,7 +210,6 @@ test(
   },
 );
 
-/** A pool with `count` running profiles whose drains are recorded. */
 async function runningPool(prefix: string, count: number) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   const store = new Store(directory, fileKeyCodec(directory));

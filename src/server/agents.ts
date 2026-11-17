@@ -29,10 +29,8 @@ export const agentEnvironment = Object.values(agentDefinitions).flatMap(
         ? [directory.variable, "XDG_CONFIG_HOME"]
         : [directory.variable],
 );
-/** The configuration directory's path under the home directory, by default. */
 export const defaultConfigDirectory = (agent: Agent): string[] =>
   agentDefinitions[agent].directory?.home ?? [];
-/** The agent's configuration directory when the environment moves it from the default. */
 export function configDirectory(agent: Agent): string | undefined {
   const directory = agentDefinitions[agent].directory;
   if (!directory) return undefined;

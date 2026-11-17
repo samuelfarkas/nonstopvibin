@@ -54,7 +54,7 @@ function identityCommand(identity: string): string {
 /** Whether an identity is a core started with a profile config inside `directory`. */
 function coreOf(directory: string, identity: string): boolean {
   const command = identityCommand(identity);
-  // The arguments core.ts passes, split around the profile ID (no path holds NUL).
+  // No path holds NUL.
   const [prefix = "", suffix = ""] =
     ` ${coreArguments(directory, "\0").join(" ")}`.split("\0");
   const at = command.lastIndexOf(prefix);
@@ -90,7 +90,6 @@ done
 kill -KILL "$1" 2>/dev/null
 exit 0`;
 
-/** Starts the layer-1 watchdog for a freshly spawned core. */
 export function watchCore(core: ChildProcess): ChildProcess | undefined {
   if (core.pid === undefined || process.platform === "win32") return undefined;
   const watchdog = spawn(
@@ -197,9 +196,7 @@ export async function reapOrphanedCores(
       continue;
     }
     try {
-      // Its owner still runs and manages it.
       if ((await identify(entry.owner.pid)) === entry.owner.identity) continue;
-      // Only cores started with a profile config inside this data directory.
       const ours =
         name === `${entry.pid}.json` && coreOf(directory, entry.identity);
       if (ours && (await identify(entry.pid)) === entry.identity)

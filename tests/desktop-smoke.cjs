@@ -42,7 +42,6 @@ if (typeof electron === "string") {
       process.exit(1);
     }
     await harness.terminate(run);
-    // Then check that profile cores never outlive a signalled or killed app.
     require("./desktop-lifetime.cjs");
   })();
 } else {
@@ -116,7 +115,6 @@ if (typeof electron === "string") {
       return listeners.filter((listener) => listener.type === "beforeunload")
         .length;
     });
-  // Closes the main window once `count` guards can veto it, then waits for the deferred close.
   async function closeGuarded(window, count, retained) {
     await until(async () => (await guards(window)) >= count);
     window.close();

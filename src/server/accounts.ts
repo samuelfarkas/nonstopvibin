@@ -11,13 +11,11 @@ import { claudeIdentity } from "./identity.ts";
 import { number, parse, record, text, type JsonObject } from "./json.ts";
 import type { Store } from "./store.ts";
 
-/** What reading a profile's accounts needs from its core. */
 export type AccountSource = Pick<
   CorePool,
   "usable" | "management" | "runtimes"
 >;
 
-/** The accounts each profile's core holds, and the credential files behind them. */
 export class Accounts {
   readonly store: Store;
   private readonly pool: AccountSource;
@@ -54,7 +52,6 @@ export class Accounts {
     this.oauthLists.set(profileId, accounts);
     this.store.saveAccountMetadata(profileId, accounts);
   }
-  /** Every account of a profile, OAuth then API key, each with its stored quota. */
   list(profileId: string): Account[] {
     const api: Account[] = this.store.apiAccounts(profileId).map((a) => ({
       id: a.id,
@@ -75,7 +72,6 @@ export class Accounts {
   chatgptAccountId(profileId: string, accountId: string): string | undefined {
     return this.chatgptAccountIds.get(profileId)?.get(accountId);
   }
-  /** Re-reads the accounts from a usable core; does nothing otherwise. */
   async sync(profileId: string, signal?: AbortSignal): Promise<void> {
     if (!this.pool.usable(profileId)) return;
     const core = this.pool.runtimes.get(profileId);
@@ -211,7 +207,6 @@ export class Accounts {
       );
     }
   }
-  /** The profile's credential files, by file name. */
   async credentialFiles(
     profileId: string,
   ): Promise<Array<{ id: string; raw: JsonObject }>> {

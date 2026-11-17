@@ -74,7 +74,6 @@ function Headroom({ groups }: { groups: Map<string, Account[]> }) {
   );
 }
 
-/** The Subscriptions page's header actions. */
 export function SubscriptionActions({
   profile,
   busy,
@@ -217,7 +216,6 @@ export function SubscriptionsPage({
               <span />
             </div>
             {accounts.map((a) => {
-              // Account-wide limits first; model-only windows fill spare slots.
               const windows = [...(a.quota?.windows ?? [])]
                 .sort((x, y) => Number(!!x.scoped) - Number(!!y.scoped))
                 .slice(0, 3);

@@ -10,7 +10,6 @@ import { text, type JsonObject } from "./json.ts";
 import type { Quotas } from "./quota.ts";
 import type { Store } from "./store.ts";
 
-/** Adds, replaces, changes and removes a profile's subscriptions, one change at a time. */
 export class Credentials {
   private readonly pool: CorePool;
   private readonly store: Store;
@@ -29,7 +28,6 @@ export class Credentials {
     this.changes = operation;
     return operation;
   }
-  /** Waits for the queued changes. */
   async settled(): Promise<void> {
     await this.changes.catch(() => undefined);
   }
