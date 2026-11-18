@@ -202,7 +202,7 @@ export class CorePool {
       runtime.ledger = undefined;
       runtime.state = runtime.stopping ? "stopped" : "error";
       if (!runtime.stopping)
-        runtime.error = `Proxy exited (${signal ?? code}). Restart this profile to reconnect.`;
+        runtime.error = `Proxy exited (${signal ?? code}). Profiles with subscriptions restart automatically, or use Restart.`;
       this.options.onStatusChange?.();
     });
     try {
@@ -303,6 +303,10 @@ export class CorePool {
       this.held.delete(profileId);
       if (wasRunning && !this.closing) await this.start(profileId);
     }
+  }
+  /** A stop or a credential swap is in flight: it decides whether the core runs next. */
+  holding(profileId: string): boolean {
+    return this.stops.has(profileId) || this.held.has(profileId);
   }
   /** The core answered and has not exited. It may be stopping. */
   running(profileId: string): boolean {

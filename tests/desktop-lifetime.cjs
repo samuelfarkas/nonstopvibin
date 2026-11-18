@@ -1,6 +1,6 @@
 // Run by tests/desktop-smoke.cjs (`bun run test:desktop`); real Electron with isolated data checks that
 // profile cores never outlive the app: SIGTERM, SIGINT and SIGHUP quit in order,
-// and after SIGKILL the watchdog stops the core.
+// and after SIGKILL the watchdog stops the core. A startup that fails exits with status 1.
 const assert = require("node:assert/strict");
 const {
   existsSync,
@@ -13,6 +13,9 @@ const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
 const harness = require("./support/desktop-harness.cjs");
 
+/** The run whose port is taken, so the app cannot start. */
+const startupFailure = "lifetime-startup-failure";
+
 if (typeof electron === "string") {
   // Processes whose command line names this run's fresh temp directory; only this run creates those.
   const owned = (marker) =>
@@ -24,7 +27,7 @@ if (typeof electron === "string") {
       await delay(100);
     }
   }
-  // Four launches take about 15 s locally; each one's own waits end within 80 s.
+  // Five launches take about 20 s locally; each one's own waits end within 80 s.
   const limit = 150_000;
   let active;
   async function scenario(signal) {
@@ -93,17 +96,69 @@ if (typeof electron === "string") {
       active = undefined;
     }
   }
+  async function failedStartup() {
+    const taken = require("node:net").createServer();
+    await new Promise((resolve) => taken.listen(0, "127.0.0.1", resolve));
+    const run = harness.launch(
+      startupFailure,
+      __filename,
+      ["ignore", "inherit", "inherit"],
+      { NONSTOPVIBIN_PORT: String(taken.address().port) },
+    );
+    active = run;
+    try {
+      const stuck = setTimeout(() => run.child.kill("SIGKILL"), 30_000);
+      const { code, signalCode } = await run.exited;
+      clearTimeout(stuck);
+      assert.equal(
+        existsSync(join(run.directory, "ready.json")),
+        false,
+        "nothing else failed in the run",
+      );
+      const shown = JSON.parse(
+        readFileSync(join(run.directory, "dialog.json"), "utf8"),
+      );
+      assert.equal(shown.title, "NonstopVibin could not start");
+      assert.equal(
+        code,
+        1,
+        `exit status after a failed startup (${signalCode})`,
+      );
+      return { startup: "failed", code };
+    } catch (error) {
+      if (!run.expired) {
+        console.error(error);
+        await harness.diagnose(run, "failure");
+      }
+      throw error;
+    } finally {
+      taken.close();
+      await harness.terminate(run);
+      active = undefined;
+    }
+  }
   const cancel = harness.limit(limit, "Desktop core lifetime", () => active);
   (async () => {
     const results = [];
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGKILL"])
       results.push(await scenario(signal));
+    results.push(await failedStartup());
     console.log("Desktop core lifetime passed:", JSON.stringify(results));
   })()
     .catch(() => {
       process.exitCode = 1; // The failing scenario printed its error and diagnostics.
     })
     .finally(cancel);
+} else if (process.env.NONSTOPVIBIN_TEST_RUN === startupFailure) {
+  harness.instrument("ready.json", { quiet: true });
+  // The app shows this box and then quits; record it instead of ending the run here.
+  electron.dialog.showErrorBox = (title, content) =>
+    writeFileSync(
+      join(process.env.NONSTOPVIBIN_DATA_DIR, "dialog.json"),
+      JSON.stringify({ title, content }),
+    );
+  electron.app.setAppPath(resolve(__dirname, ".."));
+  require("../dist/desktop/main.cjs");
 } else {
   const { stage, api } = harness.instrument("ready.json", { quiet: true });
   const { app, BrowserWindow } = electron;

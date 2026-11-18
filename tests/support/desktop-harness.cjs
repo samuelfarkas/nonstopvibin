@@ -30,7 +30,8 @@ const psEnvironment = {
   TZ: "UTC",
 };
 
-function launch(name, script, stdio) {
+/** Starts `script` in Electron on a fresh data directory and a free port unless `env` names one. */
+function launch(name, script, stdio, env = {}) {
   const directory = mkdtempSync(join(tmpdir(), `nonstopvibin-${name}-`));
   const child = spawn(require("electron"), [script, "--background"], {
     stdio,
@@ -39,6 +40,7 @@ function launch(name, script, stdio) {
       NONSTOPVIBIN_DATA_DIR: directory,
       NONSTOPVIBIN_PORT: "0",
       NONSTOPVIBIN_TEST_RUN: name,
+      ...env,
     },
   });
   const exited = new Promise((done) => {

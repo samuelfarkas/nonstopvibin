@@ -1,5 +1,5 @@
-// Limits and values the server and the renderer must agree on. Data only: the
-// renderer loads this module, so it imports nothing at run time.
+// Limits, values and rules the server and the renderer must agree on. Data and pure
+// functions only: the renderer loads this module, so it imports nothing at run time.
 
 export const strategies = ["round-robin", "fill-first"] as const;
 /** Days of usage history kept; 0 keeps everything. */
@@ -17,6 +17,14 @@ export const credentialFileBytes = 2_000_000;
 export const allHistoryDays = 3650;
 /** Usage records per page: the core's drain, history pages and the Activity sample. */
 export const usagePageSize = 500;
+/**
+ * Whether the app keeps a profile's core running, starting it again when it is not: the
+ * profile has run before (`enabled`) and has a subscription, whose quota and routing need it.
+ */
+export const keepsRunning = (
+  profile: { enabled: boolean },
+  subscriptions: number,
+): boolean => profile.enabled && subscriptions > 0;
 /** How often the server refreshes every account's quota. */
 export const quotaRefreshMs = 120_000;
 export const quotaStaleMs = 2 * quotaRefreshMs + 60_000;

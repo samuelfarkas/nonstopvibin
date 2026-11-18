@@ -94,18 +94,30 @@ export interface UsageTiming {
   usageBackoff: number;
   /** How long after gateway activity the queue keeps being drained. */
   activity: number;
+  /** Longest wait between automatic starts of a profile whose core keeps failing. */
+  restartBackoff: number;
 }
 export const usageTiming: UsageTiming = {
   accounts: 20_000,
   coalesce: 2000,
   usageBackoff: 60_000,
   activity: 10_000,
+  restartBackoff: 300_000,
 };
 interface Cadence {
   core: Readonly<CoreRuntime> | undefined;
   nextAt: number;
   activeUntil: number;
   failures: number;
+}
+/** A profile the app keeps running whose core did not run when last seen. */
+interface Restart {
+  /** Automatic starts in this run of failures. It ends once a core stays up `restartBackoff` past `at`. */
+  attempts: number;
+  /** When a pass may start it next. */
+  at: number;
+  /** This run of failures is already in the error list. */
+  reported: boolean;
 }
 export interface UsageOptions {
   /** Read on every wakeup, so a caller may change it while the scheduler runs. */
@@ -126,6 +138,9 @@ export class Usage {
   private readonly report: Report;
   private readonly cadences = new Map<string, Cadence>();
   private readonly collections = new Map<string, Promise<number>>();
+  private readonly restarts = new Map<string, Restart>();
+  /** Ends an automatic start still waiting for its core once shutdown begins. */
+  private readonly abandon = new AbortController();
   private timer?: NodeJS.Timeout;
   private polling?: Promise<void>;
   private maintenance?: Promise<void>;
@@ -158,6 +173,76 @@ export class Usage {
   }
   cadence(profileId: string): Readonly<Cadence> | undefined {
     return this.cadences.get(profileId);
+  }
+  /** A core started, stopped or failed: each profile the app keeps running that does not run is due a start. */
+  changed(): void {
+    // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
+    if (!this.schedule || this.pool.shuttingDown) return;
+    for (const profile of this.store.profiles())
+      if (
+        !this.restarts.has(profile.id) &&
+        !this.pool.running(profile.id) &&
+        this.accounts.keepsRunning(profile)
+      )
+        this.restarts.set(profile.id, { attempts: 0, at: 0, reported: false });
+    this.schedule();
+  }
+  /** Shutdown began: an automatic start gives up now; the pool's stops end its core. */
+  abandonRestarts(): void {
+    this.abandon.abort(new AppError("nonstopvibin is shutting down.", 503));
+  }
+  /**
+   * Starts each profile whose restart is due and answers those now running. A start, stop
+   * or credential swap already in flight is left to finish; the next pass looks again.
+   */
+  private async restart(): Promise<Set<string>> {
+    const started = new Set<string>();
+    for (const [profileId, restart] of this.restarts) {
+      if (this.pool.shuttingDown) break;
+      const profile = this.store.profile(profileId);
+      // A core that exits soon after starting is a crash loop: its backoff stands until it stays up.
+      if (this.pool.running(profileId)) {
+        if (Date.now() >= restart.at + this.timing.restartBackoff)
+          this.restarts.delete(profileId);
+        continue;
+      }
+      if (!this.accounts.keepsRunning(profile)) {
+        this.restarts.delete(profileId);
+        continue;
+      }
+      if (
+        Date.now() < restart.at ||
+        this.pool.holding(profileId) ||
+        this.pool.starting.has(profileId)
+      )
+        continue;
+      // One error-list entry per run of failures; the profile shows each one.
+      const fail = (message: string) => {
+        if (restart.reported) return;
+        restart.reported = true;
+        this.report(`${profile.name}: ${message}`);
+      };
+      const runtime = this.pool.runtimes.get(profileId);
+      // The last automatic start succeeded, but its core exited before this one was due.
+      if (restart.attempts && runtime?.state === "error" && runtime.error)
+        fail(runtime.error);
+      restart.attempts++;
+      try {
+        // Shutdown must not wait out this core's readiness window.
+        await this.pool.start(profileId, this.abandon.signal);
+        started.add(profileId);
+      } catch (error) {
+        if (this.pool.shuttingDown) break;
+        fail(errorMessage(error));
+      }
+      restart.at =
+        Date.now() +
+        Math.min(
+          this.timing.coalesce * 2 ** (restart.attempts - 1),
+          this.timing.restartBackoff,
+        );
+    }
+    return started;
   }
   markActivity(profileId: string): void {
     const cadence = this.cadences.get(profileId);
@@ -201,6 +286,13 @@ export class Usage {
     let nextQuotas = Date.now() + quotaRefreshMs;
     let nextPrune = Date.now() + 86_400_000;
     let scheduledAt = Infinity;
+    // The earliest start due among profiles that do not run; Infinity, and no wakeup, if none.
+    const restartAt = () =>
+      Math.min(
+        ...[...this.restarts].map(([profileId, { at }]) =>
+          this.pool.running(profileId) ? Infinity : at,
+        ),
+      );
     const schedule = () => {
       if (this.pool.shuttingDown) return;
       const running = [...this.pool.runtimes.keys()].filter((profileId) =>
@@ -209,6 +301,7 @@ export class Usage {
       const due = Math.min(
         this.maintenance ? Infinity : nextPrune,
         this.maintenance || !running.length ? Infinity : nextAccounts,
+        this.maintenance ? Infinity : restartAt(),
         ...(this.polling
           ? []
           : running.map(
@@ -270,12 +363,10 @@ export class Usage {
           this.polling = undefined;
           schedule();
         });
-      if (
-        !this.maintenance &&
-        (Date.now() >= nextAccounts || Date.now() >= nextPrune)
-      ) {
-        const quotasDue = Date.now() >= nextQuotas;
-        nextAccounts = Date.now() + this.timing.accounts;
+      const routine = Date.now() >= nextAccounts || Date.now() >= nextPrune;
+      if (!this.maintenance && (routine || Date.now() >= restartAt())) {
+        const quotasDue = routine && Date.now() >= nextQuotas;
+        if (routine) nextAccounts = Date.now() + this.timing.accounts;
         if (quotasDue) nextQuotas = Date.now() + quotaRefreshMs;
         this.maintenance = (async () => {
           if (Date.now() >= nextPrune) {
@@ -286,11 +377,14 @@ export class Usage {
               this.report(`History cleanup: ${errorMessage(error)}`);
             }
           }
+          const restarted = await this.restart();
           for (const profileId of this.pool.runtimes.keys()) {
             if (this.pool.shuttingDown) return;
-            if (!this.pool.usable(profileId)) continue;
+            // A restarted core missed its quota checks while down.
+            const missed = restarted.has(profileId);
+            if (!this.pool.usable(profileId) || !(routine || missed)) continue;
             try {
-              if (!quotasDue) await this.accounts.sync(profileId);
+              if (!quotasDue && !missed) await this.accounts.sync(profileId);
               else
                 await this.quotas.refreshAccounts(
                   profileId,
@@ -314,7 +408,8 @@ export class Usage {
       schedule();
     };
     this.schedule = schedule;
-    schedule();
+    // Profiles the launch restore could not start are due at once.
+    this.changed();
   }
   /** Stops scheduling and waits for the drain pass and maintenance already running. */
   async settled(): Promise<void> {

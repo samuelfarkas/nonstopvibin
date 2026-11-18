@@ -622,9 +622,16 @@ export class Application {
         query: noQuery,
         handle: async ({ param }) => {
           const id = param("profileId");
+          const pool = this.cores.pool;
+          // Signed-in quota is asked through the core, so a profile the app keeps running starts first.
+          if (this.cores.accounts.keepsRunning(this.store.profile(id)))
+            await pool.start(id);
           await this.cores.quotas.refreshAccounts(
             id,
-            (account) => !account.disabled,
+            // A core gone meanwhile could only record a failed check.
+            (account) =>
+              !account.disabled &&
+              (account.kind === "api-key" || pool.usable(id)),
           );
           return this.state();
         },

@@ -21,7 +21,7 @@ import {
 } from "./quota.ts";
 import { Empty, Logo, QuotaMeter } from "./components.tsx";
 import { Select } from "./controls.tsx";
-import { strategies } from "../shared/vocabulary.ts";
+import { keepsRunning, strategies } from "../shared/vocabulary.ts";
 import "./subscriptions.css";
 
 /** Each routing strategy's name and what it does, in the picker and around it. */
@@ -114,7 +114,12 @@ export function SubscriptionActions({
       {profile.accounts.length > 0 && (
         <button
           className="button"
-          disabled={Boolean(busy) || profile.runtime !== "running"}
+          disabled={
+            Boolean(busy) ||
+            // Refresh starts a profile the app keeps running.
+            (profile.runtime !== "running" &&
+              !keepsRunning(profile, profile.accounts.length))
+          }
           onClick={() => {
             void perform(
               "quotas",

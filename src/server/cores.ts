@@ -41,7 +41,11 @@ export class Cores {
       },
       // The usage queue lives only in the core's memory.
       beforeStop: (profileId) => this.usage.drain(profileId),
-      onStatusChange: options.onStatusChange,
+      // The scheduler learns here that a profile it keeps running has stopped.
+      onStatusChange: () => {
+        this.usage.changed();
+        options.onStatusChange?.();
+      },
     });
     this.accounts = new Accounts(this.pool, store);
     this.quotas = new Quotas(this.pool, this.accounts);
@@ -74,12 +78,14 @@ export class Cores {
     this.usage.begin();
   }
   /**
-   * Refuses new work, lets sign-in actions and then credential changes finish, drops the
-   * pending sign-in, lets the scheduler's running pass finish, then stops every core.
+   * Refuses new work and abandons an automatic start, lets sign-in actions and then
+   * credential changes finish, drops the pending sign-in, lets the scheduler's running
+   * pass finish, then stops every core.
    * The caller closes the store only after this: each stop drains usage into it.
    */
   async shutdown(): Promise<void> {
     this.pool.beginShutdown();
+    this.usage.abandonRestarts();
     await this.signIn.settled();
     await this.credentials.settled();
     try {
