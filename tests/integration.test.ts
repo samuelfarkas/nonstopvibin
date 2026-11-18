@@ -1216,9 +1216,13 @@ test(
   async () => {
     const runtime = app.cores.pool.runtimes.get(finalDrain.id);
     assert.ok(runtime);
+    // A collection of Personal already under way would be joined below without crossing the hook.
+    await app.cores.usage.collect(personal.id);
+    let unrelated = 0;
     // Only this profile's drain: the scheduler drains other profiles meanwhile.
     intercept = async (request) => {
       const page = await httpManagement(request);
+      if (request.profileId === personal.id) unrelated++;
       if (
         request.profileId === finalDrain.id &&
         request.path.startsWith("/usage-queue")
@@ -1234,6 +1238,7 @@ test(
       assert.equal(runtime.state, "stopped");
       // Another profile's drain while this one's is intercepted passes through untouched.
       await app.cores.usage.collect(personal.id);
+      assert.ok(unrelated > 0, "Personal's drain crossed the hook");
     } finally {
       intercept = undefined;
     }

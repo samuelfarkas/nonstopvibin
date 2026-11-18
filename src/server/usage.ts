@@ -3,10 +3,17 @@ import { z } from "zod";
 import type { Json, PricingTokens, UsageRecord } from "../shared/types.ts";
 import { quotaRefreshMs, usagePageSize } from "../shared/vocabulary.ts";
 import type { Accounts } from "./accounts.ts";
-import type { CorePool, CoreRuntime } from "./core.ts";
+import type { CoreEvent, CorePool, CoreRuntime } from "./core.ts";
 import { AppError, errorMessage, type Report } from "./errors.ts";
 import { number, record, text, unwrap } from "./json.ts";
 import type { Quotas } from "./quota.ts";
+import {
+  initial,
+  transition,
+  type RestartEvent,
+  type RestartState,
+  type RestartTiming,
+} from "./restart-policy.ts";
 import type { Store } from "./store.ts";
 
 const counter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -85,19 +92,13 @@ function usageRecord(profileId: string, item: Json): UsageRecord {
 }
 
 /** Scheduler periods in milliseconds. */
-export interface UsageTiming {
+export interface UsageTiming extends RestartTiming {
   /** Account status refresh for running profiles. */
   accounts: number;
-  /** Shortest wait between scheduler wakeups. */
-  coalesce: number;
   /** Longest wait between retries of a usage drain that keeps failing. */
   usageBackoff: number;
   /** How long after gateway activity the queue keeps being drained. */
   activity: number;
-  /** Longest wait between automatic starts of a profile whose core keeps failing. */
-  restartBackoff: number;
-  /** Automatic starts in one run of failures before the scheduler stops starting the profile. */
-  restartLimit: number;
 }
 export const usageTiming: UsageTiming = {
   accounts: 20_000,
@@ -112,19 +113,6 @@ interface Cadence {
   nextAt: number;
   activeUntil: number;
   failures: number;
-}
-/** A profile the app keeps running whose core did not run when last seen. */
-interface Restart {
-  /** Automatic starts in this run of failures. It ends once one core stays up for `restartBackoff`. */
-  attempts: number;
-  /** When a pass may start it next. */
-  at: number;
-  /** This run of failures is already in the error list. */
-  reported: boolean;
-  /** The core last seen running with no start in flight, and since when: from its start's end at the latest. */
-  up?: { core: Readonly<CoreRuntime> | undefined; since: number };
-  /** The scheduler stopped starting it after `restartLimit` attempts; what the profile shows. */
-  gaveUp?: string;
 }
 export interface UsageOptions {
   /** Read on every wakeup, so a caller may change it while the scheduler runs. */
@@ -145,9 +133,16 @@ export class Usage {
   private readonly report: Report;
   private readonly cadences = new Map<string, Cadence>();
   private readonly collections = new Map<string, Promise<number>>();
-  private readonly restarts = new Map<string, Restart>();
-  /** Automatic starts in flight, one per profile, with the quota check after each. */
-  private readonly restarting = new Map<string, Promise<void>>();
+  /** Each profile's restart state: `restart-policy.ts` decides, this carries it out. */
+  private readonly restarts = new Map<string, RestartState>();
+  /** When each profile's restart state wants to hear the time. */
+  private readonly restartWakes = new Map<string, number>();
+  /** What a profile shows once the scheduler stopped starting it. */
+  private readonly shown = new Map<string, string>();
+  /** Automatic starts in flight, each with the quota check after it. */
+  private readonly work = new Set<Promise<void>>();
+  /** Profiles whose quota check after an automatic start is in flight. */
+  private readonly checking = new Set<string>();
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
   private scheduledAt = Infinity;
@@ -184,29 +179,16 @@ export class Usage {
   cadence(profileId: string): Readonly<Cadence> | undefined {
     return this.cadences.get(profileId);
   }
-  /**
-   * A core started, stopped or failed, or a start, stop or credential swap ended: each
-   * profile the app keeps running that does not run is due a start. `reported`: profiles
-   * whose failure the launch restore has just put in the error list.
-   */
-  changed(reported: ReadonlySet<string> = new Set()): void {
-    // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
-    if (!this.schedule || this.pool.shuttingDown) return;
-    for (const [profileId, restart] of this.restarts)
-      if (this.revived(profileId, restart)) this.restarts.delete(profileId);
-    for (const profile of this.store.profiles())
-      if (
-        !this.restarts.has(profile.id) &&
-        !this.pool.running(profile.id) &&
-        this.accounts.keepsRunning(profile.id)
-      )
-        this.restarts.set(profile.id, {
-          attempts: 0,
-          at: 0,
-          // The restore's report of its failed start is this run's error entry.
-          reported: reported.has(profile.id),
-        });
-    this.schedule();
+  /** What happened to a profile's core, told by the pool as it happens. */
+  coreEvent(event: CoreEvent): void {
+    this.hear(event.profileId, event);
+    this.schedule?.();
+  }
+  /** Subscriptions may have changed: whether each profile is kept running is read again. */
+  changed(): void {
+    for (const profileId of this.store.profileNames().keys())
+      this.hear(profileId);
+    this.schedule?.();
   }
   /** Shutdown began: an automatic start gives up now; the pool's stops end its core. */
   abandonRestarts(): void {
@@ -214,85 +196,83 @@ export class Usage {
   }
   /** What a profile shows once the scheduler stopped starting it. */
   gaveUp(profileId: string): string | undefined {
-    return this.restarts.get(profileId)?.gaveUp;
-  }
-  /**
-   * Someone else's start (a user's Start or Refresh, a credential change) has a core running
-   * for a profile at the limit: it gets the full number of attempts again. Its own last
-   * core is told apart by record, and nothing is decided while a start is in flight.
-   */
-  private revived(profileId: string, restart: Restart): boolean {
-    return (
-      restart.attempts >= this.timing.restartLimit &&
-      !this.pool.starting.has(profileId) &&
-      !this.restarting.has(profileId) &&
-      this.pool.running(profileId) &&
-      this.pool.runtimes.get(profileId) !== restart.up?.core
-    );
-  }
-  /** Stops starting a profile whose run of failures reached the limit; one error entry says so. */
-  private giveUp(profileId: string, restart: Restart): void {
-    const name = this.store.profileNames().get(profileId);
-    if (name === undefined) {
-      this.restarts.delete(profileId);
-      return;
-    }
-    restart.gaveUp = `Stopped restarting after ${restart.attempts} failed starts in a row. Use Restart to try again.`;
-    this.report(`${name}: ${restart.gaveUp}`);
+    return this.shown.get(profileId);
   }
   /** When the scheduler next wakes; Infinity while nothing is due. */
   get wakesAt(): number {
     return this.scheduledAt;
   }
   /**
-   * Whether a due start of this profile can begin now. A start, stop or credential swap in
-   * flight is left to finish: the pool's `onSettled` reaches `changed` when it ends.
+   * Gives the profile's restart policy `event`, after whether the profile is kept running if
+   * that changed. `reported`: a profile seen first, whose failure the launch restore reported.
    */
-  private startable(profileId: string): boolean {
-    return (
-      !this.pool.running(profileId) &&
-      !this.pool.holding(profileId) &&
-      !this.pool.starting.has(profileId) &&
-      !this.restarting.has(profileId)
-    );
+  private hear(
+    profileId: string,
+    event?: RestartEvent,
+    reported = false,
+  ): void {
+    // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
+    if (!this.schedule || this.pool.shuttingDown) return;
+    const kept =
+      this.store.profileNames().has(profileId) &&
+      this.accounts.keepsRunning(profileId);
+    const known = this.restarts.get(profileId);
+    let state =
+      known ??
+      initial({
+        running: this.pool.running(profileId),
+        reported,
+        kept,
+        starting: this.pool.starting.has(profileId),
+        holding: this.pool.holding(profileId),
+      });
+    if (!known || state.kept !== kept)
+      state = this.act(profileId, state, { type: "kept", kept });
+    if (event) this.act(profileId, state, event);
+  }
+  /** One transition, carried out: its state is in place before a start can tell anything back. */
+  private act(
+    profileId: string,
+    state: RestartState,
+    event: RestartEvent,
+  ): RestartState {
+    const step = transition(state, event, Date.now(), this.timing);
+    this.restarts.set(profileId, step.state);
+    this.restartWakes.delete(profileId);
+    for (const action of step.actions)
+      if (action.type === "wake") this.restartWakes.set(profileId, action.at);
+      else if (action.type === "report") this.reportFor(profileId, action.text);
+      else if (action.type === "show")
+        if (action.text === undefined) this.shown.delete(profileId);
+        else this.shown.set(profileId, action.text);
+    if (step.actions.some((action) => action.type === "start"))
+      this.restart(profileId);
+    return step.state;
+  }
+  private reportFor(profileId: string, message: string): void {
+    const name = this.store.profileNames().get(profileId);
+    if (name !== undefined) this.report(`${name}: ${message}`);
   }
   /** Starts one profile apart from maintenance and from other profiles' starts, then checks its quota. */
-  private restart(profileId: string, restart: Restart): void {
+  private restart(profileId: string): void {
     const task = (async () => {
-      const name = this.store.profileNames().get(profileId);
-      if (name === undefined || !this.accounts.keepsRunning(profileId)) {
-        this.restarts.delete(profileId);
-        return;
-      }
-      // One error-list entry per run of failures; the profile shows each one.
-      const fail = (message: string) => {
-        if (restart.reported) return;
-        restart.reported = true;
-        this.report(`${name}: ${message}`);
-      };
-      const runtime = this.pool.runtimes.get(profileId);
-      // The last automatic start succeeded, but its core exited before this one was due.
-      if (restart.attempts && runtime?.state === "error" && runtime.error)
-        fail(runtime.error);
-      restart.attempts++;
       try {
         // Shutdown must not wait out this core's readiness window.
-        await this.pool.start(profileId, this.abandon.signal);
-        restart.up = {
-          core: this.pool.runtimes.get(profileId),
-          since: Date.now(),
-        };
+        await this.pool.start(profileId, this.abandon.signal, true);
       } catch (error) {
-        if (!this.pool.shuttingDown) fail(errorMessage(error));
+        // The pool tells how a start it began ended; this tells of one it refused to begin.
+        this.hear(profileId, {
+          type: "started",
+          automatic: true,
+          running: false,
+          error: errorMessage(error),
+        });
+        this.schedule?.();
         return;
-      } finally {
-        restart.at =
-          Date.now() +
-          Math.min(
-            this.timing.coalesce * 2 ** (restart.attempts - 1),
-            this.timing.restartBackoff,
-          );
       }
+      // Restart decisions never wait for this check: it is not part of the policy.
+      if (this.checking.has(profileId)) return;
+      this.checking.add(profileId);
       try {
         // It missed its quota checks while down; a stop ends the checks, and shutdown
         // abandons the one in flight without storing it.
@@ -306,16 +286,15 @@ export class Usage {
         );
       } catch (error) {
         if (!this.pool.shuttingDown)
-          this.report(`${name}: ${errorMessage(error)}`);
+          this.reportFor(profileId, errorMessage(error));
+      } finally {
+        this.checking.delete(profileId);
       }
     })()
       // One profile's failure must not end the scheduler or another profile's start.
       .catch((error) => this.report(errorMessage(error)))
-      .finally(() => {
-        this.restarting.delete(profileId);
-        this.schedule?.();
-      });
-    this.restarting.set(profileId, task);
+      .finally(() => this.work.delete(task));
+    this.work.add(task);
   }
   markActivity(profileId: string): void {
     const cadence = this.cadences.get(profileId);
@@ -360,18 +339,6 @@ export class Usage {
     let nextQuotas = Date.now() + quotaRefreshMs;
     let nextPrune = Date.now() + 86_400_000;
     this.scheduledAt = Infinity;
-    // The earliest start due that can begin; Infinity, and no wakeup, if none.
-    const restartAt = () =>
-      Math.min(
-        ...[...this.restarts].map(([profileId, { at, attempts, gaveUp }]) =>
-          gaveUp !== undefined || !this.startable(profileId)
-            ? Infinity
-            : // At the limit, the next step is giving up, which waits for nothing.
-              attempts >= this.timing.restartLimit
-              ? 0
-              : at,
-        ),
-      );
     const schedule = () => {
       if (this.pool.shuttingDown) return;
       const running = [...this.pool.runtimes.keys()].filter((profileId) =>
@@ -380,7 +347,8 @@ export class Usage {
       const due = Math.min(
         this.maintenance ? Infinity : nextPrune,
         this.maintenance || !running.length ? Infinity : nextAccounts,
-        restartAt(),
+        // Only what the restart policy asked for: nothing for a profile that cannot start.
+        ...this.restartWakes.values(),
         ...(this.polling
           ? []
           : running.map(
@@ -398,28 +366,6 @@ export class Usage {
       this.scheduledAt = Infinity;
       this.timer = undefined;
       if (this.pool.shuttingDown) return;
-      for (const [profileId, restart] of this.restarts) {
-        // A core counts as running before its start ends: the start's own end decides.
-        if (this.pool.starting.has(profileId) || this.restarting.has(profileId))
-          continue;
-        if (this.revived(profileId, restart)) {
-          this.restarts.delete(profileId);
-          continue;
-        }
-        // A core that exits soon after starting is a crash loop: the run of failures ends
-        // only once the same core has stayed up for the whole bound.
-        if (this.pool.running(profileId)) {
-          const core = this.pool.runtimes.get(profileId);
-          const { up } = restart;
-          if (!up || up.core !== core) restart.up = { core, since: Date.now() };
-          else if (Date.now() >= up.since + this.timing.restartBackoff)
-            this.restarts.delete(profileId);
-        } else if (restart.gaveUp !== undefined || !this.startable(profileId))
-          continue;
-        else if (restart.attempts >= this.timing.restartLimit)
-          this.giveUp(profileId, restart);
-        else if (Date.now() >= restart.at) this.restart(profileId, restart);
-      }
       if (!this.polling)
         this.polling = (async () => {
           for (const profileId of this.pool.runtimes.keys()) {
@@ -505,11 +451,17 @@ export class Usage {
           schedule();
         });
       }
+      // After the drain pass and maintenance are under way, so a start's notices see them.
+      for (const [profileId, at] of [...this.restartWakes])
+        if (at <= Date.now()) this.hear(profileId, { type: "time" });
       schedule();
     };
     this.schedule = schedule;
     // Profiles the launch restore could not start are due at once.
-    this.changed(new Set(reported));
+    const launch = new Set(reported);
+    for (const profileId of this.store.profileNames().keys())
+      this.hear(profileId, undefined, launch.has(profileId));
+    schedule();
   }
   /** Stops scheduling and waits for the drain pass, maintenance and automatic starts already running. */
   async settled(): Promise<void> {
@@ -517,6 +469,6 @@ export class Usage {
     this.scheduledAt = Infinity;
     await this.polling;
     await this.maintenance;
-    await Promise.all(this.restarting.values());
+    await Promise.all(this.work);
   }
 }

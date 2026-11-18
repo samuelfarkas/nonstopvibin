@@ -41,13 +41,9 @@ export class Cores {
       },
       // The usage queue lives only in the core's memory.
       beforeStop: (profileId) => this.usage.drain(profileId),
-      // The scheduler learns here that a profile it keeps running has stopped.
-      onStatusChange: () => {
-        this.usage.changed();
-        options.onStatusChange?.();
-      },
-      // A start, stop or swap that kept a due start waiting has ended.
-      onSettled: () => this.usage.changed(),
+      onStatusChange: options.onStatusChange,
+      // The scheduler hears what happens to each profile's core as it happens.
+      onCoreEvent: (event) => this.usage.coreEvent(event),
     });
     this.accounts = new Accounts(this.pool, store);
     this.quotas = new Quotas(this.pool, this.accounts);

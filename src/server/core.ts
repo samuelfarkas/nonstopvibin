@@ -80,9 +80,22 @@ export interface CorePoolOptions {
   beforeStop?: (profileId: string) => Promise<void>;
   /** A core became running, failed, exited, or applied new settings. */
   onStatusChange?: () => void;
-  /** A start, stop or credential swap of a profile ended, whatever its outcome. */
-  onSettled?: () => void;
+  /** What happened to a profile's core, or to a start, stop or credential swap of it, as it happens. */
+  onCoreEvent?: (event: CoreEvent) => void;
 }
+/**
+ * One thing that happened to a profile, told as it happens. `starting`: a start began, and
+ * `automatic` is what its caller said. `started`: that start ended; `running`: its core runs
+ * now; `error`: why not. `exited`: the profile's core exited or could not be launched; `error`
+ * unless it was being stopped. `holding`: a stop or credential swap began or ended, and whether
+ * one is still in flight.
+ */
+export type CoreEvent = { profileId: string } & (
+  | { type: "starting"; automatic: boolean }
+  | { type: "started"; automatic: boolean; running: boolean; error?: string }
+  | { type: "exited"; error?: string }
+  | { type: "holding"; holding: boolean }
+);
 /** The process exists and has not exited; a failed spawn has no PID and may never emit exit. */
 function alive(child: ChildProcess): boolean {
   return (
@@ -135,7 +148,12 @@ export class CorePool {
     const { management, timing } = this.options;
     return new CorePool(store, this.binary, { management, timing });
   }
-  async start(profileId: string, signal?: AbortSignal): Promise<void> {
+  /** `automatic`: named in this start's notifications, so its caller can tell it from others. */
+  async start(
+    profileId: string,
+    signal?: AbortSignal,
+    automatic = false,
+  ): Promise<void> {
     signal?.throwIfAborted();
     const stopping = this.stops.get(profileId);
     if (stopping) await stopping;
@@ -149,11 +167,26 @@ export class CorePool {
     if (this.running(profileId)) return;
     const operation = this.startProcess(profileId, signal);
     this.starts.set(profileId, operation);
+    this.options.onCoreEvent?.({ type: "starting", profileId, automatic });
+    let failure: string | undefined;
     try {
       await operation;
+    } catch (error) {
+      failure = errorMessage(error);
+      throw error;
     } finally {
       this.starts.delete(profileId);
-      this.options.onSettled?.();
+      // Whether its core runs as it ends: one can exit after answering, before the start returns.
+      const running = this.running(profileId);
+      this.options.onCoreEvent?.({
+        type: "started",
+        profileId,
+        automatic,
+        running,
+        error: running
+          ? undefined
+          : (failure ?? this.processes.get(profileId)?.error),
+      });
     }
   }
   private async startProcess(
@@ -196,6 +229,7 @@ export class CorePool {
     child.once("error", (error) => {
       runtime.state = "error";
       runtime.error = `Could not launch proxy: ${error.message}`;
+      this.exited(profileId, runtime);
       this.options.onStatusChange?.();
     });
     child.once("exit", (code, signal) => {
@@ -206,6 +240,7 @@ export class CorePool {
       runtime.state = runtime.stopping ? "stopped" : "error";
       if (!runtime.stopping)
         runtime.error = `Proxy exited (${signal ?? code}). Profiles with subscriptions restart automatically, or use Restart.`;
+      this.exited(profileId, runtime);
       this.options.onStatusChange?.();
     });
     try {
@@ -254,6 +289,23 @@ export class CorePool {
     runtime.error = runtime.error ?? `Proxy did not become ready. ${lastError}`;
     throw new AppError(runtime.error, 503);
   }
+  /** Tells that the profile's core went away; a replaced core's late exit tells nothing. */
+  private exited(profileId: string, runtime: CoreRuntime): void {
+    if (this.processes.get(profileId) !== runtime) return;
+    this.options.onCoreEvent?.({
+      type: "exited",
+      profileId,
+      error: runtime.stopping ? undefined : runtime.error,
+    });
+  }
+  /** Tells whether a stop or credential swap of the profile is still in flight. */
+  private tellHolding(profileId: string): void {
+    this.options.onCoreEvent?.({
+      type: "holding",
+      profileId,
+      holding: this.holding(profileId),
+    });
+  }
   async stop(profileId: string): Promise<void> {
     const starting = this.starts.get(profileId);
     if (starting) await starting.catch(() => undefined);
@@ -261,13 +313,14 @@ export class CorePool {
     if (!operation) {
       operation = this.stopProcess(profileId);
       this.stops.set(profileId, operation);
+      this.tellHolding(profileId);
     }
     try {
       await operation;
     } finally {
       if (this.stops.get(profileId) === operation) {
         this.stops.delete(profileId);
-        this.options.onSettled?.();
+        this.tellHolding(profileId);
       }
     }
   }
@@ -303,13 +356,14 @@ export class CorePool {
   ): Promise<void> {
     const wasRunning = this.running(profileId) || this.starts.has(profileId);
     this.held.add(profileId);
+    this.tellHolding(profileId);
     try {
       await this.stop(profileId);
       await replace();
     } finally {
       this.held.delete(profileId);
+      this.tellHolding(profileId);
       if (wasRunning && !this.closing) await this.start(profileId);
-      else this.options.onSettled?.();
     }
   }
   /** A stop or a credential swap is in flight: it decides whether the core runs next. */

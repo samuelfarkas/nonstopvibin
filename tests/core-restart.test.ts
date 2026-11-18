@@ -743,8 +743,8 @@ test(
     const joining = new Promise<void>((resolve) => {
       joined = resolve;
     });
-    pool.start = (profileId, signal) => {
-      const started = start(profileId, signal);
+    pool.start = (profileId, signal, automatic) => {
+      const started = start(profileId, signal, automatic);
       if (!signal) joined();
       return started;
     };
@@ -841,9 +841,13 @@ test(
 /**
  * An application whose one profile, with a subscription and never started, is started by the
  * scheduler with a limit of four. While `crashing`, each core is killed as soon as it runs; with
- * `failing`, each core exits at once. Every core the profile had is kept, by record.
+ * `failing`, each core exits at once; `quota` runs before each quota answer. Every core the
+ * profile had is kept, by record.
  */
-async function givingUp(name: string, mode: { failing?: boolean }) {
+async function givingUp(
+  name: string,
+  mode: { failing?: boolean; quota?: () => Promise<void> | undefined },
+) {
   const { directory, remove } = await temporaryStore("nv-restart-");
   const failing = join(directory, "failing");
   if (mode.failing) await writeFile(failing, "");
@@ -856,8 +860,11 @@ async function givingUp(name: string, mode: { failing?: boolean }) {
     binary,
     cores: {
       usageTiming: { ...backoff, restartLimit: 4 },
-      management: (request) =>
-        existsSync(failing) ? unreachable(request) : answering(request),
+      management: async (request) => {
+        if (existsSync(failing)) return unreachable(request);
+        if (request.path === "/api-call") await mode.quota?.();
+        return answering(request);
+      },
     },
   });
   const profile = app.store.createProfile(name);
@@ -1004,6 +1011,171 @@ test(
       assert.deepEqual(app.errors, errors);
     } finally {
       await fixture.close();
+    }
+  },
+);
+
+/**
+ * Lets the scheduler's first three cores crash and keeps the fourth, its last allowed start,
+ * running; answers that core once its start has ended, and when.
+ */
+async function lastAllowedCore(fixture: Awaited<ReturnType<typeof givingUp>>) {
+  const { app, profile } = fixture;
+  const ready = new Promise<Promise<void> | undefined>((resolve) => {
+    app.on("status", () => {
+      // The fixture's own listener has just killed the third.
+      if (fixture.cores.size === 3) fixture.crashing = false;
+      const runtime = app.cores.pool.runtimes.get(profile.id);
+      // Running counts before the start ends; that start is still in flight.
+      if (fixture.cores.size === 4 && runtime?.state === "running")
+        resolve(app.cores.pool.starting.get(profile.id));
+    });
+  });
+  app.cores.usage.changed();
+  await await ready;
+  // The pool hears its start end before this continuation runs, so this is no earlier.
+  const ended = Date.now();
+  const core = app.cores.pool.runtimes.get(profile.id)!;
+  assert.equal(core.state, "running");
+  return { core, ended };
+}
+/** Resolves with whether the scheduler started a core numbered `count` or gave up first. */
+function restartedOrGaveUp(
+  fixture: Awaited<ReturnType<typeof givingUp>>,
+  count: number,
+) {
+  const { app, profile } = fixture;
+  return Promise.race([
+    fixture.gaveUp.then(() => "gave up"),
+    new Promise<string>((resolve) =>
+      app.on("status", () => {
+        const runtime = app.cores.pool.runtimes.get(profile.id);
+        if (fixture.cores.size === count && runtime?.state === "running")
+          resolve("restarted");
+      }),
+    ),
+  ]);
+}
+
+test(
+  "the limit's last core, up past the stability bound with no tick in between, is restarted when it exits",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await givingUp("Steady", {});
+    const { app } = fixture;
+    try {
+      const { core, ended } = await lastAllowedCore(fixture);
+      // Time itself is what this waits for: the core must outlast the bound.
+      await new Promise((resolve) =>
+        setTimeout(resolve, 2 * backoff.restartBackoff),
+      );
+      const up = Date.now() - ended;
+      assert.ok(up >= backoff.restartBackoff, `up ${up} ms`);
+      // The scheduler's next wakeup is the account refresh: no tick looked at this core after its bound.
+      const wait = app.cores.usage.wakesAt - Date.now();
+      assert.ok(wait > 10_000, `the scheduler wakes in ${wait} ms`);
+      const outcome = restartedOrGaveUp(fixture, 5);
+      core.child.kill("SIGKILL");
+      assert.equal(await outcome, "restarted");
+      assert.ok(
+        !app.errors.some((e) => e.includes("Stopped restarting")),
+        `${app.errors}`,
+      );
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a Start that succeeds while the last automatic start's quota check is pending gives a fresh run",
+  { timeout: 15_000 },
+  async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let asked!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    // The fourth core's quota check waits until this test lets it go.
+    const fixture: Awaited<ReturnType<typeof givingUp>> = await givingUp(
+      "Hidden",
+      {
+        quota: () => {
+          if (fixture.cores.size < 4) return undefined;
+          asked();
+          return gate;
+        },
+      },
+    );
+    const { app, profile } = fixture;
+    try {
+      const { core } = await lastAllowedCore(fixture);
+      await checking;
+      const exited = once(core.child, "exit");
+      core.child.kill("SIGKILL");
+      await exited;
+      // The test's Start begins in the same turn as the exit, before any tick.
+      await app.cores.pool.start(profile.id);
+      const started = app.cores.pool.runtimes.get(profile.id)!;
+      assert.notEqual(started, core);
+      assert.equal(started.state, "running");
+      const outcome = restartedOrGaveUp(fixture, 6);
+      const gone = once(started.child, "exit");
+      started.child.kill("SIGKILL");
+      await gone;
+      release();
+      assert.equal(await outcome, "restarted");
+      assert.ok(
+        !app.errors.some((e) => e.includes("Stopped restarting")),
+        `${app.errors}`,
+      );
+    } finally {
+      release();
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a quota answer that arrives just as shutdown abandons the check is not stored or reported",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    const reports: string[] = [];
+    let restarted = false;
+    let begin!: (shutdown: Promise<void>) => void;
+    const shutdown = new Promise<void>((resolve) => {
+      begin = resolve;
+    });
+    const answering = subscribed();
+    const cores: Cores = new Cores(store, binary, {
+      report: (message) => reports.push(message),
+      usageTiming: { ...usageTiming, coalesce: 10 },
+      // The restarted core's quota answer is delivered, and shutdown begins before it is stored.
+      management: (request) => {
+        if (restarted && request.path === "/api-call") begin(cores.shutdown());
+        return answering(request);
+      },
+    });
+    const profile = store.createProfile("Late answer fixture");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      restarted = true;
+      const { child } = cores.pool.runtimes.get(profile.id)!;
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+      await shutdown;
+      assert.equal(store.quota(profile.id, "claude.json"), undefined);
+      assert.deepEqual(reports, []);
+    } finally {
+      await cores.shutdown();
+      await remove();
     }
   },
 );

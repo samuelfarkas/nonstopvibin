@@ -467,6 +467,7 @@ export class Quotas {
       .list(profileId)
       .find((a) => a.id === accountId);
     if (!account) throw new AppError("Account not found.", 404);
+    signal?.throwIfAborted();
     const key = `${profileId}:${accountId}`;
     const prior = this.store.quota(profileId, accountId);
     if (this.refreshing.has(key) && prior) return prior;
@@ -518,6 +519,8 @@ export class Quotas {
     } finally {
       this.refreshing.delete(key);
     }
+    // An answer that arrived just before the abort is not stored either.
+    signal?.throwIfAborted();
     this.store.saveQuota(profileId, accountId, quota);
     return quota;
   }
