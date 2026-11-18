@@ -80,6 +80,8 @@ export interface CorePoolOptions {
   beforeStop?: (profileId: string) => Promise<void>;
   /** A core became running, failed, exited, or applied new settings. */
   onStatusChange?: () => void;
+  /** A start, stop or credential swap of a profile ended, whatever its outcome. */
+  onSettled?: () => void;
 }
 /** The process exists and has not exited; a failed spawn has no PID and may never emit exit. */
 function alive(child: ChildProcess): boolean {
@@ -151,6 +153,7 @@ export class CorePool {
       await operation;
     } finally {
       this.starts.delete(profileId);
+      this.options.onSettled?.();
     }
   }
   private async startProcess(
@@ -240,7 +243,8 @@ export class CorePool {
       } catch (error) {
         signal?.throwIfAborted();
         lastError = errorMessage(error);
-        await delay(100, undefined, { signal });
+        // An abort here ends the start at the loop's check, with the abort's reason for every waiter.
+        await delay(100, undefined, { signal }).catch(() => undefined);
       }
     }
     runtime.stopping = true;
@@ -261,7 +265,10 @@ export class CorePool {
     try {
       await operation;
     } finally {
-      if (this.stops.get(profileId) === operation) this.stops.delete(profileId);
+      if (this.stops.get(profileId) === operation) {
+        this.stops.delete(profileId);
+        this.options.onSettled?.();
+      }
     }
   }
   private async stopProcess(profileId: string): Promise<void> {
@@ -302,6 +309,7 @@ export class CorePool {
     } finally {
       this.held.delete(profileId);
       if (wasRunning && !this.closing) await this.start(profileId);
+      else this.options.onSettled?.();
     }
   }
   /** A stop or a credential swap is in flight: it decides whether the core runs next. */

@@ -64,7 +64,7 @@ export function TrayView({
               // Refresh starts a profile the app keeps running; one that cannot start keeps no other from refreshing.
               for (const p of state.profiles.filter(
                 (p) =>
-                  p.runtime === "running" || keepsRunning(p, p.accounts.length),
+                  p.runtime === "running" || keepsRunning(p.accounts.length),
               ))
                 try {
                   next = await api("POST /profiles/:profileId/refresh", {

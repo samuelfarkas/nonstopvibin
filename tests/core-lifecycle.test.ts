@@ -50,7 +50,8 @@ test(
     const binary = join(directory, "wedged-core");
     await writeFile(
       binary,
-      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => {}, 1000);\n`,
+      // It ends itself once this process is gone: no watchdog guards a script.
+      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => process.ppid === 1 && process.exit(0), 1000);\n`,
     );
     await chmod(binary, 0o700);
     const core = new CorePool(store, binary, {

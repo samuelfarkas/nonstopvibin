@@ -3,9 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { coreLayout } from "../../src/server/core-binary.ts";
 
-/** Stays alive until SIGTERM, as a core does; with nothing else it is running but unreachable. */
+/**
+ * Stays alive until SIGTERM, as a core does; with nothing else it is running but unreachable.
+ * The watchdog only guards a core whose command line is its binary's, which a script run by
+ * Bun is not, so the fake ends itself once the test process that started it is gone.
+ */
 export const idleCore = `process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
+setInterval(() => process.ppid === 1 && process.exit(0), 1000);
 `;
 /**
  * A core that listens on the port its config names and answers management as a running

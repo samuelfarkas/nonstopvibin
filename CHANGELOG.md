@@ -58,10 +58,10 @@
   you to reinstall, instead of opening and failing each time a profile starts.
 - When the main window cannot be opened from the menu bar popup, the reason now
   appears in the app's error list instead of nothing happening.
-- A profile with subscriptions whose proxy exited or failed to start is now started
-  again automatically, retrying a failing proxy less often up to every five minutes,
-  so its quotas keep updating; Refresh starts it too, instead of reporting each
-  quota check as failed.
+- A profile with subscriptions whose proxy exited or failed to start, even on its
+  first start, is now started again automatically, retrying a failing proxy less
+  often up to every five minutes, so its quotas keep updating; Refresh starts it
+  too, instead of reporting each quota check as failed.
 
 ### Security
 

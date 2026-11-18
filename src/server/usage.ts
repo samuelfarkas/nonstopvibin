@@ -139,8 +139,11 @@ export class Usage {
   private readonly cadences = new Map<string, Cadence>();
   private readonly collections = new Map<string, Promise<number>>();
   private readonly restarts = new Map<string, Restart>();
+  /** Automatic starts in flight, one per profile, with the quota check after each. */
+  private readonly restarting = new Map<string, Promise<void>>();
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
+  private scheduledAt = Infinity;
   private timer?: NodeJS.Timeout;
   private polling?: Promise<void>;
   private maintenance?: Promise<void>;
@@ -174,53 +177,61 @@ export class Usage {
   cadence(profileId: string): Readonly<Cadence> | undefined {
     return this.cadences.get(profileId);
   }
-  /** A core started, stopped or failed: each profile the app keeps running that does not run is due a start. */
-  changed(): void {
+  /**
+   * A core started, stopped or failed, or a start, stop or credential swap ended: each
+   * profile the app keeps running that does not run is due a start. `launched`: the launch
+   * restore has just reported every profile it could not start.
+   */
+  changed(launched = false): void {
     // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
     if (!this.schedule || this.pool.shuttingDown) return;
     for (const profile of this.store.profiles())
       if (
         !this.restarts.has(profile.id) &&
         !this.pool.running(profile.id) &&
-        this.accounts.keepsRunning(profile)
+        this.accounts.keepsRunning(profile.id)
       )
-        this.restarts.set(profile.id, { attempts: 0, at: 0, reported: false });
+        this.restarts.set(profile.id, {
+          attempts: 0,
+          at: 0,
+          // The restore tried each enabled profile: its failure is this run's error entry.
+          reported: launched && profile.enabled,
+        });
     this.schedule();
   }
   /** Shutdown began: an automatic start gives up now; the pool's stops end its core. */
   abandonRestarts(): void {
     this.abandon.abort(new AppError("nonstopvibin is shutting down.", 503));
   }
+  /** When the scheduler next wakes; Infinity while nothing is due. */
+  get wakesAt(): number {
+    return this.scheduledAt;
+  }
   /**
-   * Starts each profile whose restart is due and answers those now running. A start, stop
-   * or credential swap already in flight is left to finish; the next pass looks again.
+   * Whether a due start of this profile can begin now. A start, stop or credential swap in
+   * flight is left to finish: the pool's `onSettled` reaches `changed` when it ends.
    */
-  private async restart(): Promise<Set<string>> {
-    const started = new Set<string>();
-    for (const [profileId, restart] of this.restarts) {
-      if (this.pool.shuttingDown) break;
-      const profile = this.store.profile(profileId);
-      // A core that exits soon after starting is a crash loop: its backoff stands until it stays up.
-      if (this.pool.running(profileId)) {
-        if (Date.now() >= restart.at + this.timing.restartBackoff)
-          this.restarts.delete(profileId);
-        continue;
-      }
-      if (!this.accounts.keepsRunning(profile)) {
+  private startable(profileId: string): boolean {
+    return (
+      !this.pool.running(profileId) &&
+      !this.pool.holding(profileId) &&
+      !this.pool.starting.has(profileId) &&
+      !this.restarting.has(profileId)
+    );
+  }
+  /** Starts one profile apart from maintenance and from other profiles' starts, then checks its quota. */
+  private restart(profileId: string, restart: Restart): void {
+    const task = (async () => {
+      const name = this.store.profileNames().get(profileId);
+      if (name === undefined || !this.accounts.keepsRunning(profileId)) {
         this.restarts.delete(profileId);
-        continue;
+        return;
       }
-      if (
-        Date.now() < restart.at ||
-        this.pool.holding(profileId) ||
-        this.pool.starting.has(profileId)
-      )
-        continue;
       // One error-list entry per run of failures; the profile shows each one.
       const fail = (message: string) => {
         if (restart.reported) return;
         restart.reported = true;
-        this.report(`${profile.name}: ${message}`);
+        this.report(`${name}: ${message}`);
       };
       const runtime = this.pool.runtimes.get(profileId);
       // The last automatic start succeeded, but its core exited before this one was due.
@@ -230,19 +241,37 @@ export class Usage {
       try {
         // Shutdown must not wait out this core's readiness window.
         await this.pool.start(profileId, this.abandon.signal);
-        started.add(profileId);
       } catch (error) {
-        if (this.pool.shuttingDown) break;
-        fail(errorMessage(error));
+        if (!this.pool.shuttingDown) fail(errorMessage(error));
+        return;
+      } finally {
+        restart.at =
+          Date.now() +
+          Math.min(
+            this.timing.coalesce * 2 ** (restart.attempts - 1),
+            this.timing.restartBackoff,
+          );
       }
-      restart.at =
-        Date.now() +
-        Math.min(
-          this.timing.coalesce * 2 ** (restart.attempts - 1),
-          this.timing.restartBackoff,
+      try {
+        // It missed its quota checks while down; a stop or shutdown ends the checks.
+        await this.quotas.refreshAccounts(
+          profileId,
+          (account) =>
+            this.pool.usable(profileId) &&
+            !account.disabled &&
+            account.quota?.status !== "unavailable",
         );
-    }
-    return started;
+      } catch (error) {
+        this.report(`${name}: ${errorMessage(error)}`);
+      }
+    })()
+      // One profile's failure must not end the scheduler or another profile's start.
+      .catch((error) => this.report(errorMessage(error)))
+      .finally(() => {
+        this.restarting.delete(profileId);
+        this.schedule?.();
+      });
+    this.restarting.set(profileId, task);
   }
   markActivity(profileId: string): void {
     const cadence = this.cadences.get(profileId);
@@ -285,12 +314,12 @@ export class Usage {
     let nextAccounts = Date.now() + this.timing.accounts;
     let nextQuotas = Date.now() + quotaRefreshMs;
     let nextPrune = Date.now() + 86_400_000;
-    let scheduledAt = Infinity;
-    // The earliest start due among profiles that do not run; Infinity, and no wakeup, if none.
+    this.scheduledAt = Infinity;
+    // The earliest start due that can begin; Infinity, and no wakeup, if none.
     const restartAt = () =>
       Math.min(
         ...[...this.restarts].map(([profileId, { at }]) =>
-          this.pool.running(profileId) ? Infinity : at,
+          this.startable(profileId) ? at : Infinity,
         ),
       );
     const schedule = () => {
@@ -301,7 +330,7 @@ export class Usage {
       const due = Math.min(
         this.maintenance ? Infinity : nextPrune,
         this.maintenance || !running.length ? Infinity : nextAccounts,
-        this.maintenance ? Infinity : restartAt(),
+        restartAt(),
         ...(this.polling
           ? []
           : running.map(
@@ -309,16 +338,24 @@ export class Usage {
             )),
       );
       const at = Math.max(Date.now() + this.timing.coalesce, due);
-      if (at >= scheduledAt) return;
+      if (at >= this.scheduledAt) return;
       clearTimeout(this.timer);
-      scheduledAt = at;
+      this.scheduledAt = at;
       this.timer = setTimeout(tick, at - Date.now());
       this.timer.unref();
     };
     const tick = () => {
-      scheduledAt = Infinity;
+      this.scheduledAt = Infinity;
       this.timer = undefined;
       if (this.pool.shuttingDown) return;
+      for (const [profileId, restart] of this.restarts) {
+        // A core that exits soon after starting is a crash loop: its backoff stands until it stays up.
+        if (this.pool.running(profileId)) {
+          if (Date.now() >= restart.at + this.timing.restartBackoff)
+            this.restarts.delete(profileId);
+        } else if (Date.now() >= restart.at && this.startable(profileId))
+          this.restart(profileId, restart);
+      }
       if (!this.polling)
         this.polling = (async () => {
           for (const profileId of this.pool.runtimes.keys()) {
@@ -363,10 +400,12 @@ export class Usage {
           this.polling = undefined;
           schedule();
         });
-      const routine = Date.now() >= nextAccounts || Date.now() >= nextPrune;
-      if (!this.maintenance && (routine || Date.now() >= restartAt())) {
-        const quotasDue = routine && Date.now() >= nextQuotas;
-        if (routine) nextAccounts = Date.now() + this.timing.accounts;
+      if (
+        !this.maintenance &&
+        (Date.now() >= nextAccounts || Date.now() >= nextPrune)
+      ) {
+        const quotasDue = Date.now() >= nextQuotas;
+        nextAccounts = Date.now() + this.timing.accounts;
         if (quotasDue) nextQuotas = Date.now() + quotaRefreshMs;
         this.maintenance = (async () => {
           if (Date.now() >= nextPrune) {
@@ -377,14 +416,11 @@ export class Usage {
               this.report(`History cleanup: ${errorMessage(error)}`);
             }
           }
-          const restarted = await this.restart();
           for (const profileId of this.pool.runtimes.keys()) {
             if (this.pool.shuttingDown) return;
-            // A restarted core missed its quota checks while down.
-            const missed = restarted.has(profileId);
-            if (!this.pool.usable(profileId) || !(routine || missed)) continue;
+            if (!this.pool.usable(profileId)) continue;
             try {
-              if (!quotasDue && !missed) await this.accounts.sync(profileId);
+              if (!quotasDue) await this.accounts.sync(profileId);
               else
                 await this.quotas.refreshAccounts(
                   profileId,
@@ -409,12 +445,14 @@ export class Usage {
     };
     this.schedule = schedule;
     // Profiles the launch restore could not start are due at once.
-    this.changed();
+    this.changed(true);
   }
-  /** Stops scheduling and waits for the drain pass and maintenance already running. */
+  /** Stops scheduling and waits for the drain pass, maintenance and automatic starts already running. */
   async settled(): Promise<void> {
     clearTimeout(this.timer);
+    this.scheduledAt = Infinity;
     await this.polling;
     await this.maintenance;
+    await Promise.all(this.restarting.values());
   }
 }

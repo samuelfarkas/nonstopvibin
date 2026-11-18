@@ -46,6 +46,8 @@ export class Cores {
         this.usage.changed();
         options.onStatusChange?.();
       },
+      // A start, stop or swap that kept a due start waiting has ended.
+      onSettled: () => this.usage.changed(),
     });
     this.accounts = new Accounts(this.pool, store);
     this.quotas = new Quotas(this.pool, this.accounts);
@@ -80,7 +82,7 @@ export class Cores {
   /**
    * Refuses new work and abandons an automatic start, lets sign-in actions and then
    * credential changes finish, drops the pending sign-in, lets the scheduler's running
-   * pass finish, then stops every core.
+   * work finish, then stops every core.
    * The caller closes the store only after this: each stop drains usage into it.
    */
   async shutdown(): Promise<void> {

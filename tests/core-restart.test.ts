@@ -1,5 +1,5 @@
-// The scheduler starts again a profile the app keeps running (it ran before and has a
-// subscription) whose core is not running; Refresh starts such a profile before asking quota.
+// The scheduler starts again a profile the app keeps running (it has a subscription) whose
+// core is not running; Refresh starts such a profile before asking quota.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
@@ -8,6 +8,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Management } from "../src/server/core.ts";
 import { Cores } from "../src/server/cores.ts";
+import { AppError } from "../src/server/errors.ts";
+import { providers } from "../src/shared/providers.ts";
 import { usageTiming } from "../src/server/usage.ts";
 import type { AppState } from "../src/shared/types.ts";
 import {
@@ -136,9 +138,8 @@ test(
       usageTiming: backoff,
       management: unreachable,
     });
-    // It ran before and has a subscription, but its core no longer starts, as after a failed launch.
+    // A first subscription whose core never started: the profile never ran.
     const profile = store.createProfile("Failing fixture");
-    store.saveProfile({ ...profile, enabled: true });
     store.saveApiAccount(profile.id, apiKey("failing-key"), "failing-key");
     try {
       cores.usage.begin();
@@ -203,7 +204,7 @@ test(
 );
 
 test(
-  "only a profile that ran before and has a subscription is started again",
+  "only a profile with a subscription is started again, whether or not it ran before",
   { timeout: 15_000 },
   async () => {
     const { directory, store, remove } = await temporaryStore("nv-restart-");
@@ -219,7 +220,7 @@ test(
     store.saveApiAccount(kept.id, apiKey("kept-key"), "kept-key");
     // Ran before, but nothing in it needs a core.
     const bare = store.createProfile("Bare");
-    // Never started: one with no subscription, as a new profile, and one with a subscription.
+    // Never started: one with no subscription, as a new profile, and one whose first start failed.
     const fresh = store.createProfile("Fresh");
     const unstarted = store.createProfile("Unstarted");
     store.saveApiAccount(unstarted.id, apiKey("unstarted-key"), "key");
@@ -231,7 +232,12 @@ test(
       const running = new Promise<void>((resolve) => {
         changed = () => {
           const runtime = cores.pool.runtimes.get(kept.id);
-          if (runtime !== before && runtime?.state === "running") resolve();
+          if (
+            runtime !== before &&
+            runtime?.state === "running" &&
+            cores.pool.running(unstarted.id)
+          )
+            resolve();
         };
       });
       for (const profile of [bare, kept]) {
@@ -244,7 +250,6 @@ test(
       await cores.usage.settled();
       assert.equal(cores.pool.runtimes.get(bare.id)?.state, "error");
       assert.equal(cores.pool.runtimes.get(fresh.id), undefined);
-      assert.equal(cores.pool.runtimes.get(unstarted.id), undefined);
     } finally {
       await cores.shutdown();
       await remove();
@@ -411,6 +416,213 @@ test(
       assert.equal(app.cores.pool.runtimes.get(empty.id), undefined);
     } finally {
       await closeApplication(app);
+      await remove();
+    }
+  },
+);
+
+test(
+  "Refresh still checks API-key quota when the profile's core cannot start or is held",
+  { timeout: 20_000 },
+  async () => {
+    const { directory, remove } = await temporaryStore("nv-restart-");
+    const failing = join(directory, "failing");
+    const binary = await installFakeCore(
+      join(directory, "core"),
+      `if (require("node:fs").existsSync(${JSON.stringify(failing)})) process.exit(1);\n${idleCore}`,
+    );
+    const answering = subscribed();
+    const app = await testApplication(join(directory, "data"), {
+      binary,
+      cores: {
+        management: (request) =>
+          existsSync(failing) ? unreachable(request) : answering(request),
+        usageTiming: { ...usageTiming, coalesce: 60_000 },
+      },
+    });
+    // OpenCode Go quota is asked from the provider with the key; no core is involved.
+    const usage = `${providers["opencode-go"].preset.baseUrl}/usage`;
+    let goChecks = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      if (String(input) !== usage) return originalFetch(input, init);
+      goChecks++;
+      return new Response(
+        JSON.stringify({ usage: { rolling: { usagePercent: 40 } } }),
+      );
+    };
+    const profile = app.store.createProfile("Go fixture");
+    app.store.saveApiAccount(
+      profile.id,
+      {
+        id: "go-key",
+        name: "OpenCode Go",
+        provider: "opencode-go",
+        baseUrl: providers["opencode-go"].preset.baseUrl,
+        prefix: "",
+        models: [],
+        disabled: false,
+      },
+      "synthetic-go-key",
+    );
+    const refresh = () =>
+      management(app, `/profiles/${profile.id}/refresh`, { method: "POST" });
+    try {
+      await app.cores.pool.start(profile.id);
+      await app.cores.pool.whileStopped(profile.id, async () => {
+        const held = await refresh();
+        assert.equal(held.status, 409);
+        assert.match(await held.text(), /reconnecting a subscription/);
+        assert.equal(goChecks, 1, "checked while the core is held");
+      });
+      const { child } = app.cores.pool.runtimes.get(profile.id)!;
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+      await writeFile(failing, "");
+      const failed = await refresh();
+      assert.equal(failed.status, 503);
+      assert.match(await failed.text(), /Proxy exited \(1\)\./);
+      assert.equal(goChecks, 2, "checked although the core cannot start");
+      assert.equal(app.store.quota(profile.id, "go-key")?.status, "available");
+      assert.deepEqual(app.errors, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await closeApplication(app);
+      await remove();
+    }
+  },
+);
+
+test(
+  "a restart blocked by a credential swap arms no wakeup of its own and begins when the swap ends",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    let changed = () => {};
+    const cores = new Cores(store, binary, {
+      report: () => {},
+      onStatusChange: () => changed(),
+      usageTiming: { ...usageTiming, coalesce: 10 },
+      management: subscribed(),
+    });
+    const profile = store.createProfile("Swap fixture");
+    store.saveProfile({ ...profile, enabled: true });
+    store.saveApiAccount(profile.id, apiKey("swap-key"), "swap-key");
+    const running = new Promise<void>((resolve) => {
+      changed = () => {
+        if (cores.pool.running(profile.id)) resolve();
+      };
+    });
+    try {
+      await cores.pool.whileStopped(profile.id, async () => {
+        // Its start is due, but nothing may start it until the swap ends.
+        cores.usage.begin();
+        const wait = cores.usage.wakesAt - Date.now();
+        // With no core running, only the daily history cleanup is due.
+        assert.ok(wait > 3_600_000, `the scheduler wakes in ${wait} ms`);
+      });
+      await running;
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "an automatic start waiting for its core does not hold up another profile's maintenance",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    const healthy = store.createProfile("Healthy");
+    const unready = store.createProfile("Unready");
+    store.saveProfile({ ...unready, enabled: true });
+    store.saveApiAccount(unready.id, apiKey("unready-key"), "unready-key");
+    let waiting = false;
+    let asked!: () => void;
+    const starting = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    let synced!: () => void;
+    const maintained = new Promise<void>((resolve) => {
+      synced = resolve;
+    });
+    const answering = subscribed();
+    const cores = new Cores(store, binary, {
+      report: () => {},
+      usageTiming: { ...usageTiming, coalesce: 10, accounts: 50 },
+      management: (request) => {
+        // The unready core answers nothing until its start is abandoned.
+        if (request.profileId === unready.id) {
+          waiting = true;
+          asked();
+          return new Promise((_, reject) =>
+            request.signal?.addEventListener("abort", () =>
+              reject(request.signal?.reason),
+            ),
+          );
+        }
+        if (waiting && request.path === "/auth-files") synced();
+        return answering(request);
+      },
+    });
+    try {
+      await cores.pool.start(healthy.id);
+      cores.usage.begin();
+      await starting;
+      // The healthy profile's account sync falls due 50 ms after `begin`.
+      await maintained;
+      assert.ok(cores.pool.starting.has(unready.id), "still waiting");
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "a start joined to an automatic one ends with shutdown's 503 when shutdown lands in its retry wait",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    const reports: string[] = [];
+    let asked!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const cores = new Cores(store, binary, {
+      report: (message) => reports.push(message),
+      usageTiming: { ...usageTiming, coalesce: 10 },
+      // Each readiness check fails at once, so the start waits 100 ms before the next.
+      management: (request) => {
+        asked();
+        return unreachable(request);
+      },
+    });
+    const profile = store.createProfile("Joined fixture");
+    store.saveProfile({ ...profile, enabled: true });
+    store.saveApiAccount(profile.id, apiKey("joined-key"), "joined-key");
+    try {
+      cores.usage.begin();
+      await waiting;
+      // A user's Start, Refresh or credential change joins the automatic start.
+      const joined = cores.pool.start(profile.id).then(
+        () => assert.fail("the start cannot succeed"),
+        (error: Error) => error,
+      );
+      // Lets the failed check settle: the start now sits in its retry wait.
+      await new Promise((resolve) => setImmediate(resolve));
+      await cores.shutdown();
+      const error = await joined;
+      assert.ok(error instanceof AppError, `${error.name}: ${error.message}`);
+      assert.equal(error.status, 503);
+      assert.deepEqual(reports, []);
+    } finally {
+      await cores.shutdown();
       await remove();
     }
   },

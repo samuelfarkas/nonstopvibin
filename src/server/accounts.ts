@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Account, Profile } from "../shared/types.ts";
+import type { Account } from "../shared/types.ts";
 import { hasOrganizations, providerLabel } from "../shared/providers.ts";
 import { credentialFileBytes, keepsRunning } from "../shared/vocabulary.ts";
 import type { CorePool } from "./core.ts";
@@ -70,10 +70,9 @@ export class Accounts {
     }));
   }
   /** `keepsRunning` with the subscriptions `list` would show, without reading their quota. */
-  keepsRunning(profile: Profile): boolean {
+  keepsRunning(profileId: string): boolean {
     return keepsRunning(
-      profile,
-      this.oauth(profile.id).length + this.store.apiAccounts(profile.id).length,
+      this.oauth(profileId).length + this.store.apiAccounts(profileId).length,
     );
   }
   chatgptAccountId(profileId: string, accountId: string): string | undefined {
