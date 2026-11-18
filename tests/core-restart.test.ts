@@ -106,8 +106,9 @@ test(
   },
 );
 
-// Attempt n + 1 comes min(coalesce * 2^(n - 1), restartBackoff) after attempt n ended;
-// without the bound the last waits would be 640 and 1280 ms.
+// Attempt n + 1 comes min(coalesce * 2^(n - 1), restartBackoff) after attempt n ended, and
+// no sooner: a loaded machine may start one late, so only that is checked here. That the
+// wait is capped is checked on the policy itself (restart-policy.test.ts).
 // The limit stays above the nine starts these tests watch.
 const backoff = {
   ...usageTiming,
@@ -121,8 +122,8 @@ function assertBackoff(times: number[]) {
   waits.forEach((wait, i) => {
     const gap = times[i + 1]! - times[i]!;
     assert.ok(
-      gap >= wait && gap < wait + 1000,
-      `launch ${i + 2} came ${gap} ms after the one before, expected ${wait} ms: ${times}`,
+      gap >= wait,
+      `launch ${i + 2} came ${gap} ms after the one before, expected at least ${wait} ms: ${times}`,
     );
   });
 }
