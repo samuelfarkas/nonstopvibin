@@ -17,19 +17,40 @@ import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
+import {
+  coreLedgerDirectory,
+  profileDirectory,
+  serverLockPath,
+} from "../src/server/data-directory.ts";
 import { probe, readSession, startServer } from "../src/server/cli.ts";
+import { clientDirectory, coreBinary } from "./support/application.ts";
 
-const binary = resolve(".vendor/core/cli-proxy-api");
-const clientDirectory = resolve("dist/client");
+const binary = coreBinary;
 const cli = resolve("src/server/cli.ts");
+// The CLI takes a port number. A port from the system's ephemeral range (from 32768 on
+// Linux, 49152 on macOS), released for the CLI to bind, can meanwhile be handed to any
+// `listen(0)` or outgoing connection, the CLIs' own cores included. Below that range a port
+// free now stays free until something binds that number; each is used once per run.
+const handedOut = new Set<number>();
+async function unusedPort(): Promise<number> {
+  for (;;) {
+    const port = 20_000 + Math.floor(Math.random() * 12_000);
+    if (handedOut.has(port)) continue;
+    const listener = createServer();
+    const free = await new Promise<boolean>((done) => {
+      listener.once("error", () => done(false));
+      listener.listen(port, "127.0.0.1", () =>
+        listener.close(() => done(true)),
+      );
+    });
+    if (!free) continue;
+    handedOut.add(port);
+    return port;
+  }
+}
 async function launch(directory: string) {
-  const listener = createServer();
-  await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
-  const address = listener.address();
-  assert.ok(address instanceof Object);
-  const port = address.port;
+  const port = await unusedPort();
   assert.notEqual(port, 4318);
-  await new Promise<void>((done) => listener.close(() => done()));
   const child = spawn(
     process.execPath,
     [cli, "serve", "--port", String(port)],
@@ -52,10 +73,36 @@ async function launch(directory: string) {
   return { child, port, exited, output: () => output };
 }
 type RunningCli = Awaited<ReturnType<typeof launch>>;
-async function waitFor(check: () => boolean | Promise<boolean>) {
+const ended = (cli: RunningCli) =>
+  cli.child.exitCode !== null || cli.child.signalCode !== null;
+const report = (clis: RunningCli[]) =>
+  clis
+    .map(
+      (cli) =>
+        `CLI on port ${cli.port} (pid ${cli.child.pid}): ${ended(cli) ? `exited with ${cli.child.exitCode ?? cli.child.signalCode}` : "running"}\n${cli.output() || "(no output)"}`,
+    )
+    .join("\n");
+/**
+ * Waits until `check` holds. A timeout reports the output and exit status of `clis`, the CLIs
+ * the wait concerns; unless the check is itself waiting for exits, one that exits fails it at once.
+ */
+async function waitFor(
+  what: string,
+  check: () => boolean | Promise<boolean>,
+  clis: RunningCli[],
+  { exits = false } = {},
+) {
   const deadline = Date.now() + 15000;
+  const fail = (message: string) => {
+    // Printed now: a cleanup that outlasts the test's limit would replace the failure.
+    console.error(message);
+    assert.fail(message);
+  };
   while (!(await check())) {
-    assert.ok(Date.now() < deadline, "lifecycle condition timed out");
+    if (!exits && clis.some(ended))
+      fail(`A CLI exited while waiting for ${what}.\n${report(clis)}`);
+    if (Date.now() > deadline)
+      fail(`Timed out waiting for ${what}.\n${report(clis)}`);
     await delay(10);
   }
 }
@@ -64,7 +111,7 @@ function corePids(directory: string): number[] {
     .split("\n")
     .filter(
       (row) =>
-        row.includes(join(directory, "profiles")) &&
+        row.includes(profileDirectory(directory, "")) &&
         row.includes("cli-proxy-api"),
     )
     .map((row) => Number(row.trim().split(/\s+/, 1)[0]));
@@ -99,7 +146,7 @@ test(
   { timeout: 20000 },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "nv-cli-initial-race-"));
-    const path = join(directory, "server.lock.sqlite");
+    const path = serverLockPath(directory);
     await writeFile(path, "", { mode: 0o600 });
     const inode = (await lstat(path)).ino;
     const reader = new DatabaseSync(path);
@@ -113,10 +160,13 @@ test(
       );
       assert.notEqual(processes[0].port, processes[1].port);
       await waitFor(
+        "one owner and one exited contender",
         async () =>
           processes.every((p) => p.child.exitCode !== null) ||
           ((await readSession(directory)) !== undefined &&
             processes.some((p) => p.child.exitCode !== null)),
+        processes,
+        { exits: true },
       );
       const owners = processes.filter((p) => p.child.exitCode === null);
       assert.equal(
@@ -164,7 +214,7 @@ test(
     try {
       const owner = await launch(directory);
       processes.push(owner);
-      await waitFor(() => corePids(directory).length > 0);
+      await waitFor("a core", () => corePids(directory).length > 0, [owner]);
       // Suspend the real pinned core to hold initialization open deterministically.
       for (const pid of corePids(directory)) signal(pid, "SIGSTOP");
       assert.equal(await readSession(directory), undefined);
@@ -172,9 +222,12 @@ test(
       processes.push(contender);
       assert.notEqual(contender.port, owner.port);
       await waitFor(
+        "the contender to exit",
         async () =>
           contender.child.exitCode !== null ||
           (await readSession(directory)) !== undefined,
+        [contender, owner],
+        { exits: true },
       );
       assert.equal(contender.child.exitCode, 1, contender.output());
       assert.equal(await contender.exited, 1);
@@ -184,7 +237,12 @@ test(
       owner.child.kill("SIGINT");
       const duringStop = await launch(directory);
       processes.push(duringStop);
-      await waitFor(() => duringStop.child.exitCode !== null);
+      await waitFor(
+        "the contender during stop to exit",
+        () => duringStop.child.exitCode !== null,
+        [duringStop, owner],
+        { exits: true },
+      );
       assert.equal(await duringStop.exited, 1, duringStop.output());
       assert.match(
         duringStop.output(),
@@ -202,7 +260,9 @@ test(
       const successor = await launch(directory);
       processes.push(successor);
       await waitFor(
+        "the successor's session",
         async () => (await readSession(directory))?.pid === successor.child.pid,
+        [successor],
       );
       successor.child.kill("SIGTERM");
       assert.equal(await successor.exited, 0, successor.output());
@@ -223,9 +283,11 @@ test(
       const owner = await launch(directory);
       processes.push(owner);
       await waitFor(
+        "the owner's session",
         async () => (await readSession(directory))?.pid === owner.child.pid,
+        [owner],
       );
-      const reservation = join(directory, "server.lock.sqlite");
+      const reservation = serverLockPath(directory);
       const before = await lstat(reservation);
       assert.equal(before.mode & 0o777, 0o600);
       owner.child.kill("SIGKILL");
@@ -233,7 +295,9 @@ test(
       const successor = await launch(directory);
       processes.push(successor);
       await waitFor(
+        "the successor's session",
         async () => (await readSession(directory))?.pid === successor.child.pid,
+        [successor],
       );
       assert.equal((await lstat(reservation)).ino, before.ino);
       successor.child.kill("SIGTERM");
@@ -259,15 +323,17 @@ test(
       const owner = await launch(directory);
       processes.push(owner);
       await waitFor(
+        "the owner's session and its core",
         async () =>
           (await readSession(directory))?.pid === owner.child.pid &&
           corePids(directory).length > 0,
+        [owner],
       );
       // A closed SSH terminal sends SIGHUP; it must not skip the accounting drain.
       owner.child.kill("SIGHUP");
       assert.equal(await owner.exited, 0, owner.output());
       assert.deepEqual(corePids(directory), [], "no core or watchdog remains");
-      assert.deepEqual(await readdir(join(directory, "core-processes")), []);
+      assert.deepEqual(await readdir(coreLedgerDirectory(directory)), []);
       assert.equal(await readSession(directory), undefined);
     } finally {
       await cleanup(directory, processes);
@@ -316,9 +382,12 @@ test(
         const peer = await launch(directory);
         contender = peer;
         await waitFor(
+          "the contender to exit",
           async () =>
             peer.child.exitCode !== null ||
             (await readSession(directory))?.pid === peer.child.pid,
+          [peer],
+          { exits: true },
         );
         assert.equal(contender.child.exitCode, 1, contender.output());
         assert.match(
@@ -336,7 +405,7 @@ test(
       assert.deepEqual(corePids(directory), []);
       const replacement = await startServer(options);
       await replacement.close();
-      const reservation = join(directory, "server.lock.sqlite");
+      const reservation = serverLockPath(directory);
       await chmod(reservation, 0o644);
       await assert.rejects(startServer(options), /owner-only ordinary file/);
       assert.equal(

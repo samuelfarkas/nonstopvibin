@@ -20,7 +20,11 @@ import { createInterface } from "node:readline";
 import { z } from "zod";
 import { Application } from "../server/server.ts";
 import { coreLayout } from "../server/core-binary.ts";
-import { linuxLoginItem, setLinuxLoginItem } from "./autostart.ts";
+import {
+  followLinuxLoginItem,
+  linuxLoginItem,
+  setLinuxLoginItem,
+} from "./autostart.ts";
 import { AppError, errorMessage } from "../server/errors.ts";
 import {
   dataDirectory,
@@ -334,16 +338,10 @@ async function start(): Promise<void> {
     (process.platform === "darwin" ||
       (process.platform === "linux" && process.env.APPIMAGE))
   ) {
-    // AppImage updates may rename the executable; repair an existing login entry on launch.
-    if (
-      process.platform === "linux" &&
-      process.env.APPIMAGE &&
-      linuxLoginItem(app.getPath("appData"))
-    )
-      await setLinuxLoginItem(
+    if (process.platform === "linux" && process.env.APPIMAGE)
+      await followLinuxLoginItem(
         app.getPath("appData"),
         process.env.APPIMAGE,
-        true,
       ).catch(reportDesktopError);
     const { autoUpdater } = await import("electron-updater");
     autoUpdater.autoDownload = false;

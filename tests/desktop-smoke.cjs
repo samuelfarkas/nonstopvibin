@@ -9,7 +9,7 @@ const {
 const { join, resolve } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
-const harness = require("./desktop-harness.cjs");
+const harness = require("./support/desktop-harness.cjs");
 
 if (typeof electron === "string") {
   // The first phase takes about 20 s on the macOS runner and the child's own checks give up
@@ -46,28 +46,50 @@ if (typeof electron === "string") {
   })();
 } else {
   const { stage, api } = harness.instrument("result.json");
-  const { app, BrowserWindow, Menu } = electron;
+  const { app, BrowserWindow } = electron;
   const directory = process.env.NONSTOPVIBIN_DATA_DIR;
   const samples = [];
   const monitors = [];
   const childProcess = require("node:child_process");
+  const { PassThrough } = require("node:stream");
+  const { createInterface } = require("node:readline");
   const spawn = childProcess.spawn;
+  // The real monitor still starts, says "ready" and is stopped by the app, but the clicks it
+  // reports (the person at the machine) never reach the app: only lines this test injects do.
   childProcess.spawn = (...args) => {
     const child = spawn(...args);
-    if (String(args[0]).endsWith("/tray-click-monitor")) monitors.push(child);
+    if (!String(args[0]).endsWith("/tray-click-monitor")) return child;
+    const lines = new PassThrough();
+    createInterface({ input: child.stdout }).on("line", (line) => {
+      if (line === "ready") lines.write("ready\n");
+    });
+    child.stdout.once("end", () => lines.end());
+    child.stdout = lines;
+    monitors.push(child);
     return child;
   };
+  // Counts the renderer's release requests (useKeepDraft in client/controls.tsx) once main
+  // has handled each; the app signals nothing else when it decides about a deferred close.
+  let releases = 0;
+  const handle = electron.ipcMain.handle.bind(electron.ipcMain);
+  electron.ipcMain.handle = (channel, listener) =>
+    handle(
+      channel,
+      channel === "nv:release-window"
+        ? (...args) => {
+            try {
+              return listener(...args);
+            } finally {
+              releases++;
+            }
+          }
+        : listener,
+    );
   app.setAppPath(resolve(__dirname, ".."));
   stage("load-main");
   require("../dist/desktop/main.cjs");
   void app.whenReady().then(() => stage("app-ready"));
-  const deadline = Date.now() + 50_000;
-  async function until(check) {
-    while (!(await check())) {
-      if (Date.now() > deadline) throw new Error("Desktop check timed out");
-      await delay(50);
-    }
-  }
+  const until = harness.deadline(50_000);
   // A call into a page never settles if the page goes away first; fail at once instead.
   function live(window, label, call) {
     if (window.isDestroyed())
@@ -96,6 +118,37 @@ if (typeof electron === "string") {
       `Renderer call ${JSON.stringify(code.slice(0, 80))}`,
       (contents) => contents.executeJavaScript(code),
     );
+  const present = (window, selector) =>
+    until(() =>
+      run(
+        window,
+        `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+      ),
+    );
+  async function press(window, selector) {
+    await present(window, selector);
+    await run(
+      window,
+      `document.querySelector(${JSON.stringify(selector)}).click()`,
+    );
+  }
+  // Runs `action`, waits until main has handled the release it sends, and says whether main
+  // began closing the window in response ("close" is emitted inside `window.close()`).
+  async function release(window, action) {
+    const before = releases;
+    let closing = false;
+    const began = () => {
+      closing = true;
+    };
+    window.on("close", began);
+    try {
+      await action();
+      await until(() => releases > before);
+      return closing;
+    } finally {
+      window.off("close", began);
+    }
+  }
   // Counts the page's beforeunload listeners. The attached debugger also keeps Chromium from
   // closing a page that takes over 500 ms to answer beforeunload, which a slow runner hits;
   // that heuristic is Chromium's, not the deferred close under test.
@@ -123,11 +176,8 @@ if (typeof electron === "string") {
       return !window.isVisible();
     });
   }
-  const viewMenu = () =>
-    Menu.getApplicationMenu()?.items.find((item) => item.label === "View")
-      ?.submenu;
   const click = (label) => {
-    const item = viewMenu().items.find((entry) => entry.label === label);
+    const item = harness.viewItem(label);
     assert.ok(item, label);
     item.click();
   };
@@ -140,9 +190,7 @@ if (typeof electron === "string") {
         realpathSync(join(directory, name)),
       );
     stage("wait-menu");
-    await until(() =>
-      viewMenu()?.items.some((item) => item.label === "Open main window"),
-    );
+    await until(() => harness.viewItem("Open main window"));
     assert.equal(
       BrowserWindow.getAllWindows().length,
       0,
@@ -181,24 +229,11 @@ if (typeof electron === "string") {
           "denied",
           "permission requests are denied",
         );
-        const request = async (path, method = "GET", body) => {
-          const response = await fetch(`${origin}/api${path}`, {
-            method,
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: body === undefined ? undefined : JSON.stringify(body),
-          });
-          assert.ok(response.ok, `Fixture request ${path}: ${response.status}`);
-          return response.json();
-        };
+        const request = harness.management(origin, token);
         const profile = await request("/profiles", "POST", {
           name: "Desktop fixture",
         });
-        await until(() =>
-          run(window, "Boolean(document.querySelector('.proxy-card button'))"),
-        );
+        await present(window, ".proxy-card button");
         await run(
           window,
           `{
@@ -224,6 +259,7 @@ if (typeof electron === "string") {
             "document.querySelector('.global-alert')?.textContent.includes('Fixture operation failed')",
           ),
         );
+        // No release is expected, so nothing marks its absence: one later than 100 ms goes unseen.
         await delay(100);
         assert.equal(
           window.isDestroyed(),
@@ -232,11 +268,13 @@ if (typeof electron === "string") {
         );
         app.emit("activate");
         await until(() => window.isVisible());
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"Dismiss error\"]').click()",
+        assert.equal(
+          await release(window, () =>
+            press(window, '[aria-label="Dismiss error"]'),
+          ),
+          false,
+          "reopening cancels deferred close",
         );
-        await delay(100);
         assert.equal(
           window.isVisible(),
           true,
@@ -246,18 +284,9 @@ if (typeof electron === "string") {
         await request(`/profiles/${profile.id}/start`, "POST");
         const { key } = await request(`/profiles/${profile.id}/key`);
         proxy = { endpoint: `${origin}/p/${profile.slug}/v1`, key };
-        await until(() =>
-          run(
-            window,
-            "Boolean(document.querySelector('[aria-label=\"New profile\"]'))",
-          ),
-        );
         // Exercise the real modal beforeunload guard, then discard through its close button.
         stage("c0:unsaved-form");
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"New profile\"]').click()",
-        );
+        await press(window, '[aria-label="New profile"]');
         await closeGuarded(window, 1, "unfinished form is retained");
         assert.equal(
           window.isDestroyed(),
@@ -266,21 +295,22 @@ if (typeof electron === "string") {
         );
         app.emit("activate");
         await until(() => window.isVisible());
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"Close dialog\"]').click()",
+        assert.equal(
+          await release(window, () =>
+            press(window, '[aria-label="Close dialog"]'),
+          ),
+          false,
+          "reopening cancels deferred close",
         );
-        await delay(100);
       }
       stage(`c${cycle}:logo`);
-      await until(() =>
-        run(window, "Boolean(document.querySelector('.nv-ball'))"),
-      );
+      // The start screen draws a logo too, without the animation; wait for the sidebar's.
+      await present(window, ".nv-logo-button .nv-ball");
       assert.equal(
         await run(
           window,
           `(async () => {
-          const logo = document.querySelector('.nv-logo');
+          const logo = document.querySelector('.nv-logo-button .nv-logo');
           const animations = logo.getAnimations({subtree:true});
           if (animations.some(animation => animation.effect.getTiming().iterations === Infinity)) return -1;
           await Promise.all(animations.map(animation => animation.finished));
@@ -292,20 +322,8 @@ if (typeof electron === "string") {
       );
       if (cycle === 1) {
         stage("c1:settings");
-        // The start screen shows the logo too; the sidebar exists once state has loaded.
-        await until(() =>
-          run(
-            window,
-            "Boolean(document.querySelector('[title=\"Settings\"]'))",
-          ),
-        );
-        await run(
-          window,
-          "document.querySelector('[title=\"Settings\"]').click()",
-        );
-        await until(() =>
-          run(window, "Boolean(document.querySelector('#usage-retention'))"),
-        );
+        await press(window, '[title="Settings"]');
+        await present(window, "#usage-retention");
         const retention = async (days) => {
           await run(
             window,
@@ -344,16 +362,12 @@ if (typeof electron === "string") {
         });
         assert.equal(created.status, 201);
         const settingsProfile = await created.json();
-        await until(() =>
-          run(
-            window,
-            "Boolean(document.querySelector('[title=\"Settings fixture\"]'))",
-          ),
-        );
+        await present(window, '[title="Settings fixture"]');
         const sidebarProfile = await run(
           window,
           "document.querySelector('.profiles [aria-current]').title",
         );
+        await present(window, "#settings-profile");
         await run(
           window,
           `{
@@ -362,7 +376,10 @@ if (typeof electron === "string") {
         }`,
         );
         await until(() =>
-          run(window, "Boolean(document.querySelector('[role=\"option\"]'))"),
+          run(
+            window,
+            `[...document.querySelectorAll('[role="option"]')].some(item => item.textContent.includes('Settings fixture'))`,
+          ),
         );
         await run(
           window,
@@ -394,10 +411,7 @@ if (typeof electron === "string") {
           "30 days",
           "switching settings profile preserves global draft",
         );
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"Keep sessions on the same account\"]').click()",
-        );
+        await press(window, '[aria-label="Keep sessions on the same account"]');
         await until(async () => {
           const response = await fetch(`${origin}/api/state`, {
             headers: { Authorization: `Bearer ${token}` },
@@ -442,30 +456,35 @@ if (typeof electron === "string") {
           ),
           "30 days",
         );
-        await retention(0);
-        await delay(100);
+        assert.equal(
+          await release(window, () => retention(0)),
+          false,
+          "reopening cancels deferred close",
+        );
         // One cleared guard must not discard another form in the same window.
         await retention(30);
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"New profile\"]').click()",
-        );
+        await press(window, '[aria-label="New profile"]');
         await closeGuarded(
           window,
           2,
           "settings and dialog drafts defer the close",
         );
-        await retention(0);
-        await delay(100);
+        let vetoed = false;
+        window.webContents.once("will-prevent-unload", () => {
+          vetoed = true;
+        });
+        assert.equal(
+          await release(window, () => retention(0)),
+          true,
+          "a cleared guard releases the hidden window",
+        );
+        await until(() => vetoed || window.isDestroyed());
         assert.equal(
           window.isDestroyed(),
           false,
           "remaining dialog keeps its draft",
         );
-        await run(
-          window,
-          "document.querySelector('[aria-label=\"Close dialog\"]').click()",
-        );
+        await press(window, '[aria-label="Close dialog"]');
         await until(() => window.isDestroyed());
         samples.push({
           phase: "draft-finished-hidden",
@@ -521,6 +540,7 @@ if (typeof electron === "string") {
       }
       if (cycle === 0) {
         app.emit("activate", {}, true);
+        // Idle for longer than the monitor's 5 s start limit (main.ts) with nothing to wait on.
         await delay(6000);
         assert.equal(popup.isDestroyed(), false, "idle quota popup stays open");
         assert.equal(BrowserWindow.getAllWindows().length, 1);
@@ -544,6 +564,7 @@ if (typeof electron === "string") {
     }
     if (process.platform === "darwin") {
       stage("outside-click");
+      const started = monitors.length;
       click("Subscription quotas");
       click("Subscription quotas");
       await until(() =>
@@ -551,28 +572,26 @@ if (typeof electron === "string") {
       );
       assert.equal(
         monitors.length,
-        4,
+        started + 1,
         "opening twice starts only one click monitor",
       );
       const popup = BrowserWindow.getAllWindows()[0];
       const monitor = monitors.at(-1);
       const bounds = popup.getBounds();
+      // The app reads each line as it arrives and `close()` emits "close" at once.
+      let closing = false;
+      popup.once("close", () => {
+        closing = true;
+      });
       monitor.stdout.emit(
         "data",
         Buffer.from(`${bounds.x + 10} ${bounds.y + 10}\n`),
       );
-      assert.equal(
-        popup.isDestroyed(),
-        false,
-        "inside clicks keep the popup open",
-      );
+      assert.equal(closing, false, "inside clicks keep the popup open");
       monitor.stdout.emit("data", Buffer.from("invalid\n"));
-      assert.equal(
-        popup.isDestroyed(),
-        false,
-        "invalid monitor output is ignored",
-      );
+      assert.equal(closing, false, "invalid monitor output is ignored");
       monitor.stdout.emit("data", Buffer.from("-100000 -100000\n"));
+      assert.equal(closing, true, "an outside click closes the popup");
       await until(() => popup.isDestroyed());
       await until(() =>
         monitors.every(

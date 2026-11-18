@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { Application, validAllowHost } from "../src/server/server.ts";
 import { verifyCore } from "../src/server/core-binary.ts";
@@ -18,9 +18,10 @@ import {
   tunnelCommand,
   updateUnit,
 } from "../src/server/cli.ts";
+import { coreBinary } from "./support/application.ts";
 
 const HOST = "box.tailnet.ts.net";
-const binary = resolve(".vendor/core/cli-proxy-api");
+const binary = coreBinary;
 let directory: string;
 let client: string;
 let app: Application;

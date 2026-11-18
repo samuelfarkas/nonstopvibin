@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { Json } from "../src/shared/types.ts";
 import { Application } from "../src/server/server.ts";
 import { httpManagement } from "../src/server/core.ts";
@@ -10,6 +10,11 @@ import { record, parse } from "../src/server/json.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { resetCreditsSchema } from "../src/server/reset-credits.ts";
+import {
+  clientDirectory,
+  coreBinary,
+  management,
+} from "./support/application.ts";
 
 const credits = {
   available_count: 1,
@@ -45,8 +50,8 @@ test(
     };
     const app = await Application.create({
       directory,
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
+      binary: coreBinary,
+      clientDirectory,
       port: 0,
       cores: {
         management: async (request) => {
@@ -100,22 +105,13 @@ test(
     const other = app.store.createProfile("Other profile");
     try {
       await app.cores.pool.start(profile.id);
-      const path = `/api/profiles/${profile.id}/accounts/fixture.json/reset-credits`;
-      async function request(
+      const path = `/profiles/${profile.id}/accounts/fixture.json/reset-credits`;
+      const request = (
         method = "GET",
         body?: Json,
         token = app.token,
         target = path,
-      ) {
-        return fetch(`${app.origin}${target}`, {
-          method,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-      }
+      ) => management(app, target, { method, body, token });
       assert.equal(
         (
           await request(

@@ -1,17 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import YAML from "yaml";
 import { ConfigWriter } from "../src/server/config.ts";
 import { coreConfigPath } from "../src/server/data-directory.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
+import { temporaryStore } from "./support/application.ts";
 
 test("config writes return the saved snapshot, serialize, and recover after failure", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-config-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { directory, store, remove } = await temporaryStore(
+    "nonstopvibin-config-",
+  );
   try {
     const profile = store.createProfile("Fixture");
     assert.equal(profile.strategy, "fill-first");
@@ -55,14 +53,12 @@ test("config writes return the saved snapshot, serialize, and recover after fail
     assert.equal(recovered.port, 1238);
     assert.deepEqual(YAML.parse(await readFile(path, "utf8")), recovered);
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("a settings change saved while the config's directories are prepared is in the written config", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-config-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nonstopvibin-config-");
   try {
     const profile = store.createProfile("Fixture");
     const writing = new ConfigWriter(store).write(profile.id, 1234);
@@ -71,7 +67,6 @@ test("a settings change saved while the config's directories are prepared is in 
     store.saveProfile({ ...profile, strategy: "round-robin" });
     assert.equal((await writing).routing.strategy, "round-robin");
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });

@@ -1,49 +1,49 @@
 // Run with `bun tests/tray-guard.cjs` (isolated Electron renderer).
 // A failed /state poll must not install the close guard in the tray view.
 const assert = require("node:assert/strict");
-const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const { writeFileSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const electron = require("electron");
+const { checkPage, launchPage } = require("./support/electron-page.cjs");
 
 if (typeof electron === "string") {
-  const directory = mkdtempSync(join(tmpdir(), "nv-tray-guard-"));
-  require("esbuild").buildSync({
-    // The real entry: it picks the main or the tray root from the URL.
-    entryPoints: [resolve(__dirname, "../src/main.tsx")],
-    bundle: true,
-    outfile: join(directory, "app.js"),
-    loader: { ".css": "empty" },
-    define: {
-      "process.env.NODE_ENV": '"production"',
-      "import.meta.hot": "undefined",
-    },
-  });
-  const state = {
-    profiles: [
-      {
-        id: "p",
-        slug: "work",
-        name: "Work",
-        strategy: "round-robin",
-        sessionAffinity: false,
-        enabled: true,
-        createdAt: "",
-        runtime: "running",
-        accounts: [],
-        endpoint: "",
+  launchPage("tray-guard", __filename, (directory) => {
+    require("esbuild").buildSync({
+      // The real entry: it picks the main or the tray root from the URL.
+      entryPoints: [resolve(__dirname, "../src/main.tsx")],
+      bundle: true,
+      outfile: join(directory, "app.js"),
+      loader: { ".css": "empty" },
+      define: {
+        "process.env.NODE_ENV": '"production"',
+        "import.meta.hot": "undefined",
       },
-    ],
-    coreVersion: "",
-    gateway: "",
-    usageRetentionDays: 0,
-    version: "",
-    desktop: true,
-    errors: [],
-  };
-  writeFileSync(
-    join(directory, "index.html"),
-    `<div id="root"></div><script>
+    });
+    const state = {
+      profiles: [
+        {
+          id: "p",
+          slug: "work",
+          name: "Work",
+          strategy: "round-robin",
+          sessionAffinity: false,
+          enabled: true,
+          createdAt: "",
+          runtime: "running",
+          accounts: [],
+          endpoint: "",
+        },
+      ],
+      coreVersion: "",
+      gateway: "",
+      usageRetentionDays: 0,
+      version: "",
+      desktop: true,
+      errors: [],
+    };
+    writeFileSync(
+      join(directory, "index.html"),
+      `<div id="root"></div><script>
       // Count live beforeunload listeners; poll quickly; first /state succeeds, later polls fail.
       window.guards = 0;
       window.stateCalls = 0;
@@ -60,34 +60,22 @@ if (typeof electron === "string") {
           : new Response(JSON.stringify({ error: { message: 'Fixture poll failed' } }), { status: 503 });
       };
     </script><script src="app.js"></script>`,
-  );
-  const child = require("node:child_process").spawn(
-    electron,
-    [__filename, directory, "--headless"],
-    { stdio: "inherit" },
-  );
-  child.on("exit", (code) => {
-    rmSync(directory, { recursive: true, force: true });
-    process.exitCode = code ?? 1;
+    );
   });
 } else {
-  const { app, BrowserWindow } = electron;
-  app.setPath("userData", process.argv[2]);
-  app.whenReady().then(async () => {
-    const window = new BrowserWindow({ show: false });
-    const timeout = setTimeout(() => {
-      console.error("Tray guard check timed out");
-      app.exit(1);
-    }, 15000);
-    const guardsAfterFailedPolls = async (query) => {
-      await window.loadFile(join(process.argv[2], "index.html"), { query });
-      return window.webContents.executeJavaScript(`(async () => {
-        while (stateCalls < 4) await new Promise(r => setTimeout(r, 20));
-        await new Promise(r => setTimeout(r, 50));
-        return guards;
-      })()`);
-    };
-    try {
+  checkPage(
+    "Tray guard check",
+    { show: false },
+    15000,
+    async (window, directory) => {
+      const guardsAfterFailedPolls = async (query) => {
+        await window.loadFile(join(directory, "index.html"), { query });
+        return window.webContents.executeJavaScript(`(async () => {
+          while (stateCalls < 4) await new Promise(r => setTimeout(r, 20));
+          await new Promise(r => setTimeout(r, 50));
+          return guards;
+        })()`);
+      };
       assert.equal(
         await guardsAfterFailedPolls({}),
         1,
@@ -99,13 +87,6 @@ if (typeof electron === "string") {
         "the tray installs no beforeunload guard when a poll fails",
       );
       console.log("Tray guard passed: failed polls leave the tray closable.");
-    } catch (error) {
-      console.error(error);
-      process.exitCode = 1;
-    } finally {
-      clearTimeout(timeout);
-      window.destroy();
-      app.exit(process.exitCode || 0);
-    }
-  });
+    },
+  );
 }

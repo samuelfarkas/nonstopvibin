@@ -1,25 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { httpManagement, type Management } from "../src/server/core.ts";
 import { Cores } from "../src/server/cores.ts";
-import { profileDirectory } from "../src/server/data-directory.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
+import {
+  oauthPendingDirectory,
+  profileDirectory,
+} from "../src/server/data-directory.ts";
 import { claudeIdentity, sameSeat } from "../src/server/identity.ts";
 import { ImportCatalog } from "../src/server/imports.ts";
 import { accountLabel } from "../src/client/format.ts";
 import { verifyCore } from "../src/server/core-binary.ts";
 import type { OAuthSession, Profile } from "../src/shared/types.ts";
+import { coreBinary, temporaryStore } from "./support/application.ts";
 
 const accountUuid = "abcdef01-2345-4678-9abc-def012345678";
 const organizationA = "00000000-0000-4000-8000-000000000002";
@@ -91,8 +85,9 @@ test(
   "same-email seats stay separate through staged sign-in, reconnect, imports, restart, and cleanup",
   { timeout: 60_000 },
   async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-seats-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { directory, store, remove } = await temporaryStore(
+      "nonstopvibin-seats-",
+    );
     const first = store.createProfile("First profile");
     const second = store.createProfile("Second profile");
     const originalFetch = globalThis.fetch;
@@ -127,7 +122,7 @@ test(
         };
       return httpManagement(request);
     };
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
       management,
       now: () => Date.now() + skew,
@@ -226,7 +221,7 @@ test(
             ).mode & 0o777,
             0o600,
           );
-          assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
+          assert.deepEqual(await readdir(oauthPendingDirectory(directory)), []);
         },
       );
       await t.test(
@@ -450,7 +445,7 @@ test(
             ),
             /not found/,
           );
-          assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
+          assert.deepEqual(await readdir(oauthPendingDirectory(directory)), []);
           const expired = await signIn.begin(first.id, "claude");
           skew = 3_600_000;
           await assert.rejects(
@@ -461,7 +456,7 @@ test(
           const next = await signIn.begin(first.id, "claude");
           skew = 0;
           await signIn.cancel(first.id, next.state);
-          assert.deepEqual(await readdir(join(directory, "oauth-pending")), []);
+          assert.deepEqual(await readdir(oauthPendingDirectory(directory)), []);
         },
       );
       await t.test(
@@ -531,8 +526,7 @@ test(
     } finally {
       await cores.shutdown();
       globalThis.fetch = originalFetch;
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );

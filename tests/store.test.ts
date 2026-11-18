@@ -12,12 +12,15 @@ import {
 import type { SecretCodec } from "../src/server/vault.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
-import { usageSummary } from "./usage-summary.ts";
+import { usageSummary } from "./support/usage-summary.ts";
+import { usagePageSize } from "../src/shared/vocabulary.ts";
 import { Application } from "../src/server/server.ts";
+import { temporaryStore } from "./support/application.ts";
 
 test("existing databases never receive a replacement vault key", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-missing-key-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { directory, store, remove } = await temporaryStore(
+    "nonstopvibin-missing-key-",
+  );
   try {
     const profile = store.createProfile("Fixture");
     const secret = store.clientKey(profile.id);
@@ -35,14 +38,12 @@ test("existing databases never receive a replacement vault key", async () => {
       secret,
     );
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("profile writes refresh the cached profile names the tray reads", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-generation-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nonstopvibin-generation-");
   try {
     const empty = store.profileNames();
     const profile = store.createProfile("Fixture");
@@ -55,8 +56,7 @@ test("profile writes refresh the cached profile names the tray reads", async () 
     store.saveProfile({ ...profile, name: "Renamed" });
     assert.deepEqual([...store.profileNames()], [[profile.id, "Renamed"]]);
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
@@ -317,55 +317,51 @@ test("saveApiAccount rolls back the account when encryption fails", async () => 
 });
 
 test("profile slug boundaries remain valid after truncation and duplicate suffixes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-slugs-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-slugs-");
   try {
     const name = "a".repeat(39) + " b";
     assert.equal(store.createProfile(name).slug, "a".repeat(39));
     assert.equal(store.createProfile(name).slug, "a".repeat(39) + "-2");
     assert.equal(store.createProfile(" ".repeat(41)).slug, "profile");
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("time pagination seeks through tied timestamps without losing rows or crossing snapshot bounds", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-time-pages-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-time-pages-");
   try {
     const profile = store.createProfile("Pagination");
     const other = store.createProfile("Other");
-    // Minimal synthetic rows exercise storage ordering independently of provider accounting.
-    const insert = store.db.prepare("INSERT INTO usage VALUES (?,?,?,?)");
-    for (let i = 0; i < 2003; i++) {
-      const timestamp = i < 1501 ? "2026-01-02" : "2026-01-03";
-      insert.run(
-        String(i),
-        profile.id,
-        timestamp,
-        JSON.stringify({ id: String(i), timestamp }),
-      );
-    }
-    insert.run(
-      "before",
-      profile.id,
-      "2026-01-01",
-      JSON.stringify({ id: "before", timestamp: "2026-01-01" }),
+    const row = (id: string, profileId: string, timestamp: string) => ({
+      id,
+      profileId,
+      timestamp,
+      model: "fixture",
+      provider: "custom",
+      account: "fixture",
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedTokens: 0,
+      reasoningTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 2,
+      latencyMs: 1,
+      failed: false,
+      statusCode: 200,
+      stream: false,
+    });
+    store.addUsage(
+      Array.from({ length: 2003 }, (_, i) =>
+        row(String(i), profile.id, i < 1501 ? "2026-01-02" : "2026-01-03"),
+      ),
     );
-    insert.run(
-      "other",
-      other.id,
-      "2026-01-02",
-      JSON.stringify({ id: "other", timestamp: "2026-01-02" }),
-    );
+    store.addUsage([
+      row("before", profile.id, "2026-01-01"),
+      row("other", other.id, "2026-01-02"),
+    ]);
     const through = store.usageSequence();
-    insert.run(
-      "later",
-      profile.id,
-      "2026-01-02",
-      JSON.stringify({ id: "later", timestamp: "2026-01-02" }),
-    );
+    store.addUsage([row("later", profile.id, "2026-01-02")]);
     let from: UsageCursor | undefined;
     const ids: string[] = [];
     for (;;) {
@@ -376,7 +372,7 @@ test("time pagination seeks through tied timestamps without losing rows or cross
       );
       ids.push(...page.records.map((record) => record.id));
       if (!page.next) break;
-      assert.equal(page.records.length, 500);
+      assert.equal(page.records.length, usagePageSize);
       from = page.next;
     }
     assert.deepEqual(
@@ -392,14 +388,12 @@ test("time pagination seeks through tied timestamps without losing rows or cross
       0,
     );
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("secret and setting rows keep the IDs stored databases already use", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-row-ids-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nonstopvibin-row-ids-");
   try {
     const profile = store.createProfile("Fixture");
     store.saveApiAccount(
@@ -444,7 +438,6 @@ test("secret and setting rows keep the IDs stored databases already use", async 
     assert.equal(store.apiKey("account"), "secret");
     assert.match(store.clientKey(profile.id), clientKeyPattern);
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });

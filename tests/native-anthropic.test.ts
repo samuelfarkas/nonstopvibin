@@ -5,12 +5,19 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { connect } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
 import { record, type JsonObject } from "../src/server/json.ts";
 import type { Profile } from "../src/shared/types.ts";
-import { settle } from "./teardown.ts";
+import {
+  closeApplication,
+  closeServer,
+  clientDirectory,
+  coreBinary,
+  listen,
+} from "./support/application.ts";
+import { events, frame } from "./support/sse.ts";
 
 // Mock only the external Anthropic provider. Every request below traverses the
 // real application gateway and the verified, compiled release-pinned core.
@@ -24,8 +31,6 @@ const image = {
     data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT1sAAAAASUVORK5CYII=",
   },
 };
-const frame = (type: string, fields: JsonObject = {}) =>
-  `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
 const start = frame("message_start", {
   message: {
     id: "msg_native_fixture",
@@ -66,12 +71,6 @@ function toolStream() {
     }) +
     frame("message_stop")
   );
-}
-function events(wire: string): JsonObject[] {
-  return wire
-    .split("\n")
-    .filter((line) => line.startsWith("data: {"))
-    .map((line) => JSON.parse(line.slice(6)));
 }
 let app: Application;
 let directory: string;
@@ -209,17 +208,12 @@ beforeAll(async () => {
       );
     }
   });
-  await new Promise<void>((resolve) =>
-    upstream.listen(0, "127.0.0.1", resolve),
-  );
-  const address = upstream.address();
-  assert.ok(address instanceof Object);
-  providerUrl = `http://127.0.0.1:${address.port}`;
+  providerUrl = `http://127.0.0.1:${await listen(upstream)}`;
   app = await Application.create({
     directory,
     agentHome: join(directory, "home"),
-    binary: resolve(".vendor/core/cli-proxy-api"),
-    clientDirectory: resolve("dist/client"),
+    binary: coreBinary,
+    clientDirectory,
     port: 0,
     requirePinnedCore: true,
   });
@@ -231,18 +225,9 @@ beforeAll(async () => {
     await app.cores.pool.start(profile.id);
   }
 }, 30_000);
-// A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
-// settle names whatever is still running well before this hook's own limit.
 afterAll(async () => {
-  if (app) {
-    await settle("app.close()", app.close(), app.cores.pool, 25_000);
-    await rm(app.agentSetup.socketDirectory, { recursive: true, force: true });
-  }
-  if (upstream)
-    await new Promise<void>((resolve) => {
-      upstream.close(() => resolve());
-      upstream.closeAllConnections();
-    });
+  if (app) await closeApplication(app);
+  if (upstream) await closeServer(upstream);
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 30_000);
 

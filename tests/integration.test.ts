@@ -19,11 +19,16 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import { agentDefinitions } from "../src/server/agents.ts";
 import { Application } from "../src/server/server.ts";
+import {
+  idleCore,
+  installFakeCore,
+  listeningCore,
+} from "./support/fake-core.ts";
 import { httpManagement, type Management } from "../src/server/core.ts";
 import {
   coreConfigPath,
@@ -32,16 +37,28 @@ import {
 } from "../src/server/data-directory.ts";
 import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
+import { usagePageSize } from "../src/shared/vocabulary.ts";
 import { Store, secretIds } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
-import { usageSummary } from "./usage-summary.ts";
+import { usageSummary } from "./support/usage-summary.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
-import { settle } from "./teardown.ts";
+import {
+  clientDirectory,
+  closeApplication,
+  closeServer,
+  coreBinary,
+  listen,
+  management,
+} from "./support/application.ts";
 
 let app: Application;
 let company: Profile;
 let personal: Profile;
+// Running profiles that each belong to one test, so no other test changes what it counts.
+let accounting: Profile;
+let removal: Profile;
+let finalDrain: Profile;
 let directory: string;
 let failCompany = false;
 let onHang: (() => void) | undefined;
@@ -127,17 +144,12 @@ beforeAll(async () => {
       );
     }
   });
-  await new Promise<void>((resolve) =>
-    upstream.listen(0, "127.0.0.1", resolve),
-  );
-  const addr = upstream.address();
-  assert.ok(addr instanceof Object);
-  upstreamBase = `http://127.0.0.1:${addr.port}/v1`;
+  upstreamBase = `http://127.0.0.1:${await listen(upstream)}/v1`;
   app = await Application.create({
     agentHome: join(directory, "agent-home"),
     directory,
-    binary: resolve(".vendor/core/cli-proxy-api"),
-    clientDirectory: resolve("dist/client"),
+    binary: coreBinary,
+    clientDirectory,
     port: 0,
     cores: {
       management: (request) => (intercept ?? httpManagement)(request),
@@ -146,9 +158,14 @@ beforeAll(async () => {
   });
   company = app.store.createProfile("Company A");
   personal = app.store.createProfile("Personal");
+  accounting = app.store.createProfile("Accounting fixture");
+  removal = app.store.createProfile("Removal fixture");
+  finalDrain = app.store.createProfile("Final drain fixture");
   for (const [profile, keys] of [
     [company, ["company-one", "company-two"]],
     [personal, ["personal-one"]],
+    [accounting, ["accounting-one"]],
+    [removal, ["removal-one"]],
   ] as const)
     for (const key of keys)
       app.store.saveApiAccount(
@@ -164,24 +181,84 @@ beforeAll(async () => {
         },
         key,
       );
-  await app.cores.pool.start(company.id);
-  await app.cores.pool.start(personal.id);
+  await Promise.all(
+    [company, personal, accounting, removal, finalDrain].map((profile) =>
+      app.cores.pool.start(profile.id),
+    ),
+  );
 }, 30_000);
-// A core may need its usage drain plus the 5 s SIGTERM grace (timing.kill) to stop;
-// settle names whatever is still running well before this hook's own limit.
-afterAll(async () => {
-  if (app) await settle("app.close()", app.close(), app.cores.pool, 25_000);
-  if (upstream)
-    await new Promise<void>((resolve) => {
-      upstream.close(() => resolve());
-      upstream.closeAllConnections();
+/** Sets a profile's routing for the duration of `body`, then restores what it was. */
+async function withRouting(
+  profile: Profile,
+  routing: Pick<Profile, "strategy" | "sessionAffinity">,
+  body: () => Promise<void>,
+) {
+  const patch = async (value: typeof routing) => {
+    const changed = await management(app, `/profiles/${profile.id}`, {
+      method: "PATCH",
+      body: value,
     });
-  if (directory) await rm(directory, { recursive: true, force: true });
-  if (app)
-    await rm(app.agentSetup.socketDirectory, {
+    assert.equal(changed.status, 200, await changed.text());
+  };
+  const { strategy, sessionAffinity } = app.store.profile(profile.id);
+  await patch(routing);
+  try {
+    await body();
+  } finally {
+    await patch({ strategy, sessionAffinity });
+  }
+}
+/** Management answers as `listeningCore` gives them, for a core that does not listen. */
+const fakeManagement: Management = async ({ path }) =>
+  path === "/auth-files"
+    ? { files: [] }
+    : path.startsWith("/usage-queue")
+      ? []
+      : {};
+/**
+ * An application whose profile core is `source`, a script run as the core binary with the
+ * core's arguments; `management` answers in place of the core's management API if given.
+ */
+async function fakeCoreApplication(
+  name: string,
+  source: string,
+  management?: Management,
+) {
+  const root = join(directory, name);
+  const binary = await installFakeCore(root, source);
+  const instance = await Application.create({
+    directory: join(root, "data"),
+    agentHome: join(root, "agent-home"),
+    binary,
+    clientDirectory: app.options.clientDirectory,
+    port: 0,
+    cores: { management },
+  });
+  const profile = instance.store.createProfile("Fake core");
+  try {
+    await instance.cores.pool.start(profile.id);
+  } catch (error) {
+    await instance.close();
+    throw error;
+  }
+  const close = async () => {
+    await instance.close();
+    await rm(instance.agentSetup.socketDirectory, {
       recursive: true,
       force: true,
     });
+  };
+  return { instance, profile, close };
+}
+// Answers a WebSocket handshake with browser-facing headers.
+const misbehavingCore = listeningCore(
+  undefined,
+  `server.on("upgrade", (_req, socket) => socket.end("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\\r\\nSet-Cookie: a=1\\r\\nSet-Cookie: b=2\\r\\nAccess-Control-Allow-Origin: *\\r\\nX-NonstopVibin-Profile: forged\\r\\n\\r\\n"));`,
+);
+afterAll(async () => {
+  if (app) await closeApplication(app);
+  if (upstream) await closeServer(upstream);
+  if (directory) await rm(directory, { recursive: true, force: true });
 }, 30_000);
 test("a malformed static path is not found and not reported as an app error", async () => {
   const reported = app.state().errors.length;
@@ -244,19 +321,23 @@ test("a rotated or deleted profile key is rejected on the very next request", as
   assert.equal(await status(app.store.clientKey(bystander.id)), 503);
 });
 test("static assets revalidate without caching management responses", async () => {
-  const original = app.options.clientDirectory;
   const client = join(directory, "static-fixture");
   await mkdir(join(client, "assets"), { recursive: true });
   await writeFile(join(client, "index.html"), "fixture page");
   await writeFile(join(client, "assets/app-AbCd1234.js"), "fixture script");
-  app.options.clientDirectory = client;
+  const served = await Application.create({
+    ...app.options,
+    directory: join(directory, "static-app"),
+    clientDirectory: client,
+    port: 0,
+  });
   try {
-    const first = await fetch(app.origin);
+    const first = await fetch(served.origin);
     assert.equal(await first.text(), "fixture page");
     assert.equal(first.headers.get("cache-control"), "no-cache");
     const etag = first.headers.get("etag")!;
     const restarted = await Application.create({
-      ...app.options,
+      ...served.options,
       directory: join(directory, "restart-fixture"),
       port: 0,
     });
@@ -274,7 +355,7 @@ test("static assets revalidate without caching management responses", async () =
       await restarted.close();
     }
     for (const match of [etag, etag.slice(2), `"other", ${etag}`, "*"]) {
-      const cached = await fetch(app.origin, {
+      const cached = await fetch(served.origin, {
         headers: { "If-None-Match": match },
       });
       assert.equal(cached.status, 304);
@@ -283,31 +364,34 @@ test("static assets revalidate without caching management responses", async () =
       assert.ok(cached.headers.has("content-security-policy"));
     }
     await writeFile(join(client, "index.html"), "updated fixture page");
-    const updated = await fetch(app.origin, {
+    const updated = await fetch(served.origin, {
       headers: { "If-None-Match": etag },
     });
     assert.equal(updated.status, 200);
     assert.equal(await updated.text(), "updated fixture page");
-    const asset = await fetch(`${app.origin}/assets/app-AbCd1234.js`);
+    const asset = await fetch(`${served.origin}/assets/app-AbCd1234.js`);
     assert.equal(await asset.text(), "fixture script");
     assert.equal(
       asset.headers.get("cache-control"),
       "public, max-age=31536000, immutable",
     );
-    const head = await fetch(app.origin, { method: "HEAD" });
+    const head = await fetch(served.origin, { method: "HEAD" });
     assert.equal(head.status, 200);
     assert.equal(await head.text(), "");
-    const state = await fetch(`${app.origin}/api/state`, {
-      headers: { Authorization: `Bearer ${app.token}`, "If-None-Match": "*" },
+    const state = await fetch(`${served.origin}/api/state`, {
+      headers: {
+        Authorization: `Bearer ${served.token}`,
+        "If-None-Match": "*",
+      },
     });
     assert.equal(state.status, 200);
     assert.equal(state.headers.get("cache-control"), "no-store");
-    const missing = await fetch(`${app.origin}/missing.js`, {
+    const missing = await fetch(`${served.origin}/missing.js`, {
       headers: { "If-None-Match": "*" },
     });
     assert.equal(missing.status, 404);
   } finally {
-    app.options.clientDirectory = original;
+    await served.close();
   }
 });
 test("settings displays the core release pin supplied by application state", () => {
@@ -354,14 +438,11 @@ test("real core launches with separate owner-only directories and a model catalo
 });
 
 test("usage retention management rejects profile keys and invalid limits", async () => {
-  const put = (key: string, days: number) =>
-    fetch(`${app.origin}/api/usage-retention`, {
+  const put = (token: string, days: number) =>
+    management(app, "/usage-retention", {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ days }),
+      body: { days },
+      token,
     });
   assert.equal((await put(app.store.clientKey(company.id), 30)).status, 401);
   assert.equal((await put(app.token, 1)).status, 400);
@@ -431,10 +512,26 @@ test(
   },
 );
 test("concurrent usage drains share one destructive queue read", async () => {
-  const first = app.cores.usage.collect(company.id);
-  const second = app.cores.usage.collect(company.id);
-  assert.equal(first, second);
-  await first;
+  // Nothing reads this queue between this drain ending and the two below starting.
+  await app.cores.usage.collect(company.id);
+  let reads = 0;
+  intercept = (request) => {
+    if (
+      request.profileId === company.id &&
+      request.path.startsWith("/usage-queue")
+    )
+      reads++;
+    return httpManagement(request);
+  };
+  try {
+    await Promise.all([
+      app.cores.usage.collect(company.id),
+      app.cores.usage.collect(company.id),
+    ]);
+    assert.equal(reads, 1);
+  } finally {
+    intercept = undefined;
+  }
 });
 test("verified CLIProxyAPI exposes its native Codex catalog through the same profile", async () => {
   const response = await fetch(
@@ -713,25 +810,26 @@ test(
   "round robin with session affinity off uses both company credentials and never personal credentials",
   { timeout: 30_000 },
   async () => {
-    const changed = await fetch(`${app.origin}/api/profiles/${company.id}`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${app.token}`,
-        "Content-Type": "application/json",
+    await withRouting(
+      company,
+      { strategy: "round-robin", sessionAffinity: false },
+      async () => {
+        const before = observed.length;
+        for (let i = 0; i < 6; i++) {
+          const response = await request(company);
+          assert.equal(response.status, 200, await response.clone().text());
+          assert.equal(
+            response.headers.get("x-nonstopvibin-profile"),
+            "company-a",
+          );
+          await response.text();
+        }
+        // Alternating from either credential, six requests split evenly.
+        const selected = observed.slice(before);
+        assert.equal(selected.filter((k) => k === "company-one").length, 3);
+        assert.equal(selected.filter((k) => k === "company-two").length, 3);
       },
-      body: JSON.stringify({ strategy: "round-robin", sessionAffinity: false }),
-    });
-    assert.equal(changed.status, 200, await changed.text());
-    const before = observed.length;
-    for (let i = 0; i < 6; i++) {
-      const response = await request(company);
-      assert.equal(response.status, 200, await response.clone().text());
-      assert.equal(response.headers.get("x-nonstopvibin-profile"), "company-a");
-      await response.text();
-    }
-    const selected = observed.slice(before);
-    assert.equal(selected.filter((k) => k === "company-one").length, 3);
-    assert.equal(selected.filter((k) => k === "company-two").length, 3);
+    );
   },
 );
 test("the shared /v1 endpoint routes solely by profile API key", async () => {
@@ -766,16 +864,30 @@ test("SSE survives the real core and gateway with usage events and completion ma
   assert.match(text, /\[DONE\]/);
 });
 test("actual upstream accounting reaches durable SQLite exactly once", async () => {
+  // Six plain requests and one stream, each answered with 14 tokens of which 3 are output.
+  for (let i = 0; i < 6; i++) {
+    const response = await request(accounting);
+    assert.equal(response.status, 200);
+    await response.text();
+  }
+  const stream = await request(accounting, {
+    model: "fixture-model",
+    messages: [{ role: "user", content: "hello" }],
+    stream: true,
+    stream_options: { include_usage: true },
+  });
+  assert.equal(stream.status, 200);
+  await stream.text();
   for (let attempt = 0; attempt < 30; attempt++) {
-    await app.cores.usage.collect(company.id);
-    if (usageSummary(app.store, company.id).requests >= 7) break;
+    await app.cores.usage.collect(accounting.id);
+    if (usageSummary(app.store, accounting.id).requests >= 7) break;
     await delay(50);
   }
-  const summary = usageSummary(app.store, company.id);
+  const summary = usageSummary(app.store, accounting.id);
   assert.equal(summary.requests, 7);
   assert.equal(summary.totalTokens, 98);
   assert.equal(summary.outputTokens, 21);
-  for (const entry of app.store.usage(company.id, "", 300)) {
+  for (const entry of app.store.usage(accounting.id, "", 300)) {
     assert.equal(entry.upstreamModel, "fixture-model");
     assert.deepEqual(entry.pricingTokens, {
       input: 6,
@@ -785,29 +897,26 @@ test("actual upstream accounting reaches durable SQLite exactly once", async () 
       reasoning: 0,
     });
   }
-  const raw = JSON.stringify(app.store.usage(company.id, "", 300));
-  assert.equal(raw.includes("company-one"), false);
+  const raw = JSON.stringify(app.store.usage(accounting.id, "", 300));
+  assert.equal(raw.includes("accounting-one"), false);
   assert.equal(raw.includes("hello"), false);
-  await app.cores.usage.collect(company.id);
-  assert.deepEqual(usageSummary(app.store, company.id), summary);
+  await app.cores.usage.collect(accounting.id);
+  assert.deepEqual(usageSummary(app.store, accounting.id), summary);
 });
 test("fill first stays on one eligible credential", async () => {
-  const changed = await fetch(`${app.origin}/api/profiles/${company.id}`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${app.token}`,
-      "Content-Type": "application/json",
+  await withRouting(
+    company,
+    { strategy: "fill-first", sessionAffinity: true },
+    async () => {
+      const before = observed.length;
+      for (let i = 0; i < 4; i++) {
+        const r = await request(company);
+        assert.equal(r.status, 200);
+        await r.text();
+      }
+      assert.equal(new Set(observed.slice(before)).size, 1);
     },
-    body: JSON.stringify({ strategy: "fill-first", sessionAffinity: true }),
-  });
-  assert.equal(changed.status, 200, await changed.text());
-  const before = observed.length;
-  for (let i = 0; i < 4; i++) {
-    const r = await request(company);
-    assert.equal(r.status, 200);
-    await r.text();
-  }
-  assert.equal(new Set(observed.slice(before)).size, 1);
+  );
 });
 test("Anthropic Messages and OpenAI Responses are translated through the profile core", async () => {
   for (const [path, payload] of [
@@ -876,17 +985,28 @@ test("OAuth sessions are profile bound, cancellable, and protected from concurre
   const next = await app.cores.signIn.begin(personal.id, "codex");
   await app.cores.signIn.cancel(personal.id, next.state);
 });
-test("quota exhaustion fails inside Company A while Personal remains available", async () => {
-  failCompany = true;
-  const before = observed.length;
-  const response = await request(company);
-  assert.equal(response.status, 429);
-  await response.text();
-  assert.ok(observed.slice(before).every((k) => k.startsWith("company")));
-  const other = await request(personal);
-  assert.equal(other.status, 200);
-  assert.match(await other.text(), /personal-one/);
-});
+test(
+  "quota exhaustion fails inside Company A while Personal remains available",
+  { timeout: 15_000 },
+  async () => {
+    failCompany = true;
+    try {
+      const before = observed.length;
+      const response = await request(company);
+      assert.equal(response.status, 429);
+      await response.text();
+      assert.ok(observed.slice(before).every((k) => k.startsWith("company")));
+      const other = await request(personal);
+      assert.equal(other.status, 200);
+      assert.match(await other.text(), /personal-one/);
+    } finally {
+      failCompany = false;
+      // The core keeps the 429's cooldown; a new core starts without it.
+      await app.cores.pool.stop(company.id);
+      await app.cores.pool.start(company.id);
+    }
+  },
+);
 test(
   "stopping a profile fails closed and a restart preserves its key and usage",
   { timeout: 15_000 },
@@ -951,9 +1071,10 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
   async function handshake(
     profile: Profile,
     key: string,
+    instance = app,
   ): Promise<http.IncomingMessage> {
     return new Promise((resolve, reject) => {
-      const req = http.get(`${app.endpoint(profile.id)}/responses`, {
+      const req = http.get(`${instance.endpoint(profile.id)}/responses`, {
         headers: {
           Authorization: `Bearer ${key}`,
           Connection: "Upgrade",
@@ -973,7 +1094,7 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
       req.once("error", (error) =>
         reject(
           new Error(
-            `Handshake for ${profile.slug} with ${key === app.store.clientKey(profile.id) ? "matching" : "foreign"} key: ${error.message}`,
+            `Handshake for ${profile.slug} with ${key === instance.store.clientKey(profile.id) ? "matching" : "foreign"} key: ${error.message}`,
             { cause: error },
           ),
         ),
@@ -992,67 +1113,58 @@ test("Responses WebSocket upgrades enforce the same profile boundary", async () 
   assert.equal(upgraded.headers["x-nonstopvibin-profile"], personal.slug);
   assert.ok(upgraded.headers["sec-websocket-accept"]);
   // A core that sets browser-facing headers on the handshake must not reach the agent with them.
-  // The gateway's own connection to a core has no production seam; to be rebuilt in the tests stage.
-  const runtime = app.cores.pool["processes"].get(personal.id)!;
-  const fixture = http.createServer();
-  fixture.on("upgrade", (_req, socket) => {
-    socket.end(
-      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSet-Cookie: a=1\r\nSet-Cookie: b=2\r\nAccess-Control-Allow-Origin: *\r\nX-NonstopVibin-Profile: forged\r\n\r\n",
-    );
-  });
-  await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
-  const address = fixture.address();
-  assert.ok(address instanceof Object);
-  const port = runtime.port;
-  runtime.port = address.port;
+  const misbehaving = await fakeCoreApplication(
+    "misbehaving-core",
+    misbehavingCore,
+  );
   try {
+    const { instance, profile } = misbehaving;
     const filtered = await handshake(
-      personal,
-      app.store.clientKey(personal.id),
+      profile,
+      instance.store.clientKey(profile.id),
+      instance,
     );
     assert.equal(filtered.statusCode, 101);
     assert.equal(filtered.headers["set-cookie"], undefined);
     assert.equal(filtered.headers["access-control-allow-origin"], undefined);
-    assert.equal(filtered.headers["x-nonstopvibin-profile"], personal.slug);
+    assert.equal(filtered.headers["x-nonstopvibin-profile"], profile.slug);
     assert.equal(
       filtered.headers["sec-websocket-accept"],
       "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
     );
   } finally {
-    runtime.port = port;
-    fixture.close();
-    fixture.closeAllConnections();
+    await misbehaving.close();
   }
 });
 
 test("account pause, resume and removal apply to the running model catalog", async () => {
-  await app.cores.credentials.setAccount(personal.id, "personal-one", {
+  await app.cores.credentials.setAccount(removal.id, "removal-one", {
     disabled: true,
   });
   assert.equal(
-    (await app.cores.pool.models(personal.id)).some(
+    (await app.cores.pool.models(removal.id)).some(
       (m) => m.id === "fixture-model",
     ),
     false,
   );
-  await app.cores.credentials.setAccount(personal.id, "personal-one", {
+  await app.cores.credentials.setAccount(removal.id, "removal-one", {
     disabled: false,
   });
   assert.equal(
-    (await app.cores.pool.models(personal.id)).some(
+    (await app.cores.pool.models(removal.id)).some(
       (m) => m.id === "fixture-model",
     ),
     true,
   );
-  await app.cores.credentials.removeAccount(personal.id, "personal-one");
-  assert.equal(app.cores.accounts.list(personal.id).length, 0);
+  await app.cores.credentials.removeAccount(removal.id, "removal-one");
+  assert.equal(app.cores.accounts.list(removal.id).length, 0);
   assert.equal(
-    (await app.cores.pool.models(personal.id)).some(
+    (await app.cores.pool.models(removal.id)).some(
       (m) => m.id === "fixture-model",
     ),
     false,
   );
-  assert.throws(() => app.store.apiKey("personal-one"), /Credential not found/);
+  assert.throws(() => app.store.apiKey("removal-one"), /Credential not found/);
 });
 
 test("the core leaves no request-body capture or error log files after traffic", async () => {
@@ -1076,7 +1188,7 @@ test(
   "stop completes when the core exits during the final usage drain",
   { timeout: 2000 },
   async () => {
-    const runtime = app.cores.pool.runtimes.get(personal.id);
+    const runtime = app.cores.pool.runtimes.get(finalDrain.id);
     assert.ok(runtime);
     intercept = async (request) => {
       const page = await httpManagement(request);
@@ -1088,7 +1200,7 @@ test(
       return page;
     };
     try {
-      await app.cores.pool.stop(personal.id);
+      await app.cores.pool.stop(finalDrain.id);
       assert.equal(runtime.state, "stopped");
     } finally {
       intercept = undefined;
@@ -1151,7 +1263,8 @@ test(
     const profile = app.store.createProfile("Drain fixture");
     await app.cores.pool.start(profile.id);
     const runtime = app.cores.pool.runtimes.get(profile.id)!;
-    const queue = Array.from({ length: 1001 }, (_, i) => ({
+    // Two full pages and a short one.
+    const queue = Array.from({ length: 2 * usagePageSize + 1 }, (_, i) => ({
       request_id: `drain-${i}`,
       timestamp: new Date().toISOString(),
       provider: "codex",
@@ -1160,7 +1273,8 @@ test(
     }));
     let pages = 0;
     const fixture = http.createServer(async (req, res) => {
-      if (!req.url?.startsWith("/v0/management/usage-queue")) {
+      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      if (url.pathname !== "/v0/management/usage-queue") {
         res.writeHead(404).end();
         return;
       }
@@ -1171,16 +1285,13 @@ test(
       // Yield so both stop callers overlap the same destructive drain.
       await delay(10);
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify(queue.splice(0, 500)));
+      res.end(
+        JSON.stringify(queue.splice(0, Number(url.searchParams.get("count")))),
+      );
     });
-    await new Promise<void>((resolve) =>
-      fixture.listen(0, "127.0.0.1", resolve),
-    );
-    const address = fixture.address();
-    assert.ok(address instanceof Object);
+    const fixturePort = await listen(fixture);
     // Finish any poll of the real core before replacing its queue with the fixture.
     await app.cores.usage.collect(profile.id);
-    const fixturePort = address.port;
     intercept = (request) =>
       httpManagement(
         request.profileId === profile.id
@@ -1200,10 +1311,13 @@ test(
         app.cores.pool.stop(profile.id),
         app.cores.pool.stop(profile.id),
       ]);
-      // Only the stop reads a stopping core's queue: 500, 500, then the short page.
+      // Only the stop reads a stopping core's queue: two full pages, then the short page.
       assert.equal(pages, 3);
       assert.equal(queue.length, 0);
-      assert.equal(usageSummary(app.store, profile.id).requests, 1001);
+      assert.equal(
+        usageSummary(app.store, profile.id).requests,
+        2 * usagePageSize + 1,
+      );
       assert.equal(runtime.state, "stopped");
       assert.ok(
         runtime.child.exitCode !== null || runtime.child.signalCode !== null,
@@ -1338,20 +1452,24 @@ test(
       assert.equal(app.gateway.active.get(profile.id), 0);
       assert.deepEqual(app.errors, reported);
 
-      // The gateway's own connection to a core has no production seam; to be rebuilt in the tests stage.
-      const runtime = app.cores.pool["processes"].get(profile.id)!;
-      const closed = http.createServer();
-      await new Promise<void>((resolve) =>
-        closed.listen(0, "127.0.0.1", resolve),
+      const unreachable = await fakeCoreApplication(
+        "unreachable-core",
+        idleCore,
+        fakeManagement,
       );
-      const address = closed.address();
-      assert.ok(address instanceof Object);
-      await new Promise<void>((resolve) => closed.close(() => resolve()));
-      const port = runtime.port;
-      runtime.port = address.port;
       try {
-        const response = await request(profile);
-        await settled();
+        const { instance, profile } = unreachable;
+        const response = await fetch(
+          `${instance.endpoint(profile.id)}/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${instance.store.clientKey(profile.id)}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ model: "fixture-model", messages: [] }),
+          },
+        );
         assert.equal(response.status, 502);
         const body = await response.text();
         assert.match(
@@ -1359,9 +1477,9 @@ test(
           /profile proxy is unavailable\. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin\./,
         );
         assert.doesNotMatch(body, /ECONNREFUSED|hang up|Premature/i);
-        assert.deepEqual(app.errors, reported);
+        assert.deepEqual(instance.errors, []);
       } finally {
-        runtime.port = port;
+        await unreachable.close();
       }
     } finally {
       onHang = undefined;

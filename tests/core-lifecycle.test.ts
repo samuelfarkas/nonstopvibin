@@ -1,23 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { chmod, copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { chmod, copyFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { CorePool, coreTiming, httpManagement } from "../src/server/core.ts";
 import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
 import { record } from "../src/server/json.ts";
+import { coreBinary, temporaryStore } from "./support/application.ts";
 
 test(
   "profile cores refresh model catalogs without overriding the pinned core's Claude fingerprint",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-model-refresh-"));
-    const store = new Store(directory, fileKeyCodec(directory));
-    const core = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    const { store, remove } = await temporaryStore("nv-model-refresh-");
+    const core = new CorePool(store, coreBinary);
     const profile = store.createProfile("Model refresh fixture");
     try {
       await core.start(profile.id);
@@ -31,8 +28,7 @@ test(
       assert.equal(record(config["claude-header-defaults"])["user-agent"], "");
     } finally {
       await core.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -41,8 +37,7 @@ test(
   "a core that never becomes ready and ignores SIGTERM is killed before start fails",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-unready-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { directory, store, remove } = await temporaryStore("nv-unready-");
     // Never listens and survives SIGTERM, like a wedged core.
     const binary = join(directory, "wedged-core");
     await writeFile(
@@ -63,8 +58,7 @@ test(
       assert.equal(runtime.state, "error");
     } finally {
       await core.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -73,18 +67,34 @@ test(
   "a failing usage drain retries once promptly, then backs off to a bound and resets on success",
   { timeout: 10_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-usage-backoff-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-usage-backoff-");
+    // When each queue read began, and what the scheduler decided after each failed one.
     const attempts: number[] = [];
+    const decisions: { failures: number; nextAt: number; at: number }[] = [];
     let failing = true;
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
-      report: () => {},
+    let backedOff!: () => void;
+    const enough = new Promise<void>((resolve) => {
+      backedOff = resolve;
+    });
+    let succeeded!: () => void;
+    const success = new Promise<void>((resolve) => {
+      succeeded = resolve;
+    });
+    const cores: Cores = new Cores(store, coreBinary, {
+      // Reported right after the scheduler records a failed drain and its next time.
+      report: (message) => {
+        if (!message.endsWith("usage queue unavailable")) return;
+        const { failures, nextAt } = cores.usage.cadence(profile.id)!;
+        decisions.push({ failures, nextAt, at: Date.now() });
+        if (decisions.length === 6) backedOff();
+      },
       usageTiming: { ...usageTiming, coalesce: 20, usageBackoff: 160 },
       management: async (request) => {
         if (!request.path.startsWith("/usage-queue"))
           return httpManagement(request);
         attempts.push(Date.now());
         if (failing) throw new Error("usage queue unavailable");
+        succeeded();
         return [];
       },
     });
@@ -93,19 +103,29 @@ test(
       await cores.pool.start(profile.id);
       cores.usage.begin();
       cores.usage.markActivity(profile.id);
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
-      // Unbounded 20 ms retries would make about 45 attempts here.
-      assert.ok(attempts.length >= 5 && attempts.length <= 10, `${gaps}`);
-      assert.ok(gaps[0]! < 80, `first retry stays prompt: ${gaps}`);
-      assert.ok(gaps[2]! >= 70, `retries back off: ${gaps}`);
-      assert.ok(
-        gaps.every((gap) => gap < 160 + 80),
-        `backoff is bounded: ${gaps}`,
-      );
+      await enough;
+      // Retry n waits min(coalesce * 2^(n-1), usageBackoff); the first retry waits for nothing.
+      const waits = [0, 40, 80, 160, 160, 160];
+      decisions.forEach(({ failures, nextAt, at }, i) => {
+        assert.equal(failures, i + 1);
+        if (i === 0) return assert.equal(nextAt, 0, "first retry stays prompt");
+        // The decision fell between its read starting and the report.
+        assert.ok(
+          nextAt - at <= waits[i]! && waits[i]! <= nextAt - attempts[i]!,
+          `retry ${i + 1} waits ${waits[i]} ms: ${JSON.stringify(decisions)}`,
+        );
+        // Timers count from a loop clock that may trail Date.now() by a millisecond.
+        if (attempts[i + 1] !== undefined)
+          assert.ok(
+            attempts[i + 1]! >= nextAt - 1,
+            `retry ${i + 2} came before its time: ${attempts}`,
+          );
+      });
       failing = false;
       cores.usage.markActivity(profile.id);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await success;
+      // Lets the pass that read successfully finish recording it.
+      await cores.usage.settled();
       assert.equal(
         cores.usage.cadence(profile.id)?.failures,
         0,
@@ -113,8 +133,7 @@ test(
       );
     } finally {
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -123,12 +142,11 @@ test(
   "idle profiles stop draining usage after one trailing drain unless a request is in flight",
   { timeout: 10_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-idle-drain-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-idle-drain-");
     let drains = 0;
     let drained = () => {};
     let inFlight = 0;
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
       // Activity keeps the queue draining for 100 ms instead of 10 s.
       usageTiming: { ...usageTiming, coalesce: 20, activity: 100 },
@@ -180,8 +198,7 @@ test(
       assert.equal(drains, beforeStop + 1, "stop still drains the queue");
     } finally {
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -190,10 +207,11 @@ test(
   "shutdown completes after the core could not spawn",
   { timeout: 10000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-core-spawn-failure-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { directory, store, remove } = await temporaryStore(
+      "nv-core-spawn-failure-",
+    );
     const binary = join(directory, "non-executable-core");
-    await copyFile(resolve(".vendor/core/cli-proxy-api"), binary);
+    await copyFile(coreBinary, binary);
     await chmod(binary, 0o600);
     const core = new CorePool(store, binary);
     const profile = store.createProfile("Spawn failure");
@@ -204,17 +222,15 @@ test(
       assert.equal(core.starting.size, 0);
     } finally {
       await core.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
 
 async function runningPool(prefix: string, count: number) {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore(prefix);
   const drained = new Set<string>();
-  const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+  const cores = new Cores(store, coreBinary, {
     report: () => {},
     management: (request) => {
       if (request.path.startsWith("/usage-queue"))
@@ -230,8 +246,7 @@ async function runningPool(prefix: string, count: number) {
   }
   const close = async () => {
     await cores.shutdown();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   };
   return { cores, profiles, drained, close };
 }
@@ -329,8 +344,7 @@ test(
   "queued starts reject shutdown after a pending accounting drain",
   { timeout: 10000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-stop-race-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-stop-race-");
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -340,7 +354,7 @@ test(
       entered = resolve;
     });
     let gated = false;
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
       management: async (request) => {
         if (!gated || !request.path.startsWith("/usage-queue"))
@@ -377,8 +391,7 @@ test(
     } finally {
       release();
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -387,11 +400,10 @@ test(
   "OAuth cancellation closes callbacks queued behind cancellation",
   { timeout: 10000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-oauth-race-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-oauth-race-");
     // Once set, this profile's management calls reach the fixture instead of its core.
     let fixturePort: number | undefined;
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
       management: (request) =>
         httpManagement(
@@ -471,8 +483,113 @@ test(
       await cores.shutdown();
       fixture.close();
       fixture.closeAllConnections();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
+    }
+  },
+);
+
+test(
+  "shutdown lets a sign-in action finish before it waits for the credential changes the action queues",
+  { timeout: 15_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-shutdown-sign-in-");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const signingIn = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let cleared = false;
+    let change: Promise<boolean> | undefined;
+    const cores: Cores = new Cores(store, coreBinary, {
+      report: () => {},
+      management: async (request) => {
+        if (request.path.startsWith("/oauth-session")) cleared = true;
+        if (request.path !== "/codex-auth-url") return httpManagement(request);
+        entered();
+        await gate;
+        // The action queues a credential change as it ends, after shutdown began.
+        change = cores.credentials.queue(async () => {
+          await new Promise((resolve) => setImmediate(resolve));
+          return cleared;
+        });
+        // No redirect, so no callback server: only the action's ordering matters here.
+        return { url: "https://example.invalid/auth", state: "fixture" };
+      },
+    });
+    const profile = store.createProfile("Sign-in order fixture");
+    try {
+      await cores.pool.start(profile.id);
+      const action = cores.signIn.begin(profile.id, "codex");
+      await signingIn;
+      const shutdown = cores.shutdown();
+      release();
+      await action;
+      assert.equal(
+        await change,
+        false,
+        "the change ran before shutdown dropped the sign-in",
+      );
+      await shutdown;
+      assert.equal(cores.pool.alive(profile.id), false);
+    } finally {
+      release();
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "shutdown lets the scheduler's running drain pass finish before it stops the cores",
+  { timeout: 15_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-shutdown-pass-");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const draining = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let gated = false;
+    const cores = new Cores(store, coreBinary, {
+      report: () => {},
+      usageTiming: { ...usageTiming, coalesce: 20 },
+      management: async (request) => {
+        if (!gated || !request.path.startsWith("/usage-queue"))
+          return httpManagement(request);
+        gated = false;
+        entered();
+        await gate;
+        return [];
+      },
+    });
+    const profile = store.createProfile("Drain pass fixture");
+    try {
+      await cores.pool.start(profile.id);
+      gated = true;
+      cores.usage.begin();
+      cores.usage.markActivity(profile.id);
+      await draining;
+      const shutdown = cores.shutdown();
+      // Every step before the stops settles within this turn when nothing holds it.
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(
+        cores.pool.runtimes.get(profile.id)?.stopping,
+        false,
+        "no stop began during the scheduler's pass",
+      );
+      release();
+      await shutdown;
+      assert.equal(cores.pool.alive(profile.id), false);
+    } finally {
+      release();
+      await cores.shutdown();
+      await remove();
     }
   },
 );
@@ -481,9 +598,8 @@ test(
   "shutdown lets a queued credential change finish before it stops the core",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-shutdown-order-"));
-    const store = new Store(directory, fileKeyCodec(directory));
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const { store, remove } = await temporaryStore("nv-shutdown-order-");
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
     });
     const profile = store.createProfile("Order fixture");
@@ -514,8 +630,7 @@ test(
     } finally {
       release();
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -524,9 +639,8 @@ test(
   "a core held stopped for a credential swap cannot start until the swap ends, then restarts",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-swap-order-"));
-    const store = new Store(directory, fileKeyCodec(directory));
-    const pool = new CorePool(store, resolve(".vendor/core/cli-proxy-api"));
+    const { store, remove } = await temporaryStore("nv-swap-order-");
+    const pool = new CorePool(store, coreBinary);
     const profile = store.createProfile("Swap fixture");
     try {
       await pool.start(profile.id);
@@ -539,8 +653,7 @@ test(
       assert.notEqual(pool.runtimes.get(profile.id)!.child, before);
     } finally {
       await pool.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -549,15 +662,14 @@ test(
   "an account sync that outlives its core does not overwrite the restarted core's accounts",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-stale-sync-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-stale-sync-");
     let hold: Promise<void> | undefined;
     let held!: () => void;
     const holding = new Promise<void>((resolve) => {
       held = resolve;
     });
     let release!: () => void;
-    const cores = new Cores(store, resolve(".vendor/core/cli-proxy-api"), {
+    const cores = new Cores(store, coreBinary, {
       report: () => {},
       // The held listing is the old core's: one subscription the new core no longer has.
       management: async (request) => {
@@ -587,8 +699,7 @@ test(
     } finally {
       release?.();
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );
@@ -597,24 +708,19 @@ test(
   "readiness retries of one core keep its usage cadence",
   { timeout: 15_000 },
   async () => {
-    const directory = await mkdtemp(join(tmpdir(), "nv-ready-retry-"));
-    const store = new Store(directory, fileKeyCodec(directory));
+    const { store, remove } = await temporaryStore("nv-ready-retry-");
     let failed = false;
-    const cores: Cores = new Cores(
-      store,
-      resolve(".vendor/core/cli-proxy-api"),
-      {
-        report: () => {},
-        // The first account sync fails after activity was marked, so readiness retries.
-        management: async (request) => {
-          if (request.path !== "/auth-files" || failed)
-            return httpManagement(request);
-          failed = true;
-          cores.usage.markActivity(profile.id);
-          throw new Error("synthetic account list failure");
-        },
+    const cores: Cores = new Cores(store, coreBinary, {
+      report: () => {},
+      // The first account sync fails after activity was marked, so readiness retries.
+      management: async (request) => {
+        if (request.path !== "/auth-files" || failed)
+          return httpManagement(request);
+        failed = true;
+        cores.usage.markActivity(profile.id);
+        throw new Error("synthetic account list failure");
       },
-    );
+    });
     const profile = store.createProfile("Retry fixture");
     try {
       await cores.pool.start(profile.id);
@@ -622,8 +728,7 @@ test(
       assert.ok((cores.usage.cadence(profile.id)?.activeUntil ?? 0) > 0);
     } finally {
       await cores.shutdown();
-      store.close();
-      await rm(directory, { recursive: true, force: true });
+      await remove();
     }
   },
 );

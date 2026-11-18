@@ -1,16 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Cores } from "../src/server/cores.ts";
 import { parseQuota } from "../src/server/quota.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
 import { resetIn } from "../src/client/format.ts";
 import { csvCell } from "../src/client/Activity.tsx";
 import { isQuotaStale } from "../src/client/quota.ts";
 import { goModelProtocol } from "../src/server/api-accounts.ts";
+import { temporaryStore } from "./support/application.ts";
 
 const now = Date.parse("2026-09-05T12:00:00Z");
 test("quota freshness preserves failed readings and the five-minute boundary", () => {
@@ -208,8 +204,7 @@ test("Antigravity fractions and Grok weekly/monthly limits preserve independent 
   );
 });
 test("OpenCode Go quota errors do not persist invalid response excerpts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-quota-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nonstopvibin-quota-");
   const { quotas } = new Cores(store, "unused", { report: () => {} });
   const profile = store.createProfile("Fixture");
   const accountId = "opencode-go-fixture";
@@ -242,8 +237,7 @@ test("OpenCode Go quota errors do not persist invalid response excerpts", async 
     );
   } finally {
     globalThis.fetch = originalFetch;
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 

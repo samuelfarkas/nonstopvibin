@@ -20,14 +20,21 @@ import { Cores } from "../src/server/cores.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import {
+  coreArguments,
+  coreConfigPath,
+  coreLedgerDirectory,
+  oauthPendingDirectory,
+} from "../src/server/data-directory.ts";
+import {
   processIdentity,
   reapOrphanedCores,
   recordCore,
   type Identify,
 } from "../src/server/core-processes.ts";
+import { coreBinary } from "./support/application.ts";
 
 const run = promisify(execFile);
-const binary = resolve(".vendor/core/cli-proxy-api");
+const binary = coreBinary;
 const source = (file: string) => JSON.stringify(resolve("src/server", file));
 
 interface Tracked {
@@ -147,7 +154,7 @@ async function fixture() {
   await mkdir(data, { mode: 0o700 });
   return { root, data };
 }
-const ledger = (data: string) => join(data, "core-processes");
+const ledger = coreLedgerDirectory;
 
 test(
   "cores exit on their own when the process that started them is SIGKILLed",
@@ -200,12 +207,7 @@ test(
         processes.children.push(bystander);
         bystanders.push(await processes.track(bystander.pid));
       }
-      const profileConfig = join(
-        data,
-        "profiles",
-        "00000000-0000-4000-8000-000000000000",
-        "config.yaml",
-      );
+      const profileConfig = coreConfigPath(data, fixtureProfile);
       const decoys = [
         // A core of this directory once had this PID; another process has it now.
         `Thu Jan  1 00:00:00 1970     ${binary} --config ${profileConfig}`,
@@ -254,7 +256,7 @@ test(
   async () => {
     const { root, data } = await fixture();
     const other = join(root, "other");
-    await mkdir(join(other, "core-processes"), {
+    await mkdir(coreLedgerDirectory(other), {
       recursive: true,
       mode: 0o700,
     });
@@ -268,7 +270,7 @@ test(
       assert.deepEqual(await readdir(ledger(data)), entries);
       // Another directory's ledger naming this exact core, claimed by a dead owner.
       await writeFile(
-        join(other, "core-processes", `${core.pid}.json`),
+        join(coreLedgerDirectory(other), `${core.pid}.json`),
         JSON.stringify({
           pid: core.pid,
           identity: core.identity,
@@ -281,7 +283,7 @@ test(
         await alive(core),
         "a core of another data directory is left alone",
       );
-      assert.deepEqual(await readdir(join(other, "core-processes")), []);
+      assert.deepEqual(await readdir(coreLedgerDirectory(other)), []);
     } finally {
       await processes.cleanup(root);
       await rm(root, { recursive: true, force: true });
@@ -292,10 +294,9 @@ test(
 /** A synthetic identity: `lstart` width, then a command. */
 const fakeIdentity = (pid: number) =>
   `Thu Jan  1 00:00:00 1970     process ${pid}`;
-const coreConfig = (data: string) =>
-  join(data, "profiles", "00000000-0000-4000-8000-000000000000", "config.yaml");
+const fixtureProfile = "00000000-0000-4000-8000-000000000000";
 const coreIdentity = (data: string) =>
-  `Thu Jan  1 00:00:00 1970     core --config ${coreConfig(data)}`;
+  `Thu Jan  1 00:00:00 1970     core ${coreArguments(data, fixtureProfile).join(" ")}`;
 /** The real lookup, but `ps` cannot be executed (as under descriptor exhaustion in Bun). */
 const psUnavailable = (root: string) => (pid: number) =>
   processIdentity(pid, join(root, "missing-ps"));
@@ -394,7 +395,7 @@ test(
       // A shell blocked in its builtin read, with the command line of a core of this directory.
       const child = spawn(
         "/bin/sh",
-        ["-c", "read _", "core", "--config", coreConfig(data)],
+        ["-c", "read _", "core", ...coreArguments(data, fixtureProfile)],
         { stdio: ["pipe", "ignore", "ignore"] },
       );
       processes.children.push(child);
@@ -467,13 +468,13 @@ test(
   async () => {
     const { root, data } = await fixture();
     const processes = new Processes();
-    const stuck = join(data, "oauth-pending", "claude-stuck");
+    const stuck = join(oauthPendingDirectory(data), "claude-stuck");
     const store = new Store(data, fileKeyCodec(data));
     try {
       // A shell blocked in its builtin read, with the command line of a core of this directory.
       const child = spawn(
         "/bin/sh",
-        ["-c", "read _", "core", "--config", coreConfig(data)],
+        ["-c", "read _", "core", ...coreArguments(data, fixtureProfile)],
         { stdio: ["pipe", "ignore", "ignore"] },
       );
       processes.children.push(child);

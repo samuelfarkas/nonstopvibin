@@ -1,25 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  rm,
-  stat,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Json } from "../src/shared/types.ts";
 import { Accounts } from "../src/server/accounts.ts";
 import { credentialDirectory } from "../src/server/data-directory.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
+import { temporaryStore } from "./support/application.ts";
 
 test("dead refresh tokens show as Reconnect needed instead of a cooldown", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-status-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { directory, store, remove } = await temporaryStore(
+    "nonstopvibin-status-",
+  );
   try {
     const profile = store.createProfile("Fixture");
     const file = (name: string, fields: Record<string, Json>) => ({
@@ -77,14 +68,14 @@ test("dead refresh tokens show as Reconnect needed instead of a cooldown", async
       ],
     );
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("account sync re-reads a Claude identity only when its file changes and repairs only loose modes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-identity-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { directory, store, remove } = await temporaryStore(
+    "nonstopvibin-identity-",
+  );
   try {
     const profile = store.createProfile("Fixture");
     // A running core that lists this file.
@@ -126,7 +117,6 @@ test("account sync re-reads a Claude identity only when its file changes and rep
     await utimes(path, 1_000_000, 1_000_001);
     assert.equal(await organization(), "Org Two");
   } finally {
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });

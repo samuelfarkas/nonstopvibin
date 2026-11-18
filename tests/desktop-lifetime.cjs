@@ -11,7 +11,7 @@ const {
 const { join, resolve } = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
-const harness = require("./desktop-harness.cjs");
+const harness = require("./support/desktop-harness.cjs");
 
 if (typeof electron === "string") {
   // Processes whose command line names this run's fresh temp directory; only this run creates those.
@@ -106,22 +106,13 @@ if (typeof electron === "string") {
     .finally(cancel);
 } else {
   const { stage, api } = harness.instrument("ready.json", { quiet: true });
-  const { app, BrowserWindow, Menu } = electron;
+  const { app, BrowserWindow } = electron;
   const directory = process.env.NONSTOPVIBIN_DATA_DIR;
   app.setAppPath(resolve(__dirname, ".."));
   stage("load-main");
   require("../dist/desktop/main.cjs");
-  const deadline = Date.now() + 40_000;
-  async function until(check) {
-    while (!(await check())) {
-      if (Date.now() > deadline) throw new Error("Desktop check timed out");
-      await delay(50);
-    }
-  }
-  const openItem = () =>
-    Menu.getApplicationMenu()
-      ?.items.find((item) => item.label === "View")
-      ?.submenu.items.find((item) => item.label === "Open main window");
+  const until = harness.deadline(40_000);
+  const openItem = () => harness.viewItem("Open main window");
   async function main() {
     stage("wait-menu");
     await until(() => openItem());
@@ -135,18 +126,7 @@ if (typeof electron === "string") {
     );
     const origin = new URL(window.webContents.getURL()).origin;
     api(origin, token);
-    const request = async (path, method = "GET", body) => {
-      const response = await fetch(`${origin}/api${path}`, {
-        method,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      assert.ok(response.ok, `Fixture request ${path}: ${response.status}`);
-      return response.json();
-    };
+    const request = harness.management(origin, token);
     const profile = await request("/profiles", "POST", { name: "Lifetime" });
     stage("start-profile");
     await request(`/profiles/${profile.id}/start`, "POST");

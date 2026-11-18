@@ -1,5 +1,5 @@
-import type { Store } from "../src/server/store.ts";
-import type { UsageSummary } from "../src/shared/types.ts";
+import type { Store } from "../../src/server/store.ts";
+import type { UsageSummary } from "../../src/shared/types.ts";
 
 /** Stored totals since an ISO time, summed in SQL: the tests' accounting oracle, independent of UsagePrices. */
 export function usageSummary(

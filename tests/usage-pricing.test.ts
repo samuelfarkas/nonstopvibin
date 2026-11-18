@@ -1,9 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
-import { usageSummary } from "./usage-summary.ts";
+import { usageSummary } from "./support/usage-summary.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -14,6 +9,7 @@ import {
 import { pricingTokens } from "../src/server/usage.ts";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
+import { temporaryStore } from "./support/application.ts";
 
 const record: UsageRecord = {
   id: "fixture",
@@ -217,8 +213,7 @@ test("outages back off rather than retrying on every dashboard poll", async () =
 });
 
 test("full-period totals are incremental, isolated, tier-aware and invalidated by retention and new rates", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-full-prices-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-full-prices-");
   let rate = {
     ...cost,
     tiers: [
@@ -375,14 +370,12 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
   } finally {
     Date.now = originalNow;
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("history calculations restart after concurrent retention and stop before storage closes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-price-lifecycle-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-price-lifecycle-");
   let networkCalls = 0;
   const unavailable = Object.assign(async () => {
     networkCalls++;
@@ -437,14 +430,12 @@ test("history calculations restart after concurrent retention and stop before st
     ]);
   } finally {
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("queued history responses keep records, summary and prices in one insertion snapshot", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-history-snapshot-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-history-snapshot-");
   const unavailable = Object.assign(
     async () => new Response(null, { status: 503 }),
     fetch,
@@ -489,14 +480,12 @@ test("queued history responses keep records, summary and prices in one insertion
     }
   } finally {
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("a queued history caller runs its own request after the caller ahead of it fails", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-history-failure-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-history-failure-");
   const unavailable = Object.assign(
     async () => new Response(null, { status: 503 }),
     fetch,
@@ -518,7 +507,6 @@ test("a queued history caller runs its own request after the caller ahead of it 
     assert.equal((await queued).summary.requests, 1);
   } finally {
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });

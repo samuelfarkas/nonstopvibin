@@ -2,11 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Application } from "../src/server/server.ts";
 import { record, type JsonObject } from "../src/server/json.ts";
 import { verifyCore } from "../src/server/core-binary.ts";
+import { events, frame } from "./support/sse.ts";
+import {
+  clientDirectory,
+  closeServer,
+  coreBinary,
+  listen,
+} from "./support/application.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
 const schema = {
@@ -31,13 +38,6 @@ const fernet = Buffer.alloc(73);
 fernet[0] = 0x80;
 for (let i = 9; i < fernet.length; i++) fernet[i] = i;
 const encrypted = fernet.toString("base64url");
-const frame = (type: string, data: JsonObject = {}) =>
-  `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
-const events = (text: string) =>
-  text
-    .split("\n")
-    .filter((line) => line.startsWith("data: {"))
-    .map((line) => JSON.parse(line.slice(6)));
 
 function responsesStream(model: string) {
   const reasoning = {
@@ -198,16 +198,12 @@ test(
         );
       }
     });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const address = upstream.address();
-    assert.ok(address instanceof Object);
+    const upstreamPort = await listen(upstream);
     const app = await Application.create({
       directory,
       agentHome: join(directory, "home"),
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
+      binary: coreBinary,
+      clientDirectory,
       port: 0,
     });
     try {
@@ -222,7 +218,7 @@ test(
             id: profile.id,
             name: "Synthetic Claude",
             provider: "custom",
-            baseUrl: `http://127.0.0.1:${address.port}`,
+            baseUrl: `http://127.0.0.1:${upstreamPort}`,
             prefix: "",
             disabled: false,
             models: [{ id: "claude-opus-5-5", protocol: "anthropic" }],
@@ -397,10 +393,7 @@ test(
       assert.equal(requests.length, 8);
     } finally {
       await app.close();
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-        upstream.closeAllConnections();
-      });
+      await closeServer(upstream);
       await rm(directory, { recursive: true, force: true });
       await rm(app.agentSetup.socketDirectory, {
         recursive: true,
@@ -437,12 +430,8 @@ test(
           : messagesStream(body.model),
       );
     });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const address = upstream.address();
-    assert.ok(address instanceof Object);
-    const binary = resolve(".vendor/core/cli-proxy-api");
+    const upstreamPort = await listen(upstream);
+    const binary = coreBinary;
     const localCatalogBinary = join(directory, "core-local-catalog-wrapper");
     // Keep this fixture deterministic while the production core refreshes its
     // mutable remote catalog: the wrapper adds --local-model only here.
@@ -451,7 +440,7 @@ test(
       agentHome: join(directory, "home"),
       binary: localCatalogBinary,
       allowMissingCore: true,
-      clientDirectory: resolve("dist/client"),
+      clientDirectory,
       port: 0,
     });
     try {
@@ -476,7 +465,7 @@ test(
             id: protocol,
             name: protocol,
             provider: "custom",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
             prefix: "",
             disabled: false,
             models: [{ id, protocol }],
@@ -695,10 +684,7 @@ test(
       assert.equal(requests.length, 4);
     } finally {
       await app.close();
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-        upstream.closeAllConnections();
-      });
+      await closeServer(upstream);
       await rm(directory, { recursive: true, force: true });
       await rm(app.agentSetup.socketDirectory, {
         recursive: true,

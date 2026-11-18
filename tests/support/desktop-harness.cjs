@@ -22,7 +22,7 @@ const { tmpdir } = require("node:os");
 const { setTimeout: delay } = require("node:timers/promises");
 
 /** Screenshots, app logs and stage records of failed runs; CI uploads this directory. */
-const artifactRoot = resolve(__dirname, "../test-results/desktop-smoke");
+const artifactRoot = resolve(__dirname, "../../test-results/desktop-smoke");
 // The fixed environment of the identity lookup in src/server/core-processes.ts.
 const psEnvironment = {
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -377,12 +377,56 @@ function instrument(resultName, { quiet = false } = {}) {
   };
 }
 
+/**
+ * Inside the Electron child: a wait for `check` that, once `limit` ms have passed since this
+ * call, fails naming the check it was waiting for.
+ */
+function deadline(limit) {
+  const end = Date.now() + limit;
+  return async (check) => {
+    while (!(await check())) {
+      if (Date.now() > end)
+        throw new Error(
+          `Desktop check timed out waiting for ${shorten(String(check).replace(/\s+/g, " "))}`,
+        );
+      await delay(50);
+    }
+  };
+}
+
+/** Inside the Electron child: the View menu item labelled `label`, once the app built its menu. */
+const viewItem = (label) =>
+  require("electron")
+    .Menu.getApplicationMenu()
+    ?.items.find((item) => item.label === "View")
+    ?.submenu.items.find((item) => item.label === label);
+
+/** The app's management API with the session token its renderer received; fails on any error status. */
+const management =
+  (origin, token) =>
+  async (path, method = "GET", body) => {
+    const response = await fetch(`${origin}/api${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!response.ok)
+      throw new Error(`Fixture request ${path}: ${response.status}`);
+    return response.json();
+  };
+
 module.exports = {
   artifactRoot,
+  deadline,
   diagnose,
   instrument,
   launch,
   limit,
+  management,
   processes,
   terminate,
+  viewItem,
 };
