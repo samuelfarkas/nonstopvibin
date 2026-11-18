@@ -71,6 +71,8 @@ let ready = false;
 let openOnReady = !process.argv.includes("--background");
 let tray: Tray;
 let quitting = false;
+/** What an orderly quit exits with; 1 once startup has failed. */
+let exitCode = 0;
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
 else {
@@ -91,13 +93,13 @@ else {
     quitting = true;
     if (application)
       application.close().then(
-        () => app.exit(0),
+        () => app.exit(exitCode),
         (error) => {
           dialog.showErrorBox("Could not shut down cleanly", String(error));
           app.exit(1);
         },
       );
-    else app.exit(0);
+    else app.exit(exitCode);
   });
   void app
     .whenReady()
@@ -106,6 +108,7 @@ else {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`NonstopVibin could not start: ${message}`);
       dialog.showErrorBox("NonstopVibin could not start", message);
+      exitCode = 1;
       app.quit();
     });
 }
