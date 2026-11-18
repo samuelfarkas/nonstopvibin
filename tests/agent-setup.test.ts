@@ -222,238 +222,247 @@ test("custom Codex roots reject shared write access", async () => {
   }
 });
 
-test("native installs use harness configuration, keep secrets out of files and resolve immutable profile keys", async () => {
-  const f = await fixture();
-  try {
-    for (const agent of agents) {
-      const selected = `vendor/mo'del"$(touch should-not-exist)__NV_BASE____NV_KEY__{env:UNTRUSTED}{file:/fixture-do-not-read}`;
-      const installed = await f.setup.install(
-        f.company,
-        ...input(agent, f.project, selected),
+// It runs each agent's key helper (curl over the local socket, up to 4 s each, bounded by the
+// helper run's own 10 s): the limit leaves room for a busy machine; speed is not asserted.
+test(
+  "native installs use harness configuration, keep secrets out of files and resolve immutable profile keys",
+  { timeout: 30_000 },
+  async () => {
+    const f = await fixture();
+    try {
+      for (const agent of agents) {
+        const selected = `vendor/mo'del"$(touch should-not-exist)__NV_BASE____NV_KEY__{env:UNTRUSTED}{file:/fixture-do-not-read}`;
+        const installed = await f.setup.install(
+          f.company,
+          ...input(agent, f.project, selected),
+        );
+        assert.deepEqual(await f.setup.status(f.company, agent), installed);
+        assert.equal(installed.provider, nativeProvider(f.company));
+        assert.equal(
+          installed.command,
+          agent === "codex"
+            ? "codex --profile nonstopvibin-work"
+            : agent === "claude"
+              ? `claude --settings ${shellQuote(filesOf(installed).launch)}`
+              : agent,
+        );
+        for (const path of installed.files) {
+          const content = await readFile(path, "utf8");
+          for (const key of f.keys.values())
+            assert.equal(content.includes(key), false);
+          assert.equal((await stat(path)).mode & 0o077, 0);
+        }
+        if (agent !== "opencode") {
+          const helper = filesOf(installed).helper;
+          assert.equal((await stat(helper)).mode & 0o700, 0o700);
+          await execute("/bin/sh", ["-n", helper]);
+          assert.equal(
+            (await f.run(helper)).stdout.trim(),
+            f.keys.get(f.company.id),
+          );
+        }
+        const content = await readFile(filesOf(installed).config, "utf8");
+        if (agent === "codex") {
+          // SAFETY: the generated config.toml is this app's own output; the shape
+          // asserted here is the one codexConfiguration writes.
+          const parsed = JSON.parse(
+            (
+              await execute(process.execPath, [
+                "-e",
+                "console.log(JSON.stringify(Bun.TOML.parse(process.argv[1])))",
+                content,
+              ])
+            ).stdout,
+          ) as {
+            model: string;
+            model_providers: Record<
+              string,
+              {
+                base_url: string;
+                auth: { command: string };
+                env_key?: string;
+                requires_openai_auth?: boolean;
+              }
+            >;
+          };
+          assert.equal(parsed.model, undefined);
+          const provider = parsed.model_providers[installed.provider];
+          assert.equal(provider.base_url, "http://127.0.0.1:4318/p/work/v1");
+          assert.equal(provider.auth.command, filesOf(installed).helper);
+          assert.equal(provider.env_key, undefined);
+          assert.equal(provider.requires_openai_auth, undefined);
+        } else if (agent === "claude") {
+          const settings = JSON.parse(content);
+          const launch = JSON.parse(
+            await readFile(filesOf(installed).launch, "utf8"),
+          );
+          assert.deepEqual(launch.modelPicker, {
+            options: [selected, "second-fixture"].map((model) => ({ model })),
+            replaceBuiltInOptions: true,
+          });
+          assert.equal(
+            settings.modelPicker,
+            undefined,
+            "project settings ignore the picker",
+          );
+          assert.equal(launch.model, undefined, "the agent owns model choice");
+          assert.deepEqual(launch.env, settings.env);
+          assert.equal(launch.apiKeyHelper, settings.apiKeyHelper);
+          assert.equal(settings.env.ANTHROPIC_MODEL, undefined);
+          assert.equal(
+            settings.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY,
+            "1",
+          );
+          assert.equal(
+            settings.env.ANTHROPIC_BASE_URL,
+            "http://127.0.0.1:4318/p/work",
+          );
+          assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "");
+          assert.equal(settings.env.ANTHROPIC_API_KEY, "");
+          assert.equal(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+          assert.equal(settings.env.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
+          assert.equal(settings.permissions, undefined);
+          assert.equal(
+            (
+              await execute("/bin/sh", ["-c", settings.apiKeyHelper], {
+                cwd: f.project,
+              })
+            ).stdout.trim(),
+            f.keys.get(f.company.id),
+          );
+        } else if (agent === "pi") {
+          const descriptor = JSON.parse(
+            await readFile(filesOf(installed).manifest, "utf8"),
+          );
+          assert.equal(
+            descriptor.content,
+            content,
+            "the installed extension must match its generated descriptor",
+          );
+          // Stand in for pi's bundled catalog, which the loader aliases for extensions.
+          const stub = join(
+            f.directory,
+            "node_modules",
+            "@earendil-works",
+            "pi-ai",
+          );
+          await mkdir(join(stub, "providers"), { recursive: true });
+          await writeFile(
+            join(stub, "package.json"),
+            JSON.stringify({
+              name: "@earendil-works/pi-ai",
+              type: "module",
+              exports: { "./providers/*": "./providers/*.js" },
+            }),
+          );
+          await writeFile(
+            join(stub, "providers", "all.js"),
+            `export const getBuiltinModel = (provider, id) => provider === "anthropic" && id === ${JSON.stringify(selected)} ? { id, name: "Fixture Opus", provider: "anthropic", baseUrl: "https://api.anthropic.com", headers: { "x-vendor": "1" }, thinkingLevelMap: { max: "max" }, compat: { supportsStrictTools: true, supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true }, cost: { input: 9, output: 9, cacheRead: 1, cacheWrite: 1 } } : undefined;`,
+          );
+          const script = `globalThis.fetch = async (url, init) => { if (!url.endsWith("/p/work/v1/models?nonstopvibin=pi") || init.headers.Authorization !== ${JSON.stringify(`Bearer ${f.keys.get(f.company.id)}`)} || init.redirect !== "error") throw new Error("wrong discovery scope"); return Response.json({models: ${JSON.stringify([selected, "second-fixture"].map((id, index) => ({ id, name: `${id} · API list price`, api: index ? "openai-completions" : "anthropic-messages", input: ["text"], contextWindow: 64000, maxTokens: 8000, cost: { input: 1, output: 2 } })))} }); }; const {default: extension} = await import(${JSON.stringify(pathToFileURL(filesOf(installed).config).href)}); await extension({registerProvider:(id,provider)=>console.log(JSON.stringify({id,provider})),events:{emit(){},on(){}},on(){},registerCommand(){}});`;
+          const registered = JSON.parse(
+            (await execute(process.execPath, ["-e", script])).stdout,
+          );
+          assert.equal(registered.id, installed.provider);
+          const provider = registered.provider;
+          assert.equal(
+            provider.api,
+            undefined,
+            "each model names its own protocol",
+          );
+          const [known, unknown] = provider.models;
+          assert.equal(known.id, selected);
+          assert.equal(known.api, "anthropic-messages");
+          assert.equal(known.baseUrl, "http://127.0.0.1:4318/p/work");
+          assert.equal(
+            known.name,
+            "Fixture Opus",
+            "pi's catalog wins for models it knows",
+          );
+          assert.deepEqual(known.thinkingLevelMap, { max: "max" });
+          assert.deepEqual(known.compat, {
+            supportsStrictTools: true,
+            supportsMidConvoSystemMessages: true,
+            supportsMidConvoEffort: false,
+            supportsMidConvoToolChanges: true,
+          });
+          assert.equal(known.cost.input, 9);
+          assert.equal(known.provider, undefined);
+          assert.equal(known.headers, undefined);
+          assert.equal(unknown.id, "second-fixture");
+          assert.equal(unknown.api, "openai-completions");
+          assert.equal(unknown.baseUrl, "http://127.0.0.1:4318/p/work/v1");
+          assert.equal(unknown.name, "second-fixture · API list price");
+          assert.deepEqual(unknown.input, ["text"]);
+          assert.equal(unknown.contextWindow, 64000);
+          assert.equal(unknown.cost.input, 1);
+          assert.equal(unknown.maxTokens, 8000);
+          assert.equal(provider.apiKey[0], "!");
+          assert.equal(
+            (
+              await execute("/bin/sh", ["-c", provider.apiKey.slice(1)], {
+                cwd: f.project,
+              })
+            ).stdout.trim(),
+            f.keys.get(f.company.id),
+          );
+        } else {
+          assert.ok(filesOf(installed).config.endsWith(".js"));
+          assert.ok(content.includes("experimental.provider.small_model"));
+        }
+      }
+      assert.deepEqual(
+        await readdir(f.project),
+        [".claude"],
+        "catalog/profile strings must never execute shell code",
       );
-      assert.deepEqual(await f.setup.status(f.company, agent), installed);
-      assert.equal(installed.provider, nativeProvider(f.company));
+      const other = await f.setup.install(
+        f.personal,
+        ...input("codex", f.project),
+      );
+      const work = await f.setup.status(f.company, "codex");
+      assert.ok(work);
+      const [workKey, personalKey] = await Promise.all([
+        f.run(filesOf(work).helper),
+        f.run(filesOf(other).helper),
+      ]);
+      assert.notEqual(workKey.stdout, personalKey.stdout);
+      f.keys.set(f.personal.id, `nv_${"C".repeat(43)}`);
       assert.equal(
-        installed.command,
-        agent === "codex"
-          ? "codex --profile nonstopvibin-work"
-          : agent === "claude"
-            ? `claude --settings ${shellQuote(filesOf(installed).launch)}`
-            : agent,
+        (await f.run(filesOf(other).helper)).stdout.trim(),
+        f.keys.get(f.personal.id),
       );
-      for (const path of installed.files) {
-        const content = await readFile(path, "utf8");
-        for (const key of f.keys.values())
-          assert.equal(content.includes(key), false);
-        assert.equal((await stat(path)).mode & 0o077, 0);
-      }
-      if (agent !== "opencode") {
-        const helper = filesOf(installed).helper;
-        assert.equal((await stat(helper)).mode & 0o700, 0o700);
-        await execute("/bin/sh", ["-n", helper]);
-        assert.equal(
-          (await f.run(helper)).stdout.trim(),
-          f.keys.get(f.company.id),
-        );
-      }
-      const content = await readFile(filesOf(installed).config, "utf8");
-      if (agent === "codex") {
-        // SAFETY: the generated config.toml is this app's own output; the shape
-        // asserted here is the one codexConfiguration writes.
-        const parsed = JSON.parse(
-          (
-            await execute(process.execPath, [
-              "-e",
-              "console.log(JSON.stringify(Bun.TOML.parse(process.argv[1])))",
-              content,
-            ])
-          ).stdout,
-        ) as {
-          model: string;
-          model_providers: Record<
-            string,
-            {
-              base_url: string;
-              auth: { command: string };
-              env_key?: string;
-              requires_openai_auth?: boolean;
-            }
-          >;
-        };
-        assert.equal(parsed.model, undefined);
-        const provider = parsed.model_providers[installed.provider];
-        assert.equal(provider.base_url, "http://127.0.0.1:4318/p/work/v1");
-        assert.equal(provider.auth.command, filesOf(installed).helper);
-        assert.equal(provider.env_key, undefined);
-        assert.equal(provider.requires_openai_auth, undefined);
-      } else if (agent === "claude") {
-        const settings = JSON.parse(content);
-        const launch = JSON.parse(
-          await readFile(filesOf(installed).launch, "utf8"),
-        );
-        assert.deepEqual(launch.modelPicker, {
-          options: [selected, "second-fixture"].map((model) => ({ model })),
-          replaceBuiltInOptions: true,
-        });
-        assert.equal(
-          settings.modelPicker,
-          undefined,
-          "project settings ignore the picker",
-        );
-        assert.equal(launch.model, undefined, "the agent owns model choice");
-        assert.deepEqual(launch.env, settings.env);
-        assert.equal(launch.apiKeyHelper, settings.apiKeyHelper);
-        assert.equal(settings.env.ANTHROPIC_MODEL, undefined);
-        assert.equal(
-          settings.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY,
-          "1",
-        );
-        assert.equal(
-          settings.env.ANTHROPIC_BASE_URL,
-          "http://127.0.0.1:4318/p/work",
-        );
-        assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, "");
-        assert.equal(settings.env.ANTHROPIC_API_KEY, "");
-        assert.equal(settings.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
-        assert.equal(settings.env.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
-        assert.equal(settings.permissions, undefined);
-        assert.equal(
-          (
-            await execute("/bin/sh", ["-c", settings.apiKeyHelper], {
-              cwd: f.project,
-            })
-          ).stdout.trim(),
-          f.keys.get(f.company.id),
-        );
-      } else if (agent === "pi") {
-        const descriptor = JSON.parse(
-          await readFile(filesOf(installed).manifest, "utf8"),
-        );
-        assert.equal(
-          descriptor.content,
-          content,
-          "the installed extension must match its generated descriptor",
-        );
-        // Stand in for pi's bundled catalog, which the loader aliases for extensions.
-        const stub = join(
-          f.directory,
-          "node_modules",
-          "@earendil-works",
-          "pi-ai",
-        );
-        await mkdir(join(stub, "providers"), { recursive: true });
-        await writeFile(
-          join(stub, "package.json"),
-          JSON.stringify({
-            name: "@earendil-works/pi-ai",
-            type: "module",
-            exports: { "./providers/*": "./providers/*.js" },
-          }),
-        );
-        await writeFile(
-          join(stub, "providers", "all.js"),
-          `export const getBuiltinModel = (provider, id) => provider === "anthropic" && id === ${JSON.stringify(selected)} ? { id, name: "Fixture Opus", provider: "anthropic", baseUrl: "https://api.anthropic.com", headers: { "x-vendor": "1" }, thinkingLevelMap: { max: "max" }, compat: { supportsStrictTools: true, supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true }, cost: { input: 9, output: 9, cacheRead: 1, cacheWrite: 1 } } : undefined;`,
-        );
-        const script = `globalThis.fetch = async (url, init) => { if (!url.endsWith("/p/work/v1/models?nonstopvibin=pi") || init.headers.Authorization !== ${JSON.stringify(`Bearer ${f.keys.get(f.company.id)}`)} || init.redirect !== "error") throw new Error("wrong discovery scope"); return Response.json({models: ${JSON.stringify([selected, "second-fixture"].map((id, index) => ({ id, name: `${id} · API list price`, api: index ? "openai-completions" : "anthropic-messages", input: ["text"], contextWindow: 64000, maxTokens: 8000, cost: { input: 1, output: 2 } })))} }); }; const {default: extension} = await import(${JSON.stringify(pathToFileURL(filesOf(installed).config).href)}); await extension({registerProvider:(id,provider)=>console.log(JSON.stringify({id,provider})),events:{emit(){},on(){}},on(){},registerCommand(){}});`;
-        const registered = JSON.parse(
-          (await execute(process.execPath, ["-e", script])).stdout,
-        );
-        assert.equal(registered.id, installed.provider);
-        const provider = registered.provider;
-        assert.equal(
-          provider.api,
-          undefined,
-          "each model names its own protocol",
-        );
-        const [known, unknown] = provider.models;
-        assert.equal(known.id, selected);
-        assert.equal(known.api, "anthropic-messages");
-        assert.equal(known.baseUrl, "http://127.0.0.1:4318/p/work");
-        assert.equal(
-          known.name,
-          "Fixture Opus",
-          "pi's catalog wins for models it knows",
-        );
-        assert.deepEqual(known.thinkingLevelMap, { max: "max" });
-        assert.deepEqual(known.compat, {
-          supportsStrictTools: true,
-          supportsMidConvoSystemMessages: true,
-          supportsMidConvoEffort: false,
-          supportsMidConvoToolChanges: true,
-        });
-        assert.equal(known.cost.input, 9);
-        assert.equal(known.provider, undefined);
-        assert.equal(known.headers, undefined);
-        assert.equal(unknown.id, "second-fixture");
-        assert.equal(unknown.api, "openai-completions");
-        assert.equal(unknown.baseUrl, "http://127.0.0.1:4318/p/work/v1");
-        assert.equal(unknown.name, "second-fixture · API list price");
-        assert.deepEqual(unknown.input, ["text"]);
-        assert.equal(unknown.contextWindow, 64000);
-        assert.equal(unknown.cost.input, 1);
-        assert.equal(unknown.maxTokens, 8000);
-        assert.equal(provider.apiKey[0], "!");
-        assert.equal(
-          (
-            await execute("/bin/sh", ["-c", provider.apiKey.slice(1)], {
-              cwd: f.project,
-            })
-          ).stdout.trim(),
-          f.keys.get(f.company.id),
-        );
-      } else {
-        assert.ok(filesOf(installed).config.endsWith(".js"));
-        assert.ok(content.includes("experimental.provider.small_model"));
-      }
+      f.setPort(54321);
+      assert.equal(
+        (await f.setup.status(f.personal, "codex"))?.needsReconnect,
+        true,
+      );
+      await assert.rejects(
+        f.run(filesOf(other).helper),
+        /gateway port changed/,
+      );
+      const updated = await f.setup.install(
+        f.personal,
+        ...input("codex", f.project),
+      );
+      assert.equal(
+        (await f.setup.status(f.personal, "codex"))?.needsReconnect,
+        undefined,
+      );
+      assert.equal(
+        (await f.run(filesOf(updated).helper)).stdout.trim(),
+        f.keys.get(f.personal.id),
+      );
+      await assert.rejects(
+        f.run(filesOf(other).helper),
+        /gateway port changed/,
+        "old sessions must retain an old-port helper and fail closed",
+      );
+    } finally {
+      await f.close();
     }
-    assert.deepEqual(
-      await readdir(f.project),
-      [".claude"],
-      "catalog/profile strings must never execute shell code",
-    );
-    const other = await f.setup.install(
-      f.personal,
-      ...input("codex", f.project),
-    );
-    const work = await f.setup.status(f.company, "codex");
-    assert.ok(work);
-    const [workKey, personalKey] = await Promise.all([
-      f.run(filesOf(work).helper),
-      f.run(filesOf(other).helper),
-    ]);
-    assert.notEqual(workKey.stdout, personalKey.stdout);
-    f.keys.set(f.personal.id, `nv_${"C".repeat(43)}`);
-    assert.equal(
-      (await f.run(filesOf(other).helper)).stdout.trim(),
-      f.keys.get(f.personal.id),
-    );
-    f.setPort(54321);
-    assert.equal(
-      (await f.setup.status(f.personal, "codex"))?.needsReconnect,
-      true,
-    );
-    await assert.rejects(f.run(filesOf(other).helper), /gateway port changed/);
-    const updated = await f.setup.install(
-      f.personal,
-      ...input("codex", f.project),
-    );
-    assert.equal(
-      (await f.setup.status(f.personal, "codex"))?.needsReconnect,
-      undefined,
-    );
-    assert.equal(
-      (await f.run(filesOf(updated).helper)).stdout.trim(),
-      f.keys.get(f.personal.id),
-    );
-    await assert.rejects(
-      f.run(filesOf(other).helper),
-      /gateway port changed/,
-      "old sessions must retain an old-port helper and fail closed",
-    );
-  } finally {
-    await f.close();
-  }
-});
+  },
+);
 
 test("native credential helpers fail closed when stopped and resume through the same private broker", async () => {
   const f = await fixture();

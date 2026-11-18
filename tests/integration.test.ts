@@ -978,9 +978,10 @@ test(
     const key = app.store.clientKey(personal.id);
     await app.cores.usage.collect(personal.id);
     const summary = usageSummary(app.store, personal.id);
-    await app.cores.pool.stop(personal.id);
-    assert.equal((await request(personal)).status, 503);
-    await app.cores.pool.start(personal.id);
+    // Held stopped, so the scheduler cannot start it again while it is checked; then it restarts.
+    await app.cores.pool.whileStopped(personal.id, async () => {
+      assert.equal((await request(personal)).status, 503);
+    });
     assert.equal(app.store.clientKey(personal.id), key);
     assert.deepEqual(usageSummary(app.store, personal.id), summary);
     const result = await request(personal);
@@ -1171,14 +1172,13 @@ test(
           assert.match(await response.text(), /Start this profile first\./);
         }
       };
-      await instance.cores.pool.stop(profile.id);
-      await answers();
-      await instance.cores.pool.start(profile.id);
+      // Each check holds the profile stopped, so the scheduler cannot start it meanwhile.
+      await instance.cores.pool.whileStopped(profile.id, answers);
       const child = instance.cores.pool.runtimes.get(profile.id)!.child;
       const exited = once(child, "exit");
       child.kill("SIGKILL");
       await exited;
-      await answers();
+      await instance.cores.pool.whileStopped(profile.id, answers);
       // API-key subscriptions live in the store and stay editable while stopped.
       const key = await patch("stopped-key", {
         name: "Stopped key",
@@ -1216,9 +1216,13 @@ test(
   async () => {
     const runtime = app.cores.pool.runtimes.get(finalDrain.id);
     assert.ok(runtime);
+    // Only this profile's drain: the scheduler drains other profiles meanwhile.
     intercept = async (request) => {
       const page = await httpManagement(request);
-      if (request.path.startsWith("/usage-queue")) {
+      if (
+        request.profileId === finalDrain.id &&
+        request.path.startsWith("/usage-queue")
+      ) {
         const exited = once(runtime.child, "exit");
         runtime.child.kill("SIGTERM");
         await exited;
@@ -1228,6 +1232,8 @@ test(
     try {
       await app.cores.pool.stop(finalDrain.id);
       assert.equal(runtime.state, "stopped");
+      // Another profile's drain while this one's is intercepted passes through untouched.
+      await app.cores.usage.collect(personal.id);
     } finally {
       intercept = undefined;
     }
