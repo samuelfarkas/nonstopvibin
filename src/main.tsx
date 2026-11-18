@@ -7,6 +7,17 @@ import "@fontsource-variable/space-grotesk";
 import "./client/styles.css";
 import "./client/focus.ts";
 
+// Shown when a root fails to load or render.
+const fatal = (
+  <div className="fatal">
+    <h1>Something interrupted the interface.</h1>
+    <p>Your profiles and credentials are still stored locally.</p>
+    <button className="button primary" onClick={() => location.reload()}>
+      Reload nonstopvibin
+    </button>
+  </div>
+);
+
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { error: boolean }
@@ -16,17 +27,7 @@ class ErrorBoundary extends React.Component<
     return { error: true };
   }
   render() {
-    return this.state.error ? (
-      <div className="fatal">
-        <h1>Something interrupted the interface.</h1>
-        <p>Your profiles and credentials are still stored locally.</p>
-        <button className="button primary" onClick={() => location.reload()}>
-          Reload nonstopvibin
-        </button>
-      </div>
-    ) : (
-      this.props.children
-    );
+    return this.state.error ? fatal : this.props.children;
   }
 }
 const root = createRoot(document.getElementById("root")!);
@@ -35,12 +36,14 @@ void (
   openedWith(location).tray
     ? import("./client/Tray.tsx").then((module) => module.TrayWindow)
     : import("./client/App.tsx").then((module) => module.App)
-).then((Root) =>
-  root.render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <Root />
-      </ErrorBoundary>
-    </React.StrictMode>,
-  ),
+).then(
+  (Root) =>
+    root.render(
+      <React.StrictMode>
+        <ErrorBoundary>
+          <Root />
+        </ErrorBoundary>
+      </React.StrictMode>,
+    ),
+  () => root.render(fatal),
 );
