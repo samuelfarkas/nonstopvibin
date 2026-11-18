@@ -635,7 +635,7 @@ test(
     // When each core was first asked whether it runs, and when each one that failed exited.
     const asked: number[] = [];
     const ended: number[] = [];
-    const ports = new Set<number>();
+    const answered = new Set<unknown>();
     const exits = new Set<unknown>();
     const reports: string[] = [];
     let enough!: () => void;
@@ -656,11 +656,13 @@ test(
         if (ended.length === waits.length + 1) enough();
       },
       // The core answers, so it counts as running, but the readiness account sync always fails.
-      management: async ({ path, port }) => {
+      management: async ({ path }) => {
         if (path === "/auth-files")
           throw new Error("The fixture's account list fails.");
-        if (path === "/config" && !ports.has(port)) {
-          ports.add(port);
+        // By its process record: a later core may be given an earlier one's port.
+        const runtime = cores.pool.runtimes.get(profile.id);
+        if (path === "/config" && !answered.has(runtime)) {
+          answered.add(runtime);
           asked.push(Date.now());
         }
         return path.startsWith("/usage-queue") ? [] : {};
@@ -675,9 +677,10 @@ test(
       // Start n + 1 waits for its backoff after start n failed.
       waits.forEach((wait, i) => {
         const gap = asked[i + 1]! - ended[i]!;
+        // No upper bound: a loaded machine may start it late, and the bound has its own test.
         assert.ok(
-          gap >= wait && gap < wait + 1000,
-          `start ${i + 2} came ${gap} ms after start ${i + 1} failed, expected ${wait} ms`,
+          gap >= wait,
+          `start ${i + 2} came ${gap} ms after start ${i + 1} failed, expected at least ${wait} ms`,
         );
       });
       assert.equal(reports.length, 1, `one error entry: ${reports}`);

@@ -6,11 +6,11 @@ import { coreLayout } from "../../src/server/core-binary.ts";
 /**
  * Stays alive until SIGTERM, as a core does; with nothing else it is running but unreachable.
  * The watchdog only guards a core whose command line is its binary's, which a script run by
- * Bun is not, so the fake ends itself once the test process that started it is gone.
+ * Bun is not, so the fake ends itself once this process, which starts it, is no longer its
+ * parent. The parent is named here: a fake orphaned before its first line would learn the wrong one.
  */
 export const idleCore = `process.on("SIGTERM", () => process.exit(0));
-const parent = process.ppid;
-setInterval(() => process.ppid !== parent && process.exit(0), 1000);
+setInterval(() => process.ppid !== ${process.pid} && process.exit(0), 1000);
 `;
 /**
  * A core that listens on the port its config names and answers management as a running

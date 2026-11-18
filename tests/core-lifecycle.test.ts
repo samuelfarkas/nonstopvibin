@@ -51,7 +51,7 @@ test(
     await writeFile(
       binary,
       // It ends itself once this process is gone: no watchdog guards a script.
-      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nconst parent = process.ppid;\nsetInterval(() => process.ppid !== parent && process.exit(0), 1000);\n`,
+      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => process.ppid !== ${process.pid} && process.exit(0), 1000);\n`,
     );
     await chmod(binary, 0o700);
     const core = new CorePool(store, binary, {
