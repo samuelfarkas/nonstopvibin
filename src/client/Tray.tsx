@@ -4,19 +4,20 @@ import { providerLabel } from "../shared/providers.ts";
 import { api, desktop } from "./api.ts";
 import { useAction } from "./action.ts";
 import { Opening, useAppState } from "./feed.tsx";
-import { Empty, Logo, ProviderIcon, logoState } from "./components.tsx";
 import {
-  accountLabel,
-  age,
-  exactTime,
-  groupAccountsByProvider,
-  resetIn,
-} from "./format.ts";
+  Empty,
+  Logo,
+  ProviderIcon,
+  QuotaMeter,
+  logoState,
+} from "./components.tsx";
+import { accountLabel, age, groupAccountsByProvider } from "./format.ts";
 import {
   currentHeadroom,
   floor,
   isQuotaStale,
   meterLevel,
+  quotaState,
   trayNotice,
 } from "./quota.ts";
 import "./tray.css";
@@ -206,28 +207,11 @@ export function TrayView({
                           <p className="tray-detail-heading">Quota remaining</p>
                           {a.quota?.windows.length ? (
                             a.quota.windows.map((w) => (
-                              <div className="tray-window" key={w.label}>
-                                <span>{w.label}</span>
-                                <div
-                                  className={`meter-track ${meterLevel(w.remainingPercent)}`}
-                                >
-                                  <div
-                                    style={{
-                                      width: `${w.remainingPercent ?? 0}%`,
-                                    }}
-                                  />
-                                </div>
-                                <strong
-                                  className={meterLevel(w.remainingPercent)}
-                                >
-                                  {w.remainingPercent === null
-                                    ? "—"
-                                    : `${Math.round(w.remainingPercent)}%`}
-                                </strong>
-                                <small title={exactTime(w.resetsAt)}>
-                                  {resetIn(w.resetsAt)}
-                                </small>
-                              </div>
+                              <QuotaMeter
+                                key={w.label}
+                                window={w}
+                                stale={stale}
+                              />
                             ))
                           ) : (
                             <small className="tray-unavailable">
@@ -238,7 +222,7 @@ export function TrayView({
                           )}
                           {a.quota?.status === "error" && (
                             <small className="tray-error text-bad">
-                              Check failed · showing last reading
+                              {quotaState.failed} · showing last reading
                             </small>
                           )}
                           <small className="tray-age">

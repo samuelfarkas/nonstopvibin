@@ -321,8 +321,8 @@ async function start(): Promise<void> {
       : join(root, coreLayout.checkout, coreLayout.binary),
     clientDirectory: join(root, checkoutLayout.client),
     port: hostPort(),
-    // Without its core the window still opens; each profile start reports it missing.
-    allowMissingCore: true,
+    // A development run without its core still opens; each profile start reports it missing.
+    allowMissingCore: !app.isPackaged,
   });
   // The UI is dark-only; force the app appearance so native popups (select
   // menus, dialogs) match instead of following a light OS theme.
@@ -413,7 +413,7 @@ async function start(): Promise<void> {
     },
     showWindow: {
       argument: z.string().uuid().optional(),
-      run: (profileId) => showMain(profileId),
+      run: (profileId) => showMain(profileId).catch(reportDesktopError),
     },
     // Closes a main window that useKeepDraft (client/controls.tsx) kept open.
     releaseWindow: {

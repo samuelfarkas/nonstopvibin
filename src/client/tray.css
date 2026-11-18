@@ -254,7 +254,7 @@
   background: var(--ink-2);
 }
 .tray-remaining.low .meter-track > span {
-  background: var(--level-low);
+  background: var(--level-low-fill);
 }
 .tray-remaining.empty .meter-track > span {
   background: var(--level-empty);
@@ -282,63 +282,24 @@
   }
 }
 
-.tray-window {
+/* The shared QuotaMeter, compact: label and value share a row. */
+.tray-account-detail .quota-meter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 2px 8px;
-  min-height: 22px;
 }
-
-.tray-window + .tray-window {
+.tray-account-detail .quota-meter + .quota-meter {
   margin-top: 8px;
 }
-
-.tray-window > span,
-.tray-window > small,
-.tray-window > strong {
-  font-family: var(--mono);
+.tray-account-detail .quota-value {
   font-size: var(--text-caption);
-  font-weight: 400;
-  white-space: nowrap;
 }
-
-.tray-window > span,
-.tray-window > small {
-  color: var(--ink-3);
-}
-
-.tray-window > span {
-  grid-column: 1;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.tray-window > small {
+.tray-account-detail .quota-meter :is(.meter-track, .reset) {
   grid-column: 1 / -1;
-  overflow: hidden;
+}
+.tray-account-detail .quota-meter .reset {
   text-align: right;
-  text-overflow: ellipsis;
-}
-
-.tray-window > strong {
-  grid-column: 2;
-  grid-row: 1;
-  color: var(--ink-2);
-  text-align: right;
-}
-
-.tray-window > strong.low {
-  color: var(--level-low);
-}
-
-.tray-window > strong.empty {
-  color: var(--level-empty);
-}
-
-.tray-window .meter-track {
-  grid-column: 1 / -1;
-  min-width: 0;
 }
 
 .tray-unavailable {

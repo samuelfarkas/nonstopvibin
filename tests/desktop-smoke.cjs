@@ -547,6 +547,25 @@ if (typeof electron === "string") {
       }
       if (cycle === 1) click("Subscription quotas");
       else if (cycle === 2) {
+        // A profile deleted after the tray rendered: the failure reaches the app's error list.
+        const missing = require("node:crypto").randomUUID();
+        assert.equal(
+          await run(
+            popup,
+            `window.nonstopvibin.showWindow(${JSON.stringify(missing)}).then(() => "resolved", () => "rejected")`,
+          ),
+          "resolved",
+          "a failed open does not reject in the tray",
+        );
+        const { errors } = await (
+          await fetch(`${origin}/api/state`, {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        ).json();
+        assert.ok(
+          errors.includes("Profile not found."),
+          "a failed open is reported",
+        );
         await run(popup, "window.nonstopvibin.showWindow()");
         await until(() => popup.isDestroyed());
         BrowserWindow.getAllWindows()[0].close();

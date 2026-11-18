@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { createReadStream, readFileSync, writeFileSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import coreRelease from "./core-release.json";
@@ -126,6 +131,11 @@ export async function verifyCore(
   binary: string,
   requirePinnedCore = false,
 ): Promise<void> {
+  if (!existsSync(binary))
+    throw new AppError(
+      `The proxy core is missing at ${binary}. Reinstall NonstopVibin.`,
+      503,
+    );
   const manifest = record(
     parse(await readFile(join(binary, "..", coreLayout.manifest), "utf8")),
   );
@@ -138,5 +148,8 @@ export async function verifyCore(
     manifest.binarySha256 !== hash ||
     (requirePinnedCore && !pinnedBinary(process.platform, process.arch, hash))
   )
-    throw new AppError("The bundled core failed its integrity check.", 503);
+    throw new AppError(
+      "The proxy core failed its integrity check. Reinstall NonstopVibin.",
+      503,
+    );
 }

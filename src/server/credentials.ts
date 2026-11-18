@@ -222,6 +222,9 @@ export class Credentials {
         .find((a) => a.id === accountId);
       if (!account)
         throw new AppError("Account not found in this profile.", 404);
+      // A stopped or exited core keeps its record and port; nothing answers there.
+      if (!this.pool.usable(profileId))
+        throw new AppError("Start this profile first.", 409);
       if (patch.disabled !== undefined)
         await this.pool.management(profileId, "/auth-files/status", "PATCH", {
           name: account.id,

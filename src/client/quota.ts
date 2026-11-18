@@ -63,32 +63,40 @@ export function currentHeadroom(accounts: Account[]) {
   };
 }
 
+/** What both windows call an account's quota state. */
+export const quotaState = {
+  paused: "Paused",
+  failed: "Check failed",
+  stale: "Stale",
+} as const;
 export function accountTag(
   a: Account,
 ): { text: string; tone: "out" | "bad" | "warn" | "" } | null {
   const level = meterLevel(floor(a));
   return a.disabled
-    ? { text: "Paused", tone: "out" }
+    ? { text: quotaState.paused, tone: "out" }
     : a.status === "Reconnect needed"
       ? { text: "Reconnect needed", tone: "bad" }
       : a.quota?.status === "error"
-        ? { text: "Check failed", tone: "bad" }
+        ? { text: quotaState.failed, tone: "bad" }
         : level === "empty"
           ? { text: "Out", tone: "out" }
           : level === "low"
             ? { text: "Low", tone: "warn" }
             : isQuotaStale(a.quota)
-              ? { text: "Stale", tone: "" }
+              ? { text: quotaState.stale, tone: "" }
               : null;
 }
+/** The tray's line under an account: the shared term, then what the numbers below it are. */
 export function trayNotice(a: Account): string | null {
-  const stale = isQuotaStale(a.quota);
   return a.disabled
-    ? "Disabled"
+    ? quotaState.paused
     : a.quota?.status === "error"
-      ? "Check failed · last reading"
-      : stale
-        ? "Stale reading"
+      ? a.quota.windows.length
+        ? `${quotaState.failed} · last reading`
+        : quotaState.failed
+      : isQuotaStale(a.quota)
+        ? quotaState.stale
         : a.quota?.status === "unavailable"
           ? "Quota unavailable"
           : null;

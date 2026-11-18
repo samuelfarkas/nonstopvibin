@@ -296,6 +296,31 @@ test("a core matching only its adjacent manifest fails the compiled-in pin", asy
   await verifyCore(binary, true);
 });
 
+test("an application that requires its core refuses to start without it and says to reinstall", async () => {
+  const missing = join(directory, "absent-core", "cli-proxy-api");
+  // The packaged desktop app leaves allowMissingCore unset.
+  await assert.rejects(
+    testApplication(join(directory, "strict-data"), { binary: missing }),
+    {
+      message: `The proxy core is missing at ${missing}. Reinstall NonstopVibin.`,
+    },
+  );
+  const corrupt = join(directory, "corrupt-core");
+  await mkdir(corrupt);
+  await writeFile(join(corrupt, "cli-proxy-api"), "bytes");
+  await writeFile(join(corrupt, "manifest.json"), "{}");
+  await assert.rejects(verifyCore(join(corrupt, "cli-proxy-api")), {
+    message:
+      "The proxy core failed its integrity check. Reinstall NonstopVibin.",
+  });
+  // A development run keeps the allowance: it opens, and each start reports the core missing.
+  const development = await testApplication(join(directory, "lenient-data"), {
+    binary: missing,
+    allowMissingCore: true,
+  });
+  await development.close();
+});
+
 test("service updates preserve custom paths, arguments and agent directories", () => {
   const previous = renderUnit(
     "/opt/custom $&path/50%/nonstopvibin",

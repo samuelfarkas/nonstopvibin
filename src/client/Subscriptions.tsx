@@ -12,7 +12,13 @@ import {
   groupAccountsByProvider,
   planLabel,
 } from "./format.ts";
-import { accountTag, isQuotaStale, meterLevel, poolHeadroom } from "./quota.ts";
+import {
+  accountTag,
+  isQuotaStale,
+  meterLevel,
+  poolHeadroom,
+  quotaState,
+} from "./quota.ts";
 import { Empty, Logo, QuotaMeter } from "./components.tsx";
 import { Select } from "./controls.tsx";
 import { strategies } from "../shared/vocabulary.ts";
@@ -249,7 +255,7 @@ export function SubscriptionsPage({
                       {tag && (
                         <span className={`tag ${tag.tone}`}>
                           {tag.text}
-                          {tag.text === "Stale" && (
+                          {tag.text === quotaState.stale && (
                             <code>
                               {age(a.quota?.checkedAt).replace(/^checked /, "")}
                             </code>

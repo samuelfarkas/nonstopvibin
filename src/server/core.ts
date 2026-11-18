@@ -327,18 +327,31 @@ export class CorePool {
       );
     return runtime.port;
   }
-  /** Rewrites a running core's config and waits until the core has applied it. */
+  /**
+   * Rewrites a running core's config and waits until the core has applied it. A core that
+   * is starting may have read the settings before this change, so it is applied once ready.
+   */
   async configure(profileId: string): Promise<void> {
+    const starting = this.starts.get(profileId);
+    if (starting) {
+      // A failed start leaves no core; the next start writes the saved settings.
+      await starting.catch(() => undefined);
+      // That core is being stopped, and its successor (if any) writes the saved settings.
+      if (this.closing || this.held.has(profileId)) return;
+    }
     const runtime = this.processes.get(profileId);
     // running(), not usable(): a stopping core still answers until it exits.
     if (!runtime || !this.running(profileId)) return;
-    const expected = await this.config.write(profileId, runtime.port);
+    let expected = await this.config.write(profileId, runtime.port);
     // The upstream file watcher reloads asynchronously; acknowledge only the applied configuration.
     for (let attempt = 0; attempt < 60; attempt++) {
       if (applied(expected, await this.management(profileId, "/config"))) {
         this.options.onStatusChange?.();
         return;
       }
+      // A core that has only just answered can miss a write for good; another write reaches it.
+      if (attempt % 10 === 9)
+        expected = await this.config.write(profileId, runtime.port);
       await delay(100);
     }
     throw new AppError(

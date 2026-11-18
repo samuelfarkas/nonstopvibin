@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, copyFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CorePool, coreTiming, httpManagement } from "../src/server/core.ts";
+import {
+  CorePool,
+  coreTiming,
+  httpManagement,
+  type ManagementRequest,
+} from "../src/server/core.ts";
 import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
 import { record } from "../src/server/json.ts";
@@ -729,6 +734,130 @@ test(
     } finally {
       await cores.shutdown();
       await remove();
+    }
+  },
+);
+
+/** A pool whose profile's first readiness answer waits for `release`; `holding` resolves when it waits. */
+async function heldReadiness(prefix: string) {
+  const { store, remove } = await temporaryStore(prefix);
+  let held!: () => void;
+  const holding = new Promise<void>((resolve) => {
+    held = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let waiting = true;
+  // Sees each management request before it is answered.
+  let observe: ((request: ManagementRequest) => void) | undefined;
+  const pool = new CorePool(store, coreBinary, {
+    management: async (request) => {
+      observe?.(request);
+      if (waiting && request.path === "/config") {
+        waiting = false;
+        held();
+        await gate;
+      }
+      return httpManagement(request);
+    },
+  });
+  const profile = store.createProfile("Starting settings fixture");
+  const strategy = async () =>
+    record(record(await pool.management(profile.id, "/config")).routing)
+      .strategy;
+  const close = async () => {
+    release();
+    await pool.shutdown();
+    await remove();
+  };
+  return {
+    store,
+    pool,
+    profile,
+    holding,
+    release,
+    observe: (next: typeof observe) => {
+      observe = next;
+    },
+    strategy,
+    close,
+  };
+}
+
+test(
+  "a settings change saved while the core starts is applied once the core is ready",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await heldReadiness("nv-start-settings-");
+    const { store, pool, profile } = fixture;
+    try {
+      const start = pool.start(profile.id);
+      await fixture.holding;
+      assert.equal(pool.runtimes.get(profile.id)?.state, "starting");
+      // As PATCH /profiles/:profileId does: save, then configure.
+      store.saveProfile({
+        ...store.profile(profile.id),
+        strategy: "round-robin",
+      });
+      const configure = pool.configure(profile.id);
+      fixture.release();
+      await Promise.all([start, configure]);
+      assert.equal(await fixture.strategy(), "round-robin");
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a settings change that waited for a start leaves alone a core that a swap or shutdown then stops",
+  { timeout: 15_000 },
+  async () => {
+    for (const interruption of ["swap", "shutdown"] as const) {
+      const fixture = await heldReadiness(`nv-start-settings-${interruption}-`);
+      const { store, pool, profile } = fixture;
+      try {
+        const start = pool.start(profile.id);
+        await fixture.holding;
+        const first = pool.runtimes.get(profile.id);
+        // Once the first core has answered, a request to it can only be the change's confirmation.
+        let confirmations = 0;
+        fixture.observe((request) => {
+          if (
+            pool.runtimes.get(request.profileId) === first &&
+            first?.state === "running"
+          )
+            confirmations++;
+        });
+        store.saveProfile({
+          ...store.profile(profile.id),
+          strategy: "round-robin",
+        });
+        const configure = pool.configure(profile.id);
+        const stopping =
+          interruption === "swap"
+            ? pool.whileStopped(profile.id, async () => {})
+            : pool.shutdown();
+        fixture.release();
+        await Promise.all([start, configure, stopping]);
+        assert.equal(
+          confirmations,
+          0,
+          `${interruption}: no request to the stopped core`,
+        );
+        assert.equal(first?.state, "stopped");
+        if (interruption === "swap")
+          assert.equal(
+            await fixture.strategy(),
+            "round-robin",
+            "the core started after the swap has the change",
+          );
+        else assert.equal(pool.alive(profile.id), false);
+      } finally {
+        await fixture.close();
+      }
     }
   },
 );

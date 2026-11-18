@@ -59,9 +59,11 @@
   font-weight: 400;
   margin-left: 2px;
 }
-.headroom-value.low,
-.headroom-value.empty {
+.headroom-value.low {
   color: var(--level-low);
+}
+.headroom-value.empty {
+  color: var(--level-empty);
 }
 .headroom-segments {
   display: flex;

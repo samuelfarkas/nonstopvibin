@@ -1131,6 +1131,68 @@ test("account pause, resume and removal apply to the running model catalog", asy
   assert.throws(() => app.store.apiKey("removal-one"), /Credential not found/);
 });
 
+test(
+  "changing a signed-in subscription of a profile whose core stopped or exited asks to start it",
+  { timeout: 15_000 },
+  async () => {
+    // The core lists one signed-in subscription; every other call reaches the core's port.
+    const fixture = await fakeCoreApplication(
+      "stopped-subscription-core",
+      listeningCore(),
+      (request) =>
+        request.path === "/auth-files" && request.method === "GET"
+          ? Promise.resolve({ files: [{ name: "codex.json", type: "codex" }] })
+          : httpManagement(request),
+    );
+    const { instance, profile } = fixture;
+    const patch = (accountId: string, body: Json) =>
+      management(instance, `/profiles/${profile.id}/accounts/${accountId}`, {
+        method: "PATCH",
+        body,
+      });
+    try {
+      instance.store.saveApiAccount(
+        profile.id,
+        customAccount("stopped-key", upstreamBase, [
+          { id: "fixture-model", protocol: "openai" },
+        ]),
+        "stopped-key",
+      );
+      const running = await patch("codex.json", { name: "Renamed" });
+      assert.equal(running.status, 200, await running.text());
+      const answers = async () => {
+        for (const body of [
+          { name: "Again" },
+          { disabled: true },
+          { priority: 3 },
+        ]) {
+          const response = await patch("codex.json", body);
+          assert.equal(response.status, 409);
+          assert.match(await response.text(), /Start this profile first\./);
+        }
+      };
+      await instance.cores.pool.stop(profile.id);
+      await answers();
+      await instance.cores.pool.start(profile.id);
+      const child = instance.cores.pool.runtimes.get(profile.id)!.child;
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+      await answers();
+      // API-key subscriptions live in the store and stay editable while stopped.
+      const key = await patch("stopped-key", {
+        name: "Stopped key",
+        disabled: true,
+      });
+      assert.equal(key.status, 200, await key.text());
+      assert.equal(instance.store.apiAccounts(profile.id)[0]?.disabled, true);
+      assert.deepEqual(instance.errors, []);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
 test("the core leaves no request-body capture or error log files after traffic", async () => {
   for (const profile of [company, personal]) {
     const files = await readdir(

@@ -61,7 +61,8 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
   assert.match(html, /<strong>59%<\/strong>/);
   assert.match(html, /Fable weekly/);
   assert.match(html, /Check failed · last reading/);
-  assert.match(html, /Disabled/);
+  assert.match(html, /class="tray-account-notice">Paused</);
+  assert.match(html, /role="meter" aria-label="Fable weekly"/);
   assert.match(html, /<strong>—<\/strong>/);
   assert.match(html, />starting</);
   assert.match(html, /No current quota/);

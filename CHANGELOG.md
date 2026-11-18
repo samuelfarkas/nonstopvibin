@@ -49,6 +49,15 @@
 - Malformed sign-in callback URLs now receive a safe error response without stopping the app.
 - Subscriptions whose provider rejected the saved sign-in now show **Reconnect needed**
   instead of **Cooling down**.
+- Renaming, pausing or reprioritising a signed-in subscription of a stopped profile
+  now asks you to start the profile instead of failing with an internal error.
+- Settings changed while a profile is starting, and API-key subscriptions paused,
+  renamed or removed meanwhile, now reach its proxy once it is ready instead of
+  waiting for the next change or restart.
+- A packaged app whose bundled proxy core is missing now refuses to start and asks
+  you to reinstall, instead of opening and failing each time a profile starts.
+- When the main window cannot be opened from the menu bar popup, the reason now
+  appears in the app's error list instead of nothing happening.
 
 ### Security
 
@@ -101,6 +110,9 @@
   shutdown no longer takes longer with every profile, and one profile that fails to
   stop no longer keeps the others from finishing their usage collection.
 - **Save name** in Settings stays disabled until the name changes.
+- The menu bar popup now names quota states as the main window does (**Paused**,
+  **Check failed**, **Stale**) and shows each quota window with the main window's
+  meter and wording; an empty provider pool on the Subscriptions page is now red.
 - This first published release exposes Claude Code, Codex, and pi as agents, and Claude, Codex, OpenCode Go, and custom API-key providers. Kimi, Antigravity, xAI, and the OpenCode agent stay in the code but are hidden from the app.
 - Packaged Electron builds now disable run-as-Node and `NODE_OPTIONS` environment overrides.
 
