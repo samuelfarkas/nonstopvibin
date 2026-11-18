@@ -330,30 +330,42 @@ export class CorePool {
   /**
    * Rewrites a running core's config and waits until the core has applied it. A core that
    * is starting may have read the settings before this change, so it is applied once ready.
+   * If the core stops or is replaced meanwhile, this ends quietly: every start writes the
+   * saved settings.
    */
   async configure(profileId: string): Promise<void> {
-    const starting = this.starts.get(profileId);
-    if (starting) {
-      // A failed start leaves no core; the next start writes the saved settings.
-      await starting.catch(() => undefined);
-      // That core is being stopped, and its successor (if any) writes the saved settings.
-      if (this.closing || this.held.has(profileId)) return;
-    }
+    // A failed start leaves no core to configure.
+    await this.starts.get(profileId)?.catch(() => undefined);
     const runtime = this.processes.get(profileId);
-    // running(), not usable(): a stopping core still answers until it exits.
-    if (!runtime || !this.running(profileId)) return;
-    let expected = await this.config.write(profileId, runtime.port);
-    // The upstream file watcher reloads asynchronously; acknowledge only the applied configuration.
-    for (let attempt = 0; attempt < 60; attempt++) {
-      if (applied(expected, await this.management(profileId, "/config"))) {
-        this.options.onStatusChange?.();
-        return;
+    // Checked right before each write and request. A start can only follow once this core
+    // stops, so a write enqueued while it holds lands before the successor's own write.
+    const current = () =>
+      this.processes.get(profileId) === runtime &&
+      this.usable(profileId) &&
+      !this.held.has(profileId);
+    if (!runtime || !current()) return;
+    try {
+      let expected = await this.config.write(profileId, runtime.port);
+      // The upstream file watcher reloads asynchronously; acknowledge only the applied configuration.
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (!current()) return;
+        if (applied(expected, await this.management(profileId, "/config"))) {
+          this.options.onStatusChange?.();
+          return;
+        }
+        // A core that has only just answered can miss a write for good; another write reaches it.
+        if (attempt % 10 === 9) {
+          if (!current()) return;
+          expected = await this.config.write(profileId, runtime.port);
+        }
+        await delay(100);
       }
-      // A core that has only just answered can miss a write for good; another write reaches it.
-      if (attempt % 10 === 9)
-        expected = await this.config.write(profileId, runtime.port);
-      await delay(100);
+    } catch (error) {
+      // A stop marks its core before ending it: a failure from a core that went away is not one.
+      if (!current()) return;
+      throw error;
     }
+    if (!current()) return;
     throw new AppError(
       "The proxy has not applied the settings yet. Stop and start this profile to reload them.",
       503,

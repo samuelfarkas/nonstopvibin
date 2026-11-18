@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { chmod, copyFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   CorePool,
@@ -12,7 +12,10 @@ import {
 import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
 import { record } from "../src/server/json.ts";
+import { coreConfigPath } from "../src/server/data-directory.ts";
+import type { Json } from "../src/shared/types.ts";
 import { coreBinary, temporaryStore } from "./support/application.ts";
+import { idleCore, installFakeCore } from "./support/fake-core.ts";
 
 test(
   "profile cores refresh model catalogs without overriding the pinned core's Claude fingerprint",
@@ -750,11 +753,14 @@ async function heldReadiness(prefix: string) {
     release = resolve;
   });
   let waiting = true;
-  // Sees each management request before it is answered.
-  let observe: ((request: ManagementRequest) => void) | undefined;
+  // Sees each management request first; an answer it returns replaces the core's.
+  let intercept:
+    | ((request: ManagementRequest) => Promise<Json> | undefined)
+    | undefined;
   const pool = new CorePool(store, coreBinary, {
     management: async (request) => {
-      observe?.(request);
+      const answer = intercept?.(request);
+      if (answer) return answer;
       if (waiting && request.path === "/config") {
         waiting = false;
         held();
@@ -778,8 +784,8 @@ async function heldReadiness(prefix: string) {
     profile,
     holding,
     release,
-    observe: (next: typeof observe) => {
-      observe = next;
+    intercept: (next: typeof intercept) => {
+      intercept = next;
     },
     strategy,
     close,
@@ -824,12 +830,13 @@ test(
         const first = pool.runtimes.get(profile.id);
         // Once the first core has answered, a request to it can only be the change's confirmation.
         let confirmations = 0;
-        fixture.observe((request) => {
+        fixture.intercept((request) => {
           if (
             pool.runtimes.get(request.profileId) === first &&
             first?.state === "running"
           )
             confirmations++;
+          return undefined;
         });
         store.saveProfile({
           ...store.profile(profile.id),
@@ -858,6 +865,153 @@ test(
       } finally {
         await fixture.close();
       }
+    }
+  },
+);
+
+test(
+  "a settings change that waited for a start leaves alone a core that a plain stop then stops",
+  { timeout: 15_000 },
+  async () => {
+    for (const order of ["change first", "stop first"] as const) {
+      const fixture = await heldReadiness("nv-start-settings-stop-");
+      const { store, pool, profile } = fixture;
+      try {
+        const start = pool.start(profile.id);
+        await fixture.holding;
+        const first = pool.runtimes.get(profile.id);
+        let afterStop = 0;
+        fixture.intercept((request) => {
+          if (pool.runtimes.get(request.profileId) === first && first?.stopping)
+            afterStop++;
+          return undefined;
+        });
+        store.saveProfile({
+          ...store.profile(profile.id),
+          strategy: "round-robin",
+        });
+        // As sign-in cleanup does for a core it cannot reach: a stop that is neither a swap nor shutdown.
+        const change = () => pool.configure(profile.id);
+        const stop = () => pool.stop(profile.id);
+        const pending =
+          order === "change first" ? [change(), stop()] : [stop(), change()];
+        fixture.release();
+        await Promise.all([start, ...pending]);
+        assert.equal(afterStop, 0, `${order}: no request to the stopping core`);
+        assert.equal(first?.state, "stopped");
+        await pool.start(profile.id);
+        assert.equal(
+          await fixture.strategy(),
+          "round-robin",
+          `${order}: the next start runs with the saved setting`,
+        );
+      } finally {
+        await fixture.close();
+      }
+    }
+  },
+);
+
+test(
+  "a confirmation outstanding while a swap replaces the core leaves the successor's config alone",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await heldReadiness("nv-replaced-confirmation-");
+    const { store, pool, profile } = fixture;
+    try {
+      fixture.release();
+      await pool.start(profile.id);
+      const first = pool.runtimes.get(profile.id);
+      let polls = 0;
+      let held!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      let answer!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      // The first core's confirmations report the old settings; the tenth waits for `answer`.
+      fixture.intercept((request) => {
+        if (
+          request.path !== "/config" ||
+          pool.runtimes.get(request.profileId) !== first
+        )
+          return undefined;
+        if (++polls < 10) return Promise.resolve({});
+        held();
+        return gate.then(() => ({}));
+      });
+      store.saveProfile({
+        ...store.profile(profile.id),
+        strategy: "round-robin",
+      });
+      const configure = pool.configure(profile.id);
+      await holding;
+      await pool.whileStopped(profile.id, async () => {});
+      const successor = pool.runtimes.get(profile.id);
+      assert.ok(successor && successor !== first);
+      assert.notEqual(successor.port, first?.port);
+      answer();
+      await configure;
+      assert.match(
+        await readFile(coreConfigPath(store.directory, profile.id), "utf8"),
+        new RegExp(`^port: ${successor.port}$`, "m"),
+        "the successor's config keeps its own port",
+      );
+      assert.equal(await fixture.strategy(), "round-robin");
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a core that misses the first write to its config applies the settings once configure writes it again",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } =
+      await temporaryStore("nv-missed-write-");
+    // Reads its config on each request and ignores the first change to it, as a core whose
+    // file watcher is not ready yet; it answers /config with the routing it has loaded.
+    const binary = await installFakeCore(
+      join(directory, "core"),
+      `${idleCore}const fs = require("node:fs");
+const config = process.argv[process.argv.indexOf("--config") + 1];
+let loaded = fs.readFileSync(config, "utf8");
+let seen = fs.statSync(config).mtimeMs;
+let changes = 0;
+require("node:http").createServer((_req, res) => {
+  const mtime = fs.statSync(config).mtimeMs;
+  if (mtime !== seen) {
+    seen = mtime;
+    if (++changes > 1) loaded = fs.readFileSync(config, "utf8");
+  }
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ routing: {
+    strategy: /^  strategy: (\\S+)$/m.exec(loaded)[1],
+    "session-affinity": /^  session-affinity: true$/m.test(loaded),
+    "session-affinity-ttl": "1h",
+  } }));
+}).listen(Number(/^port: (\\d+)$/m.exec(loaded)[1]), "127.0.0.1");
+`,
+    );
+    const pool = new CorePool(store, binary);
+    const profile = store.createProfile("Missed write fixture");
+    try {
+      await pool.start(profile.id);
+      store.saveProfile({
+        ...store.profile(profile.id),
+        strategy: "round-robin",
+      });
+      await pool.configure(profile.id);
+      const routing = record(
+        record(await pool.management(profile.id, "/config")).routing,
+      );
+      assert.equal(routing.strategy, "round-robin");
+    } finally {
+      await pool.shutdown();
+      await remove();
     }
   },
 );
