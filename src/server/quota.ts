@@ -268,12 +268,17 @@ export async function callUpstream(
   profileId: string,
   authIndex: string | undefined,
   request: UpstreamRequest,
+  signal?: AbortSignal,
 ): Promise<{ status: number | null; body: Json | undefined }> {
   const response = record(
-    await pool.management(profileId, "/api-call", "POST", {
-      auth_index: authIndex,
-      ...request,
-    }),
+    await pool.management(
+      profileId,
+      "/api-call",
+      "POST",
+      { auth_index: authIndex, ...request },
+      undefined,
+      signal,
+    ),
   );
   return { status: number(response.status_code), body: response.body };
 }
@@ -304,6 +309,8 @@ interface Asking {
   send(request: UpstreamRequest, failure?: string): Promise<Json | undefined>;
   chatgptAccountId: string | undefined;
   apiKey(): string;
+  /** Ends the check early; nothing is stored for it then. */
+  signal?: AbortSignal;
 }
 interface QuotaSource {
   /** OAuth accounts are asked through the core; others with their own key. */
@@ -367,7 +374,7 @@ const quotaSources = {
   },
   "opencode-go": {
     oauth: false,
-    ask: async ({ apiKey }) => {
+    ask: async ({ apiKey, signal }) => {
       const response = await fetch(
         `${providers["opencode-go"].preset.baseUrl}/usage`,
         {
@@ -375,7 +382,9 @@ const quotaSources = {
             Authorization: `Bearer ${apiKey()}`,
             "User-Agent": userAgent,
           },
-          signal: AbortSignal.timeout(15_000),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+            : AbortSignal.timeout(15_000),
           redirect: "error",
         },
       );
@@ -442,12 +451,18 @@ export class Quotas {
   async refreshAccounts(
     profileId: string,
     wanted: (account: Account) => boolean,
+    signal?: AbortSignal,
   ): Promise<void> {
-    await this.accounts.sync(profileId);
+    await this.accounts.sync(profileId, signal);
     for (const account of this.accounts.list(profileId))
-      if (wanted(account)) await this.refresh(profileId, account.id);
+      if (wanted(account)) await this.refresh(profileId, account.id, signal);
   }
-  async refresh(profileId: string, accountId: string): Promise<Quota> {
+  /** Asks one account's quota and stores it; an aborted check throws and stores nothing. */
+  async refresh(
+    profileId: string,
+    accountId: string,
+    signal?: AbortSignal,
+  ): Promise<Quota> {
     const account = this.accounts
       .list(profileId)
       .find((a) => a.id === accountId);
@@ -477,6 +492,7 @@ export class Quotas {
             profileId,
             account.authIndex,
             request,
+            signal,
           );
           if (status !== 200)
             throw new Error(
@@ -487,9 +503,12 @@ export class Quotas {
         },
         chatgptAccountId: this.accounts.chatgptAccountId(profileId, accountId),
         apiKey: () => this.store.apiKey(accountId),
+        signal,
       });
       quota = parseQuota(account.provider, payload);
     } catch (error) {
+      // A check ended on purpose says nothing about the account.
+      signal?.throwIfAborted();
       quota = {
         status: "error",
         windows: prior?.windows ?? [],

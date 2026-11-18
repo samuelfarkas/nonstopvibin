@@ -61,7 +61,8 @@
 - A profile with subscriptions whose proxy exited or failed to start, even on its
   first start, is now started again automatically, retrying a failing proxy less
   often up to every five minutes, so its quotas keep updating; Refresh starts it
-  too, instead of reporting each quota check as failed.
+  too, instead of reporting each quota check as failed. After 10 failed starts in a
+  row the app stops retrying and the profile says so until you use Restart.
 
 ### Security
 

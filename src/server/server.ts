@@ -415,7 +415,11 @@ export class Application {
       return {
         ...profile,
         runtime: runtime?.state ?? "stopped",
-        error: runtime?.error,
+        // Once the scheduler stopped restarting it, the profile says so instead of its last failure.
+        error:
+          (runtime?.state !== "running" &&
+            this.cores.usage.gaveUp(profile.id)) ||
+          runtime?.error,
         accounts: this.cores.accounts.list(profile.id),
         endpoint: this.endpoint(profile.id),
       };

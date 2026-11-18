@@ -96,6 +96,8 @@ export interface UsageTiming {
   activity: number;
   /** Longest wait between automatic starts of a profile whose core keeps failing. */
   restartBackoff: number;
+  /** Automatic starts in one run of failures before the scheduler stops starting the profile. */
+  restartLimit: number;
 }
 export const usageTiming: UsageTiming = {
   accounts: 20_000,
@@ -103,6 +105,7 @@ export const usageTiming: UsageTiming = {
   usageBackoff: 60_000,
   activity: 10_000,
   restartBackoff: 300_000,
+  restartLimit: 10,
 };
 interface Cadence {
   core: Readonly<CoreRuntime> | undefined;
@@ -120,6 +123,8 @@ interface Restart {
   reported: boolean;
   /** The core last seen running with no start in flight, and since when: from its start's end at the latest. */
   up?: { core: Readonly<CoreRuntime> | undefined; since: number };
+  /** The scheduler stopped starting it after `restartLimit` attempts; what the profile shows. */
+  gaveUp?: string;
 }
 export interface UsageOptions {
   /** Read on every wakeup, so a caller may change it while the scheduler runs. */
@@ -187,6 +192,8 @@ export class Usage {
   changed(reported: ReadonlySet<string> = new Set()): void {
     // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
     if (!this.schedule || this.pool.shuttingDown) return;
+    for (const [profileId, restart] of this.restarts)
+      if (this.revived(profileId, restart)) this.restarts.delete(profileId);
     for (const profile of this.store.profiles())
       if (
         !this.restarts.has(profile.id) &&
@@ -204,6 +211,34 @@ export class Usage {
   /** Shutdown began: an automatic start gives up now; the pool's stops end its core. */
   abandonRestarts(): void {
     this.abandon.abort(new AppError("nonstopvibin is shutting down.", 503));
+  }
+  /** What a profile shows once the scheduler stopped starting it. */
+  gaveUp(profileId: string): string | undefined {
+    return this.restarts.get(profileId)?.gaveUp;
+  }
+  /**
+   * Someone else's start (a user's Start or Refresh, a credential change) has a core running
+   * for a profile at the limit: it gets the full number of attempts again. Its own last
+   * core is told apart by record, and nothing is decided while a start is in flight.
+   */
+  private revived(profileId: string, restart: Restart): boolean {
+    return (
+      restart.attempts >= this.timing.restartLimit &&
+      !this.pool.starting.has(profileId) &&
+      !this.restarting.has(profileId) &&
+      this.pool.running(profileId) &&
+      this.pool.runtimes.get(profileId) !== restart.up?.core
+    );
+  }
+  /** Stops starting a profile whose run of failures reached the limit; one error entry says so. */
+  private giveUp(profileId: string, restart: Restart): void {
+    const name = this.store.profileNames().get(profileId);
+    if (name === undefined) {
+      this.restarts.delete(profileId);
+      return;
+    }
+    restart.gaveUp = `Stopped restarting after ${restart.attempts} failed starts in a row. Use Restart to try again.`;
+    this.report(`${name}: ${restart.gaveUp}`);
   }
   /** When the scheduler next wakes; Infinity while nothing is due. */
   get wakesAt(): number {
@@ -259,16 +294,19 @@ export class Usage {
           );
       }
       try {
-        // It missed its quota checks while down; a stop or shutdown ends the checks.
+        // It missed its quota checks while down; a stop ends the checks, and shutdown
+        // abandons the one in flight without storing it.
         await this.quotas.refreshAccounts(
           profileId,
           (account) =>
             this.pool.usable(profileId) &&
             !account.disabled &&
             account.quota?.status !== "unavailable",
+          this.abandon.signal,
         );
       } catch (error) {
-        this.report(`${name}: ${errorMessage(error)}`);
+        if (!this.pool.shuttingDown)
+          this.report(`${name}: ${errorMessage(error)}`);
       }
     })()
       // One profile's failure must not end the scheduler or another profile's start.
@@ -325,8 +363,13 @@ export class Usage {
     // The earliest start due that can begin; Infinity, and no wakeup, if none.
     const restartAt = () =>
       Math.min(
-        ...[...this.restarts].map(([profileId, { at }]) =>
-          this.startable(profileId) ? at : Infinity,
+        ...[...this.restarts].map(([profileId, { at, attempts, gaveUp }]) =>
+          gaveUp !== undefined || !this.startable(profileId)
+            ? Infinity
+            : // At the limit, the next step is giving up, which waits for nothing.
+              attempts >= this.timing.restartLimit
+              ? 0
+              : at,
         ),
       );
     const schedule = () => {
@@ -359,6 +402,10 @@ export class Usage {
         // A core counts as running before its start ends: the start's own end decides.
         if (this.pool.starting.has(profileId) || this.restarting.has(profileId))
           continue;
+        if (this.revived(profileId, restart)) {
+          this.restarts.delete(profileId);
+          continue;
+        }
         // A core that exits soon after starting is a crash loop: the run of failures ends
         // only once the same core has stayed up for the whole bound.
         if (this.pool.running(profileId)) {
@@ -367,8 +414,11 @@ export class Usage {
           if (!up || up.core !== core) restart.up = { core, since: Date.now() };
           else if (Date.now() >= up.since + this.timing.restartBackoff)
             this.restarts.delete(profileId);
-        } else if (Date.now() >= restart.at && this.startable(profileId))
-          this.restart(profileId, restart);
+        } else if (restart.gaveUp !== undefined || !this.startable(profileId))
+          continue;
+        else if (restart.attempts >= this.timing.restartLimit)
+          this.giveUp(profileId, restart);
+        else if (Date.now() >= restart.at) this.restart(profileId, restart);
       }
       if (!this.polling)
         this.polling = (async () => {

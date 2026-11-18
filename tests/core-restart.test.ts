@@ -108,7 +108,13 @@ test(
 
 // Attempt n + 1 comes min(coalesce * 2^(n - 1), restartBackoff) after attempt n ended;
 // without the bound the last waits would be 640 and 1280 ms.
-const backoff = { ...usageTiming, coalesce: 10, restartBackoff: 80 };
+// The limit stays above the nine starts these tests watch.
+const backoff = {
+  ...usageTiming,
+  coalesce: 10,
+  restartBackoff: 80,
+  restartLimit: 20,
+};
 const waits = [10, 20, 40, 80, 80, 80, 80, 80];
 function assertBackoff(times: number[]) {
   assert.ok(times.length > waits.length, `${times.length} launches`);
@@ -826,6 +832,224 @@ test(
       assert.match(reports[0]!, /^Early: Proxy did not become ready\./);
     } finally {
       releaseLate();
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+/**
+ * An application whose one profile, with a subscription and never started, is started by the
+ * scheduler with a limit of four. While `crashing`, each core is killed as soon as it runs; with
+ * `failing`, each core exits at once. Every core the profile had is kept, by record.
+ */
+async function givingUp(name: string, mode: { failing?: boolean }) {
+  const { directory, remove } = await temporaryStore("nv-restart-");
+  const failing = join(directory, "failing");
+  if (mode.failing) await writeFile(failing, "");
+  const binary = await installFakeCore(
+    join(directory, "core"),
+    `if (require("node:fs").existsSync(${JSON.stringify(failing)})) process.exit(1);\n${idleCore}`,
+  );
+  const answering = subscribed();
+  const app = await testApplication(join(directory, "data"), {
+    binary,
+    cores: {
+      usageTiming: { ...backoff, restartLimit: 4 },
+      management: (request) =>
+        existsSync(failing) ? unreachable(request) : answering(request),
+    },
+  });
+  const profile = app.store.createProfile(name);
+  app.store.saveApiAccount(profile.id, apiKey(`${name}-key`), "key");
+  const fixture = {
+    app,
+    profile,
+    crashing: !mode.failing,
+    cores: new Set<unknown>(),
+    /** Resolves once the scheduler reports that it gave up. */
+    gaveUp: Promise.resolve(),
+    close: async () => {
+      await closeApplication(app);
+      await remove();
+    },
+  };
+  app.on("status", () => {
+    const runtime = app.cores.pool.runtimes.get(profile.id);
+    if (!runtime) return;
+    fixture.cores.add(runtime);
+    if (fixture.crashing && runtime.state === "running")
+      runtime.child.kill("SIGKILL");
+  });
+  const report = app.report.bind(app);
+  let reported = () => {};
+  const watch = () => {
+    fixture.gaveUp = new Promise<void>((resolve) => {
+      reported = resolve;
+    });
+  };
+  watch();
+  app.report = (message) => {
+    report(message);
+    if (message.includes("Stopped restarting")) {
+      reported();
+      watch();
+    }
+  };
+  return fixture;
+}
+/** Settles the scheduler's turn, then checks it gave up: no restart due and the profile says so. */
+async function assertGaveUp(fixture: Awaited<ReturnType<typeof givingUp>>) {
+  await new Promise((resolve) => setImmediate(resolve));
+  const { app, profile } = fixture;
+  const wait = app.cores.usage.wakesAt - Date.now();
+  // With no core running, only the daily history cleanup is due.
+  assert.ok(wait > 3_600_000, `the scheduler wakes in ${wait} ms`);
+  const shown = app.state().profiles.find((p) => p.id === profile.id)!;
+  assert.equal(shown.runtime, "error");
+  assert.equal(
+    shown.error,
+    "Stopped restarting after 4 failed starts in a row. Use Restart to try again.",
+  );
+}
+
+test(
+  "a core that cannot start is started the limit's number of times, then no more",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await givingUp("Failing", { failing: true });
+    const { app } = fixture;
+    try {
+      app.cores.usage.changed();
+      await fixture.gaveUp;
+      await assertGaveUp(fixture);
+      assert.equal(fixture.cores.size, 4);
+      assert.equal(app.errors.length, 2, `${app.errors}`);
+      assert.match(app.errors[0]!, /^Failing: Proxy exited \(1\)\./);
+      assert.equal(
+        app.errors[1],
+        "Failing: Stopped restarting after 4 failed starts in a row. Use Restart to try again.",
+      );
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a core that exits as soon as it runs gives up the same way",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await givingUp("Crashing", {});
+    const { app } = fixture;
+    try {
+      app.cores.usage.changed();
+      await fixture.gaveUp;
+      await assertGaveUp(fixture);
+      assert.equal(fixture.cores.size, 4);
+      assert.equal(app.errors.length, 2, `${app.errors}`);
+      assert.match(app.errors[0]!, /^Crashing: Proxy exited \(SIGKILL\)\./);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a Start that succeeds after the scheduler gave up gives the profile its full attempts again",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await givingUp("Revived", {});
+    const { app, profile } = fixture;
+    try {
+      app.cores.usage.changed();
+      await fixture.gaveUp;
+      fixture.crashing = false;
+      const started = await management(app, `/profiles/${profile.id}/start`, {
+        method: "POST",
+      });
+      assert.equal(started.status, 200, await started.text());
+      const shown = app.state().profiles.find((p) => p.id === profile.id)!;
+      assert.equal(shown.runtime, "running");
+      assert.equal(shown.error, undefined);
+      // It crashes again: the scheduler starts it the full four times before giving up.
+      fixture.crashing = true;
+      const before = fixture.cores.size;
+      app.cores.pool.runtimes.get(profile.id)!.child.kill("SIGKILL");
+      await fixture.gaveUp;
+      await assertGaveUp(fixture);
+      assert.equal(fixture.cores.size - before, 4);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "a Start that fails after the scheduler gave up leaves it given up",
+  { timeout: 15_000 },
+  async () => {
+    const fixture = await givingUp("Still failing", { failing: true });
+    const { app, profile } = fixture;
+    try {
+      app.cores.usage.changed();
+      await fixture.gaveUp;
+      const errors = [...app.errors];
+      const started = await management(app, `/profiles/${profile.id}/start`, {
+        method: "POST",
+      });
+      assert.equal(started.status, 503);
+      await assertGaveUp(fixture);
+      assert.equal(fixture.cores.size, 5, "only the user's start ran");
+      assert.deepEqual(app.errors, errors);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+test(
+  "shutdown abandons a restarted profile's quota check and stores nothing for it",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    const reports: string[] = [];
+    let restarted = false;
+    let asked!: () => void;
+    const checking = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const answering = subscribed();
+    const cores = new Cores(store, binary, {
+      report: (message) => reports.push(message),
+      usageTiming: { ...usageTiming, coalesce: 10 },
+      // Once the scheduler restarted the core, the provider never answers its quota check.
+      management: (request) => {
+        if (!restarted || request.path !== "/api-call")
+          return answering(request);
+        asked();
+        return new Promise((_, reject) =>
+          request.signal?.addEventListener("abort", () =>
+            reject(request.signal?.reason),
+          ),
+        );
+      },
+    });
+    const profile = store.createProfile("Quota fixture");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      restarted = true;
+      cores.pool.runtimes.get(profile.id)!.child.kill("SIGKILL");
+      await checking;
+      const began = Date.now();
+      await cores.shutdown();
+      const took = Date.now() - began;
+      assert.ok(took < 3000, `shutdown took ${took} ms`);
+      assert.equal(store.quota(profile.id, "claude.json"), undefined);
+      assert.deepEqual(reports, []);
+    } finally {
       await cores.shutdown();
       await remove();
     }
