@@ -116,7 +116,11 @@ if (typeof electron === "string") {
     live(
       window,
       `Renderer call ${JSON.stringify(code.slice(0, 80))}`,
-      (contents) => contents.executeJavaScript(code),
+      (contents) =>
+        // Electron hides what a renderer script threw; name the script that did.
+        contents.executeJavaScript(code).catch((error) => {
+          throw new Error(`${error.message}\nRenderer script: ${code}`);
+        }),
     );
   const present = (window, selector) =>
     until(() =>
