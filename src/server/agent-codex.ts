@@ -112,5 +112,4 @@ export const codex: AgentDefinition<"codex"> = {
   command: (profile) => `codex --profile ${nativeProvider(profile)}`,
   instructions: () =>
     `Works in any project. Pick a model with /model before the first prompt; Codex's built-in default may not exist here. Needs Codex 0.140.0 or later.`,
-  // Only without other providers: its TOML then tags its requests with the header.
 };

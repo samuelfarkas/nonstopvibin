@@ -29,6 +29,7 @@ const entries = {
     offered: true,
     project: false,
     native: "OpenAI",
+    // Only without other providers: its TOML then tags its requests with the header.
     catalog: "header",
   },
   pi: { title: "pi", offered: true, project: false, catalog: "query" },
