@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { existsSync } from "node:fs";
 import { chmod, copyFile, readFile, writeFile } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import {
   CorePool,
@@ -48,14 +50,21 @@ test(
     const { directory, store, remove } = await temporaryStore("nv-unready-");
     // Never listens and survives SIGTERM, like a wedged core.
     const binary = join(directory, "wedged-core");
+    const armed = join(directory, "wedged-core-armed");
     await writeFile(
       binary,
       // It ends itself once this process is gone: no watchdog guards a script.
-      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nsetInterval(() => process.ppid !== ${process.pid} && process.exit(0), 1000);\n`,
+      `#!${process.execPath}\nprocess.on("SIGTERM", () => {});\nrequire("node:fs").writeFileSync(${JSON.stringify(armed)}, "");\nsetInterval(() => process.ppid !== ${process.pid} && process.exit(0), 1000);\n`,
     );
     await chmod(binary, 0o700);
     const core = new CorePool(store, binary, {
       timing: { ...coreTiming, ready: 1000, kill: 300 },
+      // A new script can take over a second to reach its first line on macOS; until it
+      // ignores SIGTERM the readiness probe does not answer, so the pool's SIGTERM finds it wedged.
+      management: async (request) => {
+        while (!existsSync(armed)) await delay(10);
+        return httpManagement(request);
+      },
     });
     const profile = store.createProfile("Wedged fixture");
     try {
