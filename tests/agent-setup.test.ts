@@ -490,6 +490,34 @@ test("native credential helpers fail closed when stopped and resume through the 
   }
 });
 
+test("status refuses a stopped profile even when its integration needs reconnecting", async () => {
+  const f = await fixture();
+  try {
+    for (const agent of agents) {
+      const project = agent === "claude" ? f.project : undefined;
+      const installed = await f.setup.install(
+        f.company,
+        ...input(agent, f.project),
+      );
+      await rm(filesOf(installed).config);
+      f.keys.delete(f.company.id);
+      await assert.rejects(
+        f.setup.status(f.company, agent, project),
+        /Stopped or unknown profile/,
+        agent,
+      );
+      f.keys.set(f.company.id, `nv_${"A".repeat(43)}`);
+      assert.equal(
+        (await f.setup.status(f.company, agent, project))?.needsReconnect,
+        true,
+        agent,
+      );
+    }
+  } finally {
+    await f.close();
+  }
+});
+
 test("startup updates installed harnesses for stopped profiles, preserves preferences and skips unchanged files", async () => {
   const f = await fixture();
   const restarted = new AgentSetup(f.directory, f.connection, { home: f.home });

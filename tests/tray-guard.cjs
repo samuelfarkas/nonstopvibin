@@ -38,7 +38,6 @@ if (typeof electron === "string") {
       gateway: "",
       usageRetentionDays: 0,
       version: "",
-      desktop: true,
       errors: [],
     };
     writeFileSync(
@@ -52,7 +51,7 @@ if (typeof electron === "string") {
       window.removeEventListener = function (type, ...rest) { if (type === 'beforeunload') guards--; return remove.call(this, type, ...rest); };
       const interval = window.setInterval;
       window.setInterval = (callback, ms, ...rest) => interval(callback, Math.min(ms, 50), ...rest);
-      window.nonstopvibin = { bootstrap: async () => ({ token: 't', desktop: true }), releaseWindow: async () => {} };
+      window.nonstopvibin = { bootstrap: async () => ({ token: 't' }), releaseWindow: async () => {} };
       window.fetch = async (url) => {
         if (!String(url).endsWith('/api/state')) return new Response('{}', { status: 404 });
         return ++stateCalls === 1

@@ -123,7 +123,6 @@
   border-bottom: 1px solid var(--line);
   position: relative;
 }
-.account-row.disabled .account-identity,
 .account-row.disabled .quota-meter {
   opacity: 0.5;
 }

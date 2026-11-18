@@ -7,9 +7,9 @@ import type { Usage } from "./usage.ts";
 import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
 import type { ProfileModels } from "./model-catalog.ts";
-import { agentDefinitions, agentModels, offeredModels } from "./agents.ts";
+import { agentDefinitions, offeredModels } from "./agents.ts";
 import { catalogRequest } from "./agent-connection.ts";
-import { isAgent, type Agent } from "../shared/agents.ts";
+import { agents, isAgent, type Agent } from "../shared/agents.ts";
 import type { Profile } from "../shared/types.ts";
 
 const permitted =
@@ -66,18 +66,18 @@ function responseHeaders(
   headers["x-nonstopvibin-profile"] = slug;
   return headers;
 }
-/** The agent asking for its curated catalog, by the mechanism its definition names. */
+/** The agent asking for its curated catalog, by the mechanism the agent registry names. */
 function curatedCatalog(req: IncomingMessage, url: URL): Agent | undefined {
   const header = req.headers[catalogRequest.header];
   if (
     header !== undefined &&
     !Array.isArray(header) &&
     isAgent(header) &&
-    agentDefinitions[header].catalog === "header"
+    agents[header].catalog === "header"
   )
     return header;
   const query = url.searchParams.get(catalogRequest.query);
-  if (query && isAgent(query) && agentDefinitions[query].catalog === "query")
+  if (query && isAgent(query) && agents[query].catalog === "query")
     return query;
   return undefined;
 }
@@ -171,10 +171,10 @@ export class Gateway {
           false,
           (models) => this.models.enriched(profileId, models),
         );
-        const generated = agentDefinitions[agent].catalog === "query";
+        const { entries } = agentDefinitions[agent];
         // The agent's own request gets the OpenAI list; generated code gets its entries.
-        const payload = generated
-          ? { models: agentModels(models, agent) }
+        const payload = entries
+          ? { models: entries(models) }
           : {
               object: "list",
               data: models.map((model) => ({ object: "model", ...model })),
@@ -182,7 +182,7 @@ export class Gateway {
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
-          ...(generated && { "x-nonstopvibin-profile": slug }),
+          ...(entries && { "x-nonstopvibin-profile": slug }),
         });
         res.end(JSON.stringify(payload));
       } finally {

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Activity, Bot } from "lucide-react";
 import { useState } from "react";
 import type { Account, ProfileState, QuotaWindow } from "../shared/types.ts";
-import { providerEntry } from "../shared/providers.ts";
+import { providerEntry, providerLabel } from "../shared/providers.ts";
 import { accountLabel, exactTime, resetIn } from "./format.ts";
 import { meterLevel } from "./quota.ts";
 
@@ -155,7 +155,7 @@ export function AccountSummary({ account }: { account: Account }) {
       <div>
         <strong title={accountLabel(account)}>{accountLabel(account)}</strong>
         <div className="account-email">
-          {account.organizationUuid && "Claude · "}
+          {account.organizationUuid && `${providerLabel(account.provider)} · `}
           {account.email ||
             (account.kind === "api-key"
               ? `${account.prefix ? `${account.prefix}/ · ` : ""}${account.modelCount} model${account.modelCount === 1 ? "" : "s"}`

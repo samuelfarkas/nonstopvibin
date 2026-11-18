@@ -18,7 +18,11 @@ import { messageOf } from "./action.ts";
 import { Opening, useAppState } from "./feed.tsx";
 import { AnimatedLogo, Logo, logoState, Status } from "./components.tsx";
 import { useKeepDraft } from "./controls.tsx";
-import { SubscriptionActions, SubscriptionsPage } from "./Subscriptions.tsx";
+import {
+  strategyCopy,
+  SubscriptionActions,
+  SubscriptionsPage,
+} from "./Subscriptions.tsx";
 import { CreateProfile } from "./CreateProfile.tsx";
 import { AccountDetails } from "./AccountDetails.tsx";
 import { AddSubscription } from "./AddSubscription.tsx";
@@ -27,10 +31,6 @@ import { ActivityPage } from "./Activity.tsx";
 import { SettingsPage } from "./Settings.tsx";
 
 type Page = "subscriptions" | "activity" | "connect" | "settings";
-const strategyLabel = {
-  "round-robin": "round robin",
-  "fill-first": "fill first",
-};
 export function App() {
   const { state, refresh, pollError, setPollError, failure, sessionRefused } =
     useAppState();
@@ -101,7 +101,7 @@ export function App() {
           title: profile.name,
           subtitle: `${profile.accounts.length} subscription${profile.accounts.length === 1 ? "" : "s"} · ${
             profile.runtime === "running"
-              ? strategyLabel[profile.strategy]
+              ? strategyCopy[profile.strategy].label.toLowerCase()
               : profile.runtime
           }`,
         };

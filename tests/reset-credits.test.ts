@@ -4,17 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Json } from "../src/shared/types.ts";
-import { Application } from "../src/server/server.ts";
 import { httpManagement } from "../src/server/core.ts";
 import { record, parse } from "../src/server/json.ts";
 import { Store } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { resetCreditsSchema } from "../src/server/reset-credits.ts";
-import {
-  clientDirectory,
-  coreBinary,
-  management,
-} from "./support/application.ts";
+import { management, testApplication } from "./support/application.ts";
 
 const credits = {
   available_count: 1,
@@ -48,11 +43,7 @@ test(
       auth_index: "fixture-index",
       id_token: { chatgpt_account_id: "fixture-identity" },
     };
-    const app = await Application.create({
-      directory,
-      binary: coreBinary,
-      clientDirectory,
-      port: 0,
+    const app = await testApplication(directory, {
       cores: {
         management: async (request) => {
           if (request.path === "/auth-files") return { files: [accountFile] };

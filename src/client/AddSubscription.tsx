@@ -15,8 +15,9 @@ import {
 } from "lucide-react";
 import {
   apiPresets,
+  hasOrganizations,
   oauthProviders,
-  providerEntry,
+  providerLabel,
   type OAuthProvider,
   type Protocol,
   type Provider,
@@ -44,9 +45,6 @@ import { CopyButton, Modal, Select } from "./controls.tsx";
 
 import { accountLabel, organizationLabel } from "./format.ts";
 
-const organizations = (provider: string) =>
-  providerEntry(provider)?.organizations === true;
-
 export function AddSubscription({
   profile: initialProfile,
   profiles,
@@ -67,16 +65,17 @@ export function AddSubscription({
     profiles.find((p) => p.id === destinationId) ?? initialProfile;
   const [reconnectId, setReconnectId] = useState(reconnectAccount?.id);
   const reconnectTarget = profile.accounts.find((a) => a.id === reconnectId);
-  const [claudeOnly, setClaudeOnly] = useState(!!reconnectAccount);
-  const claudeAccounts = claudeOnly
+  const [organizationsOnly, setOrganizationsOnly] =
+    useState(!!reconnectAccount);
+  const organizationAccounts = organizationsOnly
     ? profile.accounts.filter(
-        (a) => organizations(a.provider) && a.kind === "oauth",
+        (a) => hasOrganizations(a.provider) && a.kind === "oauth",
       )
     : [];
   const [review, setReview] = useState<OAuthReview>();
   const [verificationFailed, setVerificationFailed] = useState(false);
   const [selectedTab, setTab] = useState<"oauth" | "api" | "import">("oauth");
-  const tab = claudeOnly ? "oauth" : selectedTab;
+  const tab = organizationsOnly ? "oauth" : selectedTab;
   const { busy, error, setError, run: runAction } = useAction();
   const run = (action: () => Promise<void>) =>
     runAction(action, "Could not connect subscription.");
@@ -227,7 +226,7 @@ export function AddSubscription({
     setReview(undefined);
     setVerificationFailed(false);
     setCallback("");
-    setClaudeOnly(true);
+    setOrganizationsOnly(true);
   }
   return (
     <Modal
@@ -245,7 +244,7 @@ export function AddSubscription({
               ? "Finish signing in"
               : reconnectTarget
                 ? "Reconnect your subscription"
-                : claudeOnly
+                : organizationsOnly
                   ? "Connect another organization"
                   : "Add a subscription"
       }
@@ -284,7 +283,7 @@ export function AddSubscription({
             >
               Done
             </button>
-            {session && organizations(session.provider) && (
+            {session && hasOrganizations(session.provider) && (
               <button
                 className="button"
                 disabled={busy}
@@ -293,7 +292,7 @@ export function AddSubscription({
                   setSession(undefined);
                   setReview(undefined);
                   setReconnectId(undefined);
-                  setClaudeOnly(true);
+                  setOrganizationsOnly(true);
                 }}
               >
                 <Plus size={15} aria-hidden="true" /> Connect another
@@ -301,7 +300,7 @@ export function AddSubscription({
               </button>
             )}
           </div>
-          {session && organizations(session.provider) && (
+          {session && hasOrganizations(session.provider) && (
             <p className="field-note">
               Use the same email and choose a different organization when you
               sign in.
@@ -312,7 +311,7 @@ export function AddSubscription({
         <div className="organization-review">
           <div className="verified-organization">
             <ShieldCheck size={16} aria-hidden="true" /> Organization verified
-            by Claude
+            by {providerLabel(review.account.provider)}
           </div>
           <AccountSummary account={review.account} />
           <div className="organization-destination">
@@ -397,7 +396,7 @@ export function AddSubscription({
           </div>
           <h3>Continue in your browser</h3>
           <p>
-            {organizations(session.provider) ? (
+            {hasOrganizations(session.provider) ? (
               <>
                 Choose{" "}
                 <strong>
@@ -405,7 +404,7 @@ export function AddSubscription({
                     ? accountLabel(reconnectTarget)
                     : "the organization you want to connect"}
                 </strong>{" "}
-                on the Claude authorization page.{" "}
+                on the {providerLabel(session.provider)} authorization page.{" "}
                 {reconnectTarget ? (
                   <>
                     After you sign in, the reconnect in{" "}
@@ -426,7 +425,7 @@ export function AddSubscription({
               </>
             )}
           </p>
-          {organizations(session.provider) && (
+          {hasOrganizations(session.provider) && (
             <p className="organization-hint">
               One email can have several seats. Each organization connects
               separately.
@@ -549,7 +548,7 @@ export function AddSubscription({
               />
             </label>
           )}
-          {!claudeOnly && (
+          {!organizationsOnly && (
             <div
               className="segmented"
               role="group"
@@ -582,7 +581,8 @@ export function AddSubscription({
               {oauthProviders
                 .filter(
                   (provider) =>
-                    provider.visible && (!claudeOnly || provider.organizations),
+                    provider.visible &&
+                    (!organizationsOnly || provider.organizations),
                 )
                 .map((provider) => (
                   <button
@@ -606,10 +606,10 @@ export function AddSubscription({
                     )}
                   </button>
                 ))}
-              {claudeAccounts.length > 0 && (
+              {organizationAccounts.length > 0 && (
                 <div className="connected-organizations">
                   <h3>Already connected in {profile.name}</h3>
-                  {claudeAccounts.map((a) => (
+                  {organizationAccounts.map((a) => (
                     <div key={a.id}>
                       <CheckCircle2 size={14} aria-hidden="true" />
                       <span>
@@ -723,7 +723,7 @@ export function AddSubscription({
                     placeholder="https://api.example.com/v1"
                   />
                 </label>
-                {!preset.fixedEndpoint && (
+                {!preset.upstream && (
                   <label className="field">
                     API format
                     <Select<Protocol>
@@ -795,7 +795,7 @@ export function AddSubscription({
                         <small>
                           {source.organizationUuid
                             ? `${source.email || source.provider} · ${source.organizationUuid.slice(0, 8)}`
-                            : organizations(source.provider)
+                            : hasOrganizations(source.provider)
                               ? "Organization unverified"
                               : source.fileName}
                         </small>

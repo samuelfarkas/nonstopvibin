@@ -1,14 +1,20 @@
 import { rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import type { ApiAccountInput } from "../shared/api.ts";
 import type { Account, OAuthReview } from "../shared/types.ts";
-import { isCredentialFile } from "../shared/providers.ts";
+import {
+  hasOrganizations,
+  isCredentialFile,
+  type OrganizationProvider,
+} from "../shared/providers.ts";
 import type { Accounts } from "./accounts.ts";
+import { apiAccount } from "./api-accounts.ts";
 import type { CorePool } from "./core.ts";
 import { AppError } from "./errors.ts";
 import { claudeIdentity, sameSeat } from "./identity.ts";
 import { text, type JsonObject } from "./json.ts";
 import type { Quotas } from "./quota.ts";
-import type { Store } from "./store.ts";
+import { sameSecret, type Store } from "./store.ts";
 
 export class Credentials {
   private readonly pool: CorePool;
@@ -34,8 +40,9 @@ export class Credentials {
   import(profileId: string, contents: JsonObject): Promise<Account> {
     return this.queue(() => this.importCredential(profileId, contents));
   }
-  async matchClaudeSeat(
+  async matchSeat(
     profileId: string,
+    provider: OrganizationProvider,
     credential: JsonObject,
     reconnectAccountId?: string,
   ): Promise<
@@ -47,7 +54,7 @@ export class Credentials {
     const files = await this.accounts.credentialFiles(profileId);
     if (reconnectAccountId) {
       const target = files.find(
-        (f) => f.id === reconnectAccountId && f.raw.type === "claude",
+        (f) => f.id === reconnectAccountId && f.raw.type === provider,
       );
       if (!target)
         return {
@@ -63,7 +70,7 @@ export class Credentials {
     }
     const matches = files.filter(
       (f) =>
-        f.raw.type === "claude" && sameSeat(identity, claudeIdentity(f.raw)),
+        f.raw.type === provider && sameSeat(identity, claudeIdentity(f.raw)),
     );
     if (matches.length > 1)
       return {
@@ -101,7 +108,9 @@ export class Credentials {
         "The subscription to reconnect no longer exists.",
         409,
       );
-    const identity = provider === "claude" ? claudeIdentity(raw) : undefined;
+    const identity = hasOrganizations(provider)
+      ? claudeIdentity(raw)
+      : undefined;
     for (const existing of files) {
       if (existing === prior) continue;
       if (
@@ -163,6 +172,32 @@ export class Credentials {
     if (!account.disabled)
       account.quota = await this.quotas.refresh(profileId, account.id);
     return account;
+  }
+  /**
+   * Adds an API-key account. Its models are found before the queue and its quota is read
+   * after it: neither changes credentials, and both wait on the provider.
+   */
+  async addApiAccount(
+    profileId: string,
+    input: ApiAccountInput,
+  ): Promise<void> {
+    const account = await apiAccount(input);
+    await this.queue(async () => {
+      for (const existing of this.store.apiAccounts(profileId)) {
+        if (
+          existing.baseUrl === account.baseUrl &&
+          sameSecret(this.store.apiKey(existing.id), input.apiKey)
+        )
+          throw new AppError(
+            "This API key is already connected to this profile.",
+            409,
+          );
+      }
+      this.store.saveApiAccount(profileId, account, input.apiKey);
+      await this.pool.start(profileId);
+      await this.pool.configure(profileId);
+    });
+    await this.quotas.refresh(profileId, account.id);
   }
   setAccount(
     profileId: string,

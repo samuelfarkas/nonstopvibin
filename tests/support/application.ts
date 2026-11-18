@@ -1,5 +1,6 @@
-// Setup the server suites share: the verified core, a temporary store, loopback servers,
-// management requests, and an application teardown that names stuck cores.
+// Setup the server suites share: the verified core, a temporary store, an application and a
+// synthetic API account, loopback servers, management requests, and an application
+// teardown that names stuck cores.
 import type { Server } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,8 +9,8 @@ import type { Json } from "../../src/shared/types.ts";
 import { coreLayout } from "../../src/server/core-binary.ts";
 import type { CorePool } from "../../src/server/core.ts";
 import { checkoutLayout } from "../../src/server/host-defaults.ts";
-import type { Application } from "../../src/server/server.ts";
-import { Store } from "../../src/server/store.ts";
+import { Application } from "../../src/server/server.ts";
+import { Store, type ApiAccount } from "../../src/server/store.ts";
 import { fileKeyCodec } from "../../src/server/vault.ts";
 
 /** The pinned core `bun run core:install` verified into the checkout. */
@@ -28,6 +29,39 @@ export async function temporaryStore(prefix: string) {
       store.close();
       await rm(directory, { recursive: true, force: true });
     },
+  };
+}
+
+/** An application on `directory` with the verified core and the built client on a free port. */
+export function testApplication(
+  directory: string,
+  options: Partial<Parameters<typeof Application.create>[0]> = {},
+): Promise<Application> {
+  return Application.create({
+    directory,
+    agentHome: join(directory, "agent-home"),
+    binary: coreBinary,
+    clientDirectory,
+    port: 0,
+    ...options,
+  });
+}
+
+/** A compatible-API account without a prefix, named by its ID unless `name` is given. */
+export function customAccount(
+  id: string,
+  baseUrl: string,
+  models: ApiAccount["models"],
+  name = id,
+): ApiAccount {
+  return {
+    id,
+    name,
+    provider: "custom",
+    baseUrl,
+    prefix: "",
+    disabled: false,
+    models,
   };
 }
 

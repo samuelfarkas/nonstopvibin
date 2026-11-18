@@ -3,13 +3,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pkg from "../package.json" with { type: "json" };
 import { serverArchiveName } from "../scripts/distribution.ts";
 import { notRunningExit, serverArchive } from "../src/server/host-defaults.ts";
+import { unusedPort } from "./support/ports.ts";
 
 const name = serverArchiveName(pkg.version, "x64");
 const archive = resolve(import.meta.dirname, "../release", `${name}.tar.gz`);
@@ -19,15 +19,6 @@ const env = {
   HOME: join(work, "home"),
   NONSTOPVIBIN_DATA_DIR: join(work, "data"),
 };
-const freePort = () =>
-  new Promise((done, fail) => {
-    const probe = createServer()
-      .once("error", fail)
-      .listen(0, "127.0.0.1", () => {
-        const { port } = probe.address();
-        probe.close(() => done(port));
-      });
-  });
 const exited = (child) =>
   new Promise((done) =>
     child.once("exit", (code, signal) => done({ code, signal })),
@@ -45,7 +36,7 @@ try {
   const nv = join(work, "prefix/bin", serverArchive.executable);
   const status = () =>
     spawnSync(nv, ["status"], { env, stdio: "ignore" }).status;
-  const port = await freePort();
+  const port = await unusedPort();
   // A pipe is not a TTY, like journald.
   const log = [];
   server = spawn(nv, ["serve", "--port", String(port)], {
@@ -55,8 +46,13 @@ try {
   exit = exited(server);
   server.stdout.on("data", (chunk) => log.push(chunk));
   server.stderr.on("data", (chunk) => log.push(chunk));
-  for (let attempt = 0; attempt < 30 && status() !== 0; attempt++)
+  for (let attempt = 0; attempt < 30 && status() !== 0; attempt++) {
+    // A server that exited will not become ready.
+    if (server.exitCode !== null || server.signalCode !== null) break;
     await delay(1000);
+  }
+  if (status() !== 0)
+    throw new Error(`serve is not running. Its output:\n${Buffer.concat(log)}`);
   execFileSync(nv, ["status"], { env, stdio: "inherit" });
   const { url } = JSON.parse(
     execFileSync(nv, ["url", "--json"], { env, encoding: "utf8" }),

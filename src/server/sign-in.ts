@@ -10,23 +10,30 @@ import type {
   OAuthSession,
   OAuthStatus,
 } from "../shared/types.ts";
-import { providerEntry, type OAuthProvider } from "../shared/providers.ts";
+import {
+  hasOrganizations,
+  providerEntry,
+  providerLabel,
+  type OAuthProvider,
+  type OrganizationProvider,
+} from "../shared/providers.ts";
 import { Accounts } from "./accounts.ts";
 import type { Credentials } from "./credentials.ts";
 import type { CorePool } from "./core.ts";
 import { reapOrphanedCores } from "./core-processes.ts";
 import { oauthPendingDirectory } from "./data-directory.ts";
 import { AppError, type Report } from "./errors.ts";
-import { claudeIdentity, verifyClaudeIdentity } from "./identity.ts";
+import { claudeIdentity, verifySeat } from "./identity.ts";
 import { number, record, text, type JsonObject } from "./json.ts";
 import type { Quotas } from "./quota.ts";
 import { Store } from "./store.ts";
 
 /**
- * A Claude sign-in runs in a throwaway data directory with its own core, so a
- * credential enters a profile only after its organization and seat are reviewed.
+ * A sign-in for a provider with organizations runs in a throwaway data directory with its
+ * own core, so a credential enters a profile only after its organization and seat are reviewed.
  */
 interface Sandbox {
+  provider: OrganizationProvider;
   pool: CorePool;
   accounts: Accounts;
   profileId: string;
@@ -111,19 +118,20 @@ export class SignIn {
           account.kind !== "oauth"
         )
           throw new AppError(
-            "Choose a Claude subscription in this profile to reconnect.",
+            `Choose a ${providerLabel(provider)} subscription in this profile to reconnect.`,
             404,
           );
       }
       try {
-        if (provider === "claude") {
+        if (hasOrganizations(provider)) {
           const parent = oauthPendingDirectory(store.directory);
           await mkdir(parent, { recursive: true, mode: 0o700 });
-          const directory = await mkdtemp(join(parent, "claude-"));
+          const directory = await mkdtemp(join(parent, `${provider}-`));
           const sandboxStore = new Store(directory, store.codec);
           const pool = this.pool.isolated(sandboxStore);
           const pending = sandboxStore.createProfile("Pending sign-in");
           this.sandbox = {
+            provider,
             pool,
             accounts: new Accounts(pool, sandboxStore),
             profileId: pending.id,
@@ -359,7 +367,7 @@ export class SignIn {
             const accounts = sandbox.accounts.list(sandbox.profileId);
             if (accounts.length !== 1)
               throw new AppError(
-                "Claude did not return one subscription. Sign in again.",
+                `${providerLabel(sandbox.provider)} did not return one subscription. Sign in again.`,
                 502,
               );
             sandbox.credentialId = accounts[0]!.id;
@@ -373,21 +381,24 @@ export class SignIn {
             );
           }
           if (!sandbox.review) {
-            const credential = await verifyClaudeIdentity(sandbox.credential);
+            const credential = await verifySeat[sandbox.provider](
+              sandbox.credential,
+            );
             sandbox.credential = credential;
             const account: Account = {
               id: "pending",
-              provider: "claude",
+              provider: sandbox.provider,
               kind: "oauth",
-              name: "Claude",
+              name: providerLabel(sandbox.provider),
               ...claudeIdentity(credential),
               email: text(credential.email),
               disabled: false,
               status: "Ready",
               priority: 0,
             };
-            const match = await this.credentials.matchClaudeSeat(
+            const match = await this.credentials.matchSeat(
               profileId,
+              sandbox.provider,
               credential,
               session.reconnectAccountId,
             );
@@ -426,13 +437,14 @@ export class SignIn {
       const sandbox = this.sandbox;
       if (!sandbox?.credential || !sandbox.review)
         throw new AppError(
-          "Wait for Claude to verify the organization before connecting.",
+          `Wait for ${providerLabel(session.provider)} to verify the organization before connecting.`,
           409,
         );
       const credential = sandbox.credential;
       const result = await this.credentials.queue(async () => {
-        const match = await this.credentials.matchClaudeSeat(
+        const match = await this.credentials.matchSeat(
           profileId,
+          sandbox.provider,
           credential,
           session.reconnectAccountId,
         );

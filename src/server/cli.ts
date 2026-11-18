@@ -217,7 +217,6 @@ export async function startServer(
         clientDirectory: options.clientDirectory,
         port: options.port,
         allowHosts: options.allowHosts,
-        desktop: false,
         development: false,
         requirePinnedCore: true,
         afterClose: async () => {

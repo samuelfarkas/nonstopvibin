@@ -141,7 +141,6 @@ export interface AppState {
   gateway: string;
   usageRetentionDays: RetentionDays;
   version: string;
-  desktop: boolean;
   errors: string[];
 }
 export interface Model {

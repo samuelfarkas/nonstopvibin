@@ -321,7 +321,6 @@ async function start(): Promise<void> {
       : join(root, coreLayout.checkout, coreLayout.binary),
     clientDirectory: join(root, checkoutLayout.client),
     port: hostPort(),
-    desktop: true,
     // Without its core the window still opens; each profile start reports it missing.
     allowMissingCore: true,
   });

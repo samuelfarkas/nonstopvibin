@@ -150,7 +150,7 @@ export async function claudeProject(path: string): Promise<string> {
   return project;
 }
 
-export const claude: AgentDefinition = {
+export const claude: AgentDefinition<"claude"> = {
   version: 3,
   olderNeedsReconnect: true,
   projectRoot: claudeProject,
@@ -164,8 +164,8 @@ export const claude: AgentDefinition = {
     isDeepStrictEqual(jsonObject(current), jsonObject(expected ?? "{}")),
   retain: matchingClaudeConfig,
   launchSettings: (manifest) => {
-    // Version 2 connections predate the picker.
-    if (manifest.version !== 3) return;
+    // Connections before version 3 predate the picker.
+    if (manifest.version < 3) return;
     // Project/local settings ignore modelPicker. --settings carries the same
     // immutable profile route plus the real model IDs, without choosing a model.
     return (

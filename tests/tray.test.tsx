@@ -50,7 +50,6 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
     gateway: "",
     usageRetentionDays: 0,
     version: "",
-    desktop: true,
     errors: [],
   };
   const html = renderToStaticMarkup(

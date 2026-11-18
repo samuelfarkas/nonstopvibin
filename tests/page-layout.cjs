@@ -10,7 +10,10 @@ const electron = require("electron");
 if (typeof electron === "string") {
   const directory = mkdtempSync(join(tmpdir(), "nv-layout-"));
   (async () => {
-    const { Application } = require("../src/server/server.ts");
+    const {
+      customAccount,
+      testApplication,
+    } = require("./support/application.ts");
     const { sessionUrl } = require("../src/shared/renderer-url.ts");
     const {
       installFakeCore,
@@ -22,27 +25,21 @@ if (typeof electron === "string") {
         `(_req, res) => res.end(JSON.stringify({ data: [{ id: "fixture-model" }] }))`,
       ),
     );
-    const app = await Application.create({
-      directory: join(directory, "data"),
-      agentHome: join(directory, "agent-home"),
+    const app = await testApplication(join(directory, "data"), {
       binary,
       clientDirectory: resolve(__dirname, "../dist/client"),
-      port: 0,
     });
     let code = 1;
     try {
       const profile = app.store.createProfile("Personal");
       app.store.saveApiAccount(
         profile.id,
-        {
-          id: "layout-fixture",
-          name: "Layout fixture",
-          provider: "custom",
-          baseUrl: "https://api.example.invalid/v1",
-          prefix: "",
-          disabled: false,
-          models: [{ id: "fixture-model", protocol: "openai" }],
-        },
+        customAccount(
+          "layout-fixture",
+          "https://api.example.invalid/v1",
+          [{ id: "fixture-model", protocol: "openai" }],
+          "Layout fixture",
+        ),
         "synthetic-key",
       );
       await app.cores.pool.start(profile.id);

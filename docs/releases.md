@@ -91,16 +91,19 @@ section. Work through these steps in order.
      protects its browser storage on each platform.
    - Then test packaging, launch, updates, credential access, and agent connections
      before that release.
-3. **Run the checks** on a clean checkout of the merged revision:
+3. **Run the checks** on a clean checkout of the merged revision, in the order
+   [checks.yml](../.github/workflows/checks.yml) runs them:
 
    ```sh
-   bun ci
-   bun run core:install
+   bun run setup
    bun run quality
-   bun test
    bun run build
-   bun run test:desktop
-   bun run test:ui
+   bun run test:desktop:built
+   bun run test:ui:built
+   bun test
+   bun run dist:built
+   # On Linux x64, where CI builds and smoke-tests the server archives:
+   bun run dist:server && bun run test:server
    bun run security:deps
    bun run security:install && bun run security:secrets && bun run security:history
    GITHUB_REPOSITORY=samuelfarkas/nonstopvibin bun scripts/verify-release.mjs v0.2.0

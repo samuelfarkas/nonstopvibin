@@ -288,7 +288,7 @@ export class Usage {
           }
           for (const profileId of this.pool.runtimes.keys()) {
             if (this.pool.shuttingDown) return;
-            if (!this.pool.running(profileId)) continue;
+            if (!this.pool.usable(profileId)) continue;
             try {
               if (!quotasDue) await this.accounts.sync(profileId);
               else
@@ -296,8 +296,7 @@ export class Usage {
                   profileId,
                   // Each account is checked as its turn comes; a stop or shutdown ends the pass.
                   (account) =>
-                    !this.pool.shuttingDown &&
-                    this.pool.running(profileId) &&
+                    this.pool.usable(profileId) &&
                     !account.disabled &&
                     account.quota?.status !== "unavailable",
                 );

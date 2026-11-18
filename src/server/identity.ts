@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Json, SeatIdentity } from "../shared/types.ts";
+import type { OrganizationProvider } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
 import { record, responseJson, text, type JsonObject } from "./json.ts";
 
@@ -99,3 +100,11 @@ export async function verifyClaudeIdentity(
     ...(email && { email }),
   };
 }
+
+/** Who a signed-in token belongs to, asked of its own provider: one per provider with organizations. */
+export const verifySeat = {
+  claude: verifyClaudeIdentity,
+} satisfies Record<
+  OrganizationProvider,
+  (raw: JsonObject) => Promise<JsonObject>
+>;

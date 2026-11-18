@@ -11,6 +11,7 @@ import type {
   RouteBody,
   RouteKey,
   RouteParamName,
+  RouteQuery,
   RouteResponse,
   SessionRefused,
 } from "../shared/api.ts";
@@ -18,7 +19,6 @@ import {
   apiKeyProviders,
   oauthProviders,
   protocols,
-  providerEntry,
 } from "../shared/providers.ts";
 import { agents } from "../shared/agents.ts";
 import {
@@ -29,7 +29,7 @@ import {
   retentionDays,
   strategies,
 } from "../shared/vocabulary.ts";
-import { Store, sameSecret, type ApiAccount } from "./store.ts";
+import { Store, sameSecret } from "./store.ts";
 import { ownerOnlyDirectory } from "./data-directory.ts";
 import { offeredModels } from "./agents.ts";
 import { profileEndpoint } from "./agent-connection.ts";
@@ -39,7 +39,6 @@ import { coreVersion, verifyCore } from "./core-binary.ts";
 import { Gateway } from "./gateway.ts";
 import { ProfileModels } from "./model-catalog.ts";
 import { devHost } from "./host-defaults.ts";
-import { discoverModels, goModelProtocol } from "./api-accounts.ts";
 import { AppError, errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
 import { parse, record, responseJson, text } from "./json.ts";
@@ -80,24 +79,6 @@ const apiSchema = z
       .max(500),
   })
   .strict();
-function providerURL(raw: string): URL {
-  const url = new URL(raw);
-  if (
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    (url.protocol !== "https:" &&
-      !(
-        url.protocol === "http:" &&
-        ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
-      ))
-  )
-    throw new AppError(
-      "Use an HTTPS base URL, or HTTP for a local provider. Do not include credentials or query parameters in the URL.",
-    );
-  return url;
-}
 async function jsonBody(req: IncomingMessage): Promise<Json> {
   if (!req.headers["content-type"]?.startsWith("application/json"))
     throw new AppError("Content-Type must be application/json.", 415);
@@ -133,17 +114,25 @@ function json<T>(res: ServerResponse, value: T, status = 200): void {
 type Awaitable<T> = T | Promise<T>;
 interface RouteCall<K extends RouteKey> {
   param(name: RouteParamName<K>): string;
-  query: URLSearchParams;
+  query: RouteQuery<K>;
   body: RouteBody<K>;
 }
+/** Parses a route's query, reading each parameter (its first value, or null) by the contract's name. */
+type QueryParser<K extends RouteKey> = (
+  get: (name: Extract<keyof RouteQuery<K>, string>) => string | null,
+) => RouteQuery<K>;
 interface RouteDefinition<K extends RouteKey> {
   body: z.ZodType<RouteBody<K>>;
+  /** Runs after the body is parsed, before the handler. */
+  query: QueryParser<K>;
   handle: (call: RouteCall<K>) => Awaitable<RouteResponse<K>>;
   status?: number;
 }
 type RouteTable = { [K in RouteKey]: RouteDefinition<K> };
 /** The body schema of a route that takes none; its request body is never read. */
 const noBody: z.ZodType<undefined> = z.undefined();
+/** The query parser of a route that takes none; its query is ignored. */
+const noQuery = () => undefined;
 interface Endpoint {
   method: string;
   match(
@@ -154,7 +143,7 @@ interface Endpoint {
     req: IncomingMessage,
     res: ServerResponse,
     params: Record<string, string>,
-    query: URLSearchParams,
+    search: URLSearchParams,
   ): Promise<void>;
 }
 function endpoint<K extends RouteKey>(key: K, table: RouteTable): Endpoint {
@@ -176,10 +165,11 @@ function endpoint<K extends RouteKey>(key: K, table: RouteTable): Endpoint {
           return params;
         }
       : (pathname) => (pathname === `/api${path}` ? {} : undefined),
-    async serve(req, res, params, query) {
+    async serve(req, res, params, search) {
       const body = definition.body.parse(
         definition.body === noBody ? undefined : await jsonBody(req),
       );
+      const query = definition.query((name) => search.get(name));
       json(
         res,
         await definition.handle({ param: (name) => params[name], query, body }),
@@ -203,7 +193,6 @@ interface ServerOptions {
   binary: string;
   clientDirectory: string;
   port: number;
-  desktop?: boolean;
   development?: boolean;
   agentHome?: string;
   // Extra Host names for the management UI only (HTTPS reverse proxy such as
@@ -437,7 +426,6 @@ export class Application {
       gateway: this.origin,
       usageRetentionDays: this.store.usageRetentionDays(),
       version,
-      desktop: Boolean(this.options.desktop),
       errors: [...this.errors],
     };
   }
@@ -564,33 +552,37 @@ export class Application {
     // Any profile path names a real profile before its route is chosen.
     if (segments[1] === "profiles" && segments[2])
       this.store.profile(z.string().uuid().parse(segments[2]));
+    const allowed: string[] = [];
     for (const endpoint of this.endpoints) {
-      const params =
-        endpoint.method === req.method &&
-        endpoint.match(url.pathname, segments);
-      if (params) {
+      const params = endpoint.match(url.pathname, segments);
+      if (!params) continue;
+      if (endpoint.method === req.method) {
         await endpoint.serve(req, res, params, url.searchParams);
         return;
       }
+      allowed.push(endpoint.method);
     }
-    if (
-      segments[1] === "profiles" &&
-      segments[3] === "accounts" &&
-      segments[5] === "reset-credits" &&
-      segments.length === 6
-    )
+    if (allowed.length) {
+      // RFC 9110 requires a 405 to list the methods the path does serve.
+      res.setHeader("Allow", allowed.join(", "));
       throw new AppError("Method not allowed.", 405);
+    }
     throw new AppError("Not found.", 404);
   }
   private routes(): RouteTable {
     return {
-      "GET /state": { body: noBody, handle: () => this.state() },
+      "GET /state": {
+        body: noBody,
+        query: noQuery,
+        handle: () => this.state(),
+      },
       "PUT /usage-retention": {
         body: z
           .object({
             days: z.union(retentionDays.map((days) => z.literal(days))),
           })
           .strict(),
+        query: noQuery,
         handle: ({ body }) => {
           this.store.setUsageRetentionDays(body.days);
           return this.state();
@@ -598,15 +590,18 @@ export class Application {
       },
       "GET /import-sources": {
         body: noBody,
+        query: noQuery,
         handle: () => this.imports.scan(),
       },
       "POST /profiles": {
         body: profileSchema,
         status: 201,
+        query: noQuery,
         handle: ({ body }) => this.store.createProfile(body.name),
       },
       "PATCH /profiles/:profileId": {
         body: patchSchema,
+        query: noQuery,
         handle: async ({ param, body }) => {
           const id = param("profileId");
           this.store.saveProfile({ ...this.store.profile(id), ...body });
@@ -616,6 +611,7 @@ export class Application {
       },
       "POST /profiles/:profileId/start": {
         body: noBody,
+        query: noQuery,
         handle: async ({ param }) => {
           await this.cores.pool.start(param("profileId"));
           return this.state();
@@ -623,6 +619,7 @@ export class Application {
       },
       "POST /profiles/:profileId/refresh": {
         body: noBody,
+        query: noQuery,
         handle: async ({ param }) => {
           const id = param("profileId");
           await this.cores.quotas.refreshAccounts(
@@ -634,29 +631,36 @@ export class Application {
       },
       "GET /profiles/:profileId/key": {
         body: noBody,
+        query: noQuery,
         handle: ({ param }) => ({
           key: this.store.clientKey(param("profileId")),
         }),
       },
       "GET /profiles/:profileId/models": {
         body: noBody,
+        query: (get) => ({
+          metadata: get("metadata") === "1" ? "1" : undefined,
+        }),
         handle: async ({ param, query }) => {
           const id = param("profileId");
           const models = await this.cores.pool.models(id);
-          return query.get("metadata") === "1"
+          return query.metadata === "1"
             ? this.models.enriched(id, models)
             : models;
         },
       },
       "GET /profiles/:profileId/usage": {
         body: noBody,
-        handle: ({ param, query }) => {
-          const days = z.coerce
+        query: (get) => ({
+          days: z.coerce
             .number()
             .int()
             .min(1)
             .max(allHistoryDays)
-            .parse(query.get("days") ?? 7);
+            .optional()
+            .parse(get("days") ?? undefined),
+        }),
+        handle: ({ param, query: { days = 7 } }) => {
           const since =
             days === allHistoryDays
               ? ""
@@ -671,20 +675,21 @@ export class Application {
       },
       "GET /profiles/:profileId/agent-setup": {
         body: noBody,
-        handle: ({ param, query }) => {
-          const selection = agentSelectionSchema.parse({
-            agent: query.get("agent"),
-            projectDirectory: query.get("projectDirectory") ?? undefined,
-          });
-          return this.agentSetup.status(
+        query: (get) =>
+          agentSelectionSchema.parse({
+            agent: get("agent"),
+            projectDirectory: get("projectDirectory") ?? undefined,
+          }),
+        handle: ({ param, query }) =>
+          this.agentSetup.status(
             this.store.profile(param("profileId")),
-            selection.agent,
-            selection.projectDirectory,
-          );
-        },
+            query.agent,
+            query.projectDirectory,
+          ),
       },
       "POST /profiles/:profileId/agent-setup": {
         body: agentSetupSchema,
+        query: noQuery,
         handle: async ({ param, body }) => {
           const id = param("profileId");
           const models = await this.cores.pool.models(id);
@@ -710,6 +715,7 @@ export class Application {
       },
       "DELETE /profiles/:profileId/agent-setup": {
         body: agentSelectionSchema,
+        query: noQuery,
         handle: async ({ param, body }) => {
           await this.agentSetup.remove(
             this.store.profile(param("profileId")),
@@ -721,6 +727,7 @@ export class Application {
       },
       "POST /profiles/:profileId/agent-check": {
         body: z.object({}).strict(),
+        query: noQuery,
         handle: async ({ param }) => {
           const id = param("profileId");
           const response = await fetch(`${this.endpoint(id)}/models`, {
@@ -753,6 +760,7 @@ export class Application {
             reconnectAccountId: z.string().min(1).max(255).optional(),
           })
           .strict(),
+        query: noQuery,
         handle: ({ param, body }) =>
           this.cores.signIn.begin(
             param("profileId"),
@@ -762,29 +770,27 @@ export class Application {
       },
       "GET /profiles/:profileId/oauth": {
         body: noBody,
+        query: (get) => ({ state: z.string().min(1).parse(get("state")) }),
         handle: ({ param, query }) =>
-          this.cores.signIn.status(
-            param("profileId"),
-            z.string().min(1).parse(query.get("state")),
-          ),
+          this.cores.signIn.status(param("profileId"), query.state),
       },
       "DELETE /profiles/:profileId/oauth": {
         body: noBody,
+        query: (get) => ({ state: z.string().min(1).parse(get("state")) }),
         handle: async ({ param, query }) => {
-          await this.cores.signIn.cancel(
-            param("profileId"),
-            z.string().min(1).parse(query.get("state")),
-          );
+          await this.cores.signIn.cancel(param("profileId"), query.state);
           return { ok: true };
         },
       },
       "POST /profiles/:profileId/oauth-confirm": {
         body: z.object({ state: z.string().min(1).max(500) }).strict(),
+        query: noQuery,
         handle: ({ param, body }) =>
           this.cores.signIn.confirm(param("profileId"), body.state),
       },
       "GET /profiles/:profileId/oauth-session": {
         body: noBody,
+        query: noQuery,
         handle: ({ param }) =>
           this.cores.signIn.session?.profileId === param("profileId")
             ? this.cores.signIn.session
@@ -792,6 +798,7 @@ export class Application {
       },
       "POST /profiles/:profileId/callback": {
         body: z.object({ url: z.string().url().max(10_000) }).strict(),
+        query: noQuery,
         handle: async ({ param, body }) => {
           await this.cores.signIn.callback(param("profileId"), body.url);
           return { ok: true };
@@ -799,6 +806,7 @@ export class Application {
       },
       "POST /profiles/:profileId/import": {
         body: z.object({ contents: z.record(z.string(), z.json()) }).strict(),
+        query: noQuery,
         handle: async ({ param, body }) => {
           await this.cores.credentials.import(
             param("profileId"),
@@ -811,6 +819,7 @@ export class Application {
         body: z
           .object({ sourceId: z.string().regex(/^[a-f0-9]{64}$/) })
           .strict(),
+        query: noQuery,
         handle: async ({ param, body }) => {
           await this.cores.credentials.import(
             param("profileId"),
@@ -832,6 +841,7 @@ export class Application {
             name: nameSchema.optional(),
           })
           .strict(),
+        query: noQuery,
         handle: async ({ param, body }) => {
           await this.cores.credentials.setAccount(
             param("profileId"),
@@ -843,6 +853,7 @@ export class Application {
       },
       "DELETE /profiles/:profileId/accounts/:accountId": {
         body: noBody,
+        query: noQuery,
         handle: async ({ param }) => {
           await this.cores.credentials.removeAccount(
             param("profileId"),
@@ -853,11 +864,13 @@ export class Application {
       },
       "GET /profiles/:profileId/accounts/:accountId/reset-credits": {
         body: noBody,
+        query: noQuery,
         handle: ({ param }) =>
           this.cores.resets.credits(param("profileId"), param("accountId")),
       },
       "POST /profiles/:profileId/accounts/:accountId/reset-credits": {
         body: z.object({ creditId: z.string().min(1).max(500) }).strict(),
+        query: noQuery,
         handle: ({ param, body }) =>
           this.cores.resets.consume(
             param("profileId"),
@@ -868,51 +881,9 @@ export class Application {
       "POST /profiles/:profileId/api-account": {
         body: apiSchema,
         status: 201,
-        handle: async ({ param, body: input }) => {
-          const id = param("profileId");
-          providerURL(input.baseUrl);
-          const preset = providerEntry(input.provider).preset;
-          if (
-            preset?.fixedEndpoint &&
-            input.baseUrl.replace(/\/$/, "") !== preset.baseUrl
-          )
-            throw new AppError(
-              `${preset.name} must use its official endpoint.`,
-            );
-          let models = preset?.fixedEndpoint
-            ? input.models.map((m) => ({
-                ...m,
-                protocol: goModelProtocol(m.id),
-              }))
-            : input.models;
-          if (!models.length) models = await discoverModels(input);
-          if (!models.length)
-            throw new AppError(
-              "No models were found. Enter the model IDs your provider supports.",
-            );
-          const account: ApiAccount = {
-            id: randomUUID(),
-            name: input.name,
-            provider: input.provider,
-            baseUrl: input.baseUrl.replace(/\/$/, ""),
-            prefix: input.prefix,
-            models,
-            disabled: false,
-          };
-          for (const existing of this.store.apiAccounts(id)) {
-            if (
-              existing.baseUrl === account.baseUrl &&
-              sameSecret(this.store.apiKey(existing.id), input.apiKey)
-            )
-              throw new AppError(
-                "This API key is already connected to this profile.",
-                409,
-              );
-          }
-          this.store.saveApiAccount(id, account, input.apiKey);
-          await this.cores.pool.start(id);
-          await this.cores.pool.configure(id);
-          await this.cores.quotas.refresh(id, account.id);
+        query: noQuery,
+        handle: async ({ param, body }) => {
+          await this.cores.credentials.addApiAccount(param("profileId"), body);
           return this.state();
         },
       },

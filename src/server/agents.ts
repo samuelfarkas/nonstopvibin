@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { agents, type Agent } from "../shared/agents.ts";
 import type { CatalogModel, Model } from "../shared/types.ts";
-import { modelsFor, nativeAgent } from "../shared/providers.ts";
+import { modelsFor } from "../shared/providers.ts";
 import { AppError } from "./errors.ts";
 import type { AgentDefinition } from "./agent-connection.ts";
 import { claude } from "./agent-claude.ts";
@@ -14,12 +14,12 @@ import { pi } from "./agent-pi.ts";
  * it merges with the user's, how the agent launches and asks for its catalog. AgentSetup
  * runs the same flow for each. Key order is the service unit's environment order.
  */
-export const agentDefinitions: Record<Agent, AgentDefinition> = {
+export const agentDefinitions = {
   codex,
   opencode: openCode,
   pi,
   claude,
-};
+} satisfies { [A in Agent]: AgentDefinition<A> };
 /** Environment variables that move agent configuration; a service must forward them. */
 export const agentEnvironment = Object.values(agentDefinitions).flatMap(
   ({ directory }) =>
@@ -67,61 +67,4 @@ export async function offeredModels(
         : "This profile has no available models.",
     );
   return usable;
-}
-
-/** pi's and OpenCode's model entries, with the limits and prices both need per model. */
-export function agentModels(models: CatalogModel[], agent: Agent) {
-  // pi speaks each vendor's native protocol through the gateway so thinking
-  // levels and tool calls are not translated twice.
-  const piApi = (model: CatalogModel) =>
-    nativeAgent(model.owned_by) === "claude"
-      ? "anthropic-messages"
-      : nativeAgent(model.owned_by) === "codex"
-        ? "openai-responses"
-        : "openai-completions";
-  return models.map((model) => {
-    const { id, metadata: m } = model;
-    if (!m?.cost) throw new AppError("Model metadata is unavailable.");
-    const name = `${m.name} · API list price${agent === "opencode" && m.cost.tiers?.length ? " (base rate; tiered pricing unavailable in this client)" : ""}${m.cost.cache_read === undefined || m.cost.cache_write === undefined ? " (cache pricing unavailable)" : ""}`;
-    return agent === "pi"
-      ? {
-          id,
-          name,
-          api: piApi(model),
-          reasoning: m.reasoning,
-          input: m.input,
-          contextWindow: m.context,
-          maxTokens: m.output,
-          cost: {
-            input: m.cost.input,
-            output: m.cost.output,
-            ...(m.cost.cache_read !== undefined && {
-              cacheRead: m.cost.cache_read,
-            }),
-            ...(m.cost.cache_write !== undefined && {
-              cacheWrite: m.cost.cache_write,
-            }),
-            ...(m.cost.tiers && {
-              tiers: m.cost.tiers.map((t) => ({
-                inputTokensAbove: t.tier.size,
-                input: t.input,
-                output: t.output,
-                ...(t.cache_read !== undefined && { cacheRead: t.cache_read }),
-                ...(t.cache_write !== undefined && {
-                  cacheWrite: t.cache_write,
-                }),
-              })),
-            }),
-          },
-        }
-      : {
-          id,
-          name,
-          reasoning: m.reasoning,
-          tool_call: m.toolCall,
-          modalities: { input: m.input, output: ["text"] },
-          limit: { context: m.context, input: m.inputLimit, output: m.output },
-          cost: m.cost,
-        };
-  });
 }

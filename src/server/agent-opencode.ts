@@ -1,7 +1,8 @@
-import type { Profile } from "../shared/types.ts";
+import type { CatalogModel, Profile } from "../shared/types.ts";
 import {
   type AgentDefinition,
   catalogRequest,
+  listedModel,
   nativeProvider,
   ownedFile,
   profileEndpoint,
@@ -72,7 +73,7 @@ export default async function () {
 `;
 }
 
-export const openCode: AgentDefinition = {
+export const openCode: AgentDefinition<"opencode"> = {
   version: 3,
   olderNeedsReconnect: false,
   directory: {
@@ -89,5 +90,19 @@ export const openCode: AgentDefinition = {
   command: () => "opencode",
   instructions: (profile) =>
     `Use /models to choose nonstopvibin · ${profile.name}. Needs OpenCode 1.18.29 or later; background model overrides to another provider are rejected.`,
-  catalog: "query",
+  entries: (models) => models.map(openCodeModel),
 };
+
+/** OpenCode's model entry, with the limits and prices it needs per model. */
+export function openCodeModel(model: CatalogModel) {
+  const { m, cost, name } = listedModel(model, true);
+  return {
+    id: model.id,
+    name,
+    reasoning: m.reasoning,
+    tool_call: m.toolCall,
+    modalities: { input: m.input, output: ["text"] },
+    limit: { context: m.context, input: m.inputLimit, output: m.output },
+    cost,
+  };
+}

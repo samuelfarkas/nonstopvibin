@@ -1,7 +1,11 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import YAML from "yaml";
 import type { Json, Profile } from "../shared/types.ts";
-import { protocols } from "../shared/providers.ts";
+import {
+  protocols,
+  providerEntry,
+  type Upstream,
+} from "../shared/providers.ts";
 import type { ApiAccount, Store } from "./store.ts";
 import { createHash } from "node:crypto";
 import { version } from "../../package.json";
@@ -33,6 +37,13 @@ type KeyEntry = {
   models: ModelEntry[];
 };
 export type CoreConfiguration = ReturnType<typeof coreConfiguration>;
+/** Headers requests to a preset with `upstream` carry. */
+const upstreamHeaders = {
+  "opencode-go": {
+    "User-Agent": `${userAgent} (coding-agent-gateway)`,
+    "x-opencode-session": "$x-opencode-session",
+  },
+} satisfies Record<Upstream, Record<string, string>>;
 
 export function coreConfiguration(
   profile: Profile,
@@ -46,13 +57,11 @@ export function coreConfiguration(
   const claude: KeyEntry[] = [];
   const responses: KeyEntry[] = [];
   for (const account of accounts.filter((a) => !a.disabled)) {
-    const headers: Record<string, string> =
-      account.provider === "opencode-go"
-        ? {
-            "User-Agent": `${userAgent} (coding-agent-gateway)`,
-            "x-opencode-session": "$x-opencode-session",
-          }
-        : {};
+    const upstream = providerEntry(account.provider).preset?.upstream;
+    // A copy per account: YAML writes an object repeated across accounts as an alias.
+    const headers: Record<string, string> = upstream
+      ? { ...upstreamHeaders[upstream] }
+      : {};
     for (const protocol of protocols) {
       const models = account.models
         .filter((m) => m.protocol === protocol)

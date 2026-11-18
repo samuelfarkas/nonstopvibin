@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ResetCredits, ResetResult } from "../shared/types.ts";
+import { providerEntry } from "../shared/providers.ts";
 import { resetResultCodes } from "../shared/vocabulary.ts";
 import type { Accounts } from "./accounts.ts";
 import type { CorePool } from "./core.ts";
@@ -45,7 +46,10 @@ export class CodexResets {
       .oauth(profileId)
       .find((a) => a.id === accountId);
     if (!account) throw new AppError("Account not found in this profile.", 404);
-    if (account.provider !== "codex" || account.kind !== "oauth")
+    if (
+      !providerEntry(account.provider)?.bankedResets ||
+      account.kind !== "oauth"
+    )
       throw new AppError("Banked resets require a Codex subscription.");
     const identity = this.accounts.chatgptAccountId(profileId, accountId);
     if (!identity || !account.authIndex)

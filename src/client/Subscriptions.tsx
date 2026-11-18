@@ -15,7 +15,25 @@ import {
 import { accountTag, isQuotaStale, meterLevel, poolHeadroom } from "./quota.ts";
 import { Empty, Logo, QuotaMeter } from "./components.tsx";
 import { Select } from "./controls.tsx";
+import { strategies } from "../shared/vocabulary.ts";
 import "./subscriptions.css";
+
+/** Each routing strategy's name and what it does, in the picker and around it. */
+export const strategyCopy = {
+  "round-robin": {
+    label: "Round robin",
+    summary: "spread eligible requests",
+    note: "Round robin skips accounts with no headroom on the limit a request needs.",
+  },
+  "fill-first": {
+    label: "Fill first",
+    summary: "use priority order",
+    note: "Fill first sends every request to the highest-priority account with headroom and only moves on when it runs out.",
+  },
+} satisfies Record<
+  ProfileState["strategy"],
+  { label: string; summary: string; note: string }
+>;
 
 /** Runs a profile change that answers the new state, with a busy label and a success notice. */
 export type Perform = (
@@ -185,16 +203,12 @@ export function SubscriptionsPage({
                 "Routing updated for this profile.",
               );
             }}
-            options={[
-              { value: "round-robin", label: "Round robin" },
-              { value: "fill-first", label: "Fill first" },
-            ]}
+            options={strategies.map((value) => ({
+              value,
+              label: strategyCopy[value].label,
+            }))}
           />
-          <p>
-            {profile.strategy === "fill-first"
-              ? "use priority order"
-              : "spread eligible requests"}
-          </p>
+          <p>{strategyCopy[profile.strategy].summary}</p>
         </div>
       </div>
       <div className="accounts">
@@ -301,10 +315,8 @@ export function SubscriptionsPage({
       </div>
       <div className="accounts-note">
         <p>
-          {profile.strategy === "fill-first"
-            ? "Fill first sends every request to the highest-priority account with headroom and only moves on when it runs out."
-            : "Round robin skips accounts with no headroom on the limit a request needs."}{" "}
-          Requests never leave {profile.name}.
+          {strategyCopy[profile.strategy].note} Requests never leave{" "}
+          {profile.name}.
         </p>
         <button className="button" onClick={() => onConnect()}>
           Connect an agent

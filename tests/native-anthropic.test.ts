@@ -5,17 +5,17 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { connect } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Application } from "../src/server/server.ts";
+import type { Application } from "../src/server/server.ts";
 import { record, type JsonObject } from "../src/server/json.ts";
 import type { Profile } from "../src/shared/types.ts";
 import {
   closeApplication,
   closeServer,
-  clientDirectory,
-  coreBinary,
+  customAccount,
   listen,
+  management,
+  testApplication,
 } from "./support/application.ts";
 import { events, frame } from "./support/sse.ts";
 
@@ -88,15 +88,12 @@ const observed: {
 function addAccount(profile: Profile) {
   app.store.saveApiAccount(
     profile.id,
-    {
-      id: profile.id,
-      name: "Synthetic native Anthropic",
-      provider: "custom",
-      baseUrl: providerUrl,
-      prefix: "",
-      disabled: false,
-      models: [{ id: model, protocol: "anthropic" }],
-    },
+    customAccount(
+      profile.id,
+      providerUrl,
+      [{ id: model, protocol: "anthropic" }],
+      "Synthetic native Anthropic",
+    ),
     `synthetic-native-${profile.slug}`,
   );
 }
@@ -209,14 +206,7 @@ beforeAll(async () => {
     }
   });
   providerUrl = `http://127.0.0.1:${await listen(upstream)}`;
-  app = await Application.create({
-    directory,
-    agentHome: join(directory, "home"),
-    binary: coreBinary,
-    clientDirectory,
-    port: 0,
-    requirePinnedCore: true,
-  });
+  app = await testApplication(directory, { requirePinnedCore: true });
   primary = app.store.createProfile("Native fixture");
   other = app.store.createProfile("Other native fixture");
   exhausted = app.store.createProfile("Exhausted native fixture");
@@ -236,13 +226,7 @@ test(
   { timeout: 15_000 },
   async () => {
     const before = observed.length;
-    const management = {
-      Authorization: `Bearer ${app.token}`,
-      "Content-Type": "application/json",
-    };
-    const state = await fetch(`${app.origin}/api/state`, {
-      headers: management,
-    });
+    const state = await management(app, "/state");
     assert.equal(state.status, 200);
     const projected = (await state.json()).profiles.find(
       (profile: Profile) => profile.id === primary.id,
@@ -250,10 +234,7 @@ test(
     assert.equal(projected.slug, primary.slug);
     assert.equal(projected.endpoint, app.endpoint(primary.id));
     assert.equal(projected.runtime, "running");
-    const models = await fetch(
-      `${app.origin}/api/profiles/${primary.id}/models`,
-      { headers: management },
-    );
+    const models = await management(app, `/profiles/${primary.id}/models`);
     assert.equal(models.status, 200);
     assert.ok(
       (await models.json()).some((entry: { id: string }) => entry.id === model),
@@ -267,22 +248,20 @@ test(
     assert.ok(
       catalogBody.data.some((entry: { id: string }) => entry.id === model),
     );
-    const checkUrl = `${app.origin}/api/profiles/${primary.id}/agent-check`;
-    const check = await fetch(checkUrl, {
+    const check = await management(app, `/profiles/${primary.id}/agent-check`, {
       method: "POST",
-      headers: management,
-      body: "{}",
+      body: {},
     });
     assert.equal(check.status, 200);
     assert.deepEqual(await check.json(), { ok: true });
     const managementCannotInfer = await fetch(
       `${app.endpoint(primary.id)}/models`,
-      { headers: management },
+      { headers: { Authorization: `Bearer ${app.token}` } },
     );
     assert.equal(managementCannotInfer.status, 401);
-    const missing = await fetch(
-      `${app.origin}/api/profiles/00000000-0000-4000-8000-000000000000/models`,
-      { headers: management },
+    const missing = await management(
+      app,
+      "/profiles/00000000-0000-4000-8000-000000000000/models",
     );
     assert.equal(missing.status, 404);
     const empty = app.store.createProfile("Empty native fixture");
@@ -297,9 +276,10 @@ test(
       has_more: false,
       last_id: "",
     });
-    const emptyCheck = await fetch(
-      `${app.origin}/api/profiles/${empty.id}/agent-check`,
-      { method: "POST", headers: management, body: "{}" },
+    const emptyCheck = await management(
+      app,
+      `/profiles/${empty.id}/agent-check`,
+      { method: "POST", body: {} },
     );
     assert.equal(emptyCheck.status, 400);
     assert.equal(
@@ -311,9 +291,10 @@ test(
       headers: headers(empty),
     });
     assert.equal(stoppedCatalog.status, 503);
-    const stoppedCheck = await fetch(
-      `${app.origin}/api/profiles/${empty.id}/agent-check`,
-      { method: "POST", headers: management, body: "{}" },
+    const stoppedCheck = await management(
+      app,
+      `/profiles/${empty.id}/agent-check`,
+      { method: "POST", body: {} },
     );
     assert.equal(stoppedCheck.status, 502);
     assert.equal(observed.length, before);

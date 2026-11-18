@@ -2,8 +2,10 @@ import { agents, type Agent } from "./agents.ts";
 
 export const protocols = ["openai", "anthropic", "responses"] as const;
 export type Protocol = (typeof protocols)[number];
+/** Server rules an API-key preset can name: see `modelProtocols` (api-accounts.ts) and `upstreamHeaders` (config.ts). */
+export type Upstream = "opencode-go";
 
-export interface ProviderEntry {
+interface ProviderFields {
   /** Short name in account lists, quotas and history. */
   label: string;
   /** The first release shows it; the server supports every entry. */
@@ -35,16 +37,27 @@ export interface ProviderEntry {
     baseUrl: string;
     prefix: string;
     protocol: Protocol;
-    /** Only the official endpoint is accepted, and the server picks each model's protocol. */
+    /** Only the official endpoint is accepted. */
     fixedEndpoint?: boolean;
+    /** The server's rules for this API: each model's protocol (the user picks none) and request headers. */
+    upstream?: Upstream;
   };
-  /** A sign-in can replace the credential of an existing account in place. */
-  reconnect?: boolean;
-  /** One email can hold seats in several organizations, each its own account. */
-  organizations?: boolean;
   /** Banked rate-limit resets can be redeemed for its signed-in accounts. */
   bankedResets?: boolean;
 }
+export type ProviderEntry = ProviderFields &
+  (
+    | {
+        /**
+         * One email can hold seats in several organizations, each its own account: a sign-in
+         * runs in a sandbox and its seat is reviewed before it joins a profile.
+         */
+        organizations: true;
+        /** A sign-in can replace the credential of an existing account in place; only the review can. */
+        reconnect?: boolean;
+      }
+    | { organizations?: false; reconnect?: false }
+  );
 // One entry per provider. Key order is the order of the app's pickers.
 export const providers = {
   claude: {
@@ -118,6 +131,7 @@ export const providers = {
       prefix: "go",
       protocol: "openai",
       fixedEndpoint: true,
+      upstream: "opencode-go",
     },
   },
   openai: {
@@ -188,6 +202,12 @@ export function isOAuthProvider(id: string): id is OAuthProvider {
 }
 export const isCredentialFile = (type: string) =>
   providerEntry(type)?.credentialFile === true;
+export type OrganizationProvider = {
+  [K in Provider]: Entries[K] extends { organizations: true } ? K : never;
+}[Provider];
+export function hasOrganizations(id: string): id is OrganizationProvider {
+  return providerEntry(id)?.organizations === true;
+}
 const providerIds = Object.keys(providers).filter(isProvider);
 export const oauthProviders = providerIds.flatMap((id) => {
   const { signIn, ...entry } = providerEntry(id);

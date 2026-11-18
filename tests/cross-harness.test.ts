@@ -4,15 +4,15 @@ import http from "node:http";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Application } from "../src/server/server.ts";
 import { record, type JsonObject } from "../src/server/json.ts";
 import { verifyCore } from "../src/server/core-binary.ts";
 import { events, frame } from "./support/sse.ts";
 import {
-  clientDirectory,
   closeServer,
   coreBinary,
+  customAccount,
   listen,
+  testApplication,
 } from "./support/application.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
@@ -199,13 +199,7 @@ test(
       }
     });
     const upstreamPort = await listen(upstream);
-    const app = await Application.create({
-      directory,
-      agentHome: join(directory, "home"),
-      binary: coreBinary,
-      clientDirectory,
-      port: 0,
-    });
+    const app = await testApplication(directory);
     try {
       for (const oauth of [false, true]) {
         const profile = app.store.createProfile(
@@ -214,15 +208,12 @@ test(
         const key = "synthetic-anthropic";
         app.store.saveApiAccount(
           profile.id,
-          {
-            id: profile.id,
-            name: "Synthetic Claude",
-            provider: "custom",
-            baseUrl: `http://127.0.0.1:${upstreamPort}`,
-            prefix: "",
-            disabled: false,
-            models: [{ id: "claude-opus-5-5", protocol: "anthropic" }],
-          },
+          customAccount(
+            profile.id,
+            `http://127.0.0.1:${upstreamPort}`,
+            [{ id: "claude-opus-5-5", protocol: "anthropic" }],
+            "Synthetic Claude",
+          ),
           key,
         );
         await app.cores.pool.start(profile.id);
@@ -435,13 +426,9 @@ test(
     const localCatalogBinary = join(directory, "core-local-catalog-wrapper");
     // Keep this fixture deterministic while the production core refreshes its
     // mutable remote catalog: the wrapper adds --local-model only here.
-    const app = await Application.create({
-      directory,
-      agentHome: join(directory, "home"),
+    const app = await testApplication(directory, {
       binary: localCatalogBinary,
       allowMissingCore: true,
-      clientDirectory,
-      port: 0,
     });
     try {
       // Verify the underlying pinned core separately; the wrapper is test-only
@@ -461,15 +448,9 @@ test(
       ] as const)
         app.store.saveApiAccount(
           profile.id,
-          {
-            id: protocol,
-            name: protocol,
-            provider: "custom",
-            baseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
-            prefix: "",
-            disabled: false,
-            models: [{ id, protocol }],
-          },
+          customAccount(protocol, `http://127.0.0.1:${upstreamPort}/v1`, [
+            { id, protocol },
+          ]),
           `synthetic-${protocol}`,
         );
       await app.cores.pool.start(profile.id);

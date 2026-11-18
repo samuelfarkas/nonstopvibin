@@ -18,7 +18,7 @@ import {
   tunnelCommand,
   updateUnit,
 } from "../src/server/cli.ts";
-import { coreBinary } from "./support/application.ts";
+import { coreBinary, testApplication } from "./support/application.ts";
 
 const HOST = "box.tailnet.ts.net";
 const binary = coreBinary;
@@ -31,11 +31,8 @@ before(async () => {
   client = join(directory, "client");
   await mkdir(client);
   await writeFile(join(client, "index.html"), "fixture page");
-  app = await Application.create({
-    directory: join(directory, "data"),
-    binary,
+  app = await testApplication(join(directory, "data"), {
     clientDirectory: client,
-    port: 0,
     allowHosts: [HOST],
   });
 });
@@ -135,11 +132,8 @@ test("the agent gateway and WebSockets stay loopback-only for an allowed host", 
 });
 
 test("without --allow-host the proxy host is rejected", async () => {
-  const plain = await Application.create({
-    directory: join(directory, "plain"),
-    binary,
+  const plain = await testApplication(join(directory, "plain"), {
     clientDirectory: client,
-    port: 0,
   });
   try {
     assert.equal(await send(plain, "/", { Host: HOST }), 403);

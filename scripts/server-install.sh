@@ -182,7 +182,7 @@ if [ "$SERVICE" = 1 ]; then
       until "$BIN/$EXECUTABLE" status >/dev/null 2>&1; do
         tries=$((tries + 1))
         [ "$tries" -lt 30 ] ||
-          die "The service did not become ready. Check: journalctl --user -u nonstopvibin -e"
+          die "The service did not become ready. Check: journalctl --user -u ${UNIT##*/} -e"
         sleep 1
       done
     else

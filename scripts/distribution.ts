@@ -56,21 +56,18 @@ export function renderInstaller(
   version: string,
   arch: string,
 ): string {
-  const required = [
-    serverArchive.executable,
-    serverArchive.client,
-    serverArchive.core,
-    serverArchive.licenses,
-  ];
+  const entries = Object.values(serverArchive);
+  // An archive without any entry but these two cannot be installed.
+  const required = entries.filter(
+    (entry) =>
+      entry !== serverArchive.installer && entry !== serverArchive.readme,
+  );
   const values = new Map([
     ["VERSION", version],
     ["ARCH", arch],
     ["EXECUTABLE", serverArchive.executable],
     ["REQUIRED", required.join(" ")],
-    [
-      "ENTRIES",
-      [...required, serverArchive.installer, serverArchive.readme].join(" "),
-    ],
+    ["ENTRIES", entries.join(" ")],
     [
       "MACHINES",
       Object.entries(architectures)

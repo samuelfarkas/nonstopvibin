@@ -37,19 +37,19 @@ import {
 } from "../src/server/data-directory.ts";
 import { Cores } from "../src/server/cores.ts";
 import { usageTiming } from "../src/server/usage.ts";
-import { usagePageSize } from "../src/shared/vocabulary.ts";
+import { allHistoryDays, usagePageSize } from "../src/shared/vocabulary.ts";
 import { Store, secretIds } from "../src/server/store.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { usageSummary } from "./support/usage-summary.ts";
 import type { Json, Profile } from "../src/shared/types.ts";
 import { record } from "../src/server/json.ts";
 import {
-  clientDirectory,
   closeApplication,
   closeServer,
-  coreBinary,
+  customAccount,
   listen,
   management,
+  testApplication,
 } from "./support/application.ts";
 
 let app: Application;
@@ -145,12 +145,7 @@ beforeAll(async () => {
     }
   });
   upstreamBase = `http://127.0.0.1:${await listen(upstream)}/v1`;
-  app = await Application.create({
-    agentHome: join(directory, "agent-home"),
-    directory,
-    binary: coreBinary,
-    clientDirectory,
-    port: 0,
+  app = await testApplication(directory, {
     cores: {
       management: (request) => (intercept ?? httpManagement)(request),
       usageTiming: appUsageTiming,
@@ -170,15 +165,9 @@ beforeAll(async () => {
     for (const key of keys)
       app.store.saveApiAccount(
         profile.id,
-        {
-          id: key,
-          name: key,
-          provider: "custom",
-          baseUrl: upstreamBase,
-          prefix: "",
-          disabled: false,
-          models: [{ id: "fixture-model", protocol: "openai" }],
-        },
+        customAccount(key, upstreamBase, [
+          { id: "fixture-model", protocol: "openai" },
+        ]),
         key,
       );
   await Promise.all(
@@ -226,12 +215,8 @@ async function fakeCoreApplication(
 ) {
   const root = join(directory, name);
   const binary = await installFakeCore(root, source);
-  const instance = await Application.create({
-    directory: join(root, "data"),
-    agentHome: join(root, "agent-home"),
+  const instance = await testApplication(join(root, "data"), {
     binary,
-    clientDirectory: app.options.clientDirectory,
-    port: 0,
     cores: { management },
   });
   const profile = instance.store.createProfile("Fake core");
@@ -241,14 +226,7 @@ async function fakeCoreApplication(
     await instance.close();
     throw error;
   }
-  const close = async () => {
-    await instance.close();
-    await rm(instance.agentSetup.socketDirectory, {
-      recursive: true,
-      force: true,
-    });
-  };
-  return { instance, profile, close };
+  return { instance, profile, close: () => closeApplication(instance) };
 }
 // Answers a WebSocket handshake with browser-facing headers.
 const misbehavingCore = listeningCore(
@@ -269,12 +247,10 @@ test("a malformed static path is not found and not reported as an app error", as
 });
 test("a malformed API path parameter is rejected and not reported as an app error", async () => {
   const reported = app.state().errors.length;
-  const response = await fetch(
-    `${app.origin}/api/profiles/${company.id}/accounts/%E0`,
-    {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${app.token}` },
-    },
+  const response = await management(
+    app,
+    `/profiles/${company.id}/accounts/%E0`,
+    { method: "DELETE" },
   );
   assert.equal(response.status, 400);
   await response.text();
@@ -739,29 +715,17 @@ test("dynamic agent discovery uses validated metadata and the authenticated live
         ).status,
         403,
       );
-      const setup = await fetch(
-        `${app.origin}/api/profiles/${company.id}/agent-setup`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${app.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ agent }),
-        },
+      const setup = await management(
+        app,
+        `/profiles/${company.id}/agent-setup`,
+        { method: "POST", body: { agent } },
       );
       assert.equal(setup.status, 200);
       assert.deepEqual((await setup.json()).models, ["fixture-model"]);
-      const remove = await fetch(
-        `${app.origin}/api/profiles/${company.id}/agent-setup`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${app.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ agent }),
-        },
+      const remove = await management(
+        app,
+        `/profiles/${company.id}/agent-setup`,
+        { method: "DELETE", body: { agent } },
       );
       assert.equal(remove.status, 200);
     }
@@ -1219,20 +1183,16 @@ test(
     try {
       for (const profile of profiles) {
         const add = () =>
-          fetch(`${app.origin}/api/profiles/${profile.id}/api-account`, {
+          management(app, `/profiles/${profile.id}/api-account`, {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${app.token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
+            body: {
               name: "Shared subscription",
               provider: "custom",
               baseUrl: upstreamBase,
               apiKey: "synthetic-shared-key",
               prefix: "",
               models: [{ id: "fixture-model", protocol: "openai" }],
-            }),
+            },
           });
         const response = await add();
         assert.equal(response.status, 201, await response.text());
@@ -1368,9 +1328,9 @@ test("activity API preserves one snapshot while usage arrives during aggregation
     return batch;
   };
   try {
-    const pending = fetch(
-      `${app.origin}/api/profiles/${profile.id}/usage?days=3650`,
-      { headers: { Authorization: `Bearer ${app.token}` } },
+    const pending = management(
+      app,
+      `/profiles/${profile.id}/usage?days=${allHistoryDays}`,
     );
     await reading;
     app.store.addUsage([
@@ -1406,15 +1366,9 @@ test(
     const profile = app.store.createProfile("Abort fixture");
     app.store.saveApiAccount(
       profile.id,
-      {
-        id: "abort-one",
-        name: "abort-one",
-        provider: "custom",
-        baseUrl: upstreamBase,
-        prefix: "",
-        disabled: false,
-        models: [{ id: "fixture-model", protocol: "openai" }],
-      },
+      customAccount("abort-one", upstreamBase, [
+        { id: "fixture-model", protocol: "openai" },
+      ]),
       "abort-one",
     );
     const proxy = app.gateway.proxy;

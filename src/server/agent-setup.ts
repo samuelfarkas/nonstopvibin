@@ -487,6 +487,9 @@ export class AgentSetup {
     const definition = agentDefinitions[agent];
     const result = await this.result(profile, manifest);
     const installed = await this.installed(profile, manifest);
+    // Like install, status answers only for a running profile: `connection` refuses a
+    // stopped one with a 409, which the route returns (the app asks only while running).
+    const port = this.connection(profile.id).port;
     if (
       manifest.version === 1 ||
       (definition.olderNeedsReconnect &&
@@ -496,9 +499,7 @@ export class AgentSetup {
       (definition.helper &&
         installed.helper !==
           credentialHelper(profile, this.socketPath, manifest.port)) ||
-      // Like install, status answers only for a running profile: `connection` refuses a
-      // stopped one with a 409, which the route returns (the app asks only while running).
-      this.connection(profile.id).port !== manifest.port
+      port !== manifest.port
     )
       result.needsReconnect = true;
     return result;

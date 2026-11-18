@@ -6,7 +6,7 @@ import type { ImportSource } from "../shared/types.ts";
 import { parse, record, text, type JsonObject } from "./json.ts";
 import { AppError } from "./errors.ts";
 import { claudeIdentity } from "./identity.ts";
-import { isCredentialFile } from "../shared/providers.ts";
+import { hasOrganizations, isCredentialFile } from "../shared/providers.ts";
 import { credentialFileBytes } from "../shared/vocabulary.ts";
 
 // Only known local installations are scanned. The renderer never supplies a filesystem path.
@@ -45,7 +45,7 @@ export class ImportCatalog {
             fileName: entry.name,
             provider: String(raw.type),
             email: text(raw.email),
-            ...(raw.type === "claude" && claudeIdentity(raw)),
+            ...(hasOrganizations(String(raw.type)) && claudeIdentity(raw)),
             source: directory.includes("com.cpa.gui")
               ? "EasyCLIProxyAPI"
               : "CLIProxyAPI",

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { chmod, lstat, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Account } from "../shared/types.ts";
-import { providerLabel } from "../shared/providers.ts";
+import { hasOrganizations, providerLabel } from "../shared/providers.ts";
 import { credentialFileBytes } from "../shared/vocabulary.ts";
 import type { CorePool } from "./core.ts";
 import { credentialDirectory } from "./data-directory.ts";
@@ -94,7 +94,7 @@ export class Accounts {
       const file = record(value);
       const name = text(file.name);
       if (
-        (file.provider ?? file.type) !== "claude" ||
+        !hasOrganizations(String(file.provider ?? file.type)) ||
         file.runtime_only ||
         !name
       )

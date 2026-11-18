@@ -42,8 +42,7 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
-      - run: bun ci
-      - run: bun run core:install
+      - run: bun run setup
       - run: bun run quality
       - run: bun run build
       - if: runner.os == 'macOS'

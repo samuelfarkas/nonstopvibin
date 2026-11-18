@@ -56,12 +56,12 @@ export function QuickSetup({
   }, [profile.id, agent, selectedProject, setError]);
   const offered = modelsFor(agent, models, otherProviders);
   const otherCount = models.length - modelsFor(agent, models, false).length;
-  // Codex, pi and OpenCode discover models live; only Claude's picker is a
-  // stored list that can drift from the catalog.
+  // An agent without a live catalog keeps the list written at connection,
+  // which can drift from the profile's models.
   const modelsChanged = Boolean(
     setup &&
     ((chooses && (setup.otherProviders ?? true) !== otherProviders) ||
-      (agent === "claude" &&
+      (!agents[agent].catalog &&
         (setup.models.length !== offered.length ||
           offered.some((model) => !setup.models.includes(model.id))))),
   );

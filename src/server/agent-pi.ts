@@ -1,7 +1,9 @@
-import type { Profile } from "../shared/types.ts";
+import type { CatalogModel, Profile } from "../shared/types.ts";
+import { nativeAgent } from "../shared/providers.ts";
 import {
   type AgentDefinition,
   catalogRequest,
+  listedModel,
   nativeProvider,
   ownedFile,
   profileBase,
@@ -81,7 +83,7 @@ export default async function (pi) {
 `;
 }
 
-export const pi: AgentDefinition = {
+export const pi: AgentDefinition<"pi"> = {
   version: 7,
   olderNeedsReconnect: true,
   directory,
@@ -98,5 +100,42 @@ export const pi: AgentDefinition = {
   command: () => "pi",
   instructions: (profile) =>
     `Choose ${profile.name} once with /nv; pi remembers the profile and model for this repository, including /new. Use native /model to switch models. The footer shows the active profile. App startup updates connected extensions automatically; restart pi or /reload to load changes. Skip /login: a stored key would override the credential helper. Needs pi 0.85.1 or later.`,
-  catalog: "query",
+  entries: (models) => models.map(piModel),
 };
+
+// pi speaks each vendor's native protocol through the gateway so thinking
+// levels and tool calls are not translated twice.
+const piApi = (model: CatalogModel) =>
+  nativeAgent(model.owned_by) === "claude"
+    ? "anthropic-messages"
+    : nativeAgent(model.owned_by) === "codex"
+      ? "openai-responses"
+      : "openai-completions";
+/** pi's model entry, with the limits and prices it needs per model. */
+export function piModel(model: CatalogModel) {
+  const { m, cost, name } = listedModel(model, false);
+  return {
+    id: model.id,
+    name,
+    api: piApi(model),
+    reasoning: m.reasoning,
+    input: m.input,
+    contextWindow: m.context,
+    maxTokens: m.output,
+    cost: {
+      input: cost.input,
+      output: cost.output,
+      ...(cost.cache_read !== undefined && { cacheRead: cost.cache_read }),
+      ...(cost.cache_write !== undefined && { cacheWrite: cost.cache_write }),
+      ...(cost.tiers && {
+        tiers: cost.tiers.map((t) => ({
+          inputTokensAbove: t.tier.size,
+          input: t.input,
+          output: t.output,
+          ...(t.cache_read !== undefined && { cacheRead: t.cache_read }),
+          ...(t.cache_write !== undefined && { cacheWrite: t.cache_write }),
+        })),
+      }),
+    },
+  };
+}

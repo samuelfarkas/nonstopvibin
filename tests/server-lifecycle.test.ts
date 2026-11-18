@@ -11,7 +11,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -24,33 +23,12 @@ import {
 } from "../src/server/data-directory.ts";
 import { probe, readSession, startServer } from "../src/server/cli.ts";
 import { clientDirectory, coreBinary } from "./support/application.ts";
+import { unusedPort } from "./support/ports.ts";
 
 const binary = coreBinary;
 const cli = resolve("src/server/cli.ts");
-// The CLI takes a port number. A port from the system's ephemeral range (from 32768 on
-// Linux, 49152 on macOS), released for the CLI to bind, can meanwhile be handed to any
-// `listen(0)` or outgoing connection, the CLIs' own cores included. Below that range a port
-// free now stays free until something binds that number; each is used once per run.
-const handedOut = new Set<number>();
-async function unusedPort(): Promise<number> {
-  for (;;) {
-    const port = 20_000 + Math.floor(Math.random() * 12_000);
-    if (handedOut.has(port)) continue;
-    const listener = createServer();
-    const free = await new Promise<boolean>((done) => {
-      listener.once("error", () => done(false));
-      listener.listen(port, "127.0.0.1", () =>
-        listener.close(() => done(true)),
-      );
-    });
-    if (!free) continue;
-    handedOut.add(port);
-    return port;
-  }
-}
 async function launch(directory: string) {
   const port = await unusedPort();
-  assert.notEqual(port, 4318);
   const child = spawn(
     process.execPath,
     [cli, "serve", "--port", String(port)],

@@ -189,19 +189,27 @@ Licenses are in \`licenses/\`.
     const entries = await files(out);
     const client = `${serverArchive.client}/`;
     const fixed = entries.filter((entry) => !entry.startsWith(client));
+    // Every archive entry is staged; the directories hold exactly these files.
+    const contents = {
+      [serverArchive.core]: coreFiles,
+      [serverArchive.licenses]: [
+        ...licenses.map(([, to]) => to),
+        "CLIProxyAPI.txt",
+      ],
+    };
     assert.deepEqual(
       fixed.sort(),
-      [
-        serverArchive.executable,
-        serverArchive.installer,
-        serverArchive.readme,
-        `${serverArchive.core}/`,
-        ...coreFiles.map((file) => `${serverArchive.core}/${file}`),
-        `${serverArchive.licenses}/`,
-        ...[...licenses.map(([, to]) => to), "CLIProxyAPI.txt"].map(
-          (file) => `${serverArchive.licenses}/${file}`,
-        ),
-      ].sort(),
+      Object.values(serverArchive)
+        .filter((entry) => entry !== serverArchive.client)
+        .flatMap((entry) =>
+          contents[entry]
+            ? [
+                `${entry}/`,
+                ...contents[entry].map((file) => `${entry}/${file}`),
+              ]
+            : [entry],
+        )
+        .sort(),
       "Unexpected server archive contents",
     );
     assert.ok(entries.includes(`${client}index.html`), "Missing client");

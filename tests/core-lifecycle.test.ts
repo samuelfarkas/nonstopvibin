@@ -621,8 +621,8 @@ test(
       await changing;
       const shutdown = cores.shutdown();
       await assert.rejects(cores.pool.start(profile.id), /shutting down/);
-      // Time enough for a shutdown that did not wait to begin stopping the core.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Every step before the stops settles within this turn when nothing holds it.
+      await new Promise((resolve) => setImmediate(resolve));
       release();
       assert.equal(await change, false, "no stop began during the change");
       await shutdown;

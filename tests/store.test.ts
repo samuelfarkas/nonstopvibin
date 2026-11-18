@@ -14,8 +14,11 @@ import type { UsageRecord } from "../src/shared/types.ts";
 import { fileKeyCodec } from "../src/server/vault.ts";
 import { usageSummary } from "./support/usage-summary.ts";
 import { usagePageSize } from "../src/shared/vocabulary.ts";
-import { Application } from "../src/server/server.ts";
-import { temporaryStore } from "./support/application.ts";
+import {
+  customAccount,
+  temporaryStore,
+  testApplication,
+} from "./support/application.ts";
 
 test("existing databases never receive a replacement vault key", async () => {
   const { directory, store, remove } = await temporaryStore(
@@ -62,16 +65,13 @@ test("profile writes refresh the cached profile names the tray reads", async () 
 
 test("desktop secrets persist using an owner-only local key", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-vault-"));
-  const options = {
-    directory,
-    binary: join(directory, "unused-core"),
-    allowMissingCore: true,
-    clientDirectory: directory,
-    agentHome: join(directory, "agent-home"),
-    port: 0,
-    desktop: true,
-  };
-  let app = await Application.create(options);
+  const open = () =>
+    testApplication(directory, {
+      binary: join(directory, "unused-core"),
+      allowMissingCore: true,
+      clientDirectory: directory,
+    });
+  let app = await open();
   try {
     const profile = app.store.createProfile("Fixture");
     const id = secretIds.client(profile.id);
@@ -86,11 +86,11 @@ test("desktop secrets persist using an owner-only local key", async () => {
     for (const file of ["vault.key", "nonstopvibin.sqlite"])
       assert.equal((await stat(join(directory, file))).mode & 0o777, 0o600);
     await app.close();
-    app = await Application.create(options);
+    app = await open();
     assert.equal(app.store.clientKey(profile.id), key);
     await app.close();
     await rm(directory, { recursive: true });
-    app = await Application.create(options);
+    app = await open();
     assert.ok(app.store.profiles().every((p) => p.id !== profile.id));
     assert.equal(
       app.store.db.prepare("SELECT id FROM secrets WHERE id=?").get(id),
@@ -398,15 +398,12 @@ test("secret and setting rows keep the IDs stored databases already use", async 
     const profile = store.createProfile("Fixture");
     store.saveApiAccount(
       profile.id,
-      {
-        id: "account",
-        name: "Key",
-        provider: "custom",
-        baseUrl: "https://api.example.test/v1",
-        prefix: "",
-        models: [{ id: "model", protocol: "openai" }],
-        disabled: false,
-      },
+      customAccount(
+        "account",
+        "https://api.example.test/v1",
+        [{ id: "model", protocol: "openai" }],
+        "Key",
+      ),
       "secret",
     );
     store.saveAccountMetadata(profile.id, []);

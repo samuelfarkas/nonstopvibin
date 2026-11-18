@@ -1,4 +1,5 @@
 import type { Account, SeatIdentity } from "../shared/types.ts";
+import { providerLabel } from "../shared/providers.ts";
 
 export function groupAccountsByProvider(
   accounts: Account[],
@@ -37,7 +38,7 @@ export function organizationLabel(seat: SeatIdentity): string {
 export function accountLabel(account: Account): string {
   const organization = organizationLabel(account);
   return organization
-    ? `${organization}${account.name !== "Claude" ? ` · ${account.name}` : ""}`
+    ? `${organization}${account.name !== providerLabel(account.provider) ? ` · ${account.name}` : ""}`
     : account.name;
 }
 

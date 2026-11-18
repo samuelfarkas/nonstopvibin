@@ -1,4 +1,9 @@
-import type { AgentSetupInput, Profile } from "../shared/types.ts";
+import type { Agent, AgentEntries } from "../shared/agents.ts";
+import type {
+  AgentSetupInput,
+  CatalogModel,
+  Profile,
+} from "../shared/types.ts";
 import { AppError } from "./errors.ts";
 
 /** Manifest versions releases have written; version 1 has its own schema. */
@@ -44,7 +49,7 @@ export interface RecordedConnection {
   models: string[];
 }
 
-export interface AgentDefinition {
+interface DefinitionFields {
   /** Manifest version a connection made now records; older ones are migrated. */
   version: (typeof manifestVersions)[number];
   /**
@@ -83,8 +88,28 @@ export interface AgentDefinition {
   launchSettings?: (manifest: RecordedConnection) => string | undefined;
   command: (profile: Profile, launchSettings: string) => string;
   instructions: (profile: Profile) => string;
-  /** How the agent asks for its curated catalog (see `catalogRequest`). */
-  catalog?: "header" | "query";
+}
+/**
+ * One agent's definition. An agent whose generated code asks for its catalog (`catalog:
+ * "query"` in the shared registry) makes the entries it is served; one whose own request
+ * asks gets the OpenAI model list.
+ */
+export type AgentDefinition<A extends Agent = Agent> = A extends Agent
+  ? DefinitionFields &
+      (AgentEntries[A] extends { catalog: "query" }
+        ? { entries: (models: CatalogModel[]) => object[] }
+        : { entries?: undefined })
+  : never;
+
+/**
+ * A model's prices and the name pi and OpenCode list it under. `tiersNote` says a tiered
+ * price shows only its base rate in that client.
+ */
+export function listedModel(model: CatalogModel, tiersNote: boolean) {
+  const m = model.metadata;
+  if (!m?.cost) throw new AppError("Model metadata is unavailable.");
+  const name = `${m.name} · API list price${tiersNote && m.cost.tiers?.length ? " (base rate; tiered pricing unavailable in this client)" : ""}${m.cost.cache_read === undefined || m.cost.cache_write === undefined ? " (cache pricing unavailable)" : ""}`;
+  return { m, cost: m.cost, name };
 }
 
 export function conflict(): never {
