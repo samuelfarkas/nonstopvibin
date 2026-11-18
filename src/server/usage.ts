@@ -112,12 +112,14 @@ interface Cadence {
 }
 /** A profile the app keeps running whose core did not run when last seen. */
 interface Restart {
-  /** Automatic starts in this run of failures. It ends once a core stays up `restartBackoff` past `at`. */
+  /** Automatic starts in this run of failures. It ends once one core stays up for `restartBackoff`. */
   attempts: number;
   /** When a pass may start it next. */
   at: number;
   /** This run of failures is already in the error list. */
   reported: boolean;
+  /** The core last seen running with no start in flight, and since when: from its start's end at the latest. */
+  up?: { core: Readonly<CoreRuntime> | undefined; since: number };
 }
 export interface UsageOptions {
   /** Read on every wakeup, so a caller may change it while the scheduler runs. */
@@ -179,10 +181,10 @@ export class Usage {
   }
   /**
    * A core started, stopped or failed, or a start, stop or credential swap ended: each
-   * profile the app keeps running that does not run is due a start. `launched`: the launch
-   * restore has just reported every profile it could not start.
+   * profile the app keeps running that does not run is due a start. `reported`: profiles
+   * whose failure the launch restore has just put in the error list.
    */
-  changed(launched = false): void {
+  changed(reported: ReadonlySet<string> = new Set()): void {
     // Before `begin`, the launch restore is starting profiles; `begin` looks once it is done.
     if (!this.schedule || this.pool.shuttingDown) return;
     for (const profile of this.store.profiles())
@@ -194,8 +196,8 @@ export class Usage {
         this.restarts.set(profile.id, {
           attempts: 0,
           at: 0,
-          // The restore tried each enabled profile: its failure is this run's error entry.
-          reported: launched && profile.enabled,
+          // The restore's report of its failed start is this run's error entry.
+          reported: reported.has(profile.id),
         });
     this.schedule();
   }
@@ -241,6 +243,10 @@ export class Usage {
       try {
         // Shutdown must not wait out this core's readiness window.
         await this.pool.start(profileId, this.abandon.signal);
+        restart.up = {
+          core: this.pool.runtimes.get(profileId),
+          since: Date.now(),
+        };
       } catch (error) {
         if (!this.pool.shuttingDown) fail(errorMessage(error));
         return;
@@ -309,7 +315,8 @@ export class Usage {
       this.report(`Usage before stop: ${errorMessage(error)}`);
     }
   }
-  begin(): void {
+  /** Starts scheduling; `reported`: profiles whose failed start the launch restore reported. */
+  begin(reported: Iterable<string> = []): void {
     clearTimeout(this.timer);
     let nextAccounts = Date.now() + this.timing.accounts;
     let nextQuotas = Date.now() + quotaRefreshMs;
@@ -349,9 +356,16 @@ export class Usage {
       this.timer = undefined;
       if (this.pool.shuttingDown) return;
       for (const [profileId, restart] of this.restarts) {
-        // A core that exits soon after starting is a crash loop: its backoff stands until it stays up.
+        // A core counts as running before its start ends: the start's own end decides.
+        if (this.pool.starting.has(profileId) || this.restarting.has(profileId))
+          continue;
+        // A core that exits soon after starting is a crash loop: the run of failures ends
+        // only once the same core has stayed up for the whole bound.
         if (this.pool.running(profileId)) {
-          if (Date.now() >= restart.at + this.timing.restartBackoff)
+          const core = this.pool.runtimes.get(profileId);
+          const { up } = restart;
+          if (!up || up.core !== core) restart.up = { core, since: Date.now() };
+          else if (Date.now() >= up.since + this.timing.restartBackoff)
             this.restarts.delete(profileId);
         } else if (Date.now() >= restart.at && this.startable(profileId))
           this.restart(profileId, restart);
@@ -445,7 +459,7 @@ export class Usage {
     };
     this.schedule = schedule;
     // Profiles the launch restore could not start are due at once.
-    this.changed(true);
+    this.changed(new Set(reported));
   }
   /** Stops scheduling and waits for the drain pass, maintenance and automatic starts already running. */
   async settled(): Promise<void> {

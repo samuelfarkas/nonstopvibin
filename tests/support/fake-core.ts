@@ -9,7 +9,8 @@ import { coreLayout } from "../../src/server/core-binary.ts";
  * Bun is not, so the fake ends itself once the test process that started it is gone.
  */
 export const idleCore = `process.on("SIGTERM", () => process.exit(0));
-setInterval(() => process.ppid === 1 && process.exit(0), 1000);
+const parent = process.ppid;
+setInterval(() => process.ppid !== parent && process.exit(0), 1000);
 `;
 /**
  * A core that listens on the port its config names and answers management as a running

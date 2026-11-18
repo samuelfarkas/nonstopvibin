@@ -428,8 +428,9 @@ export class CorePool {
   async reapOrphans(): Promise<void> {
     await reapOrphanedCores(this.store.directory);
   }
-  /** Starts every enabled profile; a profile that fails is reported, not thrown. */
-  async restore(report: Report, signal?: AbortSignal): Promise<void> {
+  /** Starts every enabled profile; a profile that fails is reported, not thrown. Answers those reported. */
+  async restore(report: Report, signal?: AbortSignal): Promise<string[]> {
+    const reported: string[] = [];
     for (const profile of this.store.profiles().filter((p) => p.enabled)) {
       signal?.throwIfAborted();
       try {
@@ -437,8 +438,10 @@ export class CorePool {
       } catch (error) {
         signal?.throwIfAborted();
         report(`${profile.name}: ${errorMessage(error)}`);
+        reported.push(profile.id);
       }
     }
+    return reported;
   }
   /** From now on nothing starts and no request may be sent to a core. */
   beginShutdown(): void {

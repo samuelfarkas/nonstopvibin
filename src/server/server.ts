@@ -629,6 +629,8 @@ export class Application {
             await pool.start(id).catch((error) => {
               failure = error;
             });
+          // Once shutdown began nothing new may begin: its work waits for no provider request.
+          if (failure && pool.shuttingDown) throw failure;
           await this.cores.quotas.refreshAccounts(
             id,
             // API-key quota needs no core; a core that is not running could only record a failed check.

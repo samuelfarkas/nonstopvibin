@@ -75,9 +75,9 @@ export class Cores {
     // Orphans first: if the pending sign-ins cannot be removed, startup fails without leaving one running.
     await this.pool.reapOrphans();
     await this.signIn.discardPending();
-    await this.pool.restore(this.report, signal);
+    const reported = await this.pool.restore(this.report, signal);
     signal?.throwIfAborted();
-    this.usage.begin();
+    this.usage.begin(reported);
   }
   /**
    * Refuses new work and abandons an automatic start, lets sign-in actions and then

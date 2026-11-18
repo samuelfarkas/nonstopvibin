@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Management } from "../src/server/core.ts";
+import { coreTiming, type Management } from "../src/server/core.ts";
 import { Cores } from "../src/server/cores.ts";
 import { AppError } from "../src/server/errors.ts";
 import { providers } from "../src/shared/providers.ts";
@@ -44,6 +44,16 @@ const subscribed =
       }),
     };
   };
+/** An OpenCode Go subscription: its quota is asked from the provider with the key. */
+const goAccount = () => ({
+  id: "go-key",
+  name: "OpenCode Go",
+  provider: "opencode-go" as const,
+  baseUrl: providers["opencode-go"].preset.baseUrl,
+  prefix: "",
+  models: [],
+  disabled: false,
+});
 /** Management of a core that never answers. */
 const unreachable: Management = () =>
   Promise.reject(new Error("The fixture core does not answer."));
@@ -452,19 +462,7 @@ test(
       );
     };
     const profile = app.store.createProfile("Go fixture");
-    app.store.saveApiAccount(
-      profile.id,
-      {
-        id: "go-key",
-        name: "OpenCode Go",
-        provider: "opencode-go",
-        baseUrl: providers["opencode-go"].preset.baseUrl,
-        prefix: "",
-        models: [],
-        disabled: false,
-      },
-      "synthetic-go-key",
-    );
+    app.store.saveApiAccount(profile.id, goAccount(), "synthetic-go-key");
     const refresh = () =>
       management(app, `/profiles/${profile.id}/refresh`, { method: "POST" });
     try {
@@ -622,6 +620,209 @@ test(
       assert.equal(error.status, 503);
       assert.deepEqual(reports, []);
     } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "a core that answers but never finishes its readiness keeps its backoff and is reported once",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    // When each core was first asked whether it runs, and when each one that failed exited.
+    const asked: number[] = [];
+    const ended: number[] = [];
+    const ports = new Set<number>();
+    const exits = new Set<unknown>();
+    const reports: string[] = [];
+    let enough!: () => void;
+    const failed = new Promise<void>((resolve) => {
+      enough = resolve;
+    });
+    const cores: Cores = new Cores(store, binary, {
+      report: (message) => reports.push(message),
+      timing: { ...coreTiming, ready: 300 },
+      usageTiming: backoff,
+      onStatusChange: () => {
+        const runtime = cores.pool.runtimes.get(profile.id);
+        const { child } = runtime ?? {};
+        if (!runtime || !child || exits.has(runtime)) return;
+        if (child.exitCode === null && child.signalCode === null) return;
+        exits.add(runtime);
+        ended.push(Date.now());
+        if (ended.length === waits.length + 1) enough();
+      },
+      // The core answers, so it counts as running, but the readiness account sync always fails.
+      management: async ({ path, port }) => {
+        if (path === "/auth-files")
+          throw new Error("The fixture's account list fails.");
+        if (path === "/config" && !ports.has(port)) {
+          ports.add(port);
+          asked.push(Date.now());
+        }
+        return path.startsWith("/usage-queue") ? [] : {};
+      },
+    });
+    const profile = store.createProfile("Unready fixture");
+    store.saveApiAccount(profile.id, apiKey("unready-key"), "unready-key");
+    try {
+      cores.usage.begin();
+      await failed;
+      await cores.shutdown();
+      // Start n + 1 waits for its backoff after start n failed.
+      waits.forEach((wait, i) => {
+        const gap = asked[i + 1]! - ended[i]!;
+        assert.ok(
+          gap >= wait && gap < wait + 1000,
+          `start ${i + 2} came ${gap} ms after start ${i + 1} failed, expected ${wait} ms`,
+        );
+      });
+      assert.equal(reports.length, 1, `one error entry: ${reports}`);
+      assert.match(
+        reports[0]!,
+        /^Unready fixture: Proxy did not become ready\. The fixture's account list fails\./,
+      );
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "a Refresh that shutdown interrupts asks no provider",
+  { timeout: 20_000 },
+  async () => {
+    const { directory, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    let askedReady!: () => void;
+    const starting = new Promise<void>((resolve) => {
+      askedReady = resolve;
+    });
+    const answering = subscribed();
+    const app = await testApplication(join(directory, "data"), {
+      binary,
+      cores: {
+        usageTiming: { ...usageTiming, coalesce: 10 },
+        // The core never answers until its automatic start is abandoned.
+        management: (request) => {
+          if (request.path !== "/config") return answering(request);
+          askedReady();
+          return new Promise((_, reject) =>
+            request.signal?.addEventListener("abort", () =>
+              reject(request.signal?.reason),
+            ),
+          );
+        },
+      },
+    });
+    const usage = `${providers["opencode-go"].preset.baseUrl}/usage`;
+    let goChecks = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      if (String(input) !== usage) return originalFetch(input, init);
+      goChecks++;
+      return new Response(JSON.stringify({ usage: {} }));
+    };
+    // Tells when Refresh has joined the automatic start: joining happens within the call.
+    const pool = app.cores.pool;
+    const start = pool.start.bind(pool);
+    let joined!: () => void;
+    const joining = new Promise<void>((resolve) => {
+      joined = resolve;
+    });
+    pool.start = (profileId, signal) => {
+      const started = start(profileId, signal);
+      if (!signal) joined();
+      return started;
+    };
+    try {
+      const profile = app.store.createProfile("Interrupted fixture");
+      app.store.saveApiAccount(profile.id, goAccount(), "synthetic-go-key");
+      app.cores.usage.changed();
+      await starting;
+      const refreshed = management(app, `/profiles/${profile.id}/refresh`, {
+        method: "POST",
+      });
+      await joining;
+      await app.cores.shutdown();
+      const response = await refreshed;
+      assert.equal(response.status, 503);
+      assert.match(await response.text(), /shutting down/);
+      assert.equal(goChecks, 0, "no provider request after shutdown began");
+      assert.deepEqual(app.errors, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await closeApplication(app);
+      await remove();
+    }
+  },
+);
+
+test(
+  "a profile the launch started that exited before the scheduler began is reported on its first failed restart",
+  { timeout: 15_000 },
+  async () => {
+    const { directory, store, remove } = await temporaryStore("nv-restart-");
+    const binary = await installFakeCore(join(directory, "core"), idleCore);
+    const early = store.createProfile("Early");
+    const late = store.createProfile("Late");
+    for (const profile of [early, late]) {
+      store.saveProfile({ ...profile, enabled: true });
+      store.saveApiAccount(profile.id, apiKey(`${profile.id}-key`), "key");
+    }
+    let releaseLate!: () => void;
+    const lateGate = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
+    let lateAsked!: () => void;
+    const lateStarting = new Promise<void>((resolve) => {
+      lateAsked = resolve;
+    });
+    let earlyDown = false;
+    const reports: string[] = [];
+    let reported!: () => void;
+    const firstReport = new Promise<void>((resolve) => {
+      reported = resolve;
+    });
+    const answering = subscribed();
+    const cores = new Cores(store, binary, {
+      report: (message) => {
+        reports.push(message);
+        reported();
+      },
+      timing: { ...coreTiming, ready: 300 },
+      usageTiming: { ...usageTiming, coalesce: 10 },
+      management: async (request) => {
+        if (request.profileId === late.id && request.path === "/config") {
+          lateAsked();
+          await lateGate;
+        }
+        if (request.profileId === early.id && earlyDown)
+          throw new Error("The early core no longer answers.");
+        return answering(request);
+      },
+    });
+    try {
+      const restoring = cores.restore();
+      // Early is running; the restore waits on Late's start.
+      await lateStarting;
+      const { child } = cores.pool.runtimes.get(early.id)!;
+      const exited = once(child, "exit");
+      child.kill("SIGKILL");
+      await exited;
+      earlyDown = true;
+      releaseLate();
+      await restoring;
+      assert.deepEqual(reports, [], "the restore reported no failure");
+      await firstReport;
+      assert.equal(reports.length, 1);
+      assert.match(reports[0]!, /^Early: Proxy did not become ready\./);
+    } finally {
+      releaseLate();
       await cores.shutdown();
       await remove();
     }
