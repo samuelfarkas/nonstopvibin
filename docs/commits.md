@@ -77,10 +77,13 @@ Do not mark an internal refactor as breaking.
 
 ## Clean up history
 
-Use interactive rebase to reword or combine private WIP/fixup commits before
-sharing. Preserve useful logical commits rather than flattening everything into
-one snapshot. For a PR with noisy development history, squash-merge using a
-conforming PR title; retain a meaningful series when each commit stands alone.
+Always squash-merge pull requests, with a conforming PR title: `main` gets one
+commit per pull request. Never use a merge commit or a rebase merge, however
+clean the branch's series is.
+
+On a branch, use interactive rebase to reword or combine private WIP/fixup
+commits before sharing; logical commits there help review, and the squash
+removes them from `main`.
 
 Before rewriting, check branches, remotes, and tags, and save a recovery reference
 or Git bundle outside the checkout. Rewrite only confirmed private history. A
