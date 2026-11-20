@@ -1,6 +1,23 @@
-import type { ApiAccount, Profile } from "../shared/types.ts";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import YAML from "yaml";
+import type { Json, Profile } from "../shared/types.ts";
+import {
+  protocols,
+  providerEntry,
+  type Upstream,
+} from "../shared/providers.ts";
+import type { ApiAccount, Store } from "./store.ts";
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
+import { version } from "../../package.json";
+import {
+  coreConfigPath,
+  credentialDirectory,
+  profileDirectory,
+} from "./data-directory.ts";
+import { record } from "./json.ts";
+
+export { version };
+export const userAgent = `nonstopvibin/${version}`;
 
 // Upstream CLIProxyAPI config entries. Type aliases keep them assignable to Json.
 type ModelEntry = { name: string; alias: string };
@@ -20,6 +37,13 @@ type KeyEntry = {
   models: ModelEntry[];
 };
 export type CoreConfiguration = ReturnType<typeof coreConfiguration>;
+/** Headers requests to a preset with `upstream` carry. */
+const upstreamHeaders = {
+  "opencode-go": {
+    "User-Agent": `${userAgent} (coding-agent-gateway)`,
+    "x-opencode-session": "$x-opencode-session",
+  },
+} satisfies Record<Upstream, Record<string, string>>;
 
 export function coreConfiguration(
   profile: Profile,
@@ -33,14 +57,12 @@ export function coreConfiguration(
   const claude: KeyEntry[] = [];
   const responses: KeyEntry[] = [];
   for (const account of accounts.filter((a) => !a.disabled)) {
-    const headers: Record<string, string> =
-      account.provider === "opencode-go"
-        ? {
-            "User-Agent": "nonstopvibin/0.1.1 (coding-agent-gateway)",
-            "x-opencode-session": "$x-opencode-session",
-          }
-        : {};
-    for (const protocol of ["openai", "anthropic", "responses"] as const) {
+    const upstream = providerEntry(account.provider).preset?.upstream;
+    // A copy per account: YAML writes an object repeated across accounts as an alias.
+    const headers: Record<string, string> = upstream
+      ? { ...upstreamHeaders[upstream] }
+      : {};
+    for (const protocol of protocols) {
       const models = account.models
         .filter((m) => m.protocol === protocol)
         .map((m) => ({ name: m.id, alias: m.id }));
@@ -51,12 +73,7 @@ export function coreConfiguration(
           .update(JSON.stringify([account.baseUrl, account.prefix, models]))
           .digest("hex");
         const name = `${account.provider}-${identity}`;
-        const existing = compatible.find(
-          (p) =>
-            p.name === name &&
-            p["base-url"] === account.baseUrl &&
-            isDeepStrictEqual(p.models, models),
-        );
+        const existing = compatible.find((p) => p.name === name);
         if (existing) existing["api-key-entries"].push({ "api-key": key });
         else
           compatible.push({
@@ -120,4 +137,89 @@ export function coreConfiguration(
     "claude-api-key": claude,
     "codex-api-key": responses,
   };
+}
+
+export class ConfigWriter {
+  private readonly store: Store;
+  private readonly writes = new Map<string, Promise<CoreConfiguration>>();
+  constructor(store: Store) {
+    this.store = store;
+  }
+  async write(profileId: string, port: number): Promise<CoreConfiguration> {
+    const previous = this.writes.get(profileId) ?? Promise.resolve();
+    const operation = previous
+      .catch(() => undefined)
+      .then(() => this.writeFile(profileId, port));
+    this.writes.set(profileId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.writes.get(profileId) === operation)
+        this.writes.delete(profileId);
+    }
+  }
+  private async writeFile(
+    profileId: string,
+    port: number,
+  ): Promise<CoreConfiguration> {
+    // An unknown profile fails before any directory is created.
+    this.store.profile(profileId);
+    const directory = profileDirectory(this.store.directory, profileId);
+    const authDir = credentialDirectory(this.store.directory, profileId);
+    await mkdir(authDir, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    await chmod(authDir, 0o700);
+    // Read after the awaits above, so a settings change saved meanwhile is written.
+    const config = coreConfiguration(
+      this.store.profile(profileId),
+      port,
+      authDir,
+      {
+        core: this.store.coreKey(profileId),
+        management: this.store.managementKey(profileId),
+      },
+      this.store.apiAccounts(profileId),
+      (id) => this.store.apiKey(id),
+    );
+    const path = coreConfigPath(this.store.directory, profileId);
+    // The core watches this inode; atomic replacement drops its Linux watch.
+    // This derived config is regenerated from SQLite before every core start.
+    await writeFile(path, YAML.stringify(config), { mode: 0o600 });
+    await chmod(path, 0o600);
+    return config;
+  }
+}
+
+// The entries a running core reloads from a changed file; the rest apply at its next start.
+const liveFields = [
+  "routing",
+  "openai-compatibility",
+  "claude-api-key",
+  "codex-api-key",
+] as const;
+// The Go core omits zero values, so "", false, 0, and [] read back as absent.
+function matches(
+  expected: Json | undefined,
+  actual: Json | undefined,
+): boolean {
+  if (Array.isArray(expected))
+    return expected.length === 0
+      ? actual == null || (Array.isArray(actual) && actual.length === 0)
+      : Array.isArray(actual) &&
+          expected.length === actual.length &&
+          expected.every((value, index) => matches(value, actual[index]));
+  if (expected instanceof Object)
+    return Object.entries(expected).every(([key, value]) =>
+      matches(value, record(actual)[key]),
+    );
+  return (
+    expected === actual ||
+    ((expected === "" || expected === false || expected === 0) &&
+      actual === undefined)
+  );
+}
+/** Whether a core's reported config shows every live entry of `expected`. */
+export function applied(expected: CoreConfiguration, actual: Json): boolean {
+  const reported = record(actual);
+  return liveFields.every((key) => matches(expected[key], reported[key]));
 }

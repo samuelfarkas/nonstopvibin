@@ -1,0 +1,154 @@
+name: Checks
+# The desktop and server checks, written once. build.yml runs them on every change;
+# release.yml runs the same steps with `release: true`, which also signs macOS and keeps
+# the artifacts for publishing.
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+    secrets:
+      CSC_LINK:
+        required: false
+      CSC_KEY_PASSWORD:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-26 is the arm64 image macos-latest pointed to when pinned.
+        os: [macos-26, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.release && 30 || 25 }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun run setup
+      - run: bun run quality
+      - run: bun run build
+      - if: runner.os == 'macOS'
+        name: Fetch the Electron binary
+        # Fetched here with a limit; inside the smoke test a stalled download hangs the job.
+        timeout-minutes: 5
+        run: bun run install-electron
+      - if: runner.os == 'macOS'
+        name: Desktop smoke
+        # Backstop above the smoke test's own limits.
+        timeout-minutes: 6
+        run: bun run test:desktop:built
+      - if: runner.os == 'macOS' && (failure() || cancelled())
+        name: Upload desktop smoke diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          retention-days: 7
+          if-no-files-found: ignore
+          name: desktop-smoke-diagnostics-${{ runner.os }}
+          path: test-results/desktop-smoke/
+      - if: runner.os == 'macOS'
+        name: UI checks
+        run: bun run test:ui:built
+      - if: runner.os == 'Linux'
+        name: Desktop smoke with Chromium sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libasound2t64 libgtk-3-0 libnss3
+          bun run install-electron
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          xvfb-run -a bun run test:desktop:built
+      - run: bun test
+      # Installers for the host architecture, with the targets in package.json `build`.
+      - if: ${{ !inputs.release || runner.os == 'Linux' }}
+        name: Package
+        run: bun run dist:built
+      - if: inputs.release && runner.os == 'macOS'
+        id: signing
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "Release builds require macOS signing credentials. See docs/release-signing.md."
+            exit 1
+          else
+            test -n "$APPLE_ID" && test -n "$APPLE_APP_SPECIFIC_PASSWORD" && test -n "$APPLE_TEAM_ID" || {
+              echo "Signed macOS releases require APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID."
+              exit 1
+            }
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - if: steps.signing.outputs.enabled == 'true'
+        name: Package, signed and notarized
+        run: bun run dist:built -c.forceCodeSigning=true
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - if: steps.signing.outputs.enabled == 'true'
+        name: Verify the signed app
+        run: |
+          set -- release/mac*/*.app
+          [ "$#" -eq 1 ] || exit 1
+          [ -d "$1" ] || exit 1
+          codesign --verify --deep --strict --verbose=2 "$1"
+          xcrun stapler validate "$1"
+          spctl -a -vv -t execute "$1"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Empty keeps the repository default for release artifacts.
+          retention-days: ${{ !inputs.release && 7 || '' }}
+          if-no-files-found: error
+          name: nonstopvibin-${{ runner.os }}
+          # Every top-level output file: installers, blockmaps and update feeds.
+          path: |
+            release/*.*
+            !release/builder-*
+  server:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun ci
+      - run: bun run dist:server
+      - name: Smoke-test the x64 server archive
+        run: bun run test:server
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          retention-days: ${{ !inputs.release && 7 || '' }}
+          if-no-files-found: error
+          name: nonstopvibin-server
+          path: release/*.tar.gz

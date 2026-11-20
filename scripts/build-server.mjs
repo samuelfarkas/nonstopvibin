@@ -18,9 +18,21 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
-import release from "./core-release.json" with { type: "json" };
 import pkg from "../package.json" with { type: "json" };
-import verifyPackage from "./verify-package.cjs";
+import {
+  checkCoreDirectory,
+  coreFiles,
+  coreLayout,
+  coreVersion,
+} from "../src/server/core-binary.ts";
+import { checkoutLayout, serverArchive } from "../src/server/host-defaults.ts";
+import {
+  architecture,
+  privateFilePattern,
+  renderInstaller,
+  serverArchiveName,
+  serverArchitectures,
+} from "./distribution.ts";
 
 const repo = resolve(import.meta.dirname, "..");
 assert.equal(
@@ -30,11 +42,14 @@ assert.equal(
 );
 const arches = process.argv.slice(2).length
   ? process.argv.slice(2)
-  : ["x64", "arm64"];
+  : serverArchitectures;
 for (const arch of arches)
-  if (!["x64", "arm64"].includes(arch))
+  if (!serverArchitectures.includes(arch))
     throw new Error(`Unsupported server architecture: ${arch}`);
-for (const file of ["dist/client/index.html", "dist/licenses/THIRD-PARTY.txt"])
+for (const file of [
+  join(checkoutLayout.client, "index.html"),
+  "dist/licenses/THIRD-PARTY.txt",
+])
   await stat(join(repo, file)).catch(() => {
     throw new Error(`Missing ${file}; run bun run build first.`);
   });
@@ -55,14 +70,14 @@ async function files(root, folder = root) {
   );
   return nested.flat();
 }
-// ELF64 little-endian, e_machine: x86-64 = 62, AArch64 = 183.
+// ELF64 little-endian with the architecture's e_machine.
 async function assertElf(path, arch) {
   const header = (await readFile(path)).subarray(0, 20);
   assert.equal(header.subarray(0, 4).toString("latin1"), "\x7fELF", path);
   assert.equal(header[4], 2, `${path} must be 64-bit`);
   assert.equal(
     header.readUInt16LE(18),
-    arch === "x64" ? 62 : 183,
+    architecture(arch).elf,
     `${path} is not a linux-${arch} executable`,
   );
 }
@@ -75,25 +90,32 @@ function stageCore(directory, arch) {
     stdio: "inherit",
   });
 }
+const licenses = [
+  ["LICENSE", "LICENSE"],
+  ["licenses/NOTICE.md", "NOTICE.md"],
+  ["licenses/Bun.txt", "Bun.txt"],
+  ["dist/licenses/THIRD-PARTY.txt", "THIRD-PARTY.txt"],
+];
 const bsdtar = execFileSync("tar", ["--version"], {
   encoding: "utf8",
 }).includes("bsdtar");
 
 await mkdir(join(repo, "release"), { recursive: true });
 for (const arch of arches) {
-  const name = `nonstopvibin-server-${pkg.version}-linux-${arch}`;
+  const name = serverArchiveName(pkg.version, arch);
   const temporary = await mkdtemp(join(tmpdir(), "nv-server-"));
   try {
     const out = join(temporary, name);
     const coreStage = join(temporary, "core-stage");
-    await mkdir(join(out, "core"), { recursive: true });
-    await mkdir(join(out, "licenses"));
+    const core = join(out, serverArchive.core);
+    await mkdir(core, { recursive: true });
+    await mkdir(join(out, serverArchive.licenses));
     await mkdir(coreStage);
     await stageCore(coreStage, arch);
-    for (const file of ["cli-proxy-api", "manifest.json"])
+    for (const file of coreFiles)
       await copyFile(
-        join(coreStage, ".vendor/core", file),
-        join(out, "core", file),
+        join(coreStage, coreLayout.checkout, file),
+        join(core, file),
       );
     execFileSync(
       "bun",
@@ -108,32 +130,31 @@ for (const arch of arches) {
         "--define",
         "NONSTOPVIBIN_PACKAGED=true",
         "--outfile",
-        join(out, "nonstopvibin"),
+        join(out, serverArchive.executable),
       ],
       { cwd: repo, stdio: "inherit" },
     );
-    await cp(join(repo, "dist/client"), join(out, "client"), {
-      recursive: true,
-    });
-    for (const [from, to] of [
-      ["LICENSE", "LICENSE"],
-      ["licenses/NOTICE.md", "NOTICE.md"],
-      ["licenses/Bun.txt", "Bun.txt"],
-      ["dist/licenses/THIRD-PARTY.txt", "THIRD-PARTY.txt"],
-    ])
-      await copyFile(join(repo, from), join(out, "licenses", to));
+    await cp(
+      join(repo, checkoutLayout.client),
+      join(out, serverArchive.client),
+      { recursive: true },
+    );
+    for (const [from, to] of licenses)
+      await copyFile(join(repo, from), join(out, serverArchive.licenses, to));
     await copyFile(
       join(coreStage, "licenses/CLIProxyAPI.txt"),
-      join(out, "licenses/CLIProxyAPI.txt"),
+      join(out, serverArchive.licenses, "CLIProxyAPI.txt"),
     );
     await writeFile(
-      join(out, "install.sh"),
-      (await readFile(join(repo, "scripts/server-install.sh"), "utf8"))
-        .replace("@VERSION@", pkg.version)
-        .replace("@ARCH@", arch),
+      join(out, serverArchive.installer),
+      renderInstaller(
+        await readFile(join(repo, "scripts/server-install.sh"), "utf8"),
+        pkg.version,
+        arch,
+      ),
     );
     await writeFile(
-      join(out, "README.md"),
+      join(out, serverArchive.readme),
       `# NonstopVibin ${pkg.version} headless server (linux-${arch})
 
 Run on glibc-based Linux (x64 or arm64; not Alpine/musl) as a non-root user.
@@ -149,60 +170,53 @@ A systemd user session is optional:
 Then run \`nonstopvibin url\` for the session link and SSH tunnel command.
 Full guide: ${pkg.homepage}/blob/main/docs/server.md
 
-\`core/manifest.json\` records the bundled CLIProxyAPI ${release.version} checksums.
+\`${serverArchive.core}/${coreLayout.manifest}\` records the bundled CLIProxyAPI ${coreVersion} checksums.
 They are integrity evidence, not independent proof of the publisher.
 Licenses are in \`licenses/\`.
 `,
     );
-    for (const path of ["nonstopvibin", "core/cli-proxy-api", "install.sh"])
-      await chmod(join(out, path), 0o755);
+    const binary = join(core, coreLayout.binary);
+    for (const path of [
+      join(out, serverArchive.executable),
+      binary,
+      join(out, serverArchive.installer),
+    ])
+      await chmod(path, 0o755);
 
-    // Verify the staged tree before archiving it.
-    await assertElf(join(out, "nonstopvibin"), arch);
-    await assertElf(join(out, "core/cli-proxy-api"), arch);
-    const target = `linux_${arch}`;
-    const manifest = JSON.parse(
-      await readFile(join(out, "core/manifest.json"), "utf8"),
-    );
-    assert.equal(manifest.version, release.version, "Core version pin");
-    assert.equal(manifest.platform, "linux", "Core platform");
-    assert.equal(manifest.arch, arch, "Core architecture");
-    assert.equal(
-      manifest.sha256,
-      release.checksums[target],
-      "Core archive pin",
-    );
-    assert.equal(manifest.binarySha256, release.binaries[target], "Core pin");
-    assert.equal(
-      await sha256(join(out, "core/cli-proxy-api")),
-      release.binaries[target],
-      "Core binary differs from the reviewed pin",
-    );
+    await assertElf(join(out, serverArchive.executable), arch);
+    await assertElf(binary, arch);
+    checkCoreDirectory(core, "linux", arch);
     const entries = await files(out);
-    const fixed = entries.filter((entry) => !entry.startsWith("client/"));
+    const client = `${serverArchive.client}/`;
+    const fixed = entries.filter((entry) => !entry.startsWith(client));
+    // Every archive entry is staged; the directories hold exactly these files.
+    const contents = {
+      [serverArchive.core]: coreFiles,
+      [serverArchive.licenses]: [
+        ...licenses.map(([, to]) => to),
+        "CLIProxyAPI.txt",
+      ],
+    };
     assert.deepEqual(
       fixed.sort(),
-      [
-        "README.md",
-        "core/",
-        "core/cli-proxy-api",
-        "core/manifest.json",
-        "install.sh",
-        "licenses/",
-        "licenses/Bun.txt",
-        "licenses/CLIProxyAPI.txt",
-        "licenses/LICENSE",
-        "licenses/NOTICE.md",
-        "licenses/THIRD-PARTY.txt",
-        "nonstopvibin",
-      ],
+      Object.values(serverArchive)
+        .filter((entry) => entry !== serverArchive.client)
+        .flatMap((entry) =>
+          contents[entry]
+            ? [
+                `${entry}/`,
+                ...contents[entry].map((file) => `${entry}/${file}`),
+              ]
+            : [entry],
+        )
+        .sort(),
       "Unexpected server archive contents",
     );
-    assert.ok(entries.includes("client/index.html"), "Missing client");
+    assert.ok(entries.includes(`${client}index.html`), "Missing client");
     for (const entry of entries)
       assert.doesNotMatch(
         entry,
-        verifyPackage.privateFilePattern,
+        privateFilePattern,
         `Private or development file in server archive: ${entry}`,
       );
 

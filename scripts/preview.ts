@@ -3,6 +3,8 @@ import http from "node:http";
 import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { Application } from "../src/server/server.ts";
+import { runHost } from "../src/server/host.ts";
+import { sessionUrl } from "../src/shared/renderer-url.ts";
 
 await mkdir(".test-runtime", { recursive: true });
 const directory = await mkdtemp(resolve(".test-runtime/preview-"));
@@ -62,15 +64,20 @@ const upstream = http.createServer(async (req, res) => {
 await new Promise<void>((resolve) =>
   upstream.listen(4322, "127.0.0.1", resolve),
 );
-const app = await Application.create({
-  directory,
-  agentHome: join(directory, "agent-home"),
-  binary: resolve(".vendor/core/cli-proxy-api"),
-  clientDirectory: resolve("dist/client"),
-  port: 4321,
-});
-const work = app.store.createProfile("Work", "forest");
-const personal = app.store.createProfile("Personal", "blue");
+const app = await runHost(({ binary, clientDirectory }, signal) =>
+  Application.create(
+    {
+      directory,
+      agentHome: join(directory, "agent-home"),
+      binary,
+      clientDirectory,
+      port: 4321,
+    },
+    signal,
+  ),
+);
+const work = app.store.createProfile("Work");
+const personal = app.store.createProfile("Personal");
 for (const [profile, accounts] of [
   [
     work,
@@ -114,10 +121,9 @@ for (const [profile, accounts] of [
       ],
     });
   }
-  await app.core.start(profile.id);
+  await app.cores.pool.start(profile.id);
 }
-app.store.createProfile("Side projects", "clay");
-// Deterministic simulated request history so Activity has something to show.
+app.store.createProfile("Side projects");
 let seed = 7;
 const random = () => {
   seed = (seed * 48271) % 2147483647;
@@ -160,23 +166,16 @@ app.store.addUsage(
   }),
 );
 // Keep simulated quota readings stable; the simulator never contacts provider quota services.
-app.core.refreshQuota = async (profileId, accountId) =>
+app.cores.quotas.refresh = async (profileId, accountId) =>
   app.store.quota(profileId, accountId)!;
 await writeFile(
   join(directory, "connection.json"),
   JSON.stringify({
     endpoint: app.endpoint(work.id),
-    key: app.store.secret(`${work.id}:client`),
+    key: app.store.clientKey(work.id),
     provider: `nonstopvibin-${work.slug}`,
   }),
   { mode: 0o600 },
 );
-console.log(`SIMULATOR: ${app.origin}/#session=${app.token}`);
+console.log(`SIMULATOR: ${sessionUrl(app.origin, app.token)}`);
 console.log(`Test directory: ${directory}`);
-for (const signal of ["SIGTERM", "SIGINT"])
-  process.on(signal, () => {
-    void app.close().then(() => {
-      upstream.close(() => process.exit(0));
-      upstream.closeAllConnections();
-    });
-  });

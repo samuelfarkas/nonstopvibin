@@ -9,7 +9,8 @@ A developer with several paid coding subscriptions, terminal open beside this
 window, glancing at headroom before starting a long agent session. Dark,
 warm-charcoal surfaces; one amber accent; Geist (bundled via @fontsource-variable)
 for navigation, labels, prose, and account names. Geist Mono is reserved for
-numeric data, code, and paths.
+numeric data, code, and paths. Only the NonstopVibin wordmark uses Space Grotesk,
+also bundled via @fontsource-variable.
 Readability at actual size on a large monitor wins over matching tiny mockup text.
 
 ## Tokens (src/client/styles.css)
@@ -30,14 +31,14 @@ Readability at actual size on a large monitor wins over matching tiny mockup tex
   112.5% at 1920 CSS pixels and 125% at 2560. No device-pixel/DPI guessing.
   Main-window labels and metadata are at least 14px; account values are 20px.
   Native View > Zoom is available for individual display preferences.
-- Tray exception: the fixed 386px menu-bar panel uses 14px names and 12px
+- Tray exception: the fixed-width menu-bar panel (`trayWidth` in
+  `src/desktop/main.ts`) uses 14px names and 12px
   metadata. It does not inherit the main window's large-display scale.
 - Radii: `--radius` 6px controls, `--radius-lg` 10px panels/modals. Nothing
   rounder.
 - Motion: 150–250ms, `--ease` (ease-out-expo). State changes only. Reduced
   motion is handled globally.
-- z-index scale: `--z-dropdown`, `--z-sticky`, `--z-overlay`, `--z-modal`,
-  `--z-toast`.
+- z-index scale: `--z-sticky`, `--z-overlay`, `--z-modal`, `--z-toast`.
 
 ## Vocabulary (reuse, don't re-invent)
 
@@ -53,7 +54,7 @@ Readability at actual size on a large monitor wins over matching tiny mockup tex
   nested panels.
 - `.quota-meter` / `QuotaMeter` — label, value, track, reset line.
 - `.field`, `.field-note`, `.inline-error`, `.info-note`, `.modal-footer`,
-  `.form-grid`, `.checkbox-label`, `<details>/<summary>`.
+  `.form-grid`, `<details>/<summary>`.
 - `.empty-state` — left-aligned, amber icon, h2, prose, optional `.empty-choices`
   list. Keep this separate from the `.empty` modifier for exhausted quotas.
   `.loading` — mono inline loading row.

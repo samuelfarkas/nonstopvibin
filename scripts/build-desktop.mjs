@@ -4,6 +4,7 @@ import { createRequire, isBuiltin } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { architecture } from "./distribution.ts";
 
 await rm("dist/desktop", { recursive: true, force: true });
 const result = await build({
@@ -26,7 +27,7 @@ if (process.platform === "darwin")
       "swiftc",
       "-O",
       "-target",
-      `${process.arch === "arm64" ? "arm64" : "x86_64"}-apple-macos13.0`,
+      `${architecture(process.arch).swift}-apple-macos13.0`,
       "-module-cache-path",
       join(tmpdir(), "nv-swift-module-cache"),
       "src/desktop/tray-click-monitor.swift",

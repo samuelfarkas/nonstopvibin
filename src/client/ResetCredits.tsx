@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { ResetCredits as Credits } from "../shared/types.ts";
 import { api } from "./api.ts";
+import { messageOf } from "./action.ts";
 import { exactTime } from "./format.ts";
 import "./reset-credits.css";
 
@@ -24,22 +25,23 @@ export function ResetCredits({
   const restoreFocus = useRef(false);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
-  const path = `/profiles/${profileId}/accounts/${encodeURIComponent(accountId)}/reset-credits`;
   const load = useCallback(
     async (signal?: AbortSignal) => {
       setBusy(true);
       setError("");
       try {
-        const result = await api<Credits>(path, "GET", undefined, signal);
+        const result = await api(
+          "GET /profiles/:profileId/accounts/:accountId/reset-credits",
+          { params: { profileId, accountId }, signal },
+        );
         if (!signal?.aborted) setCredits(result);
       } catch (e) {
-        if (!signal?.aborted)
-          setError(e instanceof Error ? e.message : "Could not check resets.");
+        if (!signal?.aborted) setError(messageOf(e, "Could not check resets."));
       } finally {
         if (!signal?.aborted) setBusy(false);
       }
     },
-    [path],
+    [profileId, accountId],
   );
   useEffect(() => {
     if (!running) return;
@@ -61,16 +63,16 @@ export function ResetCredits({
     setError("");
     setMessage("");
     try {
-      const result = await api<{
-        code: "reset" | "already_redeemed" | "nothing_to_reset" | "no_credit";
-        quotaRefreshed: boolean;
-      }>(path, "POST", { creditId: selected.id });
+      const result = await api(
+        "POST /profiles/:profileId/accounts/:accountId/reset-credits",
+        { params: { profileId, accountId }, body: { creditId: selected.id } },
+      );
       setMessage(
         {
           reset:
-            "Reset applied. If requests still report exhausted quota, stop and start this profile to clear the proxy’s saved cooldown.",
+            "Reset applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy and clear its saved cooldown.",
           already_redeemed:
-            "This reset was already applied. If requests still report exhausted quota, stop and start this profile.",
+            "This reset was already applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy.",
           nothing_to_reset:
             "There are no eligible usage windows to reset. No reset was used.",
           no_credit: "This reset is no longer available. No reset was used.",
@@ -84,9 +86,7 @@ export function ResetCredits({
       await refresh();
     } catch (e) {
       setError(
-        e instanceof Error
-          ? e.message
-          : "Reset outcome is unknown. Retry this same reset.",
+        messageOf(e, "Reset outcome is unknown. Retry this same reset."),
       );
     } finally {
       setBusy(false);

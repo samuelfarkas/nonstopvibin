@@ -3,24 +3,25 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { Application, validAllowHost } from "../src/server/server.ts";
-import { CorePool } from "../src/server/core.ts";
+import { verifyCore } from "../src/server/core-binary.ts";
+import { sessionPath } from "../src/server/data-directory.ts";
 import {
   parseHost,
   readSession,
   removeSession,
   renderUnit,
-  sessionPath,
+  serviceUnit,
   startServer,
-  stopServer,
   tunnelCommand,
   updateUnit,
 } from "../src/server/cli.ts";
+import { coreBinary, testApplication } from "./support/application.ts";
 
 const HOST = "box.tailnet.ts.net";
-const binary = resolve(".vendor/core/cli-proxy-api");
+const binary = coreBinary;
 let directory: string;
 let client: string;
 let app: Application;
@@ -30,11 +31,8 @@ before(async () => {
   client = join(directory, "client");
   await mkdir(client);
   await writeFile(join(client, "index.html"), "fixture page");
-  app = await Application.create({
-    directory: join(directory, "data"),
-    binary,
+  app = await testApplication(join(directory, "data"), {
     clientDirectory: client,
-    port: 0,
     allowHosts: [HOST],
   });
 });
@@ -134,11 +132,8 @@ test("the agent gateway and WebSockets stay loopback-only for an allowed host", 
 });
 
 test("without --allow-host the proxy host is rejected", async () => {
-  const plain = await Application.create({
-    directory: join(directory, "plain"),
-    binary,
+  const plain = await testApplication(join(directory, "plain"), {
     clientDirectory: client,
-    port: 0,
   });
   try {
     assert.equal(await send(plain, "/", { Host: HOST }), 403);
@@ -201,7 +196,7 @@ test("server.json is owner-only, discoverable, guarded and pid-scoped", async ()
     await removeSession(data, process.pid + 1);
     assert.ok(await readSession(data), "another pid must not remove it");
   } finally {
-    await stopServer(server, data);
+    await server.close();
   }
   assert.equal(await readSession(data), undefined);
   await assert.rejects(
@@ -225,6 +220,28 @@ test("unit files quote paths and environment values for systemd", () => {
   );
   assert.doesNotMatch(unit, /^(PrivateTmp|ProtectHome|ProtectSystem)=/m);
   assert.throws(() => renderUnit("/bin/x", ["a\nb"], []), /control character/);
+});
+
+test("the installer's unit query finds the unit and refuses one that runs another executable", async () => {
+  const previous = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = join(directory, "config");
+  try {
+    const executable = `/opt/a b/50%$"\\x/nonstopvibin`;
+    assert.equal(await serviceUnit(executable), undefined);
+    const path = join(directory, "config/systemd/user/nonstopvibin.service");
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, renderUnit(executable, ["serve"], []));
+    assert.equal(await serviceUnit(executable), path);
+    for (const other of [
+      "/opt/other/nonstopvibin",
+      `${executable}2`,
+      `/opt/a b/50%$"\\x`,
+    ])
+      await assert.rejects(serviceUnit(other), /another executable/);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = previous;
+  }
 });
 
 test("tunnel commands use the server's own port on both ends", () => {
@@ -255,12 +272,12 @@ test("a core matching only its adjacent manifest fails the compiled-in pin", asy
     }),
   );
   await assert.rejects(
-    new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary(true),
+    verifyCore(join(core, "cli-proxy-api"), true),
     /integrity check/,
   );
   // Desktop signing legitimately rewrites the binary and the adjacent
   // manifest; preserve that pre-existing validation path explicitly.
-  await new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary();
+  await verifyCore(join(core, "cli-proxy-api"));
   await assert.rejects(
     startServer({
       directory: join(directory, "pinned-server"),
@@ -273,10 +290,35 @@ test("a core matching only its adjacent manifest fails the compiled-in pin", asy
   );
   await writeFile(join(core, "cli-proxy-api"), "different bytes");
   await assert.rejects(
-    new CorePool(app.store, join(core, "cli-proxy-api")).verifyBinary(),
+    verifyCore(join(core, "cli-proxy-api")),
     /integrity check/,
   );
-  await new CorePool(app.store, binary).verifyBinary(true);
+  await verifyCore(binary, true);
+});
+
+test("an application that requires its core refuses to start without it and says to reinstall", async () => {
+  const missing = join(directory, "absent-core", "cli-proxy-api");
+  // The packaged desktop app leaves allowMissingCore unset.
+  await assert.rejects(
+    testApplication(join(directory, "strict-data"), { binary: missing }),
+    {
+      message: `The proxy core is missing at ${missing}. Reinstall NonstopVibin.`,
+    },
+  );
+  const corrupt = join(directory, "corrupt-core");
+  await mkdir(corrupt);
+  await writeFile(join(corrupt, "cli-proxy-api"), "bytes");
+  await writeFile(join(corrupt, "manifest.json"), "{}");
+  await assert.rejects(verifyCore(join(corrupt, "cli-proxy-api")), {
+    message:
+      "The proxy core failed its integrity check. Reinstall NonstopVibin.",
+  });
+  // A development run keeps the allowance: it opens, and each start reports the core missing.
+  const development = await testApplication(join(directory, "lenient-data"), {
+    binary: missing,
+    allowMissingCore: true,
+  });
+  await development.close();
 });
 
 test("service updates preserve custom paths, arguments and agent directories", () => {

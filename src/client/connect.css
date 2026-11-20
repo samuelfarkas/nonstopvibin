@@ -22,7 +22,6 @@
 
 .endpoint-panel {
   overflow: hidden;
-  background: var(--bg-0);
 }
 
 .endpoint-row {
@@ -56,14 +55,10 @@
   flex-shrink: 0;
 }
 
-.scope-note,
-.key-storage-note {
+.scope-note {
+  margin: 9px 0 15px;
   font-size: var(--text-caption);
   color: var(--ink-3);
-}
-
-.key-storage-note {
-  margin-top: 20px;
 }
 
 .model-catalog {
@@ -107,10 +102,6 @@
   overflow-wrap: anywhere;
 }
 
-.scope-note {
-  margin: 9px 0 15px;
-}
-
 .agent-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -130,6 +121,7 @@
   font-family: var(--sans);
   font-size: var(--text-body);
   transition: color 150ms ease;
+  --focus-offset: -3px;
 }
 
 .agent-tabs button:hover {
@@ -157,37 +149,17 @@
   opacity: 1;
 }
 
-.agent-tabs button {
-  --focus-offset: -3px;
-}
-
 .quick-setup {
   width: 100%;
 }
 
 .quick-setup > p,
 .setup-launch > p,
-.setup-details > p,
-.config-instructions > p {
+.setup-details > p {
   max-width: 72ch;
   color: var(--ink-3);
   font-size: var(--text-body);
   margin-top: 7px;
-}
-
-.step-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 11px;
-  margin: 18px 0 8px;
-}
-
-.step-number {
-  flex: 0 0 18px;
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-  color: var(--amber-text);
-  font-variant-numeric: tabular-nums;
 }
 
 .setup-caveat {
@@ -280,8 +252,7 @@
   font-size: var(--text-caption);
 }
 
-.setup-check span svg,
-.connection-note svg {
+.setup-check span svg {
   color: var(--green);
 }
 
@@ -320,42 +291,6 @@
   margin-bottom: 13px;
 }
 
-.config-instructions {
-  padding-top: 2px;
-  border-top: 1px solid var(--line);
-}
-
-.code-panel {
-  margin-top: 12px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-0);
-}
-
-.code-toolbar {
-  min-height: 36px;
-  padding: 5px 8px 5px 12px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-}
-
-.code-panel pre {
-  max-height: 320px;
-  padding: 14px 12px;
-  overflow: auto;
-  color: var(--ink-2);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 .command-line {
   display: flex;
   align-items: center;
@@ -373,16 +308,6 @@
   color: var(--ink-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.connection-note {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 16px 0 0;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: var(--text-caption);
 }
 
 @media (max-width: 700px) {

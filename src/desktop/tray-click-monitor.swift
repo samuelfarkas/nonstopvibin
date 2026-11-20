@@ -20,4 +20,3 @@ FileHandle.standardInput.readabilityHandler = { input in
 print("ready")
 fflush(stdout)
 application.run()
-NSEvent.removeMonitor(monitor)

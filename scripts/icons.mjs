@@ -1,4 +1,9 @@
-import { mirrorballSvg, writeMirrorballSpin } from "./mirrorball.mjs";
+import {
+  body,
+  mirrorballSvg,
+  palette,
+  writeMirrorballSpin,
+} from "./mirrorball.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SquareTerminal } from "lucide-react";
@@ -16,23 +21,8 @@ await writeFile(
     }),
   ),
 );
-// Menu bar / tray icon (docs/design/icons.md): a still render of the 3D
-// mirrorball from Logo — tiled facets on a dark body with black seams, key
-// light top-left. Orthographic projection, tilted 16° like the app logo.
-const traySvg = mirrorballSvg(
-  [
-    "#f0bc63",
-    "#e0a33f",
-    "#f5d08c",
-    "#c98a2e",
-    "#e0a33f",
-    "#e88ab8",
-    "#f0bc63",
-    "#e0a33f",
-  ],
-  "#1a1610",
-);
-// App icon uses the same mirrorball as the renderer and tray.
+// Menu bar / tray icon (docs/design/icons.md).
+const traySvg = mirrorballSvg(palette, body);
 await sharp({
   create: { width: 512, height: 512, channels: 4, background: "#171614" },
 })
@@ -91,7 +81,8 @@ const frames = await Promise.all(
     ["ic09", 512],
     ["ic11", 32],
     ["ic12", 64],
-    ["ic13", 512],
+    ["ic13", 256],
+    ["ic14", 512],
   ].map(async ([type, size]) => {
     const png = await sharp("public/icon.png")
       .resize(size, size)
@@ -109,4 +100,5 @@ header.writeUInt32BE(
   8 + frames.reduce((size, frame) => size + frame.length, 0),
   4,
 );
-await writeFile("public/icon.icns", Buffer.concat([header, ...frames]));
+// Only electron-builder reads the ICNS; keep it out of public/ and the renderer bundle.
+await writeFile("build/icon.icns", Buffer.concat([header, ...frames]));

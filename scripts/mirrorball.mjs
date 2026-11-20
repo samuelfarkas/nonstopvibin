@@ -1,4 +1,17 @@
-import sharp from "sharp";
+/** The lit mirrorball: tile colours and body, shared by the app icon, the tray and the logo. */
+export const palette = [
+  "#f0bc63",
+  "#e0a33f",
+  "#f5d08c",
+  "#c98a2e",
+  "#e0a33f",
+  "#e88ab8",
+  "#f0bc63",
+  "#e0a33f",
+];
+export const body = "#1a1610";
+/** One 2.4-second Y-axis turn at 30 fps; the last frame matches the first. styles.css plays it. */
+export const spin = { frames: 73, size: 48, durationMs: 2400 };
 
 export const mirrorballSvg = (palette, body, phase = 0) => {
   const R = 30;
@@ -35,7 +48,6 @@ export const mirrorballSvg = (palette, body, phase = 0) => {
         project(lat + half, lon + w),
         project(lat + half, lon - w),
       ];
-      // Lambert shading from a key light top-left-front.
       const light = { x: -0.45, y: 0.55, z: 0.7 };
       const lum = Math.max(
         0,
@@ -60,41 +72,35 @@ export const mirrorballSvg = (palette, body, phase = 0) => {
 </svg>`;
 };
 
-// 30 fps for one 2.4-second Y-axis turn; the last frame matches the first.
 export async function writeMirrorballSpin() {
+  const { default: sharp } = await import("sharp");
   const frames = await Promise.all(
-    Array.from({ length: 73 }, async (_, frame) => ({
+    Array.from({ length: spin.frames }, async (_, frame) => ({
       input: await sharp(
         Buffer.from(
           mirrorballSvg(
-            [
-              "#f0bc63",
-              "#e0a33f",
-              "#f5d08c",
-              "#c98a2e",
-              "#e0a33f",
-              "#e88ab8",
-              "#f0bc63",
-              "#e0a33f",
-            ],
-            "#1a1610",
-            (frame * Math.PI * 2) / 72,
+            palette,
+            body,
+            (frame * Math.PI * 2) / (spin.frames - 1),
           ),
         ),
       )
-        .resize(48, 48)
+        .resize(spin.size, spin.size)
         .png()
         .toBuffer(),
-      left: frame * 48,
+      left: frame * spin.size,
       top: 0,
     })),
   );
   await sharp({
-    create: { width: 73 * 48, height: 48, channels: 4, background: "#0000" },
+    create: {
+      width: spin.frames * spin.size,
+      height: spin.size,
+      channels: 4,
+      background: "#0000",
+    },
   })
     .composite(frames)
     .png()
     .toFile("public/mirrorball-spin.png");
 }
-
-if (import.meta.main) await writeMirrorballSpin();

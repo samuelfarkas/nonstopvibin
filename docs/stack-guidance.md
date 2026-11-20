@@ -104,7 +104,7 @@ Use the installed `vite` skill from Anthony Fu for config, plugins, assets, and 
 changes. Vite lists him on its [team page](https://vite.dev/team). His skill repository
 is a documentation-generated proof of concept, and this skill describes a Vite 8
 beta snapshot. Its maintainer reputation is credible; that is not a guarantee that
-every option matches installed Vite 8.2.2. Confirm version-sensitive configuration
+every option matches installed Vite 8.2.4. Confirm version-sensitive configuration
 against [current Vite docs](https://vite.dev/config/) and the installed types.
 
 Keep renderer assets and environment exposure separate from desktop credentials.

@@ -1,4 +1,5 @@
 import type { UsageRecord } from "../shared/types.ts";
+import { allHistoryDays } from "../shared/vocabulary.ts";
 
 export function activityBuckets(
   records: UsageRecord[],
@@ -6,7 +7,8 @@ export function activityBuckets(
   now = new Date(),
 ) {
   const hourly = days === 1;
-  const cutoff = days === 3650 ? -Infinity : now.getTime() - days * 86_400_000;
+  const cutoff =
+    days === allHistoryDays ? -Infinity : now.getTime() - days * 86_400_000;
   const dated = records
     .map((record) => ({ record, time: new Date(record.timestamp).getTime() }))
     .filter(
@@ -14,7 +16,7 @@ export function activityBuckets(
         Number.isFinite(time) && time >= cutoff && time <= now.getTime(),
     );
   const start = new Date(
-    days === 3650
+    days === allHistoryDays
       ? dated.reduce(
           (oldest, { time }) => Math.min(oldest, time),
           now.getTime(),

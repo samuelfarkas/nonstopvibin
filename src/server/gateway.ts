@@ -1,20 +1,29 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
-import { timingSafeEqual, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import type { Duplex } from "node:stream";
-import { CorePool } from "./core.ts";
-import { Store } from "./store.ts";
+import type { CorePool } from "./core.ts";
+import type { Usage } from "./usage.ts";
+import { Store, clientDigest, sameSecret } from "./store.ts";
 import { AppError } from "./errors.ts";
-import { ModelCatalog, agentModels } from "./model-catalog.ts";
-import { modelsFor } from "../shared/providers.ts";
+import type { ProfileModels } from "./model-catalog.ts";
+import { agentDefinitions, offeredModels } from "./agents.ts";
+import { catalogRequest } from "./agent-connection.ts";
+import { agents, isAgent, type Agent } from "../shared/agents.ts";
+import type { Profile } from "../shared/types.ts";
 
-export function sameSecret(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
 const permitted =
   /^\/(?:v1\/(?:models|chat\/completions|responses(?:\/.*)?|messages(?:\/count_tokens)?|completions|embeddings|images\/(?:generations|edits)|audio\/(?:speech|transcriptions)|ws)|v1beta\/models(?:\/.*)?|v1interactions(?:\/.*)?)$/;
+function keyOwner(store: Store, key: string): Profile | undefined {
+  const id = store.clientIndex().get(clientDigest(key));
+  try {
+    // The live rows decide, so deletion and rotation fail closed even past the index.
+    if (id && sameSecret(key, store.clientKey(id))) return store.profile(id);
+  } catch (error) {
+    if (!(error instanceof AppError)) throw error;
+  }
+  return undefined;
+}
 function routeRequest(store: Store, req: IncomingMessage) {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const bearer = req.headers.authorization?.match(/^Bearer (\S+)$/i)?.[1];
@@ -25,9 +34,7 @@ function routeRequest(store: Store, req: IncomingMessage) {
     throw new AppError("Conflicting client credentials.", 401);
   const key = bearer ?? headerKey;
   if (!key) throw new AppError("A profile API key is required.", 401);
-  const profile = store
-    .profiles()
-    .find((p) => sameSecret(key, store.secret(`${p.id}:client`)));
+  const profile = keyOwner(store, key);
   if (!profile) throw new AppError("Invalid profile API key.", 401);
   let path = url.pathname;
   if (path.startsWith("/p/")) {
@@ -47,7 +54,32 @@ function routeRequest(store: Store, req: IncomingMessage) {
     url.searchParams.has("api_key")
   )
     throw new AppError("Unsupported proxy endpoint.", 404);
-  return { profileId: profile.id, path: path + url.search };
+  return { profileId: profile.id, slug: profile.slug, path: path + url.search };
+}
+function responseHeaders(
+  upstream: http.IncomingHttpHeaders,
+  slug: string,
+): http.OutgoingHttpHeaders {
+  const headers: http.OutgoingHttpHeaders = { ...upstream };
+  delete headers["access-control-allow-origin"];
+  delete headers["set-cookie"];
+  headers["x-nonstopvibin-profile"] = slug;
+  return headers;
+}
+/** The agent asking for its curated catalog, by the mechanism the agent registry names. */
+function curatedCatalog(req: IncomingMessage, url: URL): Agent | undefined {
+  const header = req.headers[catalogRequest.header];
+  if (
+    header !== undefined &&
+    !Array.isArray(header) &&
+    isAgent(header) &&
+    agents[header].catalog === "header"
+  )
+    return header;
+  const query = url.searchParams.get(catalogRequest.query);
+  if (query && isAgent(query) && agents[query].catalog === "query")
+    return query;
+  return undefined;
 }
 function forwardedHeaders(
   req: IncomingMessage,
@@ -67,7 +99,7 @@ function forwardedHeaders(
     "x-forwarded-host",
     "x-forwarded-proto",
     "proxy-authorization",
-    "x-nonstopvibin-agent",
+    catalogRequest.header,
   ])
     delete headers[key];
   headers.authorization = `Bearer ${secret}`;
@@ -83,12 +115,25 @@ function forwardedHeaders(
 export class Gateway {
   readonly store: Store;
   readonly core: CorePool;
+  private readonly usage: Usage;
   readonly active = new Map<string, number>();
-  readonly catalog = new ModelCatalog();
-  onActivityChange?: () => void;
-  constructor(store: Store, core: CorePool) {
+  private readonly models: ProfileModels;
+  private readonly onActivityChange?: () => void;
+  constructor(
+    store: Store,
+    core: CorePool,
+    usage: Usage,
+    options: {
+      models: ProfileModels;
+      /** A profile's first request opened or its last one closed. */
+      onActivityChange?: () => void;
+    },
+  ) {
     this.store = store;
     this.core = core;
+    this.usage = usage;
+    this.models = options.models;
+    this.onActivityChange = options.onActivityChange;
   }
   private acquire(profileId: string): () => void {
     const count = this.active.get(profileId) ?? 0;
@@ -98,13 +143,13 @@ export class Gateway {
         429,
       );
     this.active.set(profileId, count + 1);
-    this.core.markUsageActivity(profileId);
+    this.usage.markActivity(profileId);
     if (count === 0) this.onActivityChange?.();
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      this.core.markUsageActivity(profileId);
+      this.usage.markActivity(profileId);
       this.active.set(
         profileId,
         Math.max(0, (this.active.get(profileId) ?? 1) - 1),
@@ -113,54 +158,31 @@ export class Gateway {
     };
   }
   async proxy(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const { profileId, path } = routeRequest(this.store, req);
+    const { profileId, slug, path } = routeRequest(this.store, req);
     const port = this.core.port(profileId);
     const url = new URL(path, "http://localhost");
-    const agent = url.searchParams.get("nonstopvibin");
-    if (
-      req.method === "GET" &&
-      url.pathname === "/v1/models" &&
-      req.headers["x-nonstopvibin-agent"] === "codex"
-    ) {
-      // Codex installed without other providers: serve its own vendor's models.
+    const agent = curatedCatalog(req, url);
+    if (req.method === "GET" && url.pathname === "/v1/models" && agent) {
       const release = this.acquire(profileId);
       try {
-        const data = modelsFor(
-          "codex",
+        const models = await offeredModels(
+          agent,
           await this.core.models(profileId),
           false,
+          (models) => this.models.enriched(profileId, models),
         );
+        const { entries } = agentDefinitions[agent];
+        // The agent's own request gets the OpenAI list; generated code gets its entries.
+        const payload = entries
+          ? { models: entries(models) }
+          : {
+              object: "list",
+              data: models.map((model) => ({ object: "model", ...model })),
+            };
         res.writeHead(200, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
-        });
-        res.end(
-          JSON.stringify({
-            object: "list",
-            data: data.map((model) => ({ object: "model", ...model })),
-          }),
-        );
-      } finally {
-        release();
-      }
-      return;
-    }
-    if (
-      req.method === "GET" &&
-      url.pathname === "/v1/models" &&
-      (agent === "pi" || agent === "opencode")
-    ) {
-      const release = this.acquire(profileId);
-      try {
-        const models = await this.catalog.models(
-          await this.core.models(profileId),
-          this.store.apiAccounts(profileId),
-        );
-        const payload = { models: agentModels(models, agent) };
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-          "x-nonstopvibin-profile": this.store.profile(profileId).slug,
+          ...(entries && { "x-nonstopvibin-profile": slug }),
         });
         res.end(JSON.stringify(payload));
       } finally {
@@ -174,20 +196,22 @@ export class Gateway {
       port,
       method: req.method,
       path,
-      headers: forwardedHeaders(req, this.store.secret(`${profileId}:core`)),
+      headers: forwardedHeaders(req, this.store.coreKey(profileId)),
     });
-    const close = () => upstream.destroy();
+    let abandoned = false;
+    const close = () => {
+      abandoned = !res.writableFinished;
+      upstream.destroy();
+    };
     res.once("close", close);
     try {
       await new Promise<void>((resolve, reject) => {
         upstream.once("error", reject);
         upstream.once("response", (response) => {
-          const headers = { ...response.headers };
-          delete headers["access-control-allow-origin"];
-          delete headers["set-cookie"];
-          headers["x-nonstopvibin-profile"] =
-            this.store.profile(profileId).slug;
-          res.writeHead(response.statusCode ?? 502, headers);
+          res.writeHead(
+            response.statusCode ?? 502,
+            responseHeaders(response.headers, slug),
+          );
           pipeline(response, res).then(resolve, reject);
         });
         pipeline(req, upstream)
@@ -198,6 +222,15 @@ export class Gateway {
           })
           .catch(reject);
       });
+    } catch (error) {
+      // The agent hung up; there is no socket to answer and nothing failed in the app.
+      if (abandoned || res.destroyed) return;
+      if (res.headersSent) throw error;
+      // Raw socket errors name local ports and internals; the agent needs only the remedy.
+      throw new AppError(
+        "The profile proxy is unavailable. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin.",
+        502,
+      );
     } finally {
       res.off("close", close);
       release();
@@ -208,7 +241,7 @@ export class Gateway {
     let release = () => {};
     socket.on("error", () => socket.destroy());
     try {
-      const { profileId, path } = routeRequest(this.store, req);
+      const { profileId, slug, path } = routeRequest(this.store, req);
       const port = this.core.port(profileId);
       release = this.acquire(profileId);
       const upstream = http.request({
@@ -216,19 +249,20 @@ export class Gateway {
         port,
         method: "GET",
         path,
-        headers: forwardedHeaders(req, this.store.secret(`${profileId}:core`)),
+        headers: forwardedHeaders(req, this.store.coreKey(profileId)),
       });
       socket.once("close", () => {
         release();
         upstream.destroy();
       });
       upstream.once("upgrade", (response, remote, remoteHead) => {
+        const lines = Object.entries(
+          responseHeaders(response.headers, slug),
+        ).flatMap(([key, value]) =>
+          [value ?? []].flat().map((item) => `${key}: ${item}\r\n`),
+        );
         socket.write(
-          `HTTP/1.1 101 Switching Protocols\r\n${Object.entries(
-            response.headers,
-          )
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("\r\n")}\r\n\r\n`,
+          `HTTP/1.1 101 Switching Protocols\r\n${lines.join("")}\r\n`,
         );
         if (remoteHead.length) socket.write(remoteHead);
         if (head.length) remote.write(head);

@@ -6,6 +6,8 @@ export class AppError extends Error {
     this.status = status;
   }
 }
+/** Adds a message to the app-wide error list the UI shows. */
+export type Report = (message: string) => void;
 export function errorMessage(cause: unknown): string {
   return cause instanceof Error
     ? cause.message

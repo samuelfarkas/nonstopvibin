@@ -29,10 +29,13 @@ test("charts include rolling-window partial buckets and local daylight-saving bo
   const old = process.env.TZ;
   process.env.TZ = "Europe/Prague";
   try {
+    // Prague changes its clocks on 2026-03-29 and 2026-10-25: windows ending on and after those days.
     for (const date of [
       "2026-09-13T12:30:00",
       "2026-03-29T12:30:00",
+      "2026-03-30T12:30:00",
       "2026-10-25T12:30:00",
+      "2026-10-26T12:30:00",
     ]) {
       const now = new Date(date);
       for (const days of [1, 7, 30]) {

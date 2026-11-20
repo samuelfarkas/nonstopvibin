@@ -1,14 +1,3 @@
-.settings-page {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.settings-page .page-body {
-  width: 100%;
-}
-
 .settings-content {
   width: 100%;
 }
@@ -55,11 +44,7 @@
   font-size: var(--text-body);
 }
 
-.setting-row > svg {
-  color: var(--ink-3);
-}
-
-.settings-page .field-note {
+.settings-content .field-note {
   margin: 8px 0 12px;
 }
 

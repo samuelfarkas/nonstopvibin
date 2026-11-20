@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Matches minimumReleaseAge in bunfig.toml; Bun rejects newer releases.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     groups:
       dev-tools:
@@ -13,6 +16,8 @@ updates:
     directory: /.deepsec
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
   - package-ecosystem: github-actions
     directory: /

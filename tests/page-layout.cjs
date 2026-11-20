@@ -1,70 +1,141 @@
-// Run with `bun tests/page-layout.cjs`; measures shared page geometry in Electron.
+// Run with `bun tests/page-layout.cjs` after `bun run build`: the built app, served by a real
+// server with one running profile, keeps page geometry identical across pages and widths.
 const assert = require("node:assert/strict");
-const { mkdtempSync, readFileSync, writeFileSync, rmSync } = require("node:fs");
+const { mkdtempSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
 const electron = require("electron");
 
 if (typeof electron === "string") {
   const directory = mkdtempSync(join(tmpdir(), "nv-layout-"));
-  const css = ["styles", "connect", "settings", "activity"]
-    .map((name) =>
-      readFileSync(resolve(__dirname, `../src/client/${name}.css`), "utf8"),
-    )
-    .join("\n");
-  writeFileSync(
-    join(directory, "index.html"),
-    `<style>${css}</style><div id="root"></div>`,
-  );
-  const child = require("node:child_process").spawn(
-    electron,
-    [__filename, directory],
-    { stdio: "inherit" },
-  );
-  child.on("exit", (code) => {
+  (async () => {
+    const {
+      customAccount,
+      testApplication,
+    } = require("./support/application.ts");
+    const { sessionUrl } = require("../src/shared/renderer-url.ts");
+    const {
+      installFakeCore,
+      listeningCore,
+    } = require("./support/fake-core.ts");
+    const binary = await installFakeCore(
+      join(directory, "core"),
+      listeningCore(
+        `(_req, res) => res.end(JSON.stringify({ data: [{ id: "fixture-model" }] }))`,
+      ),
+    );
+    const app = await testApplication(join(directory, "data"), {
+      binary,
+      clientDirectory: resolve(__dirname, "../dist/client"),
+    });
+    let code = 1;
+    try {
+      const profile = app.store.createProfile("Personal");
+      app.store.saveApiAccount(
+        profile.id,
+        customAccount(
+          "layout-fixture",
+          "https://api.example.invalid/v1",
+          [{ id: "fixture-model", protocol: "openai" }],
+          "Layout fixture",
+        ),
+        "synthetic-key",
+      );
+      await app.cores.pool.start(profile.id);
+      const child = require("node:child_process").spawn(
+        electron,
+        [
+          __filename,
+          join(directory, "user"),
+          sessionUrl(app.origin, app.token),
+        ],
+        { stdio: "inherit" },
+      );
+      code = await new Promise((done) =>
+        child.on("exit", (exit) => done(exit ?? 1)),
+      );
+    } finally {
+      await app.close();
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(app.agentSetup.socketDirectory, { recursive: true, force: true });
+    }
+    process.exitCode = code;
+  })().catch((error) => {
+    console.error(error);
     rmSync(directory, { recursive: true, force: true });
-    process.exitCode = code ?? 1;
+    process.exitCode = 1;
   });
 } else {
   const { app, BrowserWindow } = electron;
-  app.setPath("userData", process.argv[2]);
+  const [userData, url] = process.argv.slice(2);
+  app.setPath("userData", userData);
   app.whenReady().then(async () => {
+    // Hidden, and allowed past the display's size, so no window manager clamps the widths.
     const window = new BrowserWindow({
-      show: true,
+      show: false,
+      enableLargerThanScreen: true,
       webPreferences: { backgroundThrottling: false },
     });
     const timeout = setTimeout(() => {
       console.error("Page layout check timed out");
       app.exit(1);
-    }, 30000);
+    }, 60000);
+    const run = (code) => window.webContents.executeJavaScript(code);
+    const until = async (code) => {
+      while (!(await run(code))) await delay(20);
+    };
+    // Each page and a block only its rendered content has; geometry is the page body's first block.
+    const pages = [
+      ["Subscriptions", ".accounts"],
+      ["Activity", ".activity-overview"],
+      ["Connect agents", ".connect-page .agent-tabs"],
+      ["Settings", "#usage-retention"],
+    ];
     try {
-      await window.loadFile(join(process.argv[2], "index.html"));
+      await window.loadURL(url);
+      await until("Boolean(document.querySelector('.main-nav'))");
       for (const width of [360, 620, 850, 1280, 1800, 2400]) {
-        window.setContentSize(width, 800);
-        const samples = await window.webContents.executeJavaScript(`(() => {
-          const samples = [];
-          for (const page of ['subscriptions', 'activity', 'connect', 'settings']) {
-            for (const tall of [false, true]) {
-              const header = '<header class="page-header"><div class="page-title"><h1>Personal</h1><code>2 subscriptions · fill first</code></div>' +
-                (page === 'subscriptions' ? '<div class="page-actions"><button class="button">Refresh</button><button class="button primary">Add subscription</button></div>' : '') + '</header>';
-              const contentClass = {subscriptions: 'accounts', activity: 'activity-page', connect: 'connect-page', settings: 'settings-content'}[page];
-              const body = '<div class="page-body"><div class="' + contentClass + '" style="height:' + (tall ? 1400 : 100) + 'px">Content</div></div>';
-              document.getElementById('root').innerHTML = '<div class="app desktop"><aside class="sidebar"></aside><main class="main">' +
-                (page === 'settings' ? '<div class="settings-page">' + header + body + '</div>' : header + body) + '</main></div>';
-              const rect = selector => {
-                const {x,y,width,height} = document.querySelector(selector).getBoundingClientRect();
-                return {x,y,width,height};
-              };
-              const content = rect('.' + contentClass);
-              samples.push({page, tall, header: rect('.page-header'), title: rect('.page-title'), content,
-                overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth});
-            }
+        const samples = [];
+        // Short enough that every page scrolls, and tall enough that none does.
+        for (const height of [200, 3000]) {
+          window.setContentSize(width, height);
+          await until(`innerWidth === ${width} && innerHeight === ${height}`);
+          for (const [title, ready] of pages) {
+            await run(
+              `document.querySelector('[title=${JSON.stringify(title)}]').click()`,
+            );
+            await until(
+              `Boolean(document.querySelector('.page-body ${ready}'))`,
+            );
+            samples.push({
+              page: title,
+              height,
+              ...(await run(`(() => {
+                const rect = selector => {
+                  const {x, y, width, height} = document.querySelector(selector).getBoundingClientRect();
+                  return {x, y, width, height};
+                };
+                const page = document.documentElement;
+                return {
+                  header: rect('.page-header'),
+                  title: rect('.page-title'),
+                  content: rect('.page-body > :first-child'),
+                  scrolls: page.scrollHeight > page.clientHeight,
+                  overflow: page.scrollWidth > page.clientWidth,
+                };
+              })()`)),
+            });
           }
-          return samples;
-        })()`);
+        }
         const baseline = samples[0];
         for (const sample of samples) {
-          const context = `${width}px ${sample.page} tall=${sample.tall}`;
+          const context = `${width}px ${sample.page} at ${sample.height}px`;
+          assert.equal(
+            sample.scrolls,
+            sample.height === 200,
+            `${context}: vertical overflow is not what the check needs`,
+          );
           assert.deepEqual(
             sample.header,
             baseline.header,
@@ -108,7 +179,7 @@ if (typeof electron === "string") {
         }
       }
       console.log(
-        "Page layout passed: four screens, six widths, with and without vertical overflow.",
+        "Page layout passed: four rendered pages, six widths, with and without vertical overflow.",
       );
     } catch (error) {
       console.error(error);

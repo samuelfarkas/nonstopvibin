@@ -10,7 +10,7 @@ below remains supported.
 
 Start a profile, open **Connect agents**, choose **Claude Code**, **Codex**, or
 **pi**, then click **Connect**. Keep the app and profile running while you work. The profile endpoint and key are under
-**Advanced connection details**; normal setup never copies a key or asks you to run a launcher.
+**Models & manual setup**; normal setup never copies a key or asks you to run a launcher.
 
 | Agent       | Connect once                                                                                                                                 | Daily use                                                                                                                 |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
@@ -74,13 +74,14 @@ Each connection keeps a fixed profile URL. If the gateway port changes, old
 helpers refuse to return credentials. App startup updates owned connections to
 the new port; restart the agent or `/reload` in pi. Resolve any update warning
 in **Connect agents** before retrying.
-Updating a helper does not redirect it to a different profile. Stopping a profile
+Updating a helper does not redirect it to a different profile. A stopped profile
 fails requests inside that profile; the gateway never borrows another profile's
 accounts.
 
 **Disconnect** removes only this connection's settings and app-owned files.
 Restart the agent afterwards. Native clients can cache keys; disconnect is not
-revocation. Stop the profile or quit the app to stop access immediately. Legacy
+revocation. Quit the app to stop access immediately; the app has no per-profile
+stop control. Legacy
 launcher files from older builds are not deleted automatically; stop using them
 once connected natively. Profiles are not an isolation boundary against programs
 running as your OS user.
@@ -108,7 +109,7 @@ profiles contribute to one `/nv` command; disconnecting one leaves the others us
   the lock) saves a worktree-only override; inheritance itself creates no extra file.
   Existing conversations keep their own selection. Outside Git, preferences are per
   working directory.
-  Preferences live in the app's private agent data (`agents/pi-preferences/`), never
+  Preferences live in the app's private agent data (`<app data>/agent-connections/pi-preferences/`), never
   in tracked repository files, and contain only profile/model IDs. Concurrent
   sessions keep their own choices; the last explicit change wins for future sessions.
 - Switching profiles keeps the model when the destination offers the same ID;
@@ -145,11 +146,11 @@ this pi runtime, not independent subagents or arbitrary third-party extensions.
 
 ### Catalogs
 
-Setup connects the full live profile catalog. Select models inside the agent; connecting does not set a foreground, review, or subagent model. Codex can retain its built-in or saved default even when it is unavailable in this profile; choose an available model with `/model` before your first prompt, or pass its native `--model` option in noninteractive use. Native Codex model/reasoning preferences are retained on reconnect and disconnect. Reconnect existing single-model installations once to remove their owned overrides. User-owned model preferences remain intact.
+Setup connects the live profile catalog. For Claude Code and Codex, other providers' models are added only when **Include other providers** is on (off for new connections; older connections keep them). Select models inside the agent; connecting does not set a foreground, review, or subagent model. Codex can retain its built-in or saved default even when it is unavailable in this profile; choose an available model with `/model` before your first prompt, or pass its native `--model` option in noninteractive use. Native Codex model/reasoning preferences are retained on reconnect and disconnect. Reconnect existing single-model installations once to remove their owned overrides. User-owned model preferences remain intact.
 
-Claude Code gets every live profile ID, including GPT/Codex models, through its native `modelPicker` in a separate app-owned `--settings` file. Project/local settings ignore that field, so use the generated command. **Sync models** updates this snapshot after subscriptions or models change; restart Claude afterwards. Plain `claude` still loads the project's route but does not load the complete custom picker. Codex uses CLIProxyAPI's native `models?client_version=...` catalog, including Claude models and the core's client compatibility metadata. Pi fetches its full profile catalog on startup and refreshes on `/reload`. Availability always comes from the running profile's core, so models in another profile or only in a public catalog are never added.
+Claude Code gets the profile's live Claude IDs (and other providers' IDs when **Include other providers** is on) through its native `modelPicker` in a separate app-owned `--settings` file. Project/local settings ignore that field, so use the generated command. **Save changes** updates this snapshot after subscriptions or models change; restart Claude afterwards. Plain `claude` still loads the project's route but does not load the complete custom picker. Codex uses CLIProxyAPI's native `models?client_version=...` catalog, including Claude models when other providers are included and the core's client compatibility metadata. Pi fetches its full profile catalog on startup and refreshes on `/reload`. Availability always comes from the running profile's core, so models in another profile or only in a public catalog are never added.
 
-The core refreshes its upstream subscription model catalog at startup and every three hours. New model IDs can appear without a core binary update once the upstream catalog includes them. Refresh **Available models** in Connect, then use pi's `/reload` to load the updated list.
+The core refreshes its upstream subscription model catalog at startup and every three hours. New model IDs can appear without a core binary update once the upstream catalog includes them. Use **Refresh availability** under **Models & manual setup** in Connect, then use pi's `/reload` to load the updated list.
 
 [models.dev](https://models.dev) supplies pi capabilities, context/input/output limits, and USD prices per million tokens. Matches require the exact routing provider and model ID, with configured account prefixes removed only for metadata lookup. There are no guessed model families, version aliases, token budgets or zero-price placeholders. Metadata is fetched without credentials over HTTPS, validated and cached in memory for up to one hour; a failed refresh does not silently use an expired cache. The management models endpoint supports `?metadata=1` to inspect source URLs and fetch timestamps.
 
@@ -157,14 +158,14 @@ Pi and OpenCode install the live models with verified text/tool capabilities, li
 
 Prices are API list estimates, not subscription bills. Missing cache rates are omitted and labelled unavailable (native clients can still display their own zero defaults). Pi receives published context-price tiers. Claude Code and Codex retain their native cost reporting; their discovery schemas do not offer the same custom pricing interface. Catalog capabilities describe upstream models and do not prove every translated tool, reasoning, or image feature works through CLIProxyAPI.
 
-**Check profile** verifies the key and nonempty profile catalog through the gateway's catalog.
-It sends no inference request. **Configuration saved** means files were installed,
+**Check connection** verifies the key and nonempty profile catalog through the gateway's catalog.
+It sends no inference request. **Connected** means files were installed,
 not that a real agent session or subscription has been tested.
 
 - **Claude Code:** verify `/status` before prompting. Managed policy or Claude apps
   gateway login may take precedence. The full picker requires 2.1.243+ and the generated command. Native Default/active rows can still appear; choose a live profile ID. Optional gateway discovery filters to Claude/Anthropic IDs and needs 2.1.257+ with nonessential traffic disabled. Disabling nonessential traffic is not an egress firewall.
 - **Codex:** native command-backed auth deliberately omits conflicting `env_key`,
-  inline token, and `requires_openai_auth` fields. The pinned core serves the native Codex catalog format and all current profile IDs. Built-in and cached models can also appear; an entry is not proof of current profile availability. Use **Available models** in Connect to check live IDs. Desktop/IDE profile selection is not verified.
+  inline token, and `requires_openai_auth` fields. The pinned core serves the native Codex catalog format and all current profile IDs. Built-in and cached models can also appear; an entry is not proof of current profile availability. Use **Models & manual setup** in Connect to check live IDs. Desktop/IDE profile selection is not verified.
 - **pi:** a same-provider stored key or explicit CLI key may supersede the helper.
   Namespacing avoids ordinary built-in-provider collisions. Existing commented
   `models.json` is never rewritten by native setup.
@@ -173,14 +174,16 @@ Cross-provider use is experimental. CLIProxyAPI owns translation; no model alias
 
 ## Verification
 
-The profile controls were checked with pi 0.85.1's actual extension
-loader and SDK against a synthetic loopback server. Run the same probe with
-`node scripts/check-pi-profiles.mjs /path/to/@earendil-works/pi-coding-agent`.
+The profile controls were last checked successfully with pi 0.85.1's actual extension
+loader and SDK against a synthetic loopback server. Against pi 1.5.2 (November 2026)
+the probe fails at its mid-conversation tool-replay assertion, so newer pi releases
+are unverified. Run the same probe with
+`bun scripts/check-pi-profiles.mjs /path/to/@earendil-works/pi-coding-agent`.
 It strictly type-checks the generated controls against the installed pi APIs and
 checks OpenAI-compatible and Anthropic streaming, wrong-profile refusal, native
 model selection/cycling, catalog refresh, reload/unlock, concurrent sessions and
-restored unavailable profiles. Its settings and credentials are disposable; no real accounts
-or global pi settings are used. Repository tests cover cancellation, authentication
+restored unavailable profiles. Its settings, credentials and `HOME` are a disposable
+temporary directory; no real accounts or global pi settings are used. Repository tests cover cancellation, authentication
 failure, busy/queued work, malformed saved state, existing slug formats, provider
 cleanup ownership and old-connection migration too.
 

@@ -35,3 +35,11 @@ export async function setLinuxLoginItem(
   } else await rm(file, { force: true });
   return linuxLoginItem(configDirectory);
 }
+/** AppImage updates may rename the executable: points an existing login entry at it, and creates none. */
+export async function followLinuxLoginItem(
+  configDirectory: string,
+  executable: string,
+): Promise<void> {
+  if (linuxLoginItem(configDirectory))
+    await setLinuxLoginItem(configDirectory, executable, true);
+}

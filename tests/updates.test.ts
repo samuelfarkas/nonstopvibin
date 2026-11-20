@@ -4,22 +4,23 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { updateChecker } from "../src/desktop/updates.ts";
-import { linuxLoginItem, setLinuxLoginItem } from "../src/desktop/autostart.ts";
+import {
+  followLinuxLoginItem,
+  linuxLoginItem,
+  setLinuxLoginItem,
+} from "../src/desktop/autostart.ts";
 
 test("AppImage login entries can follow a renamed update without enabling opted-out startup", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nv-update-login-"));
   try {
-    assert.equal(linuxLoginItem(directory), false);
+    await followLinuxLoginItem(directory, "/apps/NonstopVibin-0.1.1.AppImage");
+    assert.equal(linuxLoginItem(directory), false, "opted out stays out");
     await setLinuxLoginItem(
       directory,
       "/apps/NonstopVibin-0.1.1.AppImage",
       true,
     );
-    await setLinuxLoginItem(
-      directory,
-      "/apps/NonstopVibin-0.1.2.AppImage",
-      true,
-    );
+    await followLinuxLoginItem(directory, "/apps/NonstopVibin-0.1.2.AppImage");
     const entry = await readFile(
       join(directory, "autostart/app.nonstopvibin.desktop"),
       "utf8",

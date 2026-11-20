@@ -1,21 +1,11 @@
 import { useEffect, useState } from "react";
 import { Check, FolderOpen, LoaderCircle } from "lucide-react";
-import type {
-  Agent,
-  AgentSetup,
-  Model,
-  ProfileState,
-} from "../shared/types.ts";
-import { api } from "./api.ts";
+import type { AgentSetup, Model, ProfileState } from "../shared/types.ts";
+import { agents, type Agent } from "../shared/agents.ts";
+import { api, desktop } from "./api.ts";
+import { messageOf, useAction } from "./action.ts";
 import { modelsFor } from "../shared/providers.ts";
-import { CopyButton, Select, useKeepDraft } from "./components.tsx";
-
-const titles: Record<Agent, string> = {
-  pi: "pi",
-  codex: "Codex",
-  opencode: "OpenCode",
-  claude: "Claude Code",
-};
+import { CopyButton, Select, useKeepDraft } from "./controls.tsx";
 
 export function QuickSetup({
   profile,
@@ -28,25 +18,22 @@ export function QuickSetup({
 }) {
   const [setup, setSetup] = useState<AgentSetup | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const { busy, error, setError, run } = useAction();
   const [checked, setChecked] = useState(false);
   const [projectDirectory, setProjectDirectory] = useState("");
   const [projects, setProjects] = useState<string[]>([]);
   const [selectedProject, setSelectedProject] = useState<{ path: string }>();
   const [disconnected, setDisconnected] = useState(false);
   const [otherProviders, setOtherProviders] = useState(false);
-  const chooses = agent === "claude" || agent === "codex";
-  const native = agent === "claude" ? "Claude" : "OpenAI";
+  const { title, project, native } = agents[agent];
+  const chooses = native !== undefined;
   useEffect(() => {
     if (selectedProject?.path === "") return;
     let cancelled = false;
-    const projectQuery = selectedProject?.path
-      ? `&projectDirectory=${encodeURIComponent(selectedProject.path)}`
-      : "";
-    api<AgentSetup | null>(
-      `/profiles/${profile.id}/agent-setup?agent=${agent}${projectQuery}`,
-    )
+    api("GET /profiles/:profileId/agent-setup", {
+      params: { profileId: profile.id },
+      query: { agent, projectDirectory: selectedProject?.path || undefined },
+    })
       .then((result) => {
         if (cancelled) return;
         setSetup(result);
@@ -66,15 +53,15 @@ export function QuickSetup({
     return () => {
       cancelled = true;
     };
-  }, [profile.id, agent, selectedProject]);
+  }, [profile.id, agent, selectedProject, setError]);
   const offered = modelsFor(agent, models, otherProviders);
   const otherCount = models.length - modelsFor(agent, models, false).length;
-  // Codex, pi and OpenCode discover models live; only Claude's picker is a
-  // stored list that can drift from the catalog.
+  // An agent without a live catalog keeps the list written at connection,
+  // which can drift from the profile's models.
   const modelsChanged = Boolean(
     setup &&
     ((chooses && (setup.otherProviders ?? true) !== otherProviders) ||
-      (agent === "claude" &&
+      (!agents[agent].catalog &&
         (setup.models.length !== offered.length ||
           offered.some((model) => !setup.models.includes(model.id))))),
   );
@@ -93,18 +80,19 @@ export function QuickSetup({
       ? models.filter((model) => !setup.models.includes(model.id))
       : [];
   async function changeSetup(remove = false) {
-    setBusy(true);
-    setError("");
-    setDisconnected(false);
-    try {
+    await run(async () => {
+      setDisconnected(false);
       if (remove) {
-        await api(`/profiles/${profile.id}/agent-setup`, "DELETE", {
-          agent,
-          ...(agent === "claude" && {
-            projectDirectory: setup?.projectDirectory,
-          }),
+        await api("DELETE /profiles/:profileId/agent-setup", {
+          params: { profileId: profile.id },
+          body: {
+            agent,
+            ...(project && {
+              projectDirectory: setup?.projectDirectory,
+            }),
+          },
         });
-        if (agent === "claude") {
+        if (project) {
           setProjects(
             projects.filter((project) => project !== setup?.projectDirectory),
           );
@@ -114,30 +102,21 @@ export function QuickSetup({
         setSetup(null);
         setDisconnected(true);
       } else {
-        const result = await api<AgentSetup>(
-          `/profiles/${profile.id}/agent-setup`,
-          "POST",
-          {
+        const result = await api("POST /profiles/:profileId/agent-setup", {
+          params: { profileId: profile.id },
+          body: {
             agent,
-            ...(agent === "claude" && { projectDirectory }),
+            ...(project && { projectDirectory }),
             ...(chooses && { otherProviders }),
           },
-        );
+        });
         setSetup(result);
         setProjects(result.projects ?? []);
         setProjectDirectory(result.projectDirectory ?? "");
       }
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Could not change agent setup.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    }, "Could not change agent setup.");
   }
-  const restart = `Restart ${titles[agent]} to pick up the change.`;
+  const restart = `Restart ${title} to pick up the change.`;
   return (
     <div className="quick-setup">
       <p>
@@ -145,9 +124,9 @@ export function QuickSetup({
           ? "Choose a project to connect."
           : agent === "codex"
             ? "Connect once, use in any project."
-            : `Add ${profile.name} to ${titles[agent]}.`}
+            : `Add ${profile.name} to ${title}.`}
       </p>
-      {agent === "claude" && (
+      {project && (
         <div className="setup-project">
           {projects.length > 0 && (
             <div className="field">
@@ -205,7 +184,7 @@ export function QuickSetup({
                   disabled={loading || busy}
                   onChange={(event) => setProjectDirectory(event.target.value)}
                 />
-                {window.nonstopvibin?.chooseProject && (
+                {desktop && (
                   <button
                     className="button"
                     type="button"
@@ -213,14 +192,11 @@ export function QuickSetup({
                     onClick={async () => {
                       setError("");
                       try {
-                        const folder =
-                          await window.nonstopvibin?.chooseProject();
+                        const folder = await desktop?.chooseProject();
                         if (folder) setProjectDirectory(folder);
                       } catch (error) {
                         setError(
-                          error instanceof Error
-                            ? error.message
-                            : "Could not choose a project.",
+                          messageOf(error, "Could not choose a project."),
                         );
                       }
                     }}
@@ -260,8 +236,7 @@ export function QuickSetup({
       )}
       {setup?.needsReconnect && (
         <p className="setup-note" role="alert">
-          The connection is out of date. Reconnect, then restart {titles[agent]}
-          .
+          The connection is out of date. Reconnect, then restart {title}.
         </p>
       )}
       {modelsChanged && !setup?.needsReconnect && (
@@ -277,7 +252,7 @@ export function QuickSetup({
             busy ||
             !offered.length ||
             current ||
-            (agent === "claude" && !projectDirectory.trim())
+            (project && !projectDirectory.trim())
           }
           onClick={() => void changeSetup()}
         >
@@ -289,10 +264,10 @@ export function QuickSetup({
           {current
             ? "Connected"
             : setup?.needsReconnect
-              ? `Reconnect ${titles[agent]}`
+              ? `Reconnect ${title}`
               : setup
                 ? "Save changes"
-                : `Connect ${titles[agent]}`}
+                : `Connect ${title}`}
         </button>
         {setup && (
           <button
@@ -320,11 +295,7 @@ export function QuickSetup({
       )}
       {current && setup && (
         <div className="setup-launch" role="status">
-          <h3>
-            {agent === "claude"
-              ? "Launch Claude Code"
-              : `Open ${titles[agent]}`}
-          </h3>
+          <h3>{agent === "claude" ? "Launch Claude Code" : `Open ${title}`}</h3>
           <div className="command-line">
             <code>{setup.command}</code>
             <CopyButton
@@ -344,7 +315,7 @@ export function QuickSetup({
               ? "Saves project settings and a model picker. Includes worktrees inside the project."
               : agent === "codex"
                 ? `Adds the nonstopvibin-${profile.slug} Codex profile. Your usual login stays available.`
-                : `Adds a ${titles[agent]} provider alongside your existing ones.`}
+                : `Adds a ${title} provider alongside your existing ones.`}
           </li>
           {agent === "claude" && (
             <li>
@@ -392,23 +363,16 @@ export function QuickSetup({
           <button
             className="button small"
             disabled={busy || !models.length}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              setChecked(false);
-              try {
-                await api(`/profiles/${profile.id}/agent-check`, "POST", {});
+            onClick={() =>
+              run(async () => {
+                setChecked(false);
+                await api("POST /profiles/:profileId/agent-check", {
+                  params: { profileId: profile.id },
+                  body: {},
+                });
                 setChecked(true);
-              } catch (error) {
-                setError(
-                  error instanceof Error
-                    ? error.message
-                    : "Connection check failed.",
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
+              }, "Connection check failed.")
+            }
           >
             Check connection
           </button>

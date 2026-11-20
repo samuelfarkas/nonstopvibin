@@ -2,12 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { Application } from "../src/server/server.ts";
-import { record } from "../src/server/json.ts";
-import { CorePool } from "../src/server/core.ts";
-import type { JsonObject } from "../src/shared/types.ts";
+import { record, type JsonObject } from "../src/server/json.ts";
+import { verifyCore } from "../src/server/core-binary.ts";
+import { events, frame } from "./support/sse.ts";
+import {
+  closeServer,
+  coreBinary,
+  customAccount,
+  listen,
+  testApplication,
+} from "./support/application.ts";
 
 const args = [{ path: "one.txt" }, { path: 'two "quoted" π.txt' }];
 const schema = {
@@ -32,13 +38,6 @@ const fernet = Buffer.alloc(73);
 fernet[0] = 0x80;
 for (let i = 9; i < fernet.length; i++) fernet[i] = i;
 const encrypted = fernet.toString("base64url");
-const frame = (type: string, data: JsonObject = {}) =>
-  `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
-const events = (text: string) =>
-  text
-    .split("\n")
-    .filter((line) => line.startsWith("data: {"))
-    .map((line) => JSON.parse(line.slice(6)));
 
 function responsesStream(model: string) {
   const reasoning = {
@@ -199,47 +198,33 @@ test(
         );
       }
     });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const address = upstream.address();
-    assert.ok(address instanceof Object);
-    const app = await Application.create({
-      directory,
-      agentHome: join(directory, "home"),
-      binary: resolve(".vendor/core/cli-proxy-api"),
-      clientDirectory: resolve("dist/client"),
-      port: 0,
-    });
+    const upstreamPort = await listen(upstream);
+    const app = await testApplication(directory);
     try {
       for (const oauth of [false, true]) {
         const profile = app.store.createProfile(
           oauth ? "CLI fingerprint fixture" : "API fixture",
-          "forest",
         );
         const key = "synthetic-anthropic";
         app.store.saveApiAccount(
           profile.id,
-          {
-            id: profile.id,
-            name: "Synthetic Claude",
-            provider: "custom",
-            baseUrl: `http://127.0.0.1:${address.port}`,
-            prefix: "",
-            disabled: false,
-            models: [{ id: "claude-opus-5-5", protocol: "anthropic" }],
-          },
+          customAccount(
+            profile.id,
+            `http://127.0.0.1:${upstreamPort}`,
+            [{ id: "claude-opus-5-5", protocol: "anthropic" }],
+            "Synthetic Claude",
+          ),
           key,
         );
-        await app.core.start(profile.id);
+        await app.cores.pool.start(profile.id);
         if (oauth) {
           // Exercise the OAuth wire profile without a token or external account-profile lookup.
           const config = record(
-            await app.core.management(profile.id, "/config"),
+            await app.cores.pool.management(profile.id, "/config"),
           );
           const entries = config["claude-api-key"];
           assert.ok(Array.isArray(entries));
-          await app.core.management(
+          await app.cores.pool.management(
             profile.id,
             "/claude-api-key",
             "PUT",
@@ -255,7 +240,7 @@ test(
             const probe = await fetch(`${app.endpoint(profile.id)}/messages`, {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
                 "Content-Type": "application/json",
                 "anthropic-version": "2023-06-01",
               },
@@ -288,7 +273,7 @@ test(
               {
                 method: "POST",
                 headers: {
-                  Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+                  Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
                   "Content-Type": "application/json",
                   "anthropic-version": "2023-06-01",
                   "anthropic-beta":
@@ -394,15 +379,12 @@ test(
               );
             }
           }
-        await app.core.stop(profile.id);
+        await app.cores.pool.stop(profile.id);
       }
       assert.equal(requests.length, 8);
     } finally {
       await app.close();
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-        upstream.closeAllConnections();
-      });
+      await closeServer(upstream);
       await rm(directory, { recursive: true, force: true });
       await rm(app.agentSetup.socketDirectory, {
         recursive: true,
@@ -439,55 +421,42 @@ test(
           : messagesStream(body.model),
       );
     });
-    await new Promise<void>((resolve) =>
-      upstream.listen(0, "127.0.0.1", resolve),
-    );
-    const address = upstream.address();
-    assert.ok(address instanceof Object);
-    const binary = resolve(".vendor/core/cli-proxy-api");
+    const upstreamPort = await listen(upstream);
+    const binary = coreBinary;
     const localCatalogBinary = join(directory, "core-local-catalog-wrapper");
     // Keep this fixture deterministic while the production core refreshes its
     // mutable remote catalog: the wrapper adds --local-model only here.
-    const app = await Application.create({
-      directory,
-      agentHome: join(directory, "home"),
+    const app = await testApplication(directory, {
       binary: localCatalogBinary,
-      clientDirectory: resolve("dist/client"),
-      port: 0,
+      allowMissingCore: true,
     });
     try {
       // Verify the underlying pinned core separately; the wrapper is test-only
       // and catalog-pinned, so Application.create cannot verify it before write.
-      await new CorePool(app.store, binary).verifyBinary();
+      await verifyCore(binary);
       await writeFile(
         localCatalogBinary,
         `#!/bin/sh\nexec '${binary.replaceAll("'", "'\\''")}' "$@" --local-model\n`,
         { mode: 0o755 },
       );
       await chmod(localCatalogBinary, 0o755);
-      const profile = app.store.createProfile("Mixed models", "forest");
-      const foreign = app.store.createProfile("Other profile", "blue");
+      const profile = app.store.createProfile("Mixed models");
+      const foreign = app.store.createProfile("Other profile");
       for (const [id, protocol] of [
         ["gpt-6.1-sol", "responses"],
         ["claude-sonnet-4-6", "anthropic"],
       ] as const)
         app.store.saveApiAccount(
           profile.id,
-          {
-            id: protocol,
-            name: protocol,
-            provider: "custom",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-            prefix: "",
-            disabled: false,
-            models: [{ id, protocol }],
-          },
+          customAccount(protocol, `http://127.0.0.1:${upstreamPort}/v1`, [
+            { id, protocol },
+          ]),
           `synthetic-${protocol}`,
         );
-      await app.core.start(profile.id);
+      await app.cores.pool.start(profile.id);
       const endpoint = app.endpoint(profile.id);
       const headers = {
-        Authorization: `Bearer ${app.store.secret(`${profile.id}:client`)}`,
+        Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       };
@@ -688,7 +657,7 @@ test(
         method: "POST",
         headers: {
           ...headers,
-          Authorization: `Bearer ${app.store.secret(`${foreign.id}:client`)}`,
+          Authorization: `Bearer ${app.store.clientKey(foreign.id)}`,
         },
         body: JSON.stringify(codexRequest),
       });
@@ -696,10 +665,7 @@ test(
       assert.equal(requests.length, 4);
     } finally {
       await app.close();
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-        upstream.closeAllConnections();
-      });
+      await closeServer(upstream);
       await rm(directory, { recursive: true, force: true });
       await rm(app.agentSetup.socketDirectory, {
         recursive: true,

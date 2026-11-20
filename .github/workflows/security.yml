@@ -1,6 +1,8 @@
 name: Security checks
 on:
   workflow_dispatch:
+  # release.yml gates publishing on these jobs.
+  workflow_call:
   pull_request:
   push:
     branches: [main]

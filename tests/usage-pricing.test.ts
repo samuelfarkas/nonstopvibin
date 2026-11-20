@@ -1,18 +1,15 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
+import { usageSummary } from "./support/usage-summary.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   estimateUsd,
   normalizedTokens,
-  pricingTokens,
   UsagePrices,
 } from "../src/server/usage-pricing.ts";
+import { pricingTokens } from "../src/server/usage.ts";
 import { ModelCatalog } from "../src/server/model-catalog.ts";
 import type { UsageRecord } from "../src/shared/types.ts";
+import { temporaryStore } from "./support/application.ts";
 
 const record: UsageRecord = {
   id: "fixture",
@@ -216,8 +213,7 @@ test("outages back off rather than retrying on every dashboard poll", async () =
 });
 
 test("full-period totals are incremental, isolated, tier-aware and invalidated by retention and new rates", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-full-prices-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-full-prices-");
   let rate = {
     ...cost,
     tiers: [
@@ -249,8 +245,8 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
   );
   const originalNow = Date.now;
   try {
-    const first = store.createProfile("First", "forest");
-    const second = store.createProfile("Second", "blue");
+    const first = store.createProfile("First");
+    const second = store.createProfile("Second");
     const now = Date.now();
     const since = (days: number) =>
       new Date(now - days * 86_400_000).toISOString();
@@ -272,17 +268,17 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
     store.addUsage([{ ...record, id: "other", profileId: second.id }]);
     await catalog.models([], []);
     let readRows = 0;
-    const bySequence = store.usageBatch.bind(store);
-    const byTime = store.usageTimeBatch.bind(store);
-    store.usageBatch = (...args) => {
-      const rows = bySequence(...args);
-      readRows += rows.length;
-      return rows;
+    const bySequence = store.usageAfter.bind(store);
+    const byTime = store.usageBetween.bind(store);
+    store.usageAfter = (...args) => {
+      const page = bySequence(...args);
+      readRows += page.records.length;
+      return page;
     };
-    store.usageTimeBatch = (...args) => {
-      const rows = byTime(...args);
-      readRows += rows.length;
-      return rows;
+    store.usageBetween = (...args) => {
+      const page = byTime(...args);
+      readRows += page.records.length;
+      return page;
     };
     const get = async (id: string, cutoff = "") => {
       const { pricing: result, summary } = await prices.history(
@@ -291,7 +287,7 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
         cutoff,
         catalog,
       );
-      assert.deepEqual(summary, store.summary(id, cutoff));
+      assert.deepEqual(summary, usageSummary(store, id, cutoff));
       const rows = store.usage(id, cutoff, 10000);
       const expected = rows.map((r) => estimateUsd(r, rate));
       assert.equal(result.totals?.requests, rows.length);
@@ -374,14 +370,12 @@ test("full-period totals are incremental, isolated, tier-aware and invalidated b
   } finally {
     Date.now = originalNow;
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("history calculations restart after concurrent retention and stop before storage closes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-price-lifecycle-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-price-lifecycle-");
   let networkCalls = 0;
   const unavailable = Object.assign(async () => {
     networkCalls++;
@@ -390,7 +384,7 @@ test("history calculations restart after concurrent retention and stop before st
   const catalog = new ModelCatalog(unavailable);
   const prices = new UsagePrices(unavailable);
   try {
-    const profile = store.createProfile("Lifecycle", "forest");
+    const profile = store.createProfile("Lifecycle");
     const empty = await prices.history(store, profile.id, "", catalog);
     assert.equal(empty.pricing.totals?.requests, 0);
     assert.equal(
@@ -436,14 +430,12 @@ test("history calculations restart after concurrent retention and stop before st
     ]);
   } finally {
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 
 test("queued history responses keep records, summary and prices in one insertion snapshot", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nv-history-snapshot-"));
-  const store = new Store(directory, fileKeyCodec(directory));
+  const { store, remove } = await temporaryStore("nv-history-snapshot-");
   const unavailable = Object.assign(
     async () => new Response(null, { status: 503 }),
     fetch,
@@ -451,7 +443,7 @@ test("queued history responses keep records, summary and prices in one insertion
   const prices = new UsagePrices(unavailable);
   const catalog = new ModelCatalog(unavailable);
   try {
-    const profile = store.createProfile("Snapshot", "forest");
+    const profile = store.createProfile("Snapshot");
     store.addUsage(
       Array.from({ length: 1201 }, (_, i) => ({
         ...record,
@@ -488,7 +480,33 @@ test("queued history responses keep records, summary and prices in one insertion
     }
   } finally {
     await prices.close();
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
+  }
+});
+
+test("a queued history caller runs its own request after the caller ahead of it fails", async () => {
+  const { store, remove } = await temporaryStore("nv-history-failure-");
+  const unavailable = Object.assign(
+    async () => new Response(null, { status: 503 }),
+    fetch,
+  );
+  const prices = new UsagePrices(unavailable);
+  const catalog = new ModelCatalog(unavailable);
+  const usage = store.usage.bind(store);
+  let failures = 1;
+  store.usage = (...args) => {
+    if (failures-- > 0) throw new Error("synthetic storage failure");
+    return usage(...args);
+  };
+  try {
+    const profile = store.createProfile("Queued failure");
+    store.addUsage([{ ...record, profileId: profile.id }]);
+    const first = prices.history(store, profile.id, "", catalog);
+    const queued = prices.history(store, profile.id, "", catalog);
+    await assert.rejects(first, /synthetic storage failure/);
+    assert.equal((await queued).summary.requests, 1);
+  } finally {
+    await prices.close();
+    await remove();
   }
 });

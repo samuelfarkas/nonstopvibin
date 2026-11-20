@@ -3,9 +3,16 @@
 # directory as the same non-root user that runs your coding agents.
 set -eu
 
+# Filled in by scripts/build-server.mjs (renderInstaller in scripts/distribution.ts).
 VERSION="@VERSION@"
 ARCH="@ARCH@"
-PREFIX="$HOME/.local"
+EXECUTABLE="@EXECUTABLE@"
+REQUIRED="@REQUIRED@"
+ENTRIES="@ENTRIES@"
+MACHINES="@MACHINES@"
+DEFAULT_PORT="@DEFAULT_PORT@"
+DEFAULT_PREFIX="@DEFAULT_PREFIX@"
+PREFIX="$HOME/$DEFAULT_PREFIX"
 SERVICE=1
 SERVICE_ARGS=""
 
@@ -49,13 +56,13 @@ Install NonstopVibin $VERSION (linux-$ARCH) for the current user.
 
 Usage: ./install.sh [--prefix DIR] [--no-service] [--port N] [--allow-host FQDN]
 
-  --prefix DIR       Install to DIR/lib/nonstopvibin with a DIR/bin/nonstopvibin
-                     link (default: \$HOME/.local).
+  --prefix DIR       Install to DIR/lib/nonstopvibin with a DIR/bin/$EXECUTABLE
+                     link (default: \$HOME/$DEFAULT_PREFIX).
   --no-service       Do not install or restart the systemd user service.
-  --port N           Service port (default 4320). Passed to
-                     \`nonstopvibin service install\`.
+  --port N           Service port (default $DEFAULT_PORT). Passed to
+                     \`$EXECUTABLE service install\`.
   --allow-host FQDN  Exact HTTPS host name for the web UI, e.g. from
-                     \`tailscale serve\`. Passed to \`nonstopvibin service install\`.
+                     \`tailscale serve\`. Passed to \`$EXECUTABLE service install\`.
 
 A first install creates and starts the user service. An upgrade restarts the
 existing service and keeps its options, unless --port or --allow-host is given.
@@ -100,11 +107,12 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$(uname -s)" = Linux ] || die "This build is for Linux."
-case "$(uname -m)" in
-  x86_64 | amd64) machine=x64 ;;
-  aarch64 | arm64) machine=arm64 ;;
-  *) machine=$(uname -m) ;;
-esac
+machine=$(uname -m)
+for pair in $MACHINES; do
+  case "$machine" in
+    "${pair#*:}") machine=${pair%%:*} ;;
+  esac
+done
 [ "$machine" = "$ARCH" ] ||
   die "This archive is for linux-$ARCH, but this machine is $machine. Download the linux-$machine archive."
 [ "$(id -u)" -ne 0 ] ||
@@ -115,7 +123,7 @@ case "$PREFIX" in
   *) PREFIX="$(pwd)/$PREFIX" ;;
 esac
 SOURCE=$(cd "$(dirname "$0")" && pwd)
-for entry in nonstopvibin client core licenses; do
+for entry in $REQUIRED; do
   [ -e "$SOURCE/$entry" ] || die "$SOURCE/$entry is missing. Extract the complete archive first."
 done
 
@@ -128,11 +136,12 @@ fi
 
 LIB="$PREFIX/lib/nonstopvibin"
 BIN="$PREFIX/bin"
-UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nonstopvibin.service"
-if [ "$SERVICE" = 1 ] && [ -f "$UNIT" ]; then
-  executable=$(printf '%s' "$LIB/nonstopvibin" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/%/%%/g')
-  grep -qF "\"$executable\"" "$UNIT" ||
-    die "The existing service uses another executable. Upgrade at its original --prefix, or edit $UNIT first. Nothing was changed."
+UNIT=
+if [ "$SERVICE" = 1 ]; then
+  "$SOURCE/$EXECUTABLE" --version >/dev/null ||
+    die "The new binary does not run on this system. Nothing was changed."
+  # The CLI writes the unit, so it alone knows its path and how it quotes the executable.
+  UNIT=$("$SOURCE/$EXECUTABLE" service unit "$LIB/$EXECUTABLE") || exit 1
 fi
 NEW="$PREFIX/lib/.nonstopvibin-new.$$"
 OLD="$PREFIX/lib/.nonstopvibin-old.$$"
@@ -140,10 +149,10 @@ mkdir -p "$PREFIX/lib" "$BIN"
 rm -rf "$NEW" "$OLD"
 mkdir "$NEW"
 trap 'rm -rf "$NEW"' EXIT
-for entry in nonstopvibin client core licenses install.sh README.md; do
+for entry in $ENTRIES; do
   [ ! -e "$SOURCE/$entry" ] || cp -R "$SOURCE/$entry" "$NEW/"
 done
-"$NEW/nonstopvibin" --version >/dev/null ||
+"$NEW/$EXECUTABLE" --version >/dev/null ||
   die "The new binary does not run on this system. Nothing was changed."
 
 # Keep the previous installation until the new one runs from its final path.
@@ -154,31 +163,31 @@ if [ -e "$LIB" ]; then
 fi
 mv "$NEW" "$LIB"
 trap - EXIT
-if ! "$LIB/nonstopvibin" --version >/dev/null; then
+if ! "$LIB/$EXECUTABLE" --version >/dev/null; then
   rm -rf "$LIB"
   [ "$upgrade" = 0 ] || mv "$OLD" "$LIB"
   die "The installed binary failed to run; the previous installation was restored."
 fi
 rm -rf "$OLD"
-ln -sfn "$LIB/nonstopvibin" "$BIN/nonstopvibin"
-say "Installed $("$LIB/nonstopvibin" --version) to $LIB"
+ln -sfn "$LIB/$EXECUTABLE" "$BIN/$EXECUTABLE"
+say "Installed $("$LIB/$EXECUTABLE" --version) to $LIB"
 
 running=0
 if [ "$SERVICE" = 1 ]; then
   if [ -n "${XDG_RUNTIME_DIR:-}" ] && systemctl --user show-environment >/dev/null 2>&1; then
     if [ -f "$UNIT" ] && [ -z "$SERVICE_ARGS" ]; then
       say "Restarting the existing service..."
-      systemctl --user restart nonstopvibin.service
+      systemctl --user restart "${UNIT##*/}"
       tries=0
-      until "$BIN/nonstopvibin" status >/dev/null 2>&1; do
+      until "$BIN/$EXECUTABLE" status >/dev/null 2>&1; do
         tries=$((tries + 1))
         [ "$tries" -lt 30 ] ||
-          die "The service did not become ready. Check: journalctl --user -u nonstopvibin -e"
+          die "The service did not become ready. Check: journalctl --user -u ${UNIT##*/} -e"
         sleep 1
       done
     else
       # shellcheck disable=SC2086 # validated words, split on purpose
-      "$BIN/nonstopvibin" service install $SERVICE_ARGS
+      "$BIN/$EXECUTABLE" service install $SERVICE_ARGS
     fi
     running=1
   else
@@ -186,23 +195,23 @@ if [ "$SERVICE" = 1 ]; then
     say "No systemd user manager is reachable, so no service was installed."
     say "Log in over SSH directly as this user (not su/sudo), and check that"
     say "your distribution's systemd user session and D-Bus are available."
-    say "Then run: $BIN/nonstopvibin service install"
+    say "Then run: $BIN/$EXECUTABLE service install"
     say "Without systemd, use --no-service and run serve under your own supervisor."
   fi
 fi
 
 say ""
 if [ "$running" = 1 ]; then
-  "$BIN/nonstopvibin" url
+  "$BIN/$EXECUTABLE" url
 else
-  say "Start it in the foreground with: $BIN/nonstopvibin serve"
-  say "Then run \`$BIN/nonstopvibin url\` in another shell for the session link."
+  say "Start it in the foreground with: $BIN/$EXECUTABLE serve"
+  say "Then run \`$BIN/$EXECUTABLE url\` in another shell for the session link."
 fi
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *)
     say ""
-    say "$BIN is not on your PATH. Use $BIN/nonstopvibin, or add this to your shell profile:"
+    say "$BIN is not on your PATH. Use $BIN/$EXECUTABLE, or add this to your shell profile:"
     say "  export PATH=\"$BIN:\$PATH\""
     ;;
 esac

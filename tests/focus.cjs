@@ -1,26 +1,34 @@
-// Run with `bun tests/focus.cjs` (isolated Electron renderer).
+// Run with `bun tests/focus.cjs` after `bun run build` (isolated Electron renderer).
+// Checks src/client/focus.ts and the built app's focus styles on fixture markup that carries
+// the components' class names. It does not check that the components render those classes;
+// tests/page-layout.cjs renders the real pages.
 const assert = require("node:assert/strict");
-const { mkdtempSync, writeFileSync, readFileSync, rmSync } = require("node:fs");
-const { tmpdir } = require("node:os");
+const { readdirSync, writeFileSync, readFileSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const electron = require("electron");
+const { checkPage, launchPage } = require("./support/electron-page.cjs");
 
 if (typeof electron === "string") {
-  const directory = mkdtempSync(join(tmpdir(), "nv-focus-"));
-  require("esbuild").buildSync({
-    entryPoints: [resolve(__dirname, "../src/client/focus.ts")],
-    bundle: true,
-    format: "esm",
-    outfile: join(directory, "focus.js"),
-  });
-  const css = ["styles", "tray", "connect", "activity"]
-    .map((name) =>
-      readFileSync(resolve(__dirname, `../src/client/${name}.css`), "utf8"),
-    )
-    .join("\n");
-  writeFileSync(
-    join(directory, "index.html"),
-    `<style>${css}</style>
+  launchPage("focus", __filename, (directory) => {
+    require("esbuild").buildSync({
+      entryPoints: [resolve(__dirname, "../src/client/focus.ts")],
+      bundle: true,
+      format: "esm",
+      outfile: join(directory, "focus.js"),
+    });
+    // Every stylesheet the build emits: the shared one first, then the main window's and the tray's.
+    const assets = resolve(__dirname, "../dist/client/assets");
+    const css = readdirSync(assets)
+      .filter((name) => name.endsWith(".css"))
+      .sort(
+        (a, b) =>
+          Number(b.startsWith("index-")) - Number(a.startsWith("index-")),
+      )
+      .map((name) => readFileSync(join(assets, name), "utf8"))
+      .join("\n");
+    writeFileSync(
+      join(directory, "index.html"),
+      `<style>${css}</style>
     <button id="first">Refresh</button>
     <details><summary class="tray-profile">Profile</summary>Quota</details>
     <details><summary class="tray-account-summary">Account</summary>Quota</details>
@@ -30,24 +38,15 @@ if (typeof electron === "string") {
     <div class="select-item" tabindex="0" data-highlighted>Option</div>
     <input type="checkbox" aria-label="Enabled">
     <script type="module" src="focus.js"></script>`,
-  );
-  const child = require("node:child_process").spawn(
-    electron,
-    [__filename, directory, "--headless"],
-    { stdio: "inherit" },
-  );
-  child.on("exit", (code) => {
-    rmSync(directory, { recursive: true, force: true });
-    process.exitCode = code ?? 1;
+    );
   });
 } else {
-  const { app, BrowserWindow } = electron;
-  app.setPath("userData", process.argv[2]);
-  app.whenReady().then(async () => {
-    const window = new BrowserWindow({ show: false });
-    const timeout = setTimeout(() => app.exit(1), 15000);
-    try {
-      await window.loadFile(join(process.argv[2], "index.html"));
+  checkPage(
+    "Focus check",
+    { show: false },
+    15000,
+    async (window, directory) => {
+      await window.loadFile(join(directory, "index.html"));
       const contents = window.webContents;
       contents.debugger.attach("1.3");
       await contents.debugger.sendCommand(
@@ -187,13 +186,6 @@ if (typeof electron === "string") {
       console.log(
         "Focus checks passed: keyboard, mouse, restoration, text fields, disclosures, menus, forced colors.",
       );
-    } catch (error) {
-      console.error(error);
-      process.exitCode = 1;
-    } finally {
-      clearTimeout(timeout);
-      window.destroy();
-      app.exit(process.exitCode || 0);
-    }
-  });
+    },
+  );
 }

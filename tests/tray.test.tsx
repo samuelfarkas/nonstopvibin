@@ -12,7 +12,7 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
     provider: "claude",
     kind: "oauth",
     disabled: false,
-    status: "ready",
+    status: "Ready",
     priority: 0,
     quota: {
       status: "error",
@@ -34,7 +34,6 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
         id: "p",
         slug: "work",
         name: "Work",
-        color: "forest",
         strategy: "round-robin",
         sessionAffinity: false,
         enabled: true,
@@ -44,25 +43,13 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
           account,
           { ...account, id: "b", disabled: true, quota: undefined },
         ],
-        usage: {
-          requests: 0,
-          failed: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedTokens: 0,
-          reasoningTokens: 0,
-          totalTokens: 0,
-        },
         endpoint: "",
       },
     ],
     coreVersion: "",
-    coreAvailable: true,
     gateway: "",
-    storage: "",
     usageRetentionDays: 0,
     version: "",
-    desktop: true,
     errors: [],
   };
   const html = renderToStaticMarkup(
@@ -74,7 +61,8 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
   assert.match(html, /<strong>59%<\/strong>/);
   assert.match(html, /Fable weekly/);
   assert.match(html, /Check failed · last reading/);
-  assert.match(html, /Disabled/);
+  assert.match(html, /class="tray-account-notice">Paused</);
+  assert.match(html, /role="meter" aria-label="Fable weekly"/);
   assert.match(html, /<strong>—<\/strong>/);
   assert.match(html, />starting</);
   assert.match(html, /No current quota/);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./add-subscription.css";
 import {
   ArrowLeft,
@@ -13,31 +13,37 @@ import {
   LoaderCircle,
   Plus,
 } from "lucide-react";
-import { apiPresets, oauthProviders } from "../shared/providers.ts";
+import {
+  apiPresets,
+  hasOrganizations,
+  oauthProviders,
+  providerLabel,
+  type OAuthProvider,
+  type Protocol,
+  type Provider,
+} from "../shared/providers.ts";
+import {
+  credentialFileBytes,
+  nameLength,
+  prefixLength,
+} from "../shared/vocabulary.ts";
 import type {
   Account,
+  AppState,
   ImportSource,
-  OAuthProvider,
   OAuthReview,
   OAuthStatus,
   OAuthSession,
   ProfileState,
   Json,
-  Protocol,
 } from "../shared/types.ts";
-import { api, openExternal } from "./api.ts";
-import {
-  AccountSummary,
-  CopyButton,
-  Modal,
-  ProviderIcon,
-  Select,
-} from "./components.tsx";
+import { api, desktop, openExternal } from "./api.ts";
+import { messageOf, useAction } from "./action.ts";
+import { usePolling } from "./feed.tsx";
+import { AccountSummary, ProviderIcon } from "./components.tsx";
+import { CopyButton, Modal, Select } from "./controls.tsx";
 
-import { accountLabel } from "./format.ts";
-
-const hiddenProviders = new Set(["antigravity", "kimi", "xai"]);
-const exposedApiPresets = new Set(["opencode-go", "custom"]);
+import { accountLabel, organizationLabel } from "./format.ts";
 
 export function AddSubscription({
   profile: initialProfile,
@@ -52,29 +58,31 @@ export function AddSubscription({
   reconnectAccount?: Account;
   onSelectProfile(id: string): void;
   onClose(): void;
-  onSaved(): Promise<void>;
+  onSaved(next?: AppState): Promise<void>;
 }) {
   const [destinationId, setDestinationId] = useState(initialProfile.id);
   const profile =
     profiles.find((p) => p.id === destinationId) ?? initialProfile;
   const [reconnectId, setReconnectId] = useState(reconnectAccount?.id);
   const reconnectTarget = profile.accounts.find((a) => a.id === reconnectId);
-  const [claudeOnly, setClaudeOnly] = useState(!!reconnectAccount);
-  const claudeAccounts = claudeOnly
+  const [organizationsOnly, setOrganizationsOnly] =
+    useState(!!reconnectAccount);
+  const organizationAccounts = organizationsOnly
     ? profile.accounts.filter(
-        (a) => a.provider === "claude" && a.kind === "oauth",
+        (a) => hasOrganizations(a.provider) && a.kind === "oauth",
       )
     : [];
   const [review, setReview] = useState<OAuthReview>();
   const [verificationFailed, setVerificationFailed] = useState(false);
   const [selectedTab, setTab] = useState<"oauth" | "api" | "import">("oauth");
-  const tab = claudeOnly ? "oauth" : selectedTab;
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const tab = organizationsOnly ? "oauth" : selectedTab;
+  const { busy, error, setError, run: runAction } = useAction();
+  const run = (action: () => Promise<void>) =>
+    runAction(action, "Could not connect subscription.");
   const [session, setSession] = useState<OAuthSession>();
   const [complete, setComplete] =
     useState<Extract<OAuthStatus, { status: "ok" }>>();
-  const [presetId, setPresetId] = useState("opencode-go");
+  const [presetId, setPresetId] = useState<Provider>("opencode-go");
   const preset = apiPresets.find((p) => p.id === presetId)!;
   const [name, setName] = useState("OpenCode Go");
   const [baseUrl, setBaseUrl] = useState(preset.baseUrl);
@@ -90,7 +98,9 @@ export function AddSubscription({
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
-    api<OAuthSession | null>(`/profiles/${profile.id}/oauth-session`)
+    api("GET /profiles/:profileId/oauth-session", {
+      params: { profileId: profile.id },
+    })
       .then((existing) => {
         if (!cancelled && existing) {
           setSession(existing);
@@ -103,20 +113,20 @@ export function AddSubscription({
     return () => {
       cancelled = true;
     };
-  }, [profile.id]);
+  }, [profile.id, setError]);
   useEffect(() => {
     if (tab === "import")
-      api<ImportSource[]>("/import-sources")
+      api("GET /import-sources")
         .then(setSources)
         .catch((e) => setError(e.message));
-  }, [tab]);
+  }, [tab, setError]);
   async function cancelSignIn() {
     if (!session || complete) return;
     try {
-      await api(
-        `/profiles/${profile.id}/oauth?state=${encodeURIComponent(session.state)}`,
-        "DELETE",
-      );
+      await api("DELETE /profiles/:profileId/oauth", {
+        params: { profileId: profile.id },
+        query: { state: session.state },
+      });
     } catch (e) {
       if (
         !(e instanceof Error) ||
@@ -134,46 +144,38 @@ export function AddSubscription({
       else onClose();
     });
   }
-  useEffect(() => {
+  const checkSignIn = useMemo(() => {
     if (!session || complete || review || verificationFailed) return;
-    let cancelled = false;
-    let pending = false;
-    const timer = setInterval(async () => {
-      if (pending || cancelled) return;
-      pending = true;
+    return async (signal: AbortSignal) => {
       try {
-        const result = await api<OAuthStatus>(
-          `/profiles/${profile.id}/oauth?state=${encodeURIComponent(session.state)}`,
-        );
-        if (!cancelled && result.status === "ok") {
+        const result = await api("GET /profiles/:profileId/oauth", {
+          params: { profileId: profile.id },
+          query: { state: session.state },
+        });
+        if (!signal.aborted && result.status === "ok") {
           setComplete(result);
           await onSaved();
         }
-        if (!cancelled && result.status === "review") {
+        if (!signal.aborted && result.status === "review") {
           if (result.review.action === "reconnect" && reconnectId) {
             // The verified seat already matches the chosen connection; a confirm
             // click adds nothing and users miss it. Fall back to manual review on failure.
             let confirmed: OAuthStatus;
             try {
-              confirmed = await api<OAuthStatus>(
-                `/profiles/${profile.id}/oauth-confirm`,
-                "POST",
-                { state: session.state },
-              );
+              confirmed = await api("POST /profiles/:profileId/oauth-confirm", {
+                params: { profileId: profile.id },
+                body: { state: session.state },
+              });
               if (confirmed.status !== "ok")
                 throw new Error("The connection was not completed. Try again.");
             } catch (e) {
-              if (cancelled) return;
+              if (signal.aborted) return;
               setReview(result.review);
-              setError(
-                e instanceof Error
-                  ? e.message
-                  : "Could not reconnect the subscription.",
-              );
+              setError(messageOf(e, "Could not reconnect the subscription."));
               return;
             }
             // The server has already replaced the credential; show the result even
-            // if a profile refresh restarted this effect while confirming.
+            // if a profile refresh restarted this poll while confirming.
             setComplete(confirmed);
             await onSaved();
             return;
@@ -181,24 +183,18 @@ export function AddSubscription({
           setReview(result.review);
           setError("");
         }
-        if (!cancelled && result.status === "error") {
+        if (!signal.aborted && result.status === "error") {
           setError(
             result.error || "Sign-in did not complete. Start a new sign-in.",
           );
           setSession(undefined);
         }
       } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Could not check sign-in.");
+        if (!signal.aborted) {
+          setError(messageOf(e, "Could not check sign-in."));
           setVerificationFailed(true);
         }
-      } finally {
-        pending = false;
       }
-    }, 2000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
     };
   }, [
     session,
@@ -208,27 +204,17 @@ export function AddSubscription({
     profile.id,
     reconnectId,
     onSaved,
+    setError,
   ]);
-  async function run(action: () => Promise<void>) {
-    setError("");
-    setBusy(true);
-    try {
-      await action();
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Could not connect subscription.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Sign-in happens in a browser that usually covers this window; keep checking
+  // while it is hidden so the dialog has the result when the user returns.
+  usePolling(checkSignIn, 2000, { whileHidden: true });
   async function begin(provider: OAuthProvider) {
-    const next = await api<OAuthSession>(
-      `/profiles/${profile.id}/oauth`,
-      "POST",
+    const next = await api("POST /profiles/:profileId/oauth", {
+      params: { profileId: profile.id },
       // JSON.stringify drops undefined, so a fresh connection sends no target.
-      { provider, reconnectAccountId: reconnectTarget?.id },
-    );
+      body: { provider, reconnectAccountId: reconnectTarget?.id },
+    });
     setSession(next);
     setReview(undefined);
     setVerificationFailed(false);
@@ -240,11 +226,10 @@ export function AddSubscription({
     setReview(undefined);
     setVerificationFailed(false);
     setCallback("");
-    setClaudeOnly(true);
+    setOrganizationsOnly(true);
   }
   return (
     <Modal
-      open
       onClose={() => {
         void close();
       }}
@@ -259,7 +244,7 @@ export function AddSubscription({
               ? "Finish signing in"
               : reconnectTarget
                 ? "Reconnect your subscription"
-                : claudeOnly
+                : organizationsOnly
                   ? "Connect another organization"
                   : "Add a subscription"
       }
@@ -298,7 +283,7 @@ export function AddSubscription({
             >
               Done
             </button>
-            {session?.provider === "claude" && (
+            {session && hasOrganizations(session.provider) && (
               <button
                 className="button"
                 disabled={busy}
@@ -307,7 +292,7 @@ export function AddSubscription({
                   setSession(undefined);
                   setReview(undefined);
                   setReconnectId(undefined);
-                  setClaudeOnly(true);
+                  setOrganizationsOnly(true);
                 }}
               >
                 <Plus size={15} aria-hidden="true" /> Connect another
@@ -315,7 +300,7 @@ export function AddSubscription({
               </button>
             )}
           </div>
-          {session?.provider === "claude" && (
+          {session && hasOrganizations(session.provider) && (
             <p className="field-note">
               Use the same email and choose a different organization when you
               sign in.
@@ -326,7 +311,7 @@ export function AddSubscription({
         <div className="organization-review">
           <div className="verified-organization">
             <ShieldCheck size={16} aria-hidden="true" /> Organization verified
-            by Claude
+            by {providerLabel(review.account.provider)}
           </div>
           <AccountSummary account={review.account} />
           <div className="organization-destination">
@@ -364,16 +349,18 @@ export function AddSubscription({
             >
               Choose another organization
             </button>
-            {review.action !== "blocked" ? (
+            {review.action !== "blocked" && (
               <button
                 className="button primary"
                 disabled={busy}
                 onClick={() =>
                   run(async () => {
-                    const result = await api<OAuthStatus>(
-                      `/profiles/${profile.id}/oauth-confirm`,
-                      "POST",
-                      { state: session!.state },
+                    const result = await api(
+                      "POST /profiles/:profileId/oauth-confirm",
+                      {
+                        params: { profileId: profile.id },
+                        body: { state: session!.state },
+                      },
                     );
                     if (result.status !== "ok")
                       throw new Error(
@@ -395,21 +382,6 @@ export function AddSubscription({
                     ? "Reconnect subscription"
                     : "Connect organization"}
               </button>
-            ) : (
-              review.existingProfileId && (
-                <button
-                  className="button primary"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      await chooseAgain();
-                      onSelectProfile(review.existingProfileId!);
-                    })
-                  }
-                >
-                  Open existing profile
-                </button>
-              )
             )}
           </div>
         </div>
@@ -424,7 +396,7 @@ export function AddSubscription({
           </div>
           <h3>Continue in your browser</h3>
           <p>
-            {session.provider === "claude" ? (
+            {hasOrganizations(session.provider) ? (
               <>
                 Choose{" "}
                 <strong>
@@ -432,7 +404,7 @@ export function AddSubscription({
                     ? accountLabel(reconnectTarget)
                     : "the organization you want to connect"}
                 </strong>{" "}
-                on the Claude authorization page.{" "}
+                on the {providerLabel(session.provider)} authorization page.{" "}
                 {reconnectTarget ? (
                   <>
                     After you sign in, the reconnect in{" "}
@@ -453,7 +425,7 @@ export function AddSubscription({
               </>
             )}
           </p>
-          {session.provider === "claude" && (
+          {hasOrganizations(session.provider) && (
             <p className="organization-hint">
               One email can have several seats. Each organization connects
               separately.
@@ -503,14 +475,15 @@ export function AddSubscription({
               ? "Verification paused"
               : "Waiting for the provider"}
             · expires at{" "}
-            {new Date(
-              session.expiresAt ?? session.startedAt + 300_000,
-            ).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            {new Date(session.expiresAt).toLocaleTimeString([], {
+              hour: "numeric",
+              minute: "2-digit",
+            })}
           </p>
           {/* In a browser the server may be remote, so its loopback callback
               cannot be reached; pasting is the expected path there. */}
-          <details open={!window.nonstopvibin && !session.userCode}>
-            {window.nonstopvibin ? (
+          <details open={!desktop && !session.userCode}>
+            {desktop ? (
               <>
                 <summary>Browser did not return to the app?</summary>
                 <p>
@@ -542,8 +515,9 @@ export function AddSubscription({
               disabled={!callback || busy}
               onClick={() =>
                 run(async () => {
-                  await api(`/profiles/${profile.id}/callback`, "POST", {
-                    url: callback,
+                  await api("POST /profiles/:profileId/callback", {
+                    params: { profileId: profile.id },
+                    body: { url: callback },
                   });
                   setCallback("");
                 })
@@ -567,7 +541,6 @@ export function AddSubscription({
             <label className="field">
               Destination profile
               <Select
-                name="destinationProfile"
                 value={profile.id}
                 disabled={busy}
                 onValueChange={setDestinationId}
@@ -575,8 +548,12 @@ export function AddSubscription({
               />
             </label>
           )}
-          {!claudeOnly && (
-            <div className="segmented" aria-label="Connection method">
+          {!organizationsOnly && (
+            <div
+              className="segmented"
+              role="group"
+              aria-label="Connection method"
+            >
               {(
                 [
                   ["oauth", "Sign in"],
@@ -585,8 +562,10 @@ export function AddSubscription({
                 ] as const
               ).map(([id, label]) => (
                 <button
+                  type="button"
                   key={id}
                   className={tab === id ? "active" : ""}
+                  aria-pressed={tab === id}
                   onClick={() => {
                     setTab(id);
                     setError("");
@@ -602,8 +581,8 @@ export function AddSubscription({
               {oauthProviders
                 .filter(
                   (provider) =>
-                    !hiddenProviders.has(provider.id) &&
-                    (!claudeOnly || provider.id === "claude"),
+                    provider.visible &&
+                    (!organizationsOnly || provider.organizations),
                 )
                 .map((provider) => (
                   <button
@@ -627,10 +606,10 @@ export function AddSubscription({
                     )}
                   </button>
                 ))}
-              {claudeAccounts.length > 0 && (
+              {organizationAccounts.length > 0 && (
                 <div className="connected-organizations">
                   <h3>Already connected in {profile.name}</h3>
-                  {claudeAccounts.map((a) => (
+                  {organizationAccounts.map((a) => (
                     <div key={a.id}>
                       <CheckCircle2 size={14} aria-hidden="true" />
                       <span>
@@ -652,21 +631,27 @@ export function AddSubscription({
               onSubmit={(e) => {
                 e.preventDefault();
                 void run(async () => {
-                  await api(`/profiles/${profile.id}/api-account`, "POST", {
-                    name,
-                    provider: presetId,
-                    baseUrl,
-                    apiKey: key,
-                    protocol,
-                    prefix,
-                    models: models
-                      .split(/[\n,]/)
-                      .map((m) => m.trim())
-                      .filter(Boolean)
-                      .map((id) => ({ id, protocol })),
-                  });
+                  const next = await api(
+                    "POST /profiles/:profileId/api-account",
+                    {
+                      params: { profileId: profile.id },
+                      body: {
+                        name,
+                        provider: presetId,
+                        baseUrl,
+                        apiKey: key,
+                        protocol,
+                        prefix,
+                        models: models
+                          .split(/[\n,]/)
+                          .map((m) => m.trim())
+                          .filter(Boolean)
+                          .map((id) => ({ id, protocol })),
+                      },
+                    },
+                  );
                   setKey("");
-                  await onSaved();
+                  await onSaved(next);
                   onSelectProfile(profile.id);
                 });
               }}
@@ -682,10 +667,10 @@ export function AddSubscription({
                     setBaseUrl(p.baseUrl);
                     setPrefix(p.prefix);
                     setProtocol(p.protocol);
-                    setModels(p.models);
+                    setModels("");
                   }}
                   options={apiPresets
-                    .filter((provider) => exposedApiPresets.has(provider.id))
+                    .filter((provider) => provider.visible)
                     .map((provider) => ({
                       value: provider.id,
                       label: provider.name,
@@ -700,7 +685,7 @@ export function AddSubscription({
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    maxLength={60}
+                    maxLength={nameLength}
                   />
                 </label>
                 <label className="field">
@@ -710,7 +695,7 @@ export function AddSubscription({
                     onChange={(e) => setPrefix(e.target.value)}
                     pattern="[a-z0-9-]*"
                     placeholder="e.g. go"
-                    maxLength={30}
+                    maxLength={prefixLength}
                   />
                 </label>
               </div>
@@ -733,12 +718,12 @@ export function AddSubscription({
                     type="url"
                     required
                     value={baseUrl}
-                    readOnly={presetId === "opencode-go"}
+                    readOnly={preset.fixedEndpoint}
                     onChange={(e) => setBaseUrl(e.target.value)}
                     placeholder="https://api.example.com/v1"
                   />
                 </label>
-                {presetId !== "opencode-go" && (
+                {!preset.upstream && (
                   <label className="field">
                     API format
                     <Select<Protocol>
@@ -803,15 +788,14 @@ export function AddSubscription({
                       />
                       <span>
                         <strong>
-                          {source.organizationName ||
-                            (source.organizationUuid
-                              ? `Organization ${source.organizationUuid.slice(0, 8)}`
-                              : source.email || source.provider)}
+                          {organizationLabel(source) ||
+                            source.email ||
+                            source.provider}
                         </strong>
                         <small>
                           {source.organizationUuid
                             ? `${source.email || source.provider} · ${source.organizationUuid.slice(0, 8)}`
-                            : source.provider === "claude"
+                            : hasOrganizations(source.provider)
                               ? "Organization unverified"
                               : source.fileName}
                         </small>
@@ -868,27 +852,33 @@ export function AddSubscription({
                   onClick={() =>
                     run(async () => {
                       let imported = 0;
+                      let next: AppState | undefined;
                       for (const sourceId of selectedSources) {
-                        await api(
-                          `/profiles/${profile.id}/import-source`,
-                          "POST",
-                          { sourceId },
+                        next = await api(
+                          "POST /profiles/:profileId/import-source",
+                          {
+                            params: { profileId: profile.id },
+                            body: { sourceId },
+                          },
                         );
                         imported++;
                       }
                       for (const file of importFiles) {
-                        if (file.size > 2_000_000)
+                        if (file.size > credentialFileBytes)
                           throw new Error(
                             `${file.name} is too large. ${imported} files imported so far.`,
                           );
                         // The server validates the credential; the client only forwards the file.
-                        const contents: Json = JSON.parse(await file.text());
-                        await api(`/profiles/${profile.id}/import`, "POST", {
-                          contents,
+                        const contents: Record<string, Json> = JSON.parse(
+                          await file.text(),
+                        );
+                        next = await api("POST /profiles/:profileId/import", {
+                          params: { profileId: profile.id },
+                          body: { contents },
                         });
                         imported++;
                       }
-                      await onSaved();
+                      await onSaved(next);
                       onSelectProfile(profile.id);
                     })
                   }

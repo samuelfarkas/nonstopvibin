@@ -4,9 +4,8 @@ const { join, relative } = require("node:path");
 const { createHash } = require("node:crypto");
 const { listPackage, extractFile } = require("@electron/asar");
 const { Arch } = require("electron-builder");
-
-const privateFilePattern =
-  /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.runtime|\.test-runtime|\.deepsec|\.agents|\.git|\.codex|\.claude|\.playwright-cli|id_rsa|id_ed25519|auth\.json|credentials\.json|tokens\.json)(?:\/|$)|\.(?:pem|key|p12|pfx|sqlite3?(?:-(?:wal|shm))?|db(?:-(?:wal|shm))?|map)$/;
+const { coreFiles, coreLayout } = require("../src/server/core-binary.ts");
+const { architecture, privateFilePattern } = require("./distribution.ts");
 
 function resourcePaths(root, folder = root) {
   return readdirSync(folder, { withFileTypes: true }).flatMap((entry) => {
@@ -78,7 +77,7 @@ module.exports = async function verifyPackage(context) {
     );
     assert.equal(
       monitor.readUInt32LE(4),
-      context.arch === Arch.arm64 ? 0x0100000c : 0x01000007,
+      architecture(Arch[context.arch]).machO,
       "Click monitor architecture differs from the package target",
     );
     // LC_BUILD_VERSION stores the deployment target as major.minor.patch bytes.
@@ -113,16 +112,16 @@ module.exports = async function verifyPackage(context) {
       "Packaged click monitor differs from the built input",
     );
   }
-  for (const file of ["cli-proxy-api", "manifest.json"])
+  for (const file of coreFiles)
     assert.deepEqual(
-      readFileSync(join(resources, "core", file)),
-      readFileSync(join(project, ".vendor/core", file)),
+      readFileSync(join(resources, coreLayout.packaged, file)),
+      readFileSync(join(project, coreLayout.checkout, file)),
       "Packaged core differs from the verified input",
     );
-  assert.deepEqual(readdirSync(join(resources, "core")).sort(), [
-    "cli-proxy-api",
-    "manifest.json",
-  ]);
+  assert.deepEqual(
+    readdirSync(join(resources, coreLayout.packaged)).sort(),
+    [...coreFiles].sort(),
+  );
   const licenses = ["CLIProxyAPI.txt", "NOTICE.md"];
   assert.deepEqual(readdirSync(join(resources, "licenses")).sort(), licenses);
   for (const file of licenses)
@@ -139,4 +138,3 @@ module.exports = async function verifyPackage(context) {
     `Verified package contents (${entries.length} entries, ASAR SHA-256 ${createHash("sha256").update(readFileSync(archive)).digest("hex")}).`,
   );
 };
-module.exports.privateFilePattern = privateFilePattern;

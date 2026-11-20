@@ -1,17 +1,16 @@
 import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { databasePath, vaultKeyPath } from "./data-directory.ts";
 
 export interface SecretCodec {
   encrypt(value: string): string;
   decrypt(value: string): string;
-  label: string;
 }
 // Desktop and development share an owner-only local encryption key.
 export function fileKeyCodec(directory: string): SecretCodec {
-  const path = join(directory, "vault.key");
+  const path = vaultKeyPath(directory);
   if (!existsSync(path)) {
-    if (existsSync(join(directory, "nonstopvibin.sqlite")))
+    if (existsSync(databasePath(directory)))
       throw new Error(
         "vault.key is missing for an existing database. Restore its matching key from your backup.",
       );
@@ -24,7 +23,6 @@ export function fileKeyCodec(directory: string): SecretCodec {
       "The local vault key is invalid. Restore vault.key from your backup.",
     );
   return {
-    label: "Local encryption key · owner-only files",
     encrypt(value) {
       const nonce = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", key, nonce);

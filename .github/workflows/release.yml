@@ -14,112 +14,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun ci --ignore-scripts
       - run: bun scripts/verify-release.mjs "$GITHUB_REF_NAME"
   security:
     needs: preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun ci --ignore-scripts
-      - run: bun run security:deps
-      - run: bun ci --ignore-scripts
-        working-directory: .deepsec
-      - run: bun run security:tooling
-      - run: bun run security:install
-      - run: bun run security:secrets
-      - run: bun run security:history
+    uses: ./.github/workflows/security.yml
   build:
     needs: preflight
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: --mac dmg zip --arm64
-          - os: ubuntu-24.04
-            target: --linux AppImage deb --x64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-      - run: bun ci
-      - run: bun run core:install
-      - run: bun run quality
-      - run: bun test
-      - run: bun run build
-      - if: runner.os == 'macOS'
-        run: bun tests/desktop-smoke.cjs
-      - if: runner.os == 'Linux'
-        name: Desktop smoke with Chromium sandbox
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb libasound2t64 libgtk-3-0 libnss3
-          bun run install-electron
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-          xvfb-run -a bun tests/desktop-smoke.cjs
-      - if: runner.os == 'macOS'
-        id: signing
-        run: |
-          if [ -z "$CSC_LINK" ]; then
-            echo "Release builds require macOS signing credentials. See docs/release-signing.md."
-            exit 1
-          else
-            test -n "$APPLE_ID" && test -n "$APPLE_APP_SPECIFIC_PASSWORD" && test -n "$APPLE_TEAM_ID" || {
-              echo "Signed macOS releases require APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID."
-              exit 1
-            }
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - if: steps.signing.outputs.enabled == 'true'
-        run: bun run electron-builder ${{ matrix.target }} --publish never -c.forceCodeSigning=true
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - if: steps.signing.outputs.enabled == 'true'
-        run: |
-          xcrun stapler validate release/mac-arm64/NonstopVibin.app
-          spctl -a -vv -t execute release/mac-arm64/NonstopVibin.app
-      - if: runner.os == 'Linux'
-        run: bun run electron-builder ${{ matrix.target }} --publish never
-      - if: runner.os == 'Linux'
-        run: bun run dist:server
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-${{ matrix.os }}
-          path: |
-            release/*.tar.gz
-            release/*.dmg
-            release/*.AppImage
-            release/*.deb
-            release/*.zip
-            release/*.blockmap
-            release/latest*.yml
-            release/beta*.yml
-          if-no-files-found: error
+    uses: ./.github/workflows/checks.yml
+    with:
+      release: true
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
   release:
     needs: [build, security]
     runs-on: ubuntu-24.04
@@ -144,9 +53,11 @@ jobs:
         with:
           subject-path: release/*
       - run: |
-          prerelease=()
-          case "$GITHUB_REF_NAME" in
-            *-beta.*) prerelease=(--prerelease) ;;
+          channel=$(bun scripts/verify-release.mjs "$GITHUB_REF_NAME")
+          case "$channel" in
+            release) prerelease=() ;;
+            prerelease) prerelease=(--prerelease) ;;
+            *) exit 1 ;;
           esac
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "$GITHUB_REF_NAME" "${prerelease[@]}" release/*
           gh release edit "$GITHUB_REF_NAME" --draft=false

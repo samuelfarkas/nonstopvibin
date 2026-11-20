@@ -1,17 +1,18 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopBridge } from "../shared/types.ts";
+import {
+  bridgeChannels,
+  type BridgeArgument,
+  type BridgeMethod,
+} from "../shared/desktop-bridge.ts";
 
-const bridge: DesktopBridge = {
-  bootstrap: () => ipcRenderer.invoke("nv:bootstrap"),
-  openExternal: (url: string) => ipcRenderer.invoke("nv:open-external", url),
-  copy: (text: string) => ipcRenderer.invoke("nv:copy", text),
-  showWindow: (profileId?: string) =>
-    ipcRenderer.invoke("nv:show-window", profileId),
-  releaseWindow: () => ipcRenderer.invoke("nv:release-window"),
-  setLoginItem: (enabled: boolean) =>
-    ipcRenderer.invoke("nv:login-item", enabled),
-  getLoginItem: () => ipcRenderer.invoke("nv:get-login-item"),
-  revealData: () => ipcRenderer.invoke("nv:reveal-data"),
-  chooseProject: () => ipcRenderer.invoke("nv:choose-project"),
-};
-contextBridge.exposeInMainWorld("nonstopvibin", bridge);
+// Main validates each argument; the preload only forwards it.
+contextBridge.exposeInMainWorld(
+  "nonstopvibin",
+  Object.fromEntries(
+    Object.entries(bridgeChannels).map(([method, channel]) => [
+      method,
+      (argument?: BridgeArgument<BridgeMethod>) =>
+        ipcRenderer.invoke(channel, argument),
+    ]),
+  ),
+);

@@ -14,7 +14,7 @@ import {
 import { Arch } from "electron-builder";
 import validateCore from "../scripts/validate-core.cjs";
 import verifyPackage from "../scripts/verify-package.cjs";
-import release from "../scripts/core-release.json" with { type: "json" };
+import release from "../src/server/core-release.json" with { type: "json" };
 
 const project = resolve(import.meta.dirname, "..");
 
@@ -49,14 +49,14 @@ test("Git ignores private state while retaining source, skill copies and lockfil
     const kept = [
       "src/main.tsx",
       "bun.lock",
-      "scripts/core-release.json",
+      "src/server/core-release.json",
       ".env.example",
       ".deepsec/.env.example",
       ".deepsec/bun.lock",
       ".deepsec/data/app/INFO.md",
       ".deepsec/data/app/config.json",
       ".agents/skills/vite/SKILL.md",
-      "docs/screenshots/subscriptions.png",
+      "docs/media/subscriptions.png",
     ];
     const actual = execFileSync(
       "git",
@@ -177,6 +177,12 @@ test("the packaged archive check catches source, secrets and stale output", asyn
     };
     await pack();
     await verifyPackage(context);
+    await writeFile(join(resources, "core/cli-proxy-api"), "altered");
+    await assert.rejects(verifyPackage(context), /Packaged core differs/);
+    await writeFile(join(resources, "core/cli-proxy-api"), "synthetic");
+    await writeFile(join(resources, "core/extra"), "unexpected");
+    await assert.rejects(verifyPackage(context), /extra/);
+    await rm(join(resources, "core/extra"));
     await writeFile(
       join(resources, "licenses", "tokens.json"),
       "must not ship",
@@ -240,18 +246,30 @@ test("the packaged archive check catches source, secrets and stale output", asyn
   }
 });
 
+const workflow = async (name) =>
+  YAML.parse(await readFile(join(project, ".github/workflows", name), "utf8"));
+
 test("tag publication requires dependency and secret checks for the release revision", async () => {
-  const workflow = YAML.parse(
-    await readFile(join(project, ".github/workflows/release.yml"), "utf8"),
+  const release = await workflow("release.yml");
+  assert.ok(release.jobs.release.needs.includes("security"));
+  assert.equal(release.jobs.security.uses, "./.github/workflows/security.yml");
+  assert.equal(release.jobs.security.if, undefined);
+  const security = await workflow("security.yml");
+  assert.ok(Object.hasOwn(security.on, "workflow_call"));
+  const jobs = Object.values(security.jobs);
+  for (const job of jobs) {
+    assert.equal(job.if, undefined);
+    assert.ok(!job["continue-on-error"]);
+  }
+  const history = jobs.find((job) =>
+    job.steps.some((step) => step.run === "bun run security:history"),
   );
-  assert.ok(workflow.jobs.release.needs.includes("security"));
-  const steps = workflow.jobs.security.steps;
   assert.equal(
-    steps.find((step) => step.uses?.startsWith("actions/checkout@")).with[
-      "fetch-depth"
-    ],
+    history.steps.find((step) => step.uses?.startsWith("actions/checkout@"))
+      .with["fetch-depth"],
     0,
   );
+  const steps = jobs.flatMap((job) => job.steps);
   for (const command of [
     "bun run security:deps",
     "bun run security:tooling",
@@ -261,4 +279,16 @@ test("tag publication requires dependency and secret checks for the release revi
     assert.ok(
       steps.some((step) => step.run === command && !step["continue-on-error"]),
     );
+});
+
+test("a release publishes only after the pull-request checks pass for its revision", async () => {
+  const [build, release] = await Promise.all(
+    ["build.yml", "release.yml"].map(workflow),
+  );
+  const checks = "./.github/workflows/checks.yml";
+  assert.equal(build.jobs.build.uses, checks);
+  assert.equal(build.jobs.build.with, undefined);
+  assert.equal(release.jobs.build.uses, checks);
+  assert.deepEqual(release.jobs.build.with, { release: true });
+  assert.ok(release.jobs.release.needs.includes("build"));
 });

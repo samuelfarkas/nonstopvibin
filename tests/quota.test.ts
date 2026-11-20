@@ -1,14 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { CorePool } from "../src/server/core.ts";
+import { Cores } from "../src/server/cores.ts";
 import { parseQuota } from "../src/server/quota.ts";
-import { Store } from "../src/server/store.ts";
-import { fileKeyCodec } from "../src/server/vault.ts";
-import { csvCell, isQuotaStale, resetIn } from "../src/client/format.ts";
-import { goModelProtocol } from "../src/shared/providers.ts";
+import { resetIn } from "../src/client/format.ts";
+import { csvCell } from "../src/client/Activity.tsx";
+import { isQuotaStale } from "../src/client/quota.ts";
+import { goModelProtocol } from "../src/server/api-accounts.ts";
+import { temporaryStore } from "./support/application.ts";
 
 const now = Date.parse("2026-09-05T12:00:00Z");
 test("quota freshness preserves failed readings and the five-minute boundary", () => {
@@ -57,7 +55,6 @@ test("Claude keeps provider windows distinct and never converts a null reading t
   assert.equal(q.windows[0].remainingPercent, null);
   assert.equal(q.windows[1].remainingPercent, 100);
   assert.equal(q.windows[2].remainingPercent, 12.5);
-  // Account-wide windows decide headroom; model windows are marked scoped.
   assert.equal(q.windows[1].scoped, undefined);
   assert.equal(q.windows[2].scoped, true);
 });
@@ -207,10 +204,9 @@ test("Antigravity fractions and Grok weekly/monthly limits preserve independent 
   );
 });
 test("OpenCode Go quota errors do not persist invalid response excerpts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nonstopvibin-quota-"));
-  const store = new Store(directory, fileKeyCodec(directory));
-  const core = new CorePool(store, "unused");
-  const profile = store.createProfile("Fixture", "forest");
+  const { store, remove } = await temporaryStore("nonstopvibin-quota-");
+  const { quotas } = new Cores(store, "unused", { report: () => {} });
+  const profile = store.createProfile("Fixture");
   const accountId = "opencode-go-fixture";
   store.saveApiAccount(
     profile.id,
@@ -229,7 +225,7 @@ test("OpenCode Go quota errors do not persist invalid response excerpts", async 
   globalThis.fetch = async () =>
     new Response('{"secret":"SENTINEL_9f3a"', { status: 200 });
   try {
-    const quota = await core.refreshQuota(profile.id, accountId);
+    const quota = await quotas.refresh(profile.id, accountId);
     assert.equal(quota.status, "error");
     assert.equal(quota.error, "Quota response was not valid JSON.");
     assert.equal(quota.error.includes("SENTINEL_9f3a"), false);
@@ -241,8 +237,7 @@ test("OpenCode Go quota errors do not persist invalid response excerpts", async 
     );
   } finally {
     globalThis.fetch = originalFetch;
-    store.close();
-    await rm(directory, { recursive: true, force: true });
+    await remove();
   }
 });
 

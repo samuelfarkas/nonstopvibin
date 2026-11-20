@@ -2,45 +2,49 @@
 import { parseArgs } from "node:util";
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   closeSync,
   constants,
   existsSync,
   lstatSync,
-  mkdirSync,
   openSync,
   realpathSync,
 } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { version } from "../../package.json";
-import coreRelease from "../../scripts/core-release.json";
 import { Application, validAllowHost } from "./server.ts";
-import { dataDirectory } from "./data-directory.ts";
-import { isMissing, writeAtomic } from "./native-config-files.ts";
+import { coreLayout, coreVersion } from "./core-binary.ts";
+import {
+  dataDirectory,
+  ownerOnlyDirectory,
+  serverLockPath,
+  sessionPath,
+} from "./data-directory.ts";
+import { agentEnvironment } from "./agents.ts";
+import { isMissing, ownEntry, readOwnFile, writeAtomic } from "./safe-files.ts";
+import { runHost } from "./host.ts";
+import { notRunningExit, serverArchive, serverPort } from "./host-defaults.ts";
 import { errorMessage } from "./errors.ts";
+import { version } from "./config.ts";
+import type { RouteResponse } from "../shared/api.ts";
+import { sessionUrl } from "../shared/renderer-url.ts";
 
 // Replaced with `true` by scripts/build-server.mjs.
 declare const NONSTOPVIBIN_PACKAGED: boolean;
 const packaged = typeof NONSTOPVIBIN_PACKAGED !== "undefined";
 // The packaged binary is reached through a ~/.local/bin symlink; its siblings
 // live beside the real file.
-const root = packaged
-  ? dirname(realpathSync(process.execPath))
-  : resolve(import.meta.dirname, "../..");
-const coreBinary = packaged
-  ? join(root, "core/cli-proxy-api")
-  : join(root, ".vendor/core/cli-proxy-api");
-const clientDirectory = packaged
-  ? join(root, "client")
-  : join(root, "dist/client");
+function packagedPaths() {
+  const root = dirname(realpathSync(process.execPath));
+  return {
+    binary: join(root, serverArchive.core, coreLayout.binary),
+    clientDirectory: join(root, serverArchive.client),
+  };
+}
 
-export const DEFAULT_PORT = 4320;
-const NOT_RUNNING = 3;
 const UNIT = "nonstopvibin.service";
 const SIGN_IN_PORTS = [1455, 54545]; // Codex, Claude
 
@@ -62,34 +66,24 @@ const sessionSchema = z.object({
 });
 export type Session = z.infer<typeof sessionSchema>;
 
-export function sessionPath(directory: string): string {
-  return join(directory, "server.json");
-}
 export async function readSession(
   directory: string,
 ): Promise<Session | undefined> {
   try {
-    const file = await open(
+    const content = await readOwnFile(
       sessionPath(directory),
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    try {
-      const status = await file.stat();
-      if (
-        !status.isFile() ||
-        status.uid !== process.getuid?.() ||
-        (status.mode & 0o077) !== 0 ||
-        status.size > 65536
-      )
-        throw new CliError(
+      0o077,
+      65536,
+      () =>
+        new CliError(
           "server.json must be an owner-only ordinary file you own (chmod 600).",
-        );
-      return sessionSchema.parse(JSON.parse(await file.readFile("utf8")));
-    } finally {
-      await file.close();
-    }
+        ),
+    );
+    return content === undefined
+      ? undefined
+      : sessionSchema.parse(JSON.parse(content));
   } catch (error) {
-    if (isMissing(error) || error instanceof SyntaxError) return undefined;
+    if (error instanceof SyntaxError) return undefined;
     if (error instanceof z.ZodError) return undefined;
     throw error;
   }
@@ -104,11 +98,15 @@ export async function removeSession(
     await rm(sessionPath(directory), { force: true });
 }
 
-export interface ServerState {
-  version: string;
-  coreVersion: string;
-}
-const stateSchema = z.object({ version: z.string(), coreVersion: z.string() });
+/** What a CLI of any version reads from a running server's `GET /state`. */
+export type ServerState = Pick<
+  RouteResponse<"GET /state">,
+  "version" | "coreVersion"
+>;
+const stateSchema = z.object({
+  version: z.string(),
+  coreVersion: z.string(),
+}) satisfies z.ZodType<ServerState>;
 // Authenticated liveness: a stale file or a recycled PID cannot pass.
 export async function probe(session: Session): Promise<ServerState | null> {
   try {
@@ -127,20 +125,16 @@ export async function probe(session: Session): Promise<ServerState | null> {
 // process exit/crash, without a stale-owner check/delete race. The separate
 // database leaves the application's WAL available to normal store operations.
 const ownedDirectories = new Set<string>();
-const reservations = new WeakMap<Application, () => void>();
+/** Holds the directory's lock until the returned release, which may run more than once. */
 function reserveDirectory(directory: string): () => void {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const folder = lstatSync(directory);
-  if (
-    !folder.isDirectory() ||
-    folder.isSymbolicLink() ||
-    folder.uid !== process.getuid?.()
-  )
-    throw new CliError(
-      "The server data directory must be owner-only, owned by you, and not a symbolic link.",
-    );
-  // Preserve the store's existing permission tightening, before creating the lock.
-  if ((folder.mode & 0o777) !== 0o700) chmodSync(directory, 0o700);
+  // Tightened before the lock exists, and only once the directory is vetted.
+  ownerOnlyDirectory(directory, () => {
+    // Any mode: ownerOnlyDirectory tightens it next.
+    if (!ownEntry(lstatSync(directory), "directory", 0))
+      throw new CliError(
+        "The server data directory must be owner-only, owned by you, and not a symbolic link.",
+      );
+  });
   const canonical = realpathSync(directory);
   const occupied = () =>
     new CliError(
@@ -149,7 +143,7 @@ function reserveDirectory(directory: string): () => void {
   // Do not open/close another descriptor for the locked inode in this process:
   // POSIX advisory locks are process-scoped, and close would release them.
   if (ownedDirectories.has(canonical)) throw occupied();
-  const path = join(canonical, "server.lock.sqlite");
+  const path = serverLockPath(canonical);
   try {
     closeSync(
       openSync(
@@ -166,13 +160,7 @@ function reserveDirectory(directory: string): () => void {
       throw error;
   }
   const file = lstatSync(path);
-  if (
-    !file.isFile() ||
-    file.isSymbolicLink() ||
-    file.nlink !== 1 ||
-    file.uid !== process.getuid?.() ||
-    (file.mode & 0o077) !== 0
-  )
+  if (!ownEntry(file, "file", 0o077) || file.nlink !== 1)
     throw new CliError(
       "server.lock.sqlite must be an owner-only ordinary file you own, without links.",
     );
@@ -188,7 +176,10 @@ function reserveDirectory(directory: string): () => void {
     throw error;
   }
   ownedDirectories.add(canonical);
+  let held = true;
   return () => {
+    if (!held) return;
+    held = false;
     lock.close();
     ownedDirectories.delete(canonical);
   };
@@ -226,9 +217,15 @@ export async function startServer(
         clientDirectory: options.clientDirectory,
         port: options.port,
         allowHosts: options.allowHosts,
-        desktop: false,
         development: false,
         requirePinnedCore: true,
+        afterClose: async () => {
+          try {
+            await removeSession(options.directory);
+          } finally {
+            release();
+          }
+        },
       },
       signal,
     );
@@ -245,7 +242,6 @@ export async function startServer(
       } satisfies Session),
     );
     signal?.throwIfAborted();
-    reservations.set(application, release);
     return application;
   } catch (error) {
     try {
@@ -271,22 +267,6 @@ export async function startServer(
     throw error;
   }
 }
-export async function stopServer(
-  application: Application,
-  directory: string,
-): Promise<void> {
-  try {
-    await application.close();
-  } finally {
-    await removeSession(directory);
-    const release = reservations.get(application);
-    if (release) {
-      reservations.delete(application);
-      release();
-    }
-  }
-}
-
 export function parseHost(value: string): string {
   const host = value.trim().toLowerCase();
   if (!validAllowHost(host))
@@ -297,7 +277,7 @@ export function parseHost(value: string): string {
   return host;
 }
 function parsePort(value: string | undefined): number {
-  if (value === undefined) return DEFAULT_PORT;
+  if (value === undefined) return serverPort;
   const port = Number(value);
   if (!/^\d+$/.test(value) || port < 1 || port > 65535)
     throw new CliError(`--port must be between 1 and 65535.`, 2);
@@ -323,9 +303,9 @@ export function tunnelCommand(
 
 export function sessionLinks(session: Session) {
   return {
-    url: `http://127.0.0.1:${session.port}/#session=${session.token}`,
-    httpsUrls: session.allowHosts.map(
-      (host) => `https://${host}/#session=${session.token}`,
+    url: sessionUrl(`http://127.0.0.1:${session.port}`, session.token),
+    httpsUrls: session.allowHosts.map((host) =>
+      sessionUrl(`https://${host}`, session.token),
     ),
   };
 }
@@ -368,12 +348,7 @@ export function urlText(session: Session, sshConnection?: string): string {
 async function running(directory: string) {
   const session = await readSession(directory);
   const state = session && (await probe(session));
-  if (!session || !state)
-    throw new CliError(
-      `NonstopVibin is not running for ${directory}.\nCheck \`systemctl --user status nonstopvibin\`, or start it with \`nonstopvibin serve\`.`,
-      NOT_RUNNING,
-    );
-  return { session, state };
+  return session && state ? { session, state } : undefined;
 }
 
 // systemd unit quoting: C-style escapes inside double quotes; % starts a
@@ -390,13 +365,9 @@ function unitQuote(value: string, dollar: boolean): string {
   if (dollar) quoted = quoted.replaceAll("$", "$$$$");
   return `"${quoted}"`;
 }
-// Agent configuration lands where the user's agents read it.
 export const SERVICE_ENVIRONMENT = [
   "NONSTOPVIBIN_DATA_DIR",
-  "CODEX_HOME",
-  "OPENCODE_CONFIG_DIR",
-  "XDG_CONFIG_HOME",
-  "PI_CODING_AGENT_DIR",
+  ...agentEnvironment,
 ];
 export function renderUnit(
   executable: string,
@@ -587,7 +558,7 @@ async function serviceInstall(
   const args = [
     "serve",
     "--port",
-    String(port ?? DEFAULT_PORT),
+    String(port ?? serverPort),
     ...(allowHosts ?? []).flatMap((host) => ["--allow-host", host]),
   ];
   const environment = SERVICE_ENVIRONMENT.flatMap(
@@ -608,7 +579,7 @@ async function serviceInstall(
   const previousPort = previous?.match(/"--port" "(\d+)"/)?.[1];
   if (port !== undefined && previousPort && previousPort !== String(port))
     console.warn(
-      `The port changed from ${previousPort} to ${port}. Reconnect your agents in Connect agents; their settings still use the old port.`,
+      `The port changed from ${previousPort} to ${port}. Startup moves connected agents to the new port; restart running agents (or /reload in pi). Any connection it cannot update is reported in the app; resolve it in Connect agents.`,
     );
   const since = Date.now() - 1000;
   for (const args of [["daemon-reload"], ["enable", UNIT], ["restart", UNIT]]) {
@@ -628,6 +599,25 @@ async function serviceInstall(
   );
   ensureLinger();
   console.log("Run `nonstopvibin url` for the session link.");
+}
+/**
+ * The installed unit's path, if there is one, refusing a unit that runs another executable.
+ * install.sh asks `nonstopvibin service unit <executable>` before an upgrade.
+ */
+export async function serviceUnit(
+  executable: string,
+): Promise<string | undefined> {
+  const path = unitPath();
+  const unit = await readFile(path, "utf8").catch((error) => {
+    if (isMissing(error)) return undefined;
+    throw error;
+  });
+  if (unit === undefined) return undefined;
+  if (!unit.includes(unitQuote(executable, false)))
+    throw new CliError(
+      `The existing service uses another executable. Upgrade at its original --prefix, or edit ${path} first. Nothing was changed.`,
+    );
+  return path;
 }
 async function serviceUninstall() {
   requireUserManager();
@@ -657,23 +647,23 @@ async function serviceUninstall() {
 const HELP = `NonstopVibin ${version} — headless server
 
 Usage:
-  nonstopvibin serve [--port ${DEFAULT_PORT}] [--allow-host FQDN]
+  nonstopvibin serve [--port ${serverPort}] [--allow-host FQDN]
       Run in the foreground (Ctrl+C stops it).
   nonstopvibin url [--json]
       Print the session link and the SSH tunnel command.
   nonstopvibin status
-      Show whether the server is running (exit 0) or not (exit 3).
-  nonstopvibin service install [--port ${DEFAULT_PORT}] [--allow-host FQDN]
+      Show whether the server is running (exit 0) or not (exit ${notRunningExit}).
+  nonstopvibin service install [--port ${serverPort}] [--allow-host FQDN]
       Install and start a systemd user service.
   nonstopvibin service uninstall
       Stop and remove the user service. Your data is kept.
   nonstopvibin --version
 
 Options:
-  --port N           Loopback port (default ${DEFAULT_PORT}). Changing it later
-                     requires reconnecting agents.
+  --port N           Loopback port (default ${serverPort}). Changing it later
+                     requires restarting running agents.
   --allow-host FQDN  Also accept this exact HTTPS host name for the web UI,
-                     e.g. from \`tailscale serve --bg ${DEFAULT_PORT}\`.
+                     e.g. from \`tailscale serve --bg ${serverPort}\`.
 
 Manage the service with systemd:
   systemctl --user status nonstopvibin
@@ -697,7 +687,7 @@ export async function main(argv: string[]): Promise<number> {
   });
   const [command, subcommand, ...rest] = positionals;
   if (values.version) {
-    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreRelease.version})`);
+    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreVersion})`);
     return 0;
   }
   if (values.help || !command) {
@@ -711,42 +701,19 @@ export async function main(argv: string[]): Promise<number> {
       ? await discoveryDirectory()
       : dataDirectory();
   if (command === "serve" && !subcommand) {
-    const controller = new AbortController();
-    let application: Application | undefined;
-    let stopping = false;
-    const stop = () => {
-      controller.abort();
-      if (!application || stopping) return;
-      stopping = true;
-      stopServer(application, directory).then(
-        () => process.exit(0),
-        (error) => {
-          console.error(error);
-          process.exit(1);
-        },
-      );
-    };
-    // Receive termination before directory reservation, store creation or any
-    // core spawn. Startup cancellation itself awaits partial-app cleanup.
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
-    try {
-      application = await startServer(
+    // Signals and crashes are received before directory reservation, store creation
+    // or any core spawn; closing the server releases its lock.
+    const application = await runHost((checkout, signal) =>
+      startServer(
         {
           directory,
-          binary: coreBinary,
-          clientDirectory,
+          ...(packaged ? packagedPaths() : checkout),
           port,
           allowHosts,
         },
-        controller.signal,
-      );
-    } catch (error) {
-      process.removeListener("SIGINT", stop);
-      process.removeListener("SIGTERM", stop);
-      if (error === controller.signal.reason) return 0;
-      throw error;
-    }
+        signal,
+      ),
+    );
     // journald must never receive the session token.
     const session = await readSession(directory);
     if (process.stdout.isTTY && session)
@@ -758,7 +725,13 @@ export async function main(argv: string[]): Promise<number> {
     return -1;
   }
   if (command === "url" && !subcommand) {
-    const { session, state } = await running(directory);
+    const current = await running(directory);
+    if (!current)
+      throw new CliError(
+        `NonstopVibin is not running for ${directory}.\nCheck \`systemctl --user status nonstopvibin\`, or start it with \`nonstopvibin serve\`.`,
+        notRunningExit,
+      );
+    const { session, state } = current;
     if (values.json) {
       console.log(
         JSON.stringify({
@@ -778,20 +751,31 @@ export async function main(argv: string[]): Promise<number> {
       process.platform === "linux"
         ? systemctl("is-active", UNIT).stdout?.trim()
         : undefined;
-    const session = await readSession(directory);
-    const state = session && (await probe(session));
-    if (!session || !state) {
+    const current = await running(directory);
+    if (!current) {
       console.log(
         `NonstopVibin is not running for ${directory}.${unit ? ` Unit nonstopvibin.service: ${unit}.` : ""}`,
       );
-      return NOT_RUNNING;
+      return notRunningExit;
     }
+    const { session, state } = current;
     console.log(
       [
         `NonstopVibin ${state.version} is running on 127.0.0.1:${session.port} (pid ${session.pid}, since ${session.startedAt}).`,
         `Core: CLIProxyAPI ${state.coreVersion}.${unit ? ` Unit nonstopvibin.service: ${unit}.` : ""}`,
       ].join("\n"),
     );
+    return 0;
+  }
+  const [executable, ...extra] = rest;
+  if (
+    command === "service" &&
+    subcommand === "unit" &&
+    executable &&
+    !extra.length
+  ) {
+    const path = await serviceUnit(executable);
+    if (path) console.log(path);
     return 0;
   }
   if (command === "service" && !rest.length) {

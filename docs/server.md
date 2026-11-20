@@ -20,7 +20,9 @@ service user with no coding agents running as that user; see
 [Protected upstream](#protected-upstream) below. These are different trust models.
 
 The server needs `curl` (the agents' credential helpers use it) and system CA
-certificates (the core verifies providers with them):
+certificates (the core verifies providers with them). `ps` from procps, present on
+standard installs but often missing from minimal container images, lets the app
+stop cores left behind by a crash:
 
 Use your distribution's packages, for example:
 
@@ -126,7 +128,7 @@ tar -xzf nonstopvibin-server-<version>-linux-<arch>.tar.gz
 `install.sh` copies the files to `~/.local/lib/nonstopvibin`, links
 `~/.local/bin/nonstopvibin`, installs and starts a systemd user service, and
 prints the session link. Options: `--prefix DIR`, `--no-service`, `--port N`
-(default 4320), `--allow-host FQDN`. It warns when `curl` or CA certificates are
+(default: see `./install.sh --help`), `--allow-host FQDN`. It warns when `curl` or CA certificates are
 missing, and tells you when `~/.local/bin` is not on your `PATH`. The checksums in
 the archive's `core/manifest.json` show that the core matches the reviewed pin;
 they are integrity evidence, not independent proof of the publisher.
@@ -221,8 +223,9 @@ unit it changes only supplied options and environment variables, preserving the
 executable path, other arguments and previously configured directories. It copies
 `NONSTOPVIBIN_DATA_DIR`, `CODEX_HOME`, `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME`
 and `PI_CODING_AGENT_DIR` from your shell when they are set, so agent settings
-land where your agents read them. Changing the port requires reconnecting agents
-in **Connect agents**. Without systemd, run `nonstopvibin serve` in a terminal
+land where your agents read them. After a port change, startup moves connected
+agents to the new port; restart running agents, and resolve any connection the
+app reports in **Connect agents**. Without systemd, run `nonstopvibin serve` in a terminal
 multiplexer instead.
 
 ## Protected upstream
@@ -270,7 +273,8 @@ worker with consumer-issued scoped credential
 
 ### Existing API and non-spending readiness
 
-The headless CLI defaults to **4320** (desktop/development defaults to 4318).
+The headless CLI's default port (`nonstopvibin --help`; the examples here use it)
+differs from the desktop/development default.
 Use the configured port and discover profile identity from authenticated state:
 `id` is the UUID used in `/api/profiles/<id>/…`; `slug` is used in
 `/p/<slug>/v1`. `endpoint` in state is authoritative. Do not infer an endpoint
@@ -278,17 +282,17 @@ from a display name or use a UUID where a slug is expected. The unprefixed `/v1`
 route also selects exclusively by profile key, but a protected connector should
 pin the explicit profile URL to catch mapping mistakes.
 
-| Check                                                  | Authority and result                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `nonstopvibin status`                                  | Local protected user; exit **0** means authenticated `/api/state` liveness, **3** means stopped/unreachable/stale session, other errors remain errors. Human-readable output, not a profile-readiness assertion.                                                         |
-| `nonstopvibin url --json`                              | Same local user; exit 0 with `running`, PID, port, app/core versions and session links. Exit 3 if not running. **Contains management authority**: never put it in worker/shared logs. `status --json` is not a JSON status API.                                          |
-| `GET /api/state`                                       | Exact `Authorization: Bearer <management-session>`; JSON app state, including `profiles[]` (`id`, `slug`, `runtime`, `endpoint`, optional error), `coreAvailable`, core/app versions. A running app/file-present core does not mean every profile restored successfully. |
-| `GET /api/profiles/<UUID>/models`                      | Management session; JSON **array** of model objects with `id` (optional `owned_by`). Missing UUID: 404; malformed UUID: 400; stopped profile: 503.                                                                                                                       |
-| `GET /p/<slug>/v1/models`                              | Protected-side profile key; normally `{object:"list",data:[…]}`. With `anthropic-version`, the core uses Anthropic pagination fields (`data`, `first_id`, `last_id`, `has_more`). A stopped profile is 503; an empty running catalog can be **200 with `data:[]`**.      |
-| `POST /api/profiles/<UUID>/agent-check` with JSON `{}` | Management session; checks profile-key authentication and a nonempty gateway catalog, **no inference**. Success 200 `{ok:true}`; stopped/catalog HTTP failure 502; empty catalog 400; missing profile 404. This does not install agent settings.                         |
+| Check                                                  | Authority and result                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nonstopvibin status`                                  | Local protected user; exit **0** means authenticated `/api/state` liveness, **3** means stopped/unreachable/stale session, other errors remain errors. Human-readable output, not a profile-readiness assertion.                                                     |
+| `nonstopvibin url --json`                              | Same local user; exit 0 with `running`, PID, port, app/core versions and session links. Exit 3 if not running. **Contains management authority**: never put it in worker/shared logs. `status --json` is not a JSON status API.                                      |
+| `GET /api/state`                                       | Exact `Authorization: Bearer <management-session>`; JSON app state, including `profiles[]` (`id`, `slug`, `runtime`, `endpoint`, optional error), `coreVersion` and `version`. A running app with a verified core does not mean every profile restored successfully. |
+| `GET /api/profiles/<UUID>/models`                      | Management session; JSON **array** of model objects with `id` (optional `owned_by`). Missing UUID: 404; malformed UUID: 400; stopped profile: 503.                                                                                                                   |
+| `GET /p/<slug>/v1/models`                              | Protected-side profile key; normally `{object:"list",data:[…]}`. With `anthropic-version`, the core uses Anthropic pagination fields (`data`, `first_id`, `last_id`, `has_more`). A stopped profile is 503; an empty running catalog can be **200 with `data:[]`**.  |
+| `POST /api/profiles/<UUID>/agent-check` with JSON `{}` | Management session; checks profile-key authentication and a nonempty gateway catalog, **no inference**. Success 200 `{ok:true}`; stopped/catalog HTTP failure 502; empty catalog 400; missing profile 404. This does not install agent settings.                     |
 
 The gate's serving identity needs only the approved **profile key**, not the
-management session. Keep management/start/stop/key retrieval in protected
+management session. Keep management, profile start and key retrieval in protected
 operator maintenance, not guest tools or a consumer dashboard. Inference accepts
 `Authorization: Bearer <profile-key>` or `x-api-key: <profile-key>`; if both are
 present they must match. Query `key`/`api_key` authentication is rejected.
@@ -305,7 +309,10 @@ remaining quota or tool/vision compatibility: an exhausted pool can still have a
 catalog. A synthetic unavailable model on the native Messages route returns
 400 `invalid_request_error` without contacting a provider. Exhaustion fails
 inside that profile, never borrows another pool. Core and provider errors have
-their own protocol shapes/statuses, not app-error shape.
+their own protocol shapes/statuses, not app-error shape. The exception is a
+profile core the app cannot reach before it answers: that is an app-error 502
+with a fixed message and no socket details. A malformed percent-escape in a
+management path is a 400.
 
 ### Native Anthropic transport and limitations
 
@@ -396,9 +403,12 @@ not delete the lock inode or launch a second instance over the same directory.
 Startup restores previously enabled profiles; a profile restore failure is
 reported in state and does not make that pool ready. Shutdown interrupts active
 traffic and drains published accounting before killing cores; a crash can leave
-unknown outcomes. Restart rotates the management session: recover the operator
-URL with `nonstopvibin url`, rather than reusing an old tab's token. Profile keys
-persist across profile/app restarts and a matching restore; stopping/disconnecting
+unknown outcomes. If the server is killed or crashes, each core's watchdog stops
+it, and the next start on the same data directory stops any recorded core left
+behind (see [core lifecycle](architecture.md)). Both rely on `ps` (procps);
+without it only an orderly shutdown or the service manager stops cores. Restart
+rotates the management session: recover the operator URL with `nonstopvibin url`,
+rather than reusing an old tab's token. Profile keys persist across profile/app restarts and a matching restore; stopping/disconnecting
 an agent does **not** rotate/revoke its cached key. There is no documented public
 profile-key rotation API; never treat restart as attempt-credential revocation.
 
@@ -419,7 +429,8 @@ provider spending, consumer grants or task state.
 
 Profile usage is delayed reporting, **not a crash-safe budget ledger**. Collection
 normally follows requests at about two seconds, settles delayed publication for
-ten seconds and falls back to thirty seconds idle; crashes between provider
+ten seconds, drains every thirty seconds only while a request or WebSocket stays
+open, and otherwise sleeps until the next request; crashes between provider
 completion, queue collection and SQLite commit can lose events. Provider quota
 reads are about two minutes apart and readings older than five minutes are stale.
 Unknown prices/usage remain unknown, not free. The consumer owns atomic durable

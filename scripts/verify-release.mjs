@@ -1,16 +1,20 @@
+// `bun scripts/verify-release.mjs <tag> [assets]`: checks the tag against package.json, then
+// the assets when a directory is given, and prints the tag's channel (release or prerelease).
+// Tag mode needs no installed dependencies; the release preflight runs it before `bun ci`.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
+import { releaseChannel } from "../src/shared/release-channel.ts";
+import { serverArchiveName, serverArchitectures } from "./distribution.ts";
+
+// The file electron-updater downloads on each platform with an update feed.
+const updatePayload = { mac: "zip", linux: "AppImage" };
 
 export function verifyReleaseTag(tag, manifest, repository) {
-  assert.match(
-    tag,
-    /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/,
-    "Use vX.Y.Z or vX.Y.Z-beta.N",
-  );
+  const channel = tag.startsWith("v") && releaseChannel(tag.slice(1));
+  assert.ok(channel, "Use vX.Y.Z or vX.Y.Z-beta.N");
   assert.equal(
     tag,
     `v${manifest.version}`,
@@ -28,32 +32,43 @@ export function verifyReleaseTag(tag, manifest, repository) {
     repository,
     "Update feed must match the publishing repository",
   );
+  return channel;
 }
 
-export async function verifyReleaseAssets(directory, version) {
-  // electron-builder 26 uses latest manifests for GitHub, including prereleases.
+/** Checks `directory` holds every asset `manifest` (package.json) builds for its version. */
+export async function verifyReleaseAssets(directory, manifest) {
+  const { default: YAML } = await import("yaml");
+  const { version, build } = manifest;
   const names = await readdir(directory);
-  for (const extension of ["dmg", "zip", "AppImage", "deb"])
-    assert.ok(
-      names.some((name) => name.endsWith(`.${extension}`)),
-      `Missing ${extension} installer`,
-    );
-  for (const platform of ["mac", "linux"]) {
-    const manifest = YAML.parse(
+  // electron-builder names each installer with its target as the extension.
+  for (const [platform, payload] of Object.entries(updatePayload)) {
+    const targets = build[platform].target;
+    assert.ok(targets.includes(payload), `${platform} must build ${payload}`);
+    for (const target of targets)
+      assert.ok(
+        names.some((name) => name.endsWith(`.${target}`)),
+        `Missing ${target} installer`,
+      );
+  }
+  for (const arch of serverArchitectures) {
+    const archive = `${serverArchiveName(version, arch)}.tar.gz`;
+    assert.ok(names.includes(archive), `Missing server archive ${archive}`);
+  }
+  // electron-builder 26 uses latest manifests for GitHub, including prereleases.
+  for (const [platform, payload] of Object.entries(updatePayload)) {
+    const feed = YAML.parse(
       await readFile(join(directory, `latest-${platform}.yml`), "utf8"),
     );
-    assert.equal(manifest.version, version, "Update manifest version mismatch");
+    assert.equal(feed.version, version, "Update manifest version mismatch");
     assert.ok(
-      Array.isArray(manifest.files) && manifest.files.length,
+      Array.isArray(feed.files) && feed.files.length,
       "Missing update files",
     );
     assert.ok(
-      manifest.files.some((file) =>
-        file.url.endsWith(platform === "mac" ? ".zip" : ".AppImage"),
-      ),
+      feed.files.some((file) => file.url.endsWith(`.${payload}`)),
       "Missing auto-update payload",
     );
-    for (const file of manifest.files) {
+    for (const file of feed.files) {
       assert.equal(
         file.url,
         basename(file.url),
@@ -71,6 +86,11 @@ export async function verifyReleaseAssets(directory, version) {
 }
 
 if (import.meta.main) {
-  verifyReleaseTag(process.argv[2], pkg, process.env.GITHUB_REPOSITORY);
-  if (process.argv[3]) await verifyReleaseAssets(process.argv[3], pkg.version);
+  const channel = verifyReleaseTag(
+    process.argv[2],
+    pkg,
+    process.env.GITHUB_REPOSITORY,
+  );
+  if (process.argv[3]) await verifyReleaseAssets(process.argv[3], pkg);
+  console.log(channel);
 }

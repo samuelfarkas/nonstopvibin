@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  ModelCatalog,
-  agentModels,
-  enrichModels,
-} from "../src/server/model-catalog.ts";
+import { ModelCatalog, enrichModels } from "../src/server/model-catalog.ts";
+import type { CatalogModel } from "../src/shared/types.ts";
+import { offeredModels } from "../src/server/agents.ts";
+import { piModel } from "../src/server/agent-pi.ts";
+import { openCodeModel } from "../src/server/agent-opencode.ts";
 import { modelsFor } from "../src/shared/providers.ts";
-import type { ApiAccount } from "../src/shared/types.ts";
+import { AppError } from "../src/server/errors.ts";
+import type { ApiAccount } from "../src/server/store.ts";
 
 const entry = {
   name: "Synthetic model",
@@ -38,7 +39,11 @@ const account: ApiAccount = {
   models: [{ id: "fixture-a", protocol: "anthropic" }],
 };
 
-test("catalog intersects exact provider routes, preserves every live ID and exports per-model limits and prices", () => {
+/** What pi and OpenCode are offered from models that are already enriched. */
+const offered = (agent: "pi" | "opencode", models: CatalogModel[]) =>
+  offeredModels(agent, models, false, async () => models);
+
+test("catalog intersects exact provider routes, preserves every live ID and exports per-model limits and prices", async () => {
   const live = [
     { id: "fixture-a", owned_by: "claude" },
     { id: "fixture-b", owned_by: "claude" },
@@ -53,7 +58,7 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
     "https://models.dev/api.json#anthropic/fixture-a",
   );
   assert.equal(models[0].metadata?.fetchedAt, "2026-09-06T00:00:00Z");
-  const pi = agentModels(models, "pi");
+  const pi = models.map(piModel);
   assert.equal(
     pi[0].api,
     "anthropic-messages",
@@ -64,7 +69,7 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
   assert.equal(pi[1].cost.input, 2.5);
   assert.deepEqual(pi[0].input, ["text", "image"]);
   assert.equal(pi[0].reasoning, true);
-  assert.equal(agentModels(models, "opencode")[0].limit?.output, 8000);
+  assert.equal(models.map(openCodeModel)[0].limit?.output, 8000);
   const prefixed = enrichModels(
     [{ id: "work/fixture-a", owned_by: "openai" }],
     [account],
@@ -72,7 +77,7 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
     "today",
   );
   assert.equal(prefixed[0].metadata?.cost?.input, 1.25);
-  assert.equal(agentModels(prefixed, "pi")[0].api, "openai-responses");
+  assert.equal(prefixed.map(piModel)[0].api, "openai-responses");
   for (const [models, accounts] of [
     [[{ id: "fixture-a", owned_by: "custom" }], []],
     [[{ id: "fixture-a-latest", owned_by: "claude" }], []],
@@ -98,12 +103,12 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
   );
   assert.equal(unknown.length, 3);
   assert.deepEqual(
-    agentModels(unknown, "pi").map((model) => model.id),
+    (await offered("pi", unknown)).map(piModel).map((model) => model.id),
     ["fixture-a", "fixture-b"],
     "models without limits and prices are left out, the rest stay usable",
   );
-  assert.throws(
-    () => agentModels([{ id: "missing", owned_by: "claude" }], "pi"),
+  await assert.rejects(
+    offered("pi", [{ id: "missing", owned_by: "claude" }]),
     /missing/,
   );
   const invalid = enrichModels(
@@ -116,7 +121,7 @@ test("catalog intersects exact provider routes, preserves every live ID and expo
     },
     "today",
   );
-  assert.throws(() => agentModels(invalid, "opencode"), /fixture-a, fixture-b/);
+  await assert.rejects(offered("opencode", invalid), /fixture-a, fixture-b/);
 });
 
 test("models.dev fetching is credential-free, bounded, cached, coalesced and retries after failure", async () => {
@@ -150,6 +155,26 @@ test("models.dev fetching is credential-free, bounded, cached, coalesced and ret
   assert.equal(calls, 2);
 });
 
+test("concurrent callers of a failed models.dev fetch all get the 502 error", async () => {
+  let calls = 0;
+  const fetcher: typeof fetch = Object.assign(async () => {
+    calls++;
+    await Promise.resolve();
+    return new Response("unavailable", { status: 503 });
+  }, fetch);
+  const service = new ModelCatalog(fetcher);
+  const results = await Promise.allSettled([
+    service.models([], []),
+    service.models([], []),
+  ]);
+  assert.equal(calls, 1);
+  for (const result of results) {
+    assert.equal(result.status, "rejected");
+    assert.ok(result.reason instanceof AppError);
+    assert.equal(result.reason.status, 502);
+  }
+});
+
 test("pricing tiers retain their published thresholds and missing cache prices are not fabricated", () => {
   const models = enrichModels(
     [{ id: "tiered", owned_by: "claude" }],
@@ -176,14 +201,14 @@ test("pricing tiers retain their published thresholds and missing cache prices a
     },
     "today",
   );
-  const pi = agentModels(models, "pi")[0];
+  const pi = models.map(piModel)[0];
   const tier = pi.cost.tiers?.[0];
   assert.ok(tier && "inputTokensAbove" in tier);
   assert.equal(tier.inputTokensAbove, 272000);
   assert.equal(pi.cost.tiers?.[0].input, 4);
   assert.equal("cacheRead" in pi.cost, false);
   assert.match(pi.name, /cache pricing unavailable/);
-  assert.match(agentModels(models, "opencode")[0].name, /base rate/);
+  assert.match(models.map(openCodeModel)[0].name, /base rate/);
 });
 
 test("modelsFor keeps only the agent's native vendor unless other providers are offered", () => {

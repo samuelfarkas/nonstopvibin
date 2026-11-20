@@ -1,18 +1,75 @@
 import { DatabaseSync, type SQLOutputValue } from "node:sqlite";
-import { chmodSync, mkdirSync } from "node:fs";
-import { randomUUID, randomBytes } from "node:crypto";
-import { join } from "node:path";
-import type {
-  Account,
-  ApiAccount,
-  Profile,
-  Quota,
-  UsageRecord,
-  UsageSummary,
-} from "../shared/types.ts";
+import { chmodSync } from "node:fs";
+import {
+  createHash,
+  randomUUID,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+import type { Account, Profile, Quota, UsageRecord } from "../shared/types.ts";
+import type { Protocol, Provider } from "../shared/providers.ts";
+import {
+  retentionDays,
+  usagePageSize,
+  type RetentionDays,
+} from "../shared/vocabulary.ts";
 import type { SecretCodec } from "./vault.ts";
 import { AppError } from "./errors.ts";
+import { databasePath, ownerOnlyDirectory } from "./data-directory.ts";
 
+export interface ApiAccount {
+  id: string;
+  name: string;
+  provider: Provider;
+  baseUrl: string;
+  prefix: string;
+  models: Array<{ id: string; protocol: Protocol }>;
+  disabled: boolean;
+}
+// Row IDs in the secrets and settings tables. Stored data uses these exact
+// names: a rename here loses the owner's keys and settings.
+export const secretIds = {
+  client: (profileId: string) => `${profileId}:client`,
+  core: (profileId: string) => `${profileId}:core`,
+  management: (profileId: string) => `${profileId}:management`,
+  api: (accountId: string) => `${accountId}:api`,
+};
+const settingIds = {
+  accounts: (profileId: string) => `accounts:${profileId}`,
+  resetRequest: (identity: string, creditId: string) =>
+    `codex-reset:${JSON.stringify([identity, creditId])}`,
+  retention: "usage-retention-days",
+};
+/** One page of usage rows; `next` continues after it and is absent after the last page. */
+export interface UsagePage<Cursor> {
+  records: UsageRecord[];
+  next?: Cursor;
+}
+export interface UsageCursor {
+  timestamp: string;
+  sequence: number;
+}
+/** A profile's client key: `nv_` and 32 random bytes in base64url (43 characters). */
+export const clientKey = {
+  prefix: "nv_",
+  // This order is what installed credential helpers already contain.
+  characters: "a-zA-Z0-9_-",
+  length: 43,
+} as const;
+/** A client key without anchors, for patterns that embed one. */
+export const clientKeySource = `${clientKey.prefix}[${clientKey.characters}]{${clientKey.length}}`;
+export const clientKeyPattern = new RegExp(`^${clientKeySource}$`);
+
+/** Constant-time comparison of two secrets. */
+export function sameSecret(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+/** One-way index key for a client key; the index never holds the key itself. */
+export function clientDigest(key: string): string {
+  return createHash("sha256").update(key).digest("base64");
+}
 function stored<T>(body: SQLOutputValue): T {
   // SAFETY: bodies are written only by this Store via JSON.stringify of the
   // typed value each reader requests, so decoding yields that type back.
@@ -23,14 +80,14 @@ export class Store {
   readonly directory: string;
   readonly codec: SecretCodec;
   usageGeneration = 0;
-  private summaries = new Map<string, UsageSummary>();
+  private names?: Map<string, string>;
+  private clients?: Map<string, string>;
   constructor(directory: string, codec: SecretCodec) {
     this.directory = directory;
     this.codec = codec;
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    chmodSync(directory, 0o700);
-    this.db = new DatabaseSync(join(directory, "nonstopvibin.sqlite"));
-    chmodSync(join(directory, "nonstopvibin.sqlite"), 0o600);
+    ownerOnlyDirectory(directory);
+    this.db = new DatabaseSync(databasePath(directory));
+    chmodSync(databasePath(directory), 0o600);
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, body TEXT NOT NULL);
@@ -65,7 +122,12 @@ export class Store {
     if (!row) throw new AppError("Profile not found.", 404);
     return stored<Profile>(row.body);
   }
-  createProfile(name: string, color: string): Profile {
+  /** Profile id to name, in creation order; kept until the next profile write. */
+  profileNames(): ReadonlyMap<string, string> {
+    this.names ??= new Map(this.profiles().map(({ id, name }) => [id, name]));
+    return this.names;
+  }
+  createProfile(name: string): Profile {
     const stem =
       name
         .normalize("NFKD")
@@ -82,7 +144,6 @@ export class Store {
       id: randomUUID(),
       slug,
       name,
-      color,
       strategy: "fill-first",
       sessionAffinity: true,
       enabled: false,
@@ -93,21 +154,24 @@ export class Store {
         .prepare("INSERT INTO profiles VALUES (?,?,?)")
         .run(profile.id, slug, JSON.stringify(profile));
       this.setSecret(
-        `${profile.id}:client`,
-        `nv_${randomBytes(32).toString("base64url")}`,
+        secretIds.client(profile.id),
+        `${clientKey.prefix}${randomBytes(32).toString("base64url")}`,
       );
       this.setSecret(
-        `${profile.id}:core`,
+        secretIds.core(profile.id),
         randomBytes(32).toString("base64url"),
       );
       this.setSecret(
-        `${profile.id}:management`,
+        secretIds.management(profile.id),
         randomBytes(32).toString("base64url"),
       );
     });
+    this.names = undefined;
     return profile;
   }
   saveProfile(profile: Profile): void {
+    this.clients = undefined;
+    this.names = undefined;
     this.db
       .prepare("UPDATE profiles SET body=? WHERE id=?")
       .run(JSON.stringify(profile), profile.id);
@@ -116,28 +180,57 @@ export class Store {
     this.db
       .prepare(`INSERT INTO settings VALUES (?,?) ON CONFLICT(id) DO UPDATE
         SET value=excluded.value WHERE value!=excluded.value`)
-      .run(`accounts:${profileId}`, JSON.stringify(accounts));
+      .run(settingIds.accounts(profileId), JSON.stringify(accounts));
   }
   accountMetadata(profileId: string): Account[] {
     const row = this.db
       .prepare("SELECT value FROM settings WHERE id=?")
-      .get(`accounts:${profileId}`);
+      .get(settingIds.accounts(profileId));
     return row ? stored<Account[]>(row.value) : [];
   }
-  secret(id: string): string {
+  private secret(id: string): string {
     const row = this.db
       .prepare("SELECT encrypted FROM secrets WHERE id=?")
       .get(id);
     if (!row) throw new AppError("Credential not found.", 404);
     return this.codec.decrypt(String(row.encrypted));
   }
+  /**
+   * Client-key digest to profile id, so a request costs one lookup instead of a
+   * decrypt per profile. A hint only: callers verify the live rows. Every profile
+   * or secret write (including createProfile, via setSecret) drops it.
+   */
+  clientIndex(): Map<string, string> {
+    this.clients ??= new Map(
+      this.profiles().map((profile) => [
+        clientDigest(this.clientKey(profile.id)),
+        profile.id,
+      ]),
+    );
+    return this.clients;
+  }
+  /** The key agents send for this profile. Never grants management access. */
+  clientKey(profileId: string): string {
+    return this.secret(secretIds.client(profileId));
+  }
+  /** The key the gateway sends to this profile's core. */
+  coreKey(profileId: string): string {
+    return this.secret(secretIds.core(profileId));
+  }
+  managementKey(profileId: string): string {
+    return this.secret(secretIds.management(profileId));
+  }
+  apiKey(accountId: string): string {
+    return this.secret(secretIds.api(accountId));
+  }
   setSecret(id: string, value: string): void {
+    this.clients = undefined;
     this.db
       .prepare("INSERT OR REPLACE INTO secrets VALUES (?,?)")
       .run(id, this.codec.encrypt(value));
   }
   resetRequestId(identity: string, creditId: string): string {
-    const key = `codex-reset:${JSON.stringify([identity, creditId])}`;
+    const key = settingIds.resetRequest(identity, creditId);
     this.db
       .prepare("INSERT OR IGNORE INTO settings VALUES (?,?)")
       .run(key, randomUUID());
@@ -149,7 +242,7 @@ export class Store {
   clearResetRequest(identity: string, creditId: string): void {
     this.db
       .prepare("DELETE FROM settings WHERE id=?")
-      .run(`codex-reset:${JSON.stringify([identity, creditId])}`);
+      .run(settingIds.resetRequest(identity, creditId));
   }
   apiAccounts(profileId: string): ApiAccount[] {
     return this.db
@@ -164,7 +257,7 @@ export class Store {
       this.db
         .prepare("INSERT OR REPLACE INTO api_accounts VALUES (?,?,?)")
         .run(account.id, profileId, JSON.stringify(account));
-      if (key !== undefined) this.setSecret(`${account.id}:api`, key);
+      if (key !== undefined) this.setSecret(secretIds.api(account.id), key);
     });
   }
   removeApiAccount(profileId: string, accountId: string): void {
@@ -172,7 +265,9 @@ export class Store {
       this.db
         .prepare("DELETE FROM api_accounts WHERE profile_id=? AND id=?")
         .run(profileId, accountId);
-      this.db.prepare("DELETE FROM secrets WHERE id=?").run(accountId + ":api");
+      this.db
+        .prepare("DELETE FROM secrets WHERE id=?")
+        .run(secretIds.api(accountId));
       this.db
         .prepare("DELETE FROM quotas WHERE profile_id=? AND account_id=?")
         .run(profileId, accountId);
@@ -194,37 +289,12 @@ export class Store {
     const stmt = this.db.prepare(
       "INSERT OR IGNORE INTO usage VALUES (?,?,?,?)",
     );
-    const summaries = this.transaction(() => {
-      const updated = new Map<string, UsageSummary>();
-      for (const r of records) {
-        const result = stmt.run(
-          r.id,
-          r.profileId,
-          r.timestamp,
-          JSON.stringify(r),
-        );
-        if (!result.changes) continue;
-        let summary = updated.get(r.profileId);
-        if (!summary) {
-          const cached = this.summaries.get(r.profileId);
-          if (!cached) continue;
-          summary = { ...cached };
-          updated.set(r.profileId, summary);
-        }
-        summary.requests++;
-        summary.failed += Number(r.failed);
-        summary.inputTokens += r.inputTokens;
-        summary.outputTokens += r.outputTokens;
-        summary.cachedTokens += r.cachedTokens;
-        summary.reasoningTokens += r.reasoningTokens;
-        summary.totalTokens += r.totalTokens;
-      }
-      return updated;
+    this.transaction(() => {
+      for (const r of records)
+        stmt.run(r.id, r.profileId, r.timestamp, JSON.stringify(r));
     });
-    // Publish only after commit; duplicates and rolled-back batches never change totals.
-    for (const [id, summary] of summaries) this.summaries.set(id, summary);
   }
-  usage(profileId: string, since = "", limit = 300): UsageRecord[] {
+  usage(profileId: string, since: string, limit: number): UsageRecord[] {
     return this.db
       .prepare(
         "SELECT body FROM usage WHERE profile_id=? AND timestamp>=? ORDER BY timestamp DESC LIMIT ?",
@@ -239,40 +309,40 @@ export class Store {
         .get()?.sequence,
     );
   }
-  usageBatch(
+  /** Rows stored after sequence `after` and up to `through`, in sequence order. */
+  usageAfter(
     profileId: string,
     after: number,
     through: number,
-  ): Array<{ sequence: number; record: UsageRecord }> {
-    return this.db
+  ): UsagePage<number> {
+    const rows = this.db
       .prepare(`SELECT rowid AS sequence, body FROM usage INDEXED BY usage_profile_sequence
-      WHERE profile_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 500`)
-      .all(profileId, after, through)
-      .map((row) => ({
-        sequence: Number(row.sequence),
-        record: stored<UsageRecord>(row.body),
-      }));
+      WHERE profile_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?`)
+      .all(profileId, after, through, usagePageSize);
+    return {
+      records: rows.map((row) => stored<UsageRecord>(row.body)),
+      next:
+        rows.length < usagePageSize ? undefined : Number(rows.at(-1)?.sequence),
+    };
   }
-  usageTimeBatch(
+  /** Rows stored up to `through` with `since <= timestamp < before`, in time order. */
+  usageBetween(
     profileId: string,
-    since: string,
-    before: string,
-    through: number,
-    timestamp = since,
-    sequence = 0,
-  ): Array<{ sequence: number; record: UsageRecord }> {
+    range: { since: string; before: string; through: number },
+    from: UsageCursor = { timestamp: range.since, sequence: 0 },
+  ): UsagePage<UsageCursor> {
+    const { since, before, through } = range;
+    // A cursor before the range starts at the range.
+    const { timestamp, sequence } =
+      from.timestamp < since ? { timestamp: since, sequence: 0 } : from;
     // Seek ties by rowid, then later timestamps; a tuple filter rescans the prefix on each page.
-    if (timestamp < since) {
-      timestamp = since;
-      sequence = 0;
-    }
-    return this.db
+    const rows = this.db
       .prepare(`SELECT rowid AS sequence, body, timestamp FROM usage INDEXED BY usage_profile_time
       WHERE profile_id=? AND timestamp=? AND timestamp<? AND rowid>? AND rowid<=?
       UNION ALL
       SELECT rowid AS sequence, body, timestamp FROM usage INDEXED BY usage_profile_time
       WHERE profile_id=? AND timestamp>? AND timestamp<? AND rowid<=?
-      ORDER BY timestamp,sequence LIMIT 500`)
+      ORDER BY timestamp,sequence LIMIT ?`)
       .all(
         profileId,
         timestamp,
@@ -283,60 +353,35 @@ export class Store {
         timestamp,
         before,
         through,
-      )
-      .map((row) => ({
-        sequence: Number(row.sequence),
-        record: stored<UsageRecord>(row.body),
-      }));
-  }
-  summary(profileId: string, since = ""): UsageSummary {
-    // Activity periods are aggregated by UsagePrices; only state() needs this cache.
-    if (since) return this.readSummary(profileId, since);
-    const cached = this.summaries.get(profileId);
-    if (cached) return cached;
-    const summary = this.readSummary(profileId, since);
-    this.summaries.set(profileId, summary);
-    return summary;
-  }
-  private readSummary(profileId: string, since: string): UsageSummary {
-    const row = this.db
-      .prepare(
-        `SELECT count(*) AS requests,
-      coalesce(sum(json_extract(body,'$.failed')),0) AS failed,
-      coalesce(sum(json_extract(body,'$.inputTokens')),0) AS inputTokens,
-      coalesce(sum(json_extract(body,'$.outputTokens')),0) AS outputTokens,
-      coalesce(sum(json_extract(body,'$.cachedTokens')),0) AS cachedTokens,
-      coalesce(sum(json_extract(body,'$.reasoningTokens')),0) AS reasoningTokens,
-      coalesce(sum(json_extract(body,'$.totalTokens')),0) AS totalTokens
-      FROM usage WHERE profile_id=? AND timestamp>=?`,
-      )
-      .get(profileId, since);
-    const summary: UsageSummary = {
-      requests: Number(row?.requests ?? 0),
-      failed: Number(row?.failed ?? 0),
-      inputTokens: Number(row?.inputTokens ?? 0),
-      outputTokens: Number(row?.outputTokens ?? 0),
-      cachedTokens: Number(row?.cachedTokens ?? 0),
-      reasoningTokens: Number(row?.reasoningTokens ?? 0),
-      totalTokens: Number(row?.totalTokens ?? 0),
+        usagePageSize,
+      );
+    const last = rows.at(-1);
+    return {
+      records: rows.map((row) => stored<UsageRecord>(row.body)),
+      next:
+        rows.length < usagePageSize || !last
+          ? undefined
+          : {
+              timestamp: String(last.timestamp),
+              sequence: Number(last.sequence),
+            },
     };
-    return summary;
   }
-  usageRetentionDays(): number {
+  usageRetentionDays(): RetentionDays {
     const row = this.db
-      .prepare("SELECT value FROM settings WHERE id='usage-retention-days'")
-      .get();
-    return Number(row?.value ?? 0);
+      .prepare("SELECT value FROM settings WHERE id=?")
+      .get(settingIds.retention);
+    const days = Number(row?.value ?? 0);
+    // Only setUsageRetentionDays writes it; anything else reads as the default.
+    return retentionDays.find((option) => option === days) ?? 0;
   }
   setUsageRetentionDays(days: number): void {
-    if (![0, 30, 90, 365].includes(days))
+    if (!retentionDays.some((option) => option === days))
       throw new AppError("Unsupported history retention.");
     this.transaction(() => {
       this.db
-        .prepare(
-          "INSERT OR REPLACE INTO settings VALUES ('usage-retention-days',?)",
-        )
-        .run(String(days));
+        .prepare("INSERT OR REPLACE INTO settings VALUES (?,?)")
+        .run(settingIds.retention, String(days));
       this.pruneUsage();
     });
   }
@@ -348,10 +393,7 @@ export class Store {
       "DELETE FROM usage WHERE profile_id=? AND timestamp<?",
     );
     for (const profile of this.profiles()) {
-      if (remove.run(profile.id, cutoff).changes) {
-        this.usageGeneration++;
-        this.summaries.delete(profile.id);
-      }
+      if (remove.run(profile.id, cutoff).changes) this.usageGeneration++;
     }
   }
   close(): void {

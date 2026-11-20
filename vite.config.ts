@@ -1,15 +1,23 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import {
+  checkoutLayout,
+  devServer,
+  hostPort,
+} from "./src/server/host-defaults.ts";
 
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: "127.0.0.1",
-    port: 5173,
+    ...devServer,
     strictPort: true,
     proxy: {
-      "/api": `http://127.0.0.1:${process.env.NONSTOPVIBIN_PORT || 4318}`,
+      "/api": `http://127.0.0.1:${hostPort()}`,
     },
   },
-  build: { target: "chrome152", outDir: "dist/client", sourcemap: false },
+  build: {
+    target: "chrome152",
+    outDir: checkoutLayout.client,
+    sourcemap: false,
+  },
 });

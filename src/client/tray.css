@@ -1,4 +1,4 @@
-/* The fixed 386px menu-bar panel uses a smaller scale than the main window. */
+/* The fixed-width menu-bar panel (main.ts trayWidth) uses a smaller scale than the main window. */
 .tray-view {
   --text-caption: 0.75rem;
   --text-body: 0.875rem;
@@ -59,6 +59,7 @@
   cursor: pointer;
   list-style: none;
   transition: background 120ms ease;
+  --focus-offset: -3px;
 }
 .tray-profile::-webkit-details-marker {
   display: none;
@@ -69,9 +70,6 @@
 .tray-profile:hover,
 .tray-profile-group[open] > .tray-profile {
   background: var(--bg-3);
-}
-.tray-profile {
-  --focus-offset: -3px;
 }
 .tray-profile-title {
   display: grid;
@@ -181,6 +179,7 @@
   cursor: pointer;
   list-style: none;
   transition: background 120ms ease;
+  --focus-offset: -3px;
 }
 .tray-account-summary::before {
   content: none;
@@ -191,9 +190,6 @@
 .tray-account-summary:hover,
 .tray-account[open] > summary {
   background: var(--bg-3);
-}
-.tray-account-summary {
-  --focus-offset: -3px;
 }
 .tray-account-summary .provider-icon {
   width: 26px;
@@ -247,10 +243,10 @@
   font-variant-numeric: tabular-nums;
 }
 .tray-remaining.low {
-  color: var(--amber-text);
+  color: var(--level-low);
 }
 .tray-remaining.empty {
-  color: var(--red);
+  color: var(--level-empty);
 }
 .tray-remaining .meter-track > span {
   display: block;
@@ -258,10 +254,10 @@
   background: var(--ink-2);
 }
 .tray-remaining.low .meter-track > span {
-  background: var(--amber-text);
+  background: var(--level-low-fill);
 }
 .tray-remaining.empty .meter-track > span {
-  background: var(--red);
+  background: var(--level-empty);
 }
 .tray-disclosure {
   color: var(--ink-3);
@@ -286,63 +282,24 @@
   }
 }
 
-.tray-window {
+/* The shared QuotaMeter, compact: label and value share a row. */
+.tray-account-detail .quota-meter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 2px 8px;
-  min-height: 22px;
 }
-
-.tray-window + .tray-window {
+.tray-account-detail .quota-meter + .quota-meter {
   margin-top: 8px;
 }
-
-.tray-window > span,
-.tray-window > small,
-.tray-window > strong {
-  font-family: var(--mono);
+.tray-account-detail .quota-value {
   font-size: var(--text-caption);
-  font-weight: 400;
-  white-space: nowrap;
 }
-
-.tray-window > span,
-.tray-window > small {
-  color: var(--ink-3);
-}
-
-.tray-window > span {
-  grid-column: 1;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.tray-window > small {
+.tray-account-detail .quota-meter :is(.meter-track, .reset) {
   grid-column: 1 / -1;
-  overflow: hidden;
+}
+.tray-account-detail .quota-meter .reset {
   text-align: right;
-  text-overflow: ellipsis;
-}
-
-.tray-window > strong {
-  grid-column: 2;
-  grid-row: 1;
-  color: var(--ink-2);
-  text-align: right;
-}
-
-.tray-window > strong.low {
-  color: var(--amber-text);
-}
-
-.tray-window > strong.empty {
-  color: var(--red);
-}
-
-.tray-window .meter-track {
-  grid-column: 1 / -1;
-  min-width: 0;
 }
 
 .tray-unavailable {

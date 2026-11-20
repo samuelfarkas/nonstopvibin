@@ -1,9 +1,8 @@
 import { setImmediate as yieldToLoop } from "node:timers/promises";
-import type { Store } from "./store.ts";
+import type { Store, UsageCursor } from "./store.ts";
 import { z } from "zod";
 import type {
-  Model,
-  Json,
+  CatalogModel,
   PricingTokens,
   UsagePricing,
   UsageRecord,
@@ -11,51 +10,8 @@ import type {
   UsageSummary,
 } from "../shared/types.ts";
 import type { ModelCatalog } from "./model-catalog.ts";
-
-interface UsageHistory {
-  records: UsageRecord[];
-  summary: UsageSummary;
-  pricing: UsagePricing;
-}
-
-const counter = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const breakdown = z.object({
-  schema_version: z.literal(2),
-  quality: z.literal("complete"),
-  total_tokens: counter,
-  unclassified_tokens: z.literal(0),
-  input: z.object({
-    total_tokens: counter,
-    uncached_tokens: counter,
-    cache_read_tokens: counter,
-    cache_write_tokens: counter,
-  }),
-  output: z.object({
-    total_tokens: counter,
-    non_reasoning_tokens: counter,
-    reasoning_tokens: counter,
-  }),
-});
-
-export function pricingTokens(value: Json | undefined): PricingTokens | null {
-  const parsed = breakdown.safeParse(value);
-  if (!parsed.success) return null;
-  const { input: i, output: o, total_tokens: total } = parsed.data;
-  if (
-    i.total_tokens !==
-      i.uncached_tokens + i.cache_read_tokens + i.cache_write_tokens ||
-    o.total_tokens !== o.non_reasoning_tokens + o.reasoning_tokens ||
-    total !== i.total_tokens + o.total_tokens
-  )
-    return null;
-  return {
-    input: i.uncached_tokens,
-    cached: i.cache_read_tokens,
-    cacheWrite: i.cache_write_tokens,
-    output: o.non_reasoning_tokens,
-    reasoning: o.reasoning_tokens,
-  };
-}
+import type { UsageHistory } from "../shared/api.ts";
+import { usagePageSize } from "../shared/vocabulary.ts";
 
 function legacyTokens(r: UsageRecord): PricingTokens | null {
   const t = {
@@ -93,7 +49,7 @@ export function normalizedTokens(r: UsageRecord): PricingTokens | null {
 
 export function estimateUsd(
   r: UsageRecord,
-  cost: NonNullable<Model["metadata"]>["cost"],
+  cost: NonNullable<CatalogModel["metadata"]>["cost"],
   t = normalizedTokens(r),
 ): number | null {
   if (!cost || !t) return null;
@@ -194,7 +150,9 @@ export class UsagePrices {
     catalog: ModelCatalog,
   ): Promise<UsageHistory> {
     // Serialize only callers for this profile; retain one bounded aggregate, not history rows.
-    while (this.histories.has(profileId)) await this.histories.get(profileId);
+    // A predecessor's failure is its own caller's; waiters still run their own request.
+    while (this.histories.has(profileId))
+      await this.histories.get(profileId)?.catch(() => {});
     if (this.closed) throw new Error("Activity pricing is shutting down");
     const operation = this.summarize(store, profileId, since, catalog);
     this.histories.set(profileId, operation);
@@ -213,13 +171,13 @@ export class UsagePrices {
     catalog: ModelCatalog,
   ): Promise<UsageHistory> {
     // Capture one storage snapshot after queued callers finish, before yielding.
-    const records = store.usage(profileId, since, 500);
+    const records = store.usage(profileId, since, usagePageSize);
     const pricing = this.snapshot(records, catalog);
     // Freeze rates for the entire calculation, even if a network refresh finishes between batches.
     const snapshot = records.length
       ? catalog.snapshot([])
       : {
-          enrich: (models: Model[]) => models,
+          enrich: (models: CatalogModel[]) => models,
           fetchedAt: null,
         };
     const generation = store.usageGeneration;
@@ -258,7 +216,10 @@ export class UsagePrices {
           reasoningTokens: 0,
           totalTokens: 0,
         };
-    const costs = new Map<string, NonNullable<Model["metadata"]>["cost"]>();
+    const costs = new Map<
+      string,
+      NonNullable<CatalogModel["metadata"]>["cost"]
+    >();
     const include = (r: UsageRecord, direction: number) => {
       const id = r.upstreamModel || r.model;
       const key = JSON.stringify([r.provider, id]);
@@ -291,44 +252,43 @@ export class UsagePrices {
       }
     };
     if (previous && since > previous.since) {
-      let timestamp = previous.since;
-      let sequence = 0;
+      let from: UsageCursor | undefined;
       for (;;) {
         if (this.closed) throw new Error("Activity pricing is shutting down");
-        const batch = store.usageTimeBatch(
+        const page = store.usageBetween(
           profileId,
-          previous.since,
-          since,
-          previous.sequence,
-          timestamp,
-          sequence,
+          { since: previous.since, before: since, through: previous.sequence },
+          from,
         );
-        for (const item of batch) include(item.record, -1);
-        if (batch.length < 500) break;
-        timestamp = batch[batch.length - 1].record.timestamp;
-        sequence = batch[batch.length - 1].sequence;
+        for (const record of page.records) include(record, -1);
+        if (!page.next) break;
+        from = page.next;
         await yieldToLoop();
       }
     }
-    let sequence = previous?.sequence ?? 0;
-    let timestamp = since;
+    let after = previous?.sequence ?? 0;
+    let from: UsageCursor | undefined;
+    const page = previous
+      ? () => {
+          const added = store.usageAfter(profileId, after, through);
+          after = added.next ?? after;
+          return added;
+        }
+      : () => {
+          const ranged = store.usageBetween(
+            profileId,
+            { since, before: "\uffff", through },
+            from,
+          );
+          from = ranged.next;
+          return ranged;
+        };
     for (;;) {
       if (this.closed) throw new Error("Activity pricing is shutting down");
-      const batch = previous
-        ? store.usageBatch(profileId, sequence, through)
-        : store.usageTimeBatch(
-            profileId,
-            since,
-            "\uffff",
-            through,
-            timestamp,
-            sequence,
-          );
-      for (const item of batch)
-        if (item.record.timestamp >= since) include(item.record, 1);
-      if (batch.length < 500) break;
-      sequence = batch[batch.length - 1].sequence;
-      timestamp = batch[batch.length - 1].record.timestamp;
+      const { records, next } = page();
+      for (const record of records)
+        if (record.timestamp >= since) include(record, 1);
+      if (next === undefined) break;
       await yieldToLoop();
     }
     // Retention may run while yielding; never publish a total containing deleted records.

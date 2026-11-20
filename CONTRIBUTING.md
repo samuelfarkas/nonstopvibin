@@ -29,23 +29,11 @@ bun run dev      # Local API and Vite development server
 bun run preview  # Isolated simulator with synthetic accounts
 ```
 
-Run the checks that apply before opening a pull request:
-
-```sh
-bun run quality
-bun test
-```
-
-Also run `bun run build` when changing runtime or build boundaries. Format touched
-files with `bunx --no-install oxfmt --write <files>` before the final checks.
+CI runs every check on your pull request ([SECURITY.md](SECURITY.md#required-checks)
+says where they are defined). Before opening one, run `bun run quality` and
+`bun test`, and `bun run build` when changing runtime or build boundaries. Format
+touched files with `bunx --no-install oxfmt --write <files>` before the final checks.
 Documentation-only changes need formatting and a diff review.
-
-Run the dependency and secret checks:
-
-```sh
-bun run security:deps
-bun run security:install && bun run security:secrets
-```
 
 Use [the commit conventions](docs/commits.md) for commit messages, scopes, and
 history cleanup.

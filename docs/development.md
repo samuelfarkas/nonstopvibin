@@ -19,7 +19,10 @@ bun test            # Add --watch to rerun while editing
 bun run build
 bun run start       # Launch the built Electron app
 bun run test:desktop # Isolated Electron lifecycle check (requires a desktop)
-bun run dist:mac     # DMG, on macOS
+bun run test:ui      # Isolated Electron focus, logo, page layout, and tray close-guard checks (requires a desktop)
+bun run test:server  # Installs and runs the linux-x64 server archive (Linux x64, after dist:server)
+bun run package      # Unsigned app folder in release/ for local checks
+bun run dist:mac     # DMG and ZIP, on macOS
 bun run dist:linux   # AppImage and deb, on Linux
 bun run dist:server  # Headless Linux server archives (x64 and arm64), any host
 ```
@@ -30,11 +33,11 @@ target (pass `x64` or `arm64` to build one), stages the pinned Linux core in a
 temporary directory (your own `.vendor/core` is untouched), and writes
 `release/nonstopvibin-server-<version>-linux-<arch>.tar.gz`. It checks the ELF
 architecture of both binaries, the core's version, platform and hashes against
-`scripts/core-release.json`, and the exact archive contents, then prints each
+`src/server/core-release.json`, and the exact archive contents, then prints each
 archive's SHA-256. Run the CLI from source with `bun src/server/cli.ts`; it then
 uses `.vendor/core` and `dist/client`. See [Run on a Linux server](server.md).
 
-The desktop check uses temporary data and a synthetic profile. It verifies window recreation, draft preservation, IPC bootstrap, continued proxy access with both windows closed, and renderer process exit. For memory comparisons, use a packaged build with the same enabled profiles and distinguish idle, UI-open, and request-load measurements; summed RSS includes shared pages. No universal RAM target is enforced.
+The desktop check uses temporary data and a synthetic profile. It verifies window recreation, draft preservation, IPC bootstrap, continued proxy access with both windows closed, renderer process exit, denied web permission requests, and that a profile core stops when the app receives SIGTERM, SIGINT, SIGHUP or SIGKILL. For memory comparisons, use a packaged build with the same enabled profiles and distinguish idle, UI-open, and request-load measurements; summed RSS includes shared pages. No universal RAM target is enforced.
 
 Use `bun ci` to restore the exact dependency versions, `bun add <package>` to add one, and `bun update` for intentional updates. Commit `bun.lock` with `package.json`. CI reads the Bun version from `packageManager` and uses a frozen install. No global Vite, TypeScript, or Electron CLI is needed.
 
@@ -56,10 +59,10 @@ an identifier operand. It remains excluded from linting and formatting.
 `src/server/json.ts` holds the shared `Json` boundary accessors the rules steer
 toward instead of `unknown`, `typeof`, and casts.
 
-Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI builds, tests, and runs the Electron lifecycle smoke check on Linux and macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
+Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI ([checks.yml](../.github/workflows/checks.yml)) builds, tests, and runs the Electron lifecycle smoke check, including the core-lifetime check, on Linux and macOS, plus the `test:ui` checks on macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
 
-The core installer pins 8.0.67 and all four supported archive checksums in
-`scripts/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. No automatic upstream update runs. Change the pinned version and reviewed hashes together, reinstall it, and run the tests before packaging.
+The core installer pins the version and all four supported archive checksums in
+`src/server/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. No automatic upstream update runs. Change the pinned version and reviewed hashes together, reinstall it, and run the tests before packaging.
 
 ## Contributor guidance
 
@@ -68,7 +71,9 @@ required. Read [AGENTS.md](../AGENTS.md) for task routing and
 [stack guidance](stack-guidance.md) for Electron, SQLite, Bun, TypeScript,
 React, and Vite. `bun run setup` uses the checked-in copies without downloading
 latest skill content. Sources, exact reviewed revisions, and the update policy are
-recorded in [security tooling](security-tooling.md).
+recorded in [security tooling](security-tooling.md). UI work follows the
+[visual system](design/DESIGN.md); app and tray icons are described in
+[icons](design/icons.md).
 
 ## Package metadata
 
@@ -82,8 +87,8 @@ Packaging runs `scripts/validate-core.cjs` before building the archive and
 `scripts/verify-package.cjs` afterwards. These reject the wrong core version,
 target or hash, unexpected application files, credential files, stale desktop
 output, and missing licenses. Distribution commands use `--publish never`; they
-only create local artifacts. The desktop bundle is minified with function/class names retained for diagnostics. Native Chromium translations and ICU date/number locale data remain intact. Runtime dependencies are bundled into desktop/client output; duplicate `node_modules` are excluded, with full dependency license texts generated in `dist/licenses/THIRD-PARTY.txt`. The build rejects unbundled non-native desktop imports or missing dependency licenses. Packaged builds disable `ELECTRON_RUN_AS_NODE` and
-`NODE_OPTIONS`; ASAR integrity fuses remain disabled because unsigned builds failed
+only create local artifacts. The desktop bundle is minified with function/class names retained for diagnostics. Native Chromium translations and ICU date/number locale data remain intact. Runtime dependencies are bundled into desktop/client output; duplicate `node_modules` are excluded, with full dependency license texts generated in `dist/licenses/THIRD-PARTY.txt`. The build rejects unbundled non-native desktop imports or missing dependency licenses. Packaged builds disable `ELECTRON_RUN_AS_NODE`,
+`NODE_OPTIONS`, `--inspect` arguments, and extra `file://` privileges; ASAR integrity fuses remain disabled because unsigned builds failed
 to launch with them. Follow the [macOS release signing guide](release-signing.md)
 for package checks, then see [SECURITY.md](../SECURITY.md) for release requirements.
 

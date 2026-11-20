@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Plug } from "lucide-react";
-import type { Agent, Model, ProfileState } from "../shared/types.ts";
-import { api, copy } from "./api.ts";
-import { CopyButton, Empty } from "./components.tsx";
+import type { Model, ProfileState } from "../shared/types.ts";
+import { agentIds, agents, type Agent } from "../shared/agents.ts";
+import { api } from "./api.ts";
+import { messageOf } from "./action.ts";
+import { Empty } from "./components.tsx";
+import { CopyButton } from "./controls.tsx";
 import { QuickSetup } from "./QuickSetup.tsx";
 import "./connect.css";
 
-const agentOptions = [
-  ["claude", "Claude Code"],
-  ["codex", "Codex"],
-  ["pi", "pi"],
-] as const;
+const agentOptions = agentIds.filter((id) => agents[id].offered);
 
 export function Connect({ profile }: { profile: ProfileState }) {
   const [models, setModels] = useState<Model[]>([]);
@@ -21,8 +20,6 @@ export function Connect({ profile }: { profile: ProfileState }) {
   const [search, setSearch] = useState("");
   const [revealed, setRevealed] = useState(false);
   const [key, setKey] = useState("");
-  const [keyCopying, setKeyCopying] = useState(false);
-  const [keyCopied, setKeyCopied] = useState(false);
   const accountCatalog = JSON.stringify(
     profile.accounts.map((account) => [
       account.id,
@@ -37,7 +34,9 @@ export function Connect({ profile }: { profile: ProfileState }) {
     setLoading(false);
     if (profile.runtime !== "running") return;
     setLoading(true);
-    api<Model[]>(`/profiles/${profile.id}/models`)
+    api("GET /profiles/:profileId/models", {
+      params: { profileId: profile.id },
+    })
       .then((result) => {
         if (!cancelled) {
           setModels(result);
@@ -55,7 +54,9 @@ export function Connect({ profile }: { profile: ProfileState }) {
   }, [profile.id, profile.runtime, accountCatalog, refresh]);
   async function getProfileKey() {
     if (key) return key;
-    const result = await api<{ key: string }>(`/profiles/${profile.id}/key`);
+    const result = await api("GET /profiles/:profileId/key", {
+      params: { profileId: profile.id },
+    });
     setKey(result.key);
     return result.key;
   }
@@ -67,7 +68,7 @@ export function Connect({ profile }: { profile: ProfileState }) {
         icon={<Plug size={27} />}
         title="Start this profile to connect an agent"
       >
-        Its model catalog and connection settings will appear here.
+        <p>Its model catalog and connection settings will appear here.</p>
       </Empty>
     );
   return (
@@ -82,7 +83,7 @@ export function Connect({ profile }: { profile: ProfileState }) {
         </div>
       )}
       <div className="agent-tabs" role="tablist" aria-label="Agent">
-        {agentOptions.map(([id, label], index) => (
+        {agentOptions.map((id, index) => (
           <button
             key={id}
             id={`agent-tab-${id}`}
@@ -107,12 +108,12 @@ export function Connect({ profile }: { profile: ProfileState }) {
                         : undefined;
               if (next === undefined) return;
               event.preventDefault();
-              const nextAgent = agentOptions[next][0];
+              const nextAgent = agentOptions[next];
               setAgent(nextAgent);
               document.getElementById(`agent-tab-${nextAgent}`)?.focus();
             }}
           >
-            {label}
+            {agents[id].title}
           </button>
         ))}
       </div>
@@ -127,8 +128,10 @@ export function Connect({ profile }: { profile: ProfileState }) {
           </div>
         ) : !models.length ? (
           <Empty title="Connect a subscription first">
-            The proxy has no models available in this profile yet. Add an
-            account from Subscriptions.
+            <p>
+              The proxy has no models available in this profile yet. Add an
+              account from Subscriptions.
+            </p>
           </Empty>
         ) : (
           <QuickSetup
@@ -211,38 +214,13 @@ export function Connect({ profile }: { profile: ProfileState }) {
                       if (!revealed) await getProfileKey();
                       setRevealed(!revealed);
                     } catch (e) {
-                      setError(
-                        e instanceof Error
-                          ? e.message
-                          : "Could not reveal key.",
-                      );
+                      setError(messageOf(e, "Could not reveal key."));
                     }
                   }}
                 >
                   {revealed ? "Hide" : "Reveal"}
                 </button>
-                <button
-                  className="button small"
-                  disabled={keyCopying}
-                  onClick={async () => {
-                    setKeyCopying(true);
-                    try {
-                      await copy(await getProfileKey());
-                      setKeyCopied(true);
-                      setTimeout(() => setKeyCopied(false), 1800);
-                    } catch (e) {
-                      setError(
-                        e instanceof Error
-                          ? e.message
-                          : "Clipboard unavailable. Select and copy the key.",
-                      );
-                    } finally {
-                      setKeyCopying(false);
-                    }
-                  }}
-                >
-                  {keyCopying ? "Copying…" : keyCopied ? "Copied" : "Copy"}
-                </button>
+                <CopyButton text={getProfileKey} onError={setError} />
               </div>
             </div>
           </div>

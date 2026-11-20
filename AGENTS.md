@@ -53,7 +53,7 @@ security, and accessibility while optimizing.
 Use [README.md](README.md) for orientation, [stack guidance](docs/stack-guidance.md)
 for runtime details, and [SECURITY.md](SECURITY.md) for security/release workflows.
 Dependency changes use `bun run security:deps`; scanner dependency changes also
-use `bun run security:tooling`. Release checks remain defined in SECURITY.md.
+use `bun run security:tooling`. SECURITY.md says where the release checks are defined.
 
 Skills live in `.agents/skills`; use specific workflow triggers and load only the
 relevant sub-guides. Keep descriptions short and root documents as routers.

@@ -8,26 +8,49 @@ import {
   nativeImage,
   nativeTheme,
   screen,
+  session,
   shell,
   Tray,
   type IpcMainInvokeEvent,
 } from "electron";
 import { join } from "node:path";
-import { chmodSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { Application } from "../server/server.ts";
-import { linuxLoginItem, setLinuxLoginItem } from "./autostart.ts";
-import { errorMessage } from "../server/errors.ts";
-import { dataDirectory } from "../server/data-directory.ts";
+import { coreLayout } from "../server/core-binary.ts";
+import {
+  followLinuxLoginItem,
+  linuxLoginItem,
+  setLinuxLoginItem,
+} from "./autostart.ts";
+import { AppError, errorMessage } from "../server/errors.ts";
+import {
+  dataDirectory,
+  databasePath,
+  ownerOnlyDirectory,
+} from "../server/data-directory.ts";
+import { providers, type ProviderEntry } from "../shared/providers.ts";
+import {
+  bridgeChannels,
+  type BridgeArgument,
+  type BridgeMethod,
+  type BridgeResult,
+} from "../shared/desktop-bridge.ts";
+import { mainUrl, trayUrl } from "../shared/renderer-url.ts";
+import { releaseChannel } from "../shared/release-channel.ts";
 import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
+import {
+  checkoutLayout,
+  hostPort,
+  terminationSignals,
+} from "../server/host-defaults.ts";
 
 app.setName("NonstopVibin");
 const userData = dataDirectory();
-mkdirSync(userData, { recursive: true, mode: 0o700 });
-chmodSync(userData, 0o700);
+ownerOnlyDirectory(userData);
 // Set every Electron storage path before readiness or the single-instance lock.
 app.setPath("userData", userData);
 for (const name of ["sessionData", "crashDumps"] as const) {
@@ -40,13 +63,16 @@ let application: Application;
 let mainWindow: BrowserWindow | undefined;
 let trayWindow: BrowserWindow | undefined;
 let mainLoading: Promise<void> | undefined;
-let trayLoading: Promise<void> | undefined;
 let mainBounds: Electron.Rectangle | undefined;
 const deferredCloses = new WeakSet<BrowserWindow>();
+/** The menu-bar panel; its CSS fills whatever width the window has. */
+const trayWidth = 386;
 let ready = false;
 let openOnReady = !process.argv.includes("--background");
 let tray: Tray;
 let quitting = false;
+/** What an orderly quit exits with; 1 once startup has failed. */
+let exitCode = 0;
 const single = app.requestSingleInstanceLock();
 if (!single) app.quit();
 else {
@@ -60,19 +86,20 @@ else {
   app.on("window-all-closed", () => {
     /* The menu bar and proxy intentionally continue until Quit. */
   });
+  for (const signal of terminationSignals) process.on(signal, () => app.quit());
   app.on("before-quit", (event) => {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
     if (application)
       application.close().then(
-        () => app.exit(0),
+        () => app.exit(exitCode),
         (error) => {
           dialog.showErrorBox("Could not shut down cleanly", String(error));
           app.exit(1);
         },
       );
-    else app.exit(0);
+    else app.exit(exitCode);
   });
   void app
     .whenReady()
@@ -81,25 +108,15 @@ else {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`NonstopVibin could not start: ${message}`);
       dialog.showErrorBox("NonstopVibin could not start", message);
+      exitCode = 1;
       app.quit();
     });
 }
-const externalHosts = new Set([
-  "auth.openai.com",
-  "chatgpt.com",
-  "claude.ai",
-  "console.anthropic.com",
-  "platform.claude.com",
-  "accounts.google.com",
-  "auth.kimi.com",
-  "www.kimi.com",
-  "kimi.com",
-  "accounts.x.ai",
-  "auth.x.ai",
-  "grok.com",
-  "accounts.xai.com",
-  "opencode.ai",
-]);
+const externalHosts = new Set(
+  Object.values<ProviderEntry>(providers).flatMap(
+    (provider) => provider.hosts ?? [],
+  ),
+);
 function safeExternal(raw: string): string {
   const url = new URL(raw);
   if (
@@ -114,7 +131,7 @@ function safeExternal(raw: string): string {
   return url.href;
 }
 function reportDesktopError(error: Error) {
-  application.core.report(errorMessage(error));
+  application.report(errorMessage(error));
 }
 async function watchOutsideClicks(window: BrowserWindow): Promise<void> {
   const root = app.getAppPath();
@@ -168,23 +185,18 @@ async function watchOutsideClicks(window: BrowserWindow): Promise<void> {
 }
 async function showMain(profileId?: string) {
   if (quitting) return;
-  if (profileId) application.store.profile(profileId);
+  if (profileId && !application.hasProfile(profileId))
+    throw new AppError("Profile not found.", 404);
   const existing = mainWindow;
   if (!mainWindow) {
     mainWindow = createWindow("main");
-    mainLoading = mainWindow.loadURL(
-      profileId
-        ? `${application.origin}/?profile=${encodeURIComponent(profileId)}`
-        : application.origin,
-    );
+    mainLoading = mainWindow.loadURL(mainUrl(application.origin, profileId));
   }
   const window = mainWindow;
   try {
     await mainLoading;
     if (existing && profileId)
-      await window.loadURL(
-        `${application.origin}/?profile=${encodeURIComponent(profileId)}`,
-      );
+      await window.loadURL(mainUrl(application.origin, profileId));
   } finally {
     if (!quitting && !window.isDestroyed()) {
       trayWindow?.close();
@@ -207,11 +219,11 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
           titleBarStyle:
             process.platform === "darwin" ? "hiddenInset" : "default",
           trafficLightPosition: { x: 21, y: 17 },
-          icon: join(root, "dist/client/icon.png"),
+          icon: join(root, checkoutLayout.client, "icon.png"),
         }
       : {
           title: "NonstopVibin quotas",
-          width: 386,
+          width: trayWidth,
           height: 640,
           frame: false,
           resizable: false,
@@ -229,14 +241,11 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
       devTools: !app.isPackaged,
     },
   });
-  window.webContents.session.setPermissionRequestHandler(
-    (_contents, _permission, callback) => callback(false),
-  );
   window.webContents.setWindowOpenHandler(({ url }) => {
     try {
       void shell.openExternal(safeExternal(url)).catch(reportDesktopError);
     } catch (error) {
-      application.core.report(errorMessage(error));
+      application.report(errorMessage(error));
     }
     return { action: "deny" };
   });
@@ -252,7 +261,8 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
     });
     window.webContents.on("will-prevent-unload", (event) => {
       if (quitting) event.preventDefault();
-      // A form's beforeunload guard keeps its draft in memory until finished.
+      // A form's beforeunload guard keeps its draft in memory until finished;
+      // useKeepDraft (client/controls.tsx) vetoes, then calls releaseWindow.
       if (closing && !quitting) {
         deferredCloses.add(window);
         window.hide();
@@ -274,13 +284,20 @@ function createWindow(view: "main" | "tray"): BrowserWindow {
       mainWindow = undefined;
       mainLoading = undefined;
     }
-    if (trayWindow === window) {
-      trayWindow = undefined;
-      trayLoading = undefined;
-    }
+    if (trayWindow === window) trayWindow = undefined;
   });
   return window;
 }
+interface BridgeHandler<M extends BridgeMethod> {
+  argument: z.ZodType<BridgeArgument<M>>;
+  run(
+    argument: BridgeArgument<M>,
+    event: IpcMainInvokeEvent,
+  ): BridgeResult<M> | Promise<BridgeResult<M>>;
+}
+type BridgeHandlers = { [M in BridgeMethod]: BridgeHandler<M> };
+const isBridgeMethod = (method: string): method is BridgeMethod =>
+  Object.hasOwn(bridgeChannels, method);
 function assertSender(event: IpcMainInvokeEvent): void {
   const sender = event.senderFrame;
   if (
@@ -295,15 +312,20 @@ function assertSender(event: IpcMainInvokeEvent): void {
     throw new Error("Untrusted desktop request.");
 }
 async function start(): Promise<void> {
+  // Every window uses the default session; deny permissions before any can exist.
+  session.defaultSession.setPermissionRequestHandler(
+    (_contents, _permission, callback) => callback(false),
+  );
   const root = app.getAppPath();
   application = await Application.create({
     directory: userData,
     binary: app.isPackaged
-      ? join(process.resourcesPath, "core/cli-proxy-api")
-      : join(root, ".vendor/core/cli-proxy-api"),
-    clientDirectory: join(root, "dist/client"),
-    port: Number(process.env.NONSTOPVIBIN_PORT || 4318),
-    desktop: true,
+      ? join(process.resourcesPath, coreLayout.packaged, coreLayout.binary)
+      : join(root, coreLayout.checkout, coreLayout.binary),
+    clientDirectory: join(root, checkoutLayout.client),
+    port: hostPort(),
+    // A development run without its core still opens; each profile start reports it missing.
+    allowMissingCore: !app.isPackaged,
   });
   // The UI is dark-only; force the app appearance so native popups (select
   // menus, dialogs) match instead of following a light OS theme.
@@ -318,21 +340,16 @@ async function start(): Promise<void> {
     (process.platform === "darwin" ||
       (process.platform === "linux" && process.env.APPIMAGE))
   ) {
-    // AppImage updates may rename the executable; repair an existing login entry on launch.
-    if (
-      process.platform === "linux" &&
-      process.env.APPIMAGE &&
-      linuxLoginItem(app.getPath("appData"))
-    )
-      await setLinuxLoginItem(
+    if (process.platform === "linux" && process.env.APPIMAGE)
+      await followLinuxLoginItem(
         app.getPath("appData"),
         process.env.APPIMAGE,
-        true,
       ).catch(reportDesktopError);
     const { autoUpdater } = await import("electron-updater");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
-    autoUpdater.allowPrerelease = app.getVersion().includes("-");
+    autoUpdater.allowPrerelease =
+      releaseChannel(app.getVersion()) === "prerelease";
     autoUpdater.allowDowngrade = false;
     autoUpdater.logger = null;
     let installing = false;
@@ -386,83 +403,99 @@ async function start(): Promise<void> {
       clearInterval(interval);
     });
   }
-  ipcMain.handle("nv:bootstrap", (event) => {
-    assertSender(event);
-    return { token: application.token, desktop: true };
-  });
-  // Every privileged handler with a payload validates its sender, then its argument.
-  function handle<T, R>(
-    channel: string,
-    schema: z.ZodType<T>,
-    run: (value: T) => R,
-  ): void {
-    ipcMain.handle(channel, (event, argument) => {
+  const none = z.undefined();
+  const handlers: BridgeHandlers = {
+    bootstrap: { argument: none, run: () => ({ token: application.token }) },
+    openExternal: {
+      argument: z.string().max(20_000),
+      run: (url) => shell.openExternal(safeExternal(url)),
+    },
+    copy: {
+      argument: z.string().max(1_000_000),
+      run: (text) => clipboard.writeText(text),
+    },
+    showWindow: {
+      argument: z.string().uuid().optional(),
+      run: (profileId) => showMain(profileId).catch(reportDesktopError),
+    },
+    // Closes a main window that useKeepDraft (client/controls.tsx) kept open.
+    releaseWindow: {
+      argument: none,
+      run: (_, event) => {
+        if (
+          mainWindow &&
+          event.sender === mainWindow.webContents &&
+          deferredCloses.has(mainWindow) &&
+          !mainWindow.isVisible()
+        )
+          mainWindow.close();
+      },
+    },
+    setLoginItem: {
+      argument: z.boolean(),
+      run: (value) => {
+        if (!app.isPackaged)
+          throw new Error("Use the packaged app to enable automatic startup.");
+        if (process.platform === "linux")
+          return setLinuxLoginItem(
+            app.getPath("appData"),
+            process.env.APPIMAGE || process.execPath,
+            value,
+          );
+        app.setLoginItemSettings({
+          openAtLogin: value,
+          args: ["--background"],
+        });
+        const actual = app.getLoginItemSettings().openAtLogin;
+        if (actual !== value)
+          throw new Error(
+            "macOS did not apply this setting. Add NonstopVibin in System Settings → General → Login Items.",
+          );
+        return actual;
+      },
+    },
+    getLoginItem: {
+      argument: none,
+      run: () =>
+        process.platform === "linux"
+          ? linuxLoginItem(app.getPath("appData"))
+          : app.getLoginItemSettings().openAtLogin,
+    },
+    revealData: {
+      argument: none,
+      run: () => shell.showItemInFolder(databasePath(userData)),
+    },
+    chooseProject: {
+      argument: none,
+      run: async () => {
+        if (!mainWindow) throw new Error("Open the main window first.");
+        const result = await dialog.showOpenDialog(mainWindow, {
+          title: "Connect Claude Code in a project",
+          properties: ["openDirectory"],
+          buttonLabel: "Choose project",
+        });
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+    },
+  };
+  // Every privileged handler validates its sender, then its argument.
+  function handle<M extends BridgeMethod>(method: M): void {
+    const { argument, run } = handlers[method];
+    ipcMain.handle(bridgeChannels[method], (event, value) => {
       assertSender(event);
-      return run(schema.parse(argument));
+      return run(argument.parse(value), event);
     });
   }
-  handle("nv:open-external", z.string().max(20_000), (url) =>
-    shell.openExternal(safeExternal(url)),
-  );
-  handle("nv:copy", z.string().max(1_000_000), (text) =>
-    clipboard.writeText(text),
-  );
-  handle("nv:show-window", z.string().uuid().optional(), showMain);
-  ipcMain.handle("nv:release-window", (event, argument) => {
-    assertSender(event);
-    z.undefined().parse(argument);
-    if (
-      mainWindow &&
-      event.sender === mainWindow.webContents &&
-      deferredCloses.has(mainWindow) &&
-      !mainWindow.isVisible()
-    )
-      mainWindow.close();
-  });
-  handle("nv:login-item", z.boolean(), (value) => {
-    if (!app.isPackaged)
-      throw new Error("Use the packaged app to enable automatic startup.");
-    if (process.platform === "linux")
-      return setLinuxLoginItem(
-        app.getPath("appData"),
-        process.env.APPIMAGE || process.execPath,
-        value,
-      );
-    app.setLoginItemSettings({ openAtLogin: value, args: ["--background"] });
-    const actual = app.getLoginItemSettings().openAtLogin;
-    if (actual !== value)
-      throw new Error(
-        "macOS did not apply this setting. Add NonstopVibin in System Settings → General → Login Items.",
-      );
-    return actual;
-  });
-  ipcMain.handle("nv:get-login-item", (event) => {
-    assertSender(event);
-    return process.platform === "linux"
-      ? linuxLoginItem(app.getPath("appData"))
-      : app.getLoginItemSettings().openAtLogin;
-  });
-  ipcMain.handle("nv:reveal-data", (event) => {
-    assertSender(event);
-    shell.showItemInFolder(join(userData, "nonstopvibin.sqlite"));
-  });
-  ipcMain.handle("nv:choose-project", async (event) => {
-    assertSender(event);
-    if (!mainWindow) throw new Error("Open the main window first.");
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Connect Claude Code in a project",
-      properties: ["openDirectory"],
-      buttonLabel: "Choose project",
-    });
-    return result.canceled ? null : (result.filePaths[0] ?? null);
-  });
+  for (const method of Object.keys(bridgeChannels).filter(isBridgeMethod))
+    handle(method);
   // Mirrorball status item (docs/design/icons.md): still image, colored while
   // a proxy runs, grey when none does. Full color on every platform.
   const trayImage = (name: string) =>
     nativeImage.createFromPath(
       join(
         root,
-        `dist/client/tray/${process.platform === "darwin" ? "mac" : "linux"}-${name}.png`,
+        checkoutLayout.client,
+        `tray/${process.platform === "darwin" ? "mac" : "linux"}-${name}.png`,
       ),
     );
   const ballImage = trayImage("ball");
@@ -471,16 +504,12 @@ async function start(): Promise<void> {
   tray.setToolTip("NonstopVibin · proxy off");
   let trayState = "";
   let trayTooltip = "";
+  // Gateway idle/active edges run this per request.
   const syncTray = () => {
     if (quitting) return;
-    const running = application.store
-      .profiles()
-      .filter((p) => application.core.runtimes.get(p.id)?.state === "running");
-    const streaming = running.some(
-      (p) => (application.gateway.active.get(p.id) ?? 0) > 0,
-    );
+    const { running, streaming } = application.status();
     const state = running.length ? "running" : "stopped";
-    const names = running.map((p) => p.name).join(", ");
+    const names = running.join(", ");
     const tooltip =
       state === "stopped"
         ? "NonstopVibin · proxy off"
@@ -493,12 +522,11 @@ async function start(): Promise<void> {
     trayState = state;
     tray.setImage(state === "stopped" ? stoppedImage : ballImage);
   };
-  application.core.onStatusChange = syncTray;
-  application.core.onOAuthCallback = () => {
+  application.on("status", syncTray);
+  application.on("sign-in", () => {
     // Only an existing window holds the sign-in dialog; a new one would not.
     if (mainWindow) void showMain().catch(reportDesktopError);
-  };
-  application.gateway.onActivityChange = syncTray;
+  });
   syncTray();
   const openTray = async () => {
     if (quitting) return;
@@ -508,9 +536,14 @@ async function start(): Promise<void> {
     }
     if (trayWindow) return;
     trayWindow = createWindow("tray");
-    trayLoading = trayWindow.loadURL(`${application.origin}/?view=tray`);
     const window = trayWindow;
-    await trayLoading;
+    try {
+      await window.loadURL(trayUrl(application.origin));
+    } catch (error) {
+      // Destroying emits "closed", which clears trayWindow so a later click can retry.
+      if (!window.isDestroyed()) window.destroy();
+      throw error;
+    }
     if (window.isDestroyed() || quitting) return;
     if (process.platform === "darwin") await watchOutsideClicks(window);
     if (window.isDestroyed() || quitting) return;
@@ -520,8 +553,8 @@ async function start(): Promise<void> {
     const x = Math.max(
       display.x + 8,
       Math.min(
-        bounds.x + bounds.width / 2 - 193,
-        display.x + display.width - 394,
+        bounds.x + bounds.width / 2 - trayWidth / 2,
+        display.x + display.width - trayWidth - 8,
       ),
     );
     window.setBounds({
@@ -531,7 +564,7 @@ async function start(): Promise<void> {
           ? bounds.y + bounds.height + 7
           : display.y + display.height - height - 8,
       ),
-      width: 386,
+      width: trayWidth,
       height,
     });
     window.show();

@@ -1,39 +1,37 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  count,
-  dateLabel,
-  groupAccountsByProvider,
-} from "../src/client/format.ts";
+import { groupAccountsByProvider } from "../src/client/format.ts";
+import { count, dateLabel } from "../src/client/Activity.tsx";
 
 test("reused formatters preserve number boundaries and local date output", () => {
-  for (const n of [-1, 0, 1.25, 99_999, 100_000, 1_000_000])
-    assert.equal(
-      count(n),
-      new Intl.NumberFormat("en", {
-        notation: n >= 100_000 ? "compact" : "standard",
-        maximumFractionDigits: 1,
-      }).format(n),
-    );
-  for (const locale of ["en-US", "cs-CZ"])
-    for (const timeZone of ["Europe/Prague", "America/New_York"]) {
-      const options = {
-        timeZone,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      } as const;
-      const format = new Intl.DateTimeFormat(locale, options);
-      for (const value of [
-        "2026-03-29T00:30:00Z",
-        "2026-03-29T01:30:00Z",
-        "invalid",
-      ])
-        assert.equal(
-          dateLabel(value, format),
-          new Date(value).toLocaleTimeString(locale, options),
-        );
-    }
+  for (const [n, expected] of [
+    [-1, "-1"],
+    [0, "0"],
+    [1.25, "1.3"],
+    [99_999, "99,999"],
+    [100_000, "100K"],
+    [1_250_000, "1.3M"],
+  ] as const)
+    assert.equal(count(n), expected);
+  // Prague moves its clocks from 02:00 to 03:00 at 01:00 UTC on 2026-03-29.
+  for (const [locale, timeZone, before, after] of [
+    ["cs-CZ", "Europe/Prague", "01:30:00", "03:30:00"],
+    ["cs-CZ", "America/New_York", "20:30:00", "21:30:00"],
+    ["en-US", "Europe/Prague", "01:30:00 AM", "03:30:00 AM"],
+  ] as const) {
+    const format = new Intl.DateTimeFormat(locale, {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    // ICU may separate the day period with a narrow no-break space.
+    const label = (value: string) =>
+      dateLabel(value, format).replace(/\s/gu, " ");
+    assert.equal(label("2026-03-29T00:30:00Z"), before);
+    assert.equal(label("2026-03-29T01:30:00Z"), after);
+    assert.equal(label("invalid"), "Invalid Date");
+  }
 });
 
 test("provider groups gather interleaved subscriptions without changing priority order", () => {
@@ -41,7 +39,7 @@ test("provider groups gather interleaved subscriptions without changing priority
     name: "Account",
     kind: "oauth",
     disabled: false,
-    status: "ready",
+    status: "Ready",
     priority: 0,
   } as const;
   const accounts = [
