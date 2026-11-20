@@ -23,6 +23,9 @@ the verified core; run and repair them without repeated approval or real account
 Run `bunx --no-install oxfmt --write <touched-files>` on supported files before
 finishing; CI enforces formatting through `bun run quality`.
 
+Always squash-merge pull requests, with a title that follows the
+[commit conventions](docs/commits.md). Never use a merge commit or a rebase merge.
+
 ## Performance
 
 Extract every last drop of performance from Electron: no wasted CPU, memory,
