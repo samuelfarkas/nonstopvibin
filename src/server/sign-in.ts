@@ -92,6 +92,19 @@ export class SignIn {
   async settled(): Promise<void> {
     await this.actions.catch(() => undefined);
   }
+  /**
+   * Runs `action` between sign-in actions, and only while no sign-in is pending: one on a
+   * profile's own core would not survive that core restarting.
+   */
+  whileIdle<T>(action: () => Promise<T>): Promise<T> {
+    return this.serialize(async () => {
+      if (this.session && this.now() < this.session.expiresAt)
+        throw new AppError("Finish or cancel the sign-in first.", 409);
+      // An expired one is dropped now, while the core that holds it still runs.
+      if (this.session) await this.clear();
+      return action();
+    });
+  }
   begin(
     profileId: string,
     provider: OAuthProvider,
@@ -487,7 +500,10 @@ export class SignIn {
       );
     });
   }
-  /** Sign-ins pending when the app last stopped never resume or enter a profile: reap their cores and delete them. */
+  /**
+   * Sign-ins pending when the app last stopped never resume or enter a profile, and core
+   * update checks never finish: reap their cores and delete them.
+   */
   async discardPending(): Promise<void> {
     const pending = oauthPendingDirectory(this.pool.store.directory);
     for (const entry of await readdir(pending).catch(() => []))

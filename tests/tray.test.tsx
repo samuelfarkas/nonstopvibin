@@ -47,6 +47,7 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
       },
     ],
     coreVersion: "",
+    core: { bundled: "", updates: false },
     gateway: "",
     usageRetentionDays: 0,
     version: "",

@@ -18,6 +18,8 @@ import { coreArguments, profileDirectory } from "./data-directory.ts";
 
 export interface CoreRuntime {
   child: ChildProcess;
+  /** The executable it was started from. */
+  binary: string;
   port: number;
   state: ProfileState["runtime"];
   error?: string;
@@ -120,7 +122,7 @@ async function unusedPort(): Promise<number> {
 }
 export class CorePool {
   readonly store: Store;
-  readonly binary: string;
+  private current: string;
   private readonly processes = new Map<string, CoreRuntime>();
   /** Each profile's current core. A restart makes a new record, so an unchanged record means the same core. */
   readonly runtimes: ReadonlyMap<string, Readonly<CoreRuntime>> =
@@ -137,16 +139,24 @@ export class CorePool {
   private readonly timing: CoreTiming;
   constructor(store: Store, binary: string, options: CorePoolOptions = {}) {
     this.store = store;
-    this.binary = binary;
+    this.current = binary;
     this.options = options;
     this.transport = options.management ?? httpManagement;
     this.timing = options.timing ?? coreTiming;
     this.config = new ConfigWriter(store);
   }
-  /** A pool on another store with this pool's binary, transport and timing, and no features. */
-  isolated(store: Store): CorePool {
+  /** The executable profiles start from. */
+  get binary(): string {
+    return this.current;
+  }
+  /** Profiles start from `binary` from now on; running cores keep theirs. */
+  use(binary: string): void {
+    this.current = binary;
+  }
+  /** A pool on another store with this pool's transport and timing, and no features. */
+  isolated(store: Store, binary = this.current): CorePool {
     const { management, timing } = this.options;
-    return new CorePool(store, this.binary, { management, timing });
+    return new CorePool(store, binary, { management, timing });
   }
   /** `automatic`: named in this start's notifications, so its caller can tell it from others. */
   async start(
@@ -194,7 +204,9 @@ export class CorePool {
     signal?: AbortSignal,
   ): Promise<void> {
     this.store.profile(profileId);
-    if (!existsSync(this.binary))
+    // Read once: another core may be put in use while this one starts.
+    const binary = this.current;
+    if (!existsSync(binary))
       throw new AppError(
         "The bundled proxy core is missing. Run bun run core:install, then start the profile.",
         503,
@@ -209,7 +221,7 @@ export class CorePool {
     );
     signal?.throwIfAborted();
     const child = spawn(
-      this.binary,
+      binary,
       coreArguments(this.store.directory, profileId),
       {
         cwd: profileDirectory(this.store.directory, profileId),
@@ -219,6 +231,7 @@ export class CorePool {
     );
     const runtime: CoreRuntime = {
       child,
+      binary,
       port,
       state: "starting",
       stopping: false,

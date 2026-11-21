@@ -47,7 +47,7 @@ Retries for the same account and credit reuse a persisted redemption ID, includi
 after an uncertain network response or app restart. Successful IDs remain saved;
 definitive `nothing_to_reset` and `no_credit` responses permit a fresh attempt.
 
-The pinned 8.0.67 core includes upstream’s
+Pinned cores since 8.0.67 include upstream’s
 [cooldown clearing fix](https://github.com/router-for-me/CLIProxyAPI/commit/80234b5).
 Synthetic tests cover the adapter and management boundaries; live credit
 redemption has not been tested and no real credit was consumed during development.

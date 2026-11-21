@@ -4,6 +4,10 @@
 export const defaultPort = 4318;
 export const hostPort = (): number =>
   Number(process.env.NONSTOPVIBIN_PORT || defaultPort);
+/** The reviewed core pin installed builds offer; NONSTOPVIBIN_CORE_FEED tries another, such as a pull request's. */
+export const coreFeed = (): string =>
+  process.env.NONSTOPVIBIN_CORE_FEED ||
+  "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/src/server/core-release.json";
 /** Vite's development server; the development host accepts its Host and Origin. */
 export const devServer = { host: "127.0.0.1", port: 5173 } as const;
 export const devHost = `${devServer.host}:${devServer.port}`;

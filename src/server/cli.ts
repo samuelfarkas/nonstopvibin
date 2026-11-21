@@ -26,7 +26,12 @@ import {
 import { agentEnvironment } from "./agents.ts";
 import { isMissing, ownEntry, readOwnFile, writeAtomic } from "./safe-files.ts";
 import { runHost } from "./host.ts";
-import { notRunningExit, serverArchive, serverPort } from "./host-defaults.ts";
+import {
+  coreFeed,
+  notRunningExit,
+  serverArchive,
+  serverPort,
+} from "./host-defaults.ts";
 import { errorMessage } from "./errors.ts";
 import { version } from "./config.ts";
 import type { RouteResponse } from "../shared/api.ts";
@@ -191,6 +196,8 @@ export interface ServeOptions {
   clientDirectory: string;
   port: number;
   allowHosts: string[];
+  /** The packaged server's reviewed core pin feed; see the application's `coreFeed`. */
+  coreFeed?: string;
 }
 export async function startServer(
   options: ServeOptions,
@@ -219,6 +226,7 @@ export async function startServer(
         allowHosts: options.allowHosts,
         development: false,
         requirePinnedCore: true,
+        coreFeed: options.coreFeed,
         afterClose: async () => {
           try {
             await removeSession(options.directory);
@@ -687,7 +695,7 @@ export async function main(argv: string[]): Promise<number> {
   });
   const [command, subcommand, ...rest] = positionals;
   if (values.version) {
-    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreVersion})`);
+    console.log(`nonstopvibin ${version} (bundled CLIProxyAPI ${coreVersion})`);
     return 0;
   }
   if (values.help || !command) {
@@ -710,6 +718,8 @@ export async function main(argv: string[]): Promise<number> {
           ...(packaged ? packagedPaths() : checkout),
           port,
           allowHosts,
+          // A source checkout shares the data folder: an installed core would shadow its pin.
+          coreFeed: packaged ? coreFeed() : undefined,
         },
         signal,
       ),

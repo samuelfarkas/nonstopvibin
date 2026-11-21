@@ -31,9 +31,11 @@ export const coreArguments = (directory: string, profileId: string) => [
   "--config",
   coreConfigPath(directory, profileId),
 ];
-/** Throwaway data directories for Claude sign-ins awaiting review. */
+/** Throwaway data directories for Claude sign-ins awaiting review and core update checks. */
 export const oauthPendingDirectory = (directory: string) =>
   join(directory, "oauth-pending");
+/** Core updates installed builds downloaded, as `<version>/`; see core-updates.ts. */
+export const coresDirectory = (directory: string) => join(directory, "cores");
 /** Ledger of running cores, for the next instance to reap after a crash. */
 export const coreLedgerDirectory = (directory: string) =>
   join(directory, "core-processes");

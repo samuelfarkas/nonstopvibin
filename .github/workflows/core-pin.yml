@@ -1,0 +1,81 @@
+name: Core pin
+# Every 12 hours: when upstream has a newer stable CLIProxyAPI release, pin it with
+# `bun run core:pin` and open a pull request for review. Merging it ships the core to
+# installed apps. This job never runs the downloaded core; the pull request's checks do.
+on:
+  schedule:
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: core-pin
+  cancel-in-progress: false
+jobs:
+  pin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - run: bun ci --ignore-scripts
+      - name: Open a pull request for a newer CLIProxyAPI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pinned=$(jq -r .version src/server/core-release.json)
+          read -r tag published < <(gh release view --repo router-for-me/CLIProxyAPI \
+            --json tagName,publishedAt --jq '"\(.tagName) \(.publishedAt)"')
+          version=${tag#v}
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Unexpected latest CLIProxyAPI tag: $tag"
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$pinned" "$version" | sort -V | tail -n 1)" = "$pinned" ]; then
+            echo "CLIProxyAPI $pinned is pinned; upstream's latest is $version."
+            exit 0
+          fi
+          # Upstream keeps uploading archives and checksums after it publishes a release.
+          age=$(( $(date +%s) - $(date -d "$published" +%s) ))
+          if [ "$age" -lt 7200 ]; then
+            echo "CLIProxyAPI $version is $(( age / 60 )) minutes old; the next run pins it."
+            exit 0
+          fi
+          branch="core/cliproxyapi-$version"
+          # A closed pull request declines that version: it is not opened again.
+          if [ "$(gh pr list --head "$branch" --state all --json number --jq length)" != 0 ]; then
+            echo "A pull request for CLIProxyAPI $version already exists."
+            exit 0
+          fi
+          bun run core:pin "$version"
+          git switch -c "$branch"
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -am "build(deps): update CLIProxyAPI to $version"
+          # The branch has no pull request, so it can only be a failed run's leftover.
+          git push --force origin "$branch"
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          Upstream released CLIProxyAPI $version. \`bun run core:pin $version\` checked each
+          target's archive against the release's \`checksums.txt\` and pinned its hashes.
+
+          - Release notes: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v$version
+          - Changes since $pinned: https://github.com/router-for-me/CLIProxyAPI/compare/v$pinned...v$version
+
+          Merging ships this core to installed apps, which offer it in Settings. Before merging:
+
+          - [ ] Review the changes to configuration, management APIs, authentication and routing.
+          - [ ] If the core needs app changes, add them here and set \`minApp\` to the first app version that has them.
+          - [ ] Record the upgrade in \`CHANGELOG.md\` and the version notes in \`docs/releases.md\`.
+
+          Closing this pull request declines $version. Opened by \`.github/workflows/core-pin.yml\`.
+          EOF
+          gh pr create --base main --head "$branch" \
+            --title "build(deps): update CLIProxyAPI to $version" --body-file "$RUNNER_TEMP/body.md"
+          # Pull requests and pushes made with this token start no workflows: start the checks.
+          gh workflow run build.yml --ref "$branch"
+          gh workflow run security.yml --ref "$branch"

@@ -64,6 +64,12 @@ export interface Routes {
     body: { days: RetentionDays };
     response: AppState;
   };
+  /** Reads the reviewed core pin; `core.available` names a newer core this app may run. */
+  "POST /core/check": { response: AppState };
+  /** Installs the offered core `version` and restarts running profiles on it. */
+  "POST /core/install": { body: { version: string }; response: AppState };
+  /** Deletes installed core updates and restarts running profiles on the bundled core. */
+  "DELETE /core/install": { response: AppState };
   "GET /import-sources": { response: ImportSource[] };
   "POST /profiles": { body: { name: string }; response: Profile };
   "PATCH /profiles/:profileId": { body: ProfilePatch; response: AppState };

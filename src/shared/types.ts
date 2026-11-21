@@ -135,9 +135,22 @@ export interface ProfileState extends Profile {
   accounts: Account[];
   endpoint: string;
 }
+export type CorePhase = "checking" | "downloading" | "testing" | "restarting";
+export interface CoreState {
+  /** The core this build bundles. */
+  bundled: string;
+  /** Whether this run can install reviewed core updates (installed builds only). */
+  updates: boolean;
+  /** A newer reviewed core the last check found that this app may run. */
+  available?: string;
+  /** The update or revert in progress. */
+  phase?: CorePhase;
+}
 export interface AppState {
   profiles: ProfileState[];
+  /** The core profiles start from: `core.bundled`, or an update installed over it. */
   coreVersion: string;
+  core: CoreState;
   gateway: string;
   usageRetentionDays: RetentionDays;
   version: string;

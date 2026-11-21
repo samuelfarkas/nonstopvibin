@@ -3,6 +3,7 @@ import { Credentials } from "./credentials.ts";
 import { CorePool, type CoreTiming, type Management } from "./core.ts";
 import { Quotas } from "./quota.ts";
 import { CodexResets } from "./reset-credits.ts";
+import { CoreUpdates } from "./core-updates.ts";
 import { SignIn } from "./sign-in.ts";
 import type { Report } from "./errors.ts";
 import type { Store } from "./store.ts";
@@ -18,6 +19,12 @@ export interface CoresOptions {
   report: Report;
   onStatusChange?: () => void;
   onSignInCallback?: () => void;
+  /** The reviewed core pin feed; without one only the bundled core runs. */
+  feed?: string;
+  /** Where core release archives download from; tests serve their own. */
+  archives?: string;
+  /** Whether the bundled core must also match the pin compiled into this build. */
+  requirePinnedCore?: boolean;
 }
 
 export class Cores {
@@ -28,6 +35,7 @@ export class Cores {
   readonly signIn: SignIn;
   readonly resets: CodexResets;
   readonly usage: Usage;
+  readonly updates: CoreUpdates;
   private readonly report: Report;
   constructor(store: Store, binary: string, options: CoresOptions) {
     this.report = options.report;
@@ -65,6 +73,12 @@ export class Cores {
       inFlight: options.inFlight,
       report: options.report,
     });
+    this.updates = new CoreUpdates(this.pool, this.signIn, this.credentials, {
+      feed: options.feed,
+      archives: options.archives,
+      requirePinnedCore: options.requirePinnedCore,
+      report: options.report,
+    });
   }
   async restore(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
@@ -74,16 +88,19 @@ export class Cores {
     const reported = await this.pool.restore(this.report, signal);
     signal?.throwIfAborted();
     this.usage.begin(reported);
+    // Offline at launch stays quiet: Settings checks again when it opens.
+    if (this.updates.enabled) void this.updates.check().catch(() => undefined);
   }
   /**
-   * Refuses new work and abandons an automatic start, lets sign-in actions and then
-   * credential changes finish, drops the pending sign-in, lets the scheduler's running
-   * work finish, then stops every core.
+   * Refuses new work and abandons an automatic start, aborts a core download and lets the
+   * core update finish, lets sign-in actions and then credential changes finish, drops the
+   * pending sign-in, lets the scheduler's running work finish, then stops every core.
    * The caller closes the store only after this: each stop drains usage into it.
    */
   async shutdown(): Promise<void> {
     this.pool.beginShutdown();
     this.usage.abandonRestarts();
+    await this.updates.shutdown();
     await this.signIn.settled();
     await this.credentials.settled();
     try {

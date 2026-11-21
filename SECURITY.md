@@ -57,6 +57,18 @@ Validate findings with synthetic reproducers and regression tests before fixing 
 publishing them. Review the bundled CLIProxyAPI release separately: scanning this
 TypeScript wrapper does not audit the upstream Go implementation or binary.
 
+## Core updates
+
+Installed builds offer the CLIProxyAPI core that the reviewed pin on `main`
+(`src/server/core-release.json`) names. They download it only from the upstream
+release URL for that version and install it only when the archive and the
+extracted executable match the pin's SHA-256 for their platform and architecture.
+Merging a pin therefore ships its core to installed users: review it as a release.
+`NONSTOPVIBIN_CORE_FEED` changes only where the pin is read; the archive origin is
+fixed. Installed cores are owner-only files in the data folder, checked against
+their manifest at launch. Like the database, they are not protected from software
+running as the same OS user.
+
 ## Distribution checklist
 
 - Include the application MIT license and preserve third-party licenses. Audit the

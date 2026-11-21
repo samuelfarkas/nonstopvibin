@@ -35,7 +35,7 @@ import { offeredModels } from "./agents.ts";
 import { profileEndpoint } from "./agent-connection.ts";
 import { fileKeyCodec } from "./vault.ts";
 import { Cores, type CoresOptions } from "./cores.ts";
-import { coreVersion, verifyCore } from "./core-binary.ts";
+import { corePinSchema, verifyCore } from "./core-binary.ts";
 import { Gateway } from "./gateway.ts";
 import { ProfileModels } from "./model-catalog.ts";
 import { devHost } from "./host-defaults.ts";
@@ -199,12 +199,24 @@ interface ServerOptions {
   // Tailscale Serve). The agent gateway stays loopback-only.
   allowHosts?: string[];
   requirePinnedCore?: boolean;
+  /**
+   * Where installed builds read the reviewed core pin. With it, startup selects a core
+   * update installed over the bundled core, and Settings installs them.
+   */
+  coreFeed?: string;
   /** Starts without a core binary, so development and tests run without one; profiles then cannot start. */
   allowMissingCore?: boolean;
   /** Runs once after the application closed, even if closing failed: the host's own resources. */
   afterClose?: () => Promise<void>;
   /** How the profile cores are reached and timed; tests answer and shorten them. */
-  cores?: Omit<CoresOptions, "report" | "onStatusChange" | "onSignInCallback">;
+  cores?: Omit<
+    CoresOptions,
+    | "report"
+    | "onStatusChange"
+    | "onSignInCallback"
+    | "feed"
+    | "requirePinnedCore"
+  >;
 }
 export interface HostStatus {
   /** Names of the profiles whose core runs, in profile order. */
@@ -241,6 +253,8 @@ export class Application {
     this.store = store;
     this.cores = new Cores(store, options.binary, {
       ...options.cores,
+      feed: options.coreFeed,
+      requirePinnedCore: options.requirePinnedCore,
       // The scheduler drains slowly while the gateway still has requests open.
       inFlight: (profileId) => this.gateway.active.get(profileId) ?? 0,
       report: (message) => this.report(message),
@@ -339,7 +353,9 @@ export class Application {
       if (!(address instanceof Object))
         throw new Error("Gateway failed to bind.");
       app.port = address.port;
-      if (!options.allowMissingCore || existsSync(options.binary))
+      // An installed core is hashed against its manifest; a reviewed pin was checked when it was installed.
+      const updated = await app.cores.updates.select();
+      if (!updated && (!options.allowMissingCore || existsSync(options.binary)))
         await verifyCore(options.binary, options.requirePinnedCore);
       signal?.throwIfAborted();
       await app.cores.restore(signal);
@@ -426,7 +442,8 @@ export class Application {
     });
     return {
       profiles,
-      coreVersion,
+      coreVersion: this.cores.updates.version,
+      core: this.cores.updates.state(),
       gateway: this.origin,
       usageRetentionDays: this.store.usageRetentionDays(),
       version,
@@ -589,6 +606,30 @@ export class Application {
         query: noQuery,
         handle: ({ body }) => {
           this.store.setUsageRetentionDays(body.days);
+          return this.state();
+        },
+      },
+      "POST /core/check": {
+        body: noBody,
+        query: noQuery,
+        handle: async () => {
+          await this.cores.updates.check();
+          return this.state();
+        },
+      },
+      "POST /core/install": {
+        body: z.object({ version: corePinSchema.shape.version }).strict(),
+        query: noQuery,
+        handle: async ({ body }) => {
+          await this.cores.updates.install(body.version);
+          return this.state();
+        },
+      },
+      "DELETE /core/install": {
+        body: noBody,
+        query: noQuery,
+        handle: async () => {
+          await this.cores.updates.useBundled();
           return this.state();
         },
       },

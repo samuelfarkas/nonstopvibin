@@ -4,8 +4,6 @@
 import { serverArchive, serverPort } from "../src/server/host-defaults.ts";
 
 interface Architecture {
-  /** The core release's archive suffix. */
-  core: string;
   /** What `uname -m` prints on a Linux server. */
   uname: readonly string[];
   /** ELF `e_machine`. */
@@ -18,14 +16,12 @@ interface Architecture {
 /** Each supported architecture by Node's name, with the names other tools give it. */
 export const architectures = {
   x64: {
-    core: "amd64",
     uname: ["x86_64", "amd64"],
     elf: 62,
     machO: 0x01000007,
     swift: "x86_64",
   },
   arm64: {
-    core: "aarch64",
     uname: ["aarch64", "arm64"],
     elf: 183,
     machO: 0x0100000c,

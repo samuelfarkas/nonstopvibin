@@ -44,6 +44,7 @@ import { updatesEnabled } from "../../package.json";
 import { updateChecker } from "./updates.ts";
 import {
   checkoutLayout,
+  coreFeed,
   hostPort,
   terminationSignals,
 } from "../server/host-defaults.ts";
@@ -326,6 +327,8 @@ async function start(): Promise<void> {
     port: hostPort(),
     // A development run without its core still opens; each profile start reports it missing.
     allowMissingCore: !app.isPackaged,
+    // Development runs share the data folder: an installed core would shadow the pin under test.
+    coreFeed: app.isPackaged ? coreFeed() : undefined,
   });
   // The UI is dark-only; force the app appearance so native popups (select
   // menus, dialogs) match instead of following a light OS theme.

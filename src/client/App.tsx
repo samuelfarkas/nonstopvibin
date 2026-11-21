@@ -192,11 +192,19 @@ export function App() {
             <button
               className={page === "settings" ? "selected" : ""}
               aria-current={page === "settings" ? "page" : undefined}
+              aria-label={
+                state.core.available
+                  ? "Settings, core update available"
+                  : undefined
+              }
               title="Settings"
               onClick={() => setPage("settings")}
             >
               <Settings2 size={15} />
               <span>Settings</span>
+              {state.core.available && (
+                <i className="status-dot nav-dot" aria-hidden="true" />
+              )}
             </button>
             <code>{state.version}</code>
           </div>

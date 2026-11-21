@@ -58,6 +58,13 @@
   width: 240px;
 }
 
+.core-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .settings-notices {
   display: flex;
   flex-direction: column;

@@ -101,10 +101,12 @@ To create an installer, run the matching command on the target system:
 | Linux, x86_64        | `bun run dist:linux` | AppImage and deb     |
 
 Packaged apps do not require Bun. Starting with 0.2.0, packaged macOS and AppImage
-builds check GitHub Releases for updates; deb installations update manually. See
-[releases and app updates](docs/releases.md). Locally built macOS apps are unsigned
-and not notarized until signing is configured; installation and tray behavior in
-an interactive Linux desktop session still need verification. See
+builds check GitHub Releases for updates; deb installations update manually.
+Installed builds, deb included, also update the proxy core from Settings once a
+reviewed core pin reaches `main`. See [releases and app updates](docs/releases.md).
+Locally built macOS apps are unsigned and not notarized until signing is
+configured; installation and tray behavior in an interactive Linux desktop
+session still need verification. See
 [release requirements](SECURITY.md) before distributing builds.
 
 For development, use `bun run dev`; `bun run preview` starts an isolated app with

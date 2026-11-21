@@ -148,41 +148,74 @@ CLIProxyAPI ships inside every installer as a separate native executable at
 `manifest.json`. Electron launches it as a child process for each running profile;
 [storage and profile boundaries](architecture.md) describes how a core is tied to
 the app's lifetime.
-Users do not install the core separately. Settings shows the version pinned in
-`src/server/core-release.json`.
-
-Keep core upgrades part of an app release so the wrapper and core are tested and
-distributed together. To upgrade:
+`src/server/core-release.json` is the reviewed pin: the core version, an optional
+`minApp`, and the SHA-256 of each target's upstream archive and extracted
+executable. Each build bundles the core of the pin it was built from. Installed
+builds also read the pin on `main` and offer a newer core in **Settings → Proxy
+core**, so a reviewed core reaches users when its pin merges, without an app
+release. To publish one:
 
 1. Review the chosen [upstream release](https://github.com/router-for-me/CLIProxyAPI/releases)
    and its changes to configuration, management APIs, authentication and routing.
-2. Update `src/server/core-release.json`: the version, archive SHA-256 checksums, and
-   SHA-256 hashes of the extracted unsigned executables for all four listed targets.
-   Verify downloaded archives against upstream checksums before extracting and
-   hashing their executables. Checksums published beside the downloads establish
-   integrity, not independent assurance of the publisher.
-3. Quit the running app and run `bun run core:install`. This installs the reviewed
-   pin into `.vendor/core`; it does not select the latest upstream release.
-   For another packaging target, set `CORE_PLATFORM` and `CORE_ARCH`, for example
-   `CORE_PLATFORM=linux CORE_ARCH=x64 bun run core:install`.
-4. Run the checks of the first-release checklist above. Exercise the
-   synthetic-provider integration tests against the new core and verify the
-   packaged app on each shipping target.
-5. Bump the app version, record the core upgrade in `CHANGELOG.md`, and publish
-   through the normal release workflow above.
+2. Run `bun run core:pin <version>`, or `bun run core:pin` for the latest release.
+   It requires all four targets in the release's `checksums.txt`, checks each
+   downloaded archive against it, and writes the archive and executable hashes.
+   Checksums published beside the downloads establish integrity, not independent
+   assurance of the publisher.
+3. If the core needs app changes, set `minApp` to the first NonstopVibin version
+   that has them; older apps keep their core. `core:pin` keeps an existing `minApp`.
+4. Quit the running app and run `bun run core:install`. This installs the pin
+   into `.vendor/core`. For another packaging target, set `CORE_PLATFORM` and
+   `CORE_ARCH`, for example `CORE_PLATFORM=linux CORE_ARCH=x64 bun run core:install`.
+5. Run the checks of the first-release checklist above and exercise the
+   synthetic-provider integration tests against the new core.
+6. Try the pin on an installed app: start it with `NONSTOPVIBIN_CORE_FEED` set to
+   the pull request's raw `core-release.json` URL and update from Settings.
+7. Record the core upgrade in `CHANGELOG.md` and merge. Installed apps offer the
+   core at their next check: at launch, and whenever Settings opens. The next app
+   release bundles it.
 
-Packaging rejects mismatched versions, platforms, architectures and binary hashes.
+The [Core pin workflow](../.github/workflows/core-pin.yml) does step 2 every 12
+hours, and on demand from the Actions tab. When upstream's latest stable release is
+newer than the pin and at least two hours old, it opens a pull request titled
+`build(deps): update CLIProxyAPI to <version>` with the rest of this list as a
+checklist. Pull requests opened with the workflow's own token start no workflows,
+so it starts the build and security checks on its branch. Closing the pull request
+declines that version; the workflow does not open it again. The workflow never runs
+the downloaded core: the pull request's checks do. It needs **Settings → Actions →
+General → Allow GitHub Actions to create and approve pull requests**. Until that is
+on, each run pushes its branch and then fails to open the pull request. GitHub
+disables scheduled workflows in a public repository after 60 days without activity.
 
-The 8.0.67 upgrade keeps the legacy YAML configuration and `/v0/management`
-routes, which upstream retains alongside its new v8 configuration and OAuth APIs.
-Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain disabled.
-The core now supplies its Claude Code 2.1.321 fingerprint without a wrapper override.
+An installed app downloads only the pinned version's archive from upstream's
+release URL, and installs it only when the archive and its executable match the
+pin for its platform and architecture. It starts the new core on a throwaway
+profile, keeps it in `cores/<version>` in the data folder, then restarts running
+profiles on it; requests in progress are interrupted. Settings shows it as
+updated from the bundled core, and **Use bundled** checks the bundled core,
+restarts profiles on it, then deletes installed cores. At launch the newest intact
+installed core above the bundled one runs, so an app update that bundles a newer
+or equal core replaces it. Development runs never install or select cores: they share the data
+folder with an installed app. On macOS an installed core keeps upstream's own
+signature instead of the app's; that path is untested.
+
+`core:install` and packaging accept only the bundled pin. Packaging rejects
+mismatched versions, platforms, architectures and binary hashes.
+
+The 8.1.0 upgrade keeps the legacy YAML configuration and `/v0/management`
+routes, which upstream retains alongside its v8 configuration and OAuth APIs.
+Upstream 8.1.0 adds a GitHub Copilot provider, which NonstopVibin does not offer.
+On its first start a core writes a generated `server-id` into its profile's config
+file. The app rewrites that file at each start, so the ID changes then; nothing
+reads it. Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain
+disabled. Since 8.0.67 the core supplies its own Claude Code fingerprint without a
+wrapper override.
 App startup upgrades existing owned Pi connections; reload Pi to remove older
 tool-change fallbacks. Core installation replaces the binary for the next process
 start; restart NonstopVibin to replace any running profile cores.
 macOS signing updates the packaged manifest hash after verifying the unsigned core.
-Installed users receive the new core by updating NonstopVibin; deb installations
-and builds older than 0.2.0 install the newer app manually. Development checkouts rerun
+Builds up to 0.2.0 receive a new core only with a newer app; deb installations and
+builds older than 0.2.0 install that manually. Development checkouts rerun
 `bun run core:install` after pulling a changed pin, then restart the app.
 
 ## Installed behavior
@@ -196,8 +229,10 @@ or **Later**, defaulting to Later because restart interrupts connected agents.
 After Later, use the same menu command to install the downloaded update. Ordinary
 Quit does not opt into installation. Checks and downloads are serialized, and
 background failures remain quiet. Restart closes the local service before handing
-off to the updater. Credentials and the database remain in the data directory;
-the pinned core is replaced only as part of the app bundle.
+off to the updater. Credentials, the database and installed core updates remain in
+the data directory. The bundled core is replaced with the app bundle; newer
+reviewed cores install from Settings (see
+[Updating the CLIProxyAPI core](#updating-the-cliproxyapi-core)).
 
 Existing installations without enabled update support need one manual install.
 Linux deb users continue installing newer deb packages manually.

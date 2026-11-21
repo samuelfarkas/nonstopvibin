@@ -7,15 +7,79 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { z } from "zod";
 import coreRelease from "./core-release.json";
 import { AppError } from "./errors.ts";
 import { parse, record, type JsonObject } from "./json.ts";
 import type { Json } from "../shared/types.ts";
 
-// The core artifact for the app and for the build scripts (install-core, validate-core,
-// verify-package, sign-mac, build-server), which import this module: no build tooling here.
+// The core artifact for the app and for the build scripts (install-core, pin-core,
+// validate-core, verify-package, sign-mac, build-server), which import this module: no build
+// tooling here.
 
-export const coreVersion = coreRelease.version;
+const versionSchema = z.string().regex(/^\d+\.\d+\.\d+$/);
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const targetsSchema = z.object({
+  darwin_arm64: sha256Schema,
+  darwin_x64: sha256Schema,
+  linux_arm64: sha256Schema,
+  linux_x64: sha256Schema,
+});
+/**
+ * A reviewed core release, `src/server/core-release.json`: bundled into each build, and read
+ * from `main` by installed ones. Unknown keys are dropped, so a later field does not stop
+ * older apps from reading it.
+ */
+export const corePinSchema = z.object({
+  version: versionSchema,
+  /** The oldest NonstopVibin version that may run this core. */
+  minApp: versionSchema.optional(),
+  /** Each target's upstream archive SHA-256. */
+  checksums: targetsSchema,
+  /** Each target's extracted, unsigned executable SHA-256. */
+  binaries: targetsSchema,
+});
+export type CorePin = z.infer<typeof corePinSchema>;
+/** `<platform>_<arch>` by Node's names. */
+export type CoreTarget = keyof CorePin["binaries"];
+export const coreTargets = targetsSchema.keyof().options;
+export function coreTarget(
+  platform: string,
+  arch: string,
+): CoreTarget | undefined {
+  return coreTargets.find((target) => target === `${platform}_${arch}`);
+}
+/** The upstream release archive's name for a target. */
+export function coreArchive(
+  version: string,
+  platform: string,
+  arch: string,
+): string {
+  const suffix = new Map([
+    ["x64", "amd64"],
+    ["arm64", "aarch64"],
+  ]).get(arch);
+  if (!suffix) throw new Error(`Unsupported architecture: ${arch}`);
+  return `CLIProxyAPI_${version}_${platform}_${suffix}.tar.gz`;
+}
+/** Orders X.Y.Z versions numerically; a prerelease (X.Y.Z-beta.N) sorts below its X.Y.Z. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (version: string) => {
+    const [release = "", prerelease] = version.split("-", 2);
+    return [
+      ...release.split(".").map(Number),
+      prerelease === undefined ? 1 : 0,
+    ];
+  };
+  const [x, y] = [parts(a), parts(b)];
+  for (const [index, part] of x.entries())
+    if (part !== y[index]) return part - (y[index] ?? 0);
+  return 0;
+}
+
+/** The pin this build bundles. */
+export const bundledPin: CorePin = corePinSchema.parse(coreRelease);
+export const coreVersion = bundledPin.version;
 
 export const coreLayout = {
   /** Written by `bun run core:install`, relative to the checkout. */
@@ -27,8 +91,8 @@ export const coreLayout = {
 } as const;
 export const coreFiles = [coreLayout.binary, coreLayout.manifest] as const;
 
-const archivePins = new Map(Object.entries(coreRelease.checksums));
-const binaryPins = new Map(Object.entries(coreRelease.binaries));
+const archivePins = new Map(Object.entries(bundledPin.checksums));
+const binaryPins = new Map(Object.entries(bundledPin.binaries));
 const matches = (
   table: Map<string, string>,
   platform: Json | undefined,
@@ -38,8 +102,6 @@ const matches = (
   const pin = table.get(`${platform}_${arch}`);
   return pin !== undefined && pin === sha256;
 };
-export const pinned = (platform: string, arch: string): boolean =>
-  binaryPins.has(`${platform}_${arch}`);
 /** Whether `sha256` is the reviewed checksum of the upstream archive for this target. */
 export const pinnedArchive = (
   platform: Json | undefined,
@@ -58,6 +120,7 @@ export const pinnedBinary = (
  * `binarySha256` the binary's hash, which desktop signing rewrites (scripts/sign-mac.cjs).
  */
 export function coreManifest(
+  version: string,
   platform: string,
   arch: string,
   archive: string,
@@ -65,7 +128,7 @@ export function coreManifest(
   binarySha256: string,
 ): JsonObject {
   return {
-    version: coreVersion,
+    version,
     platform,
     arch,
     archive,
@@ -108,7 +171,7 @@ export function checkCoreDirectory(
     throw new Error(
       `The proxy core is ${manifest.platform}/${manifest.arch}, but the target is ${platform}/${arch}. Run core:install for the target first.`,
     );
-  if (!pinned(platform, arch))
+  if (!coreTarget(platform, arch))
     throw new Error("The proxy core target has no reviewed binary pin.");
   if (!pinnedBinary(platform, arch, manifest.binarySha256))
     throw new Error(
@@ -121,6 +184,13 @@ export function checkCoreDirectory(
     throw new Error(
       "The proxy core binary does not match the reviewed release pin. Run bun run core:install again.",
     );
+}
+
+/** A file's SHA-256, streamed: a core is too large to read into one buffer. */
+export async function fileSha256(path: string): Promise<string> {
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(path)) digest.update(chunk);
+  return digest.digest("hex");
 }
 
 /**
@@ -139,9 +209,7 @@ export async function verifyCore(
   const manifest = record(
     parse(await readFile(join(binary, "..", coreLayout.manifest), "utf8")),
   );
-  const digest = createHash("sha256");
-  for await (const chunk of createReadStream(binary)) digest.update(chunk);
-  const hash = digest.digest("hex");
+  const hash = await fileSha256(binary);
   // Headless releases must also match the compiled pin. Desktop signing
   // changes the binary and refreshes its manifest after packaging verifies it.
   if (
