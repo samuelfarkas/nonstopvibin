@@ -1054,6 +1054,14 @@ input[role="switch"]:disabled {
   font-size: var(--text-caption);
   padding-right: 8px;
 }
+/* An update is available on that page. */
+.nav-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--amber);
+}
 
 /* ---------- Main column ---------- */
 .main {
@@ -1540,6 +1548,11 @@ details > dl {
   .sidebar-version > button {
     justify-content: center;
     padding: 0;
+  }
+  .nav-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
   }
   .profile-button > .profile-initial {
     display: grid;

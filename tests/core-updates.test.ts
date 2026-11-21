@@ -15,7 +15,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AppState, Json } from "../src/shared/types.ts";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { SettingsPage } from "../src/client/Settings.tsx";
+import type { AppState, CoreState, Json } from "../src/shared/types.ts";
 import {
   bundledPin,
   coreArchive,
@@ -317,4 +320,48 @@ test("startup selects the newest intact core above the bundled one and deletes t
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("Settings offers a reviewed core, then the bundled one, and shows progress", () => {
+  const render = (coreVersion: string, core: CoreState) =>
+    renderToStaticMarkup(
+      createElement(SettingsPage, {
+        state: {
+          profiles: [],
+          coreVersion,
+          core,
+          gateway: "",
+          usageRetentionDays: 0,
+          version: "0.2.0",
+          errors: [],
+        },
+        refresh: async () => {},
+        onError: assert.fail,
+      }),
+    );
+  const bundled = { bundled: "8.0.67", updates: true };
+  const development = render("8.0.67", { ...bundled, updates: false });
+  assert.match(development, /Core updates install in installed builds/);
+  assert.doesNotMatch(development, /<button[^>]*>Update/);
+
+  const offered = render("8.0.67", { ...bundled, available: "8.0.99" });
+  assert.match(offered, /Version 8.0.99 is available/);
+  assert.match(offered, />Update to 8.0.99<\/button>/);
+  assert.doesNotMatch(offered, /Use bundled/);
+
+  const installed = render("8.0.99", bundled);
+  assert.match(installed, /Updated from the bundled 8.0.67/);
+  assert.match(installed, />Use bundled 8.0.67<\/button>/);
+  assert.match(installed, /<code>8.0.99<\/code>/);
+
+  const busy = render("8.0.67", {
+    ...bundled,
+    available: "8.0.99",
+    phase: "downloading",
+  });
+  assert.match(
+    busy,
+    /<button class="button" disabled="">.*Downloading…<\/button>/,
+  );
+  assert.doesNotMatch(busy, /Update to/);
 });

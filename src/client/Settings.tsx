@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ChevronRight } from "lucide-react";
-import type { AppState, ProfileState } from "../shared/types.ts";
+import { ChevronRight, LoaderCircle } from "lucide-react";
+import type { AppState, CorePhase, ProfileState } from "../shared/types.ts";
 import {
   nameLength,
   retentionDays,
@@ -16,6 +16,12 @@ const retentionLabels: Record<RetentionDays, string> = {
   30: "30 days",
   90: "90 days",
   365: "1 year",
+};
+const phaseLabels: Record<CorePhase, string> = {
+  checking: "Checking…",
+  downloading: "Downloading…",
+  testing: "Testing…",
+  restarting: "Restarting profiles…",
 };
 
 export function SettingsPage({
@@ -98,16 +104,7 @@ export function SettingsPage({
         </div>
         <section className="settings-section">
           <h3>Proxy core</h3>
-          <div className="setting-row">
-            <div className="setting-copy">
-              <h3>CLIProxyAPI</h3>
-              <p>
-                Included with NonstopVibin. Core upgrades arrive with app
-                updates.
-              </p>
-            </div>
-            <code>{state.coreVersion}</code>
-          </div>
+          <CoreSetting state={state} refresh={refresh} onError={onError} />
         </section>
         <section className="settings-section">
           <h3>Desktop</h3>
@@ -252,6 +249,114 @@ export function SettingsPage({
           </section>
         )}
       </section>
+    </div>
+  );
+}
+
+function CoreSetting({
+  state: { core, coreVersion },
+  refresh,
+  onError,
+}: {
+  state: AppState;
+  refresh(next?: AppState): Promise<void>;
+  onError(message: string): void;
+}) {
+  // The phase reaches state with the next poll; until then, the one this click began.
+  const [started, setStarted] = useState<CorePhase>();
+  const phase = core.phase ?? started;
+  const { available, bundled } = core;
+  const installed = coreVersion !== bundled;
+  useEffect(() => {
+    if (!core.updates) return;
+    // Offline, the row keeps what the last check found; opening Settings again retries.
+    api("POST /core/check").then(refresh, () => undefined);
+  }, [core.updates, refresh]);
+  async function change(
+    first: CorePhase,
+    request: () => Promise<AppState>,
+    fallback: string,
+  ) {
+    setStarted(first);
+    try {
+      await refresh(await request());
+    } catch (error) {
+      onError(messageOf(error, fallback));
+    } finally {
+      setStarted(undefined);
+    }
+  }
+  return (
+    <div className="setting-row">
+      <div className="setting-copy">
+        <h3>CLIProxyAPI</h3>
+        {!core.updates ? (
+          <p>
+            Included with NonstopVibin. Core updates install in installed
+            builds.
+          </p>
+        ) : (
+          <>
+            {installed && <p>Updated from the bundled {bundled}.</p>}
+            {available ? (
+              <p>
+                Version {available} is available. Updating restarts running
+                profiles and interrupts requests in progress.
+              </p>
+            ) : (
+              !installed && (
+                <p>
+                  Included with NonstopVibin. Reviewed updates install here
+                  without an app update.
+                </p>
+              )
+            )}
+          </>
+        )}
+      </div>
+      <div className="core-actions">
+        {phase ? (
+          <button className="button" disabled>
+            <LoaderCircle size={15} className="spin" aria-hidden="true" />
+            {phaseLabels[phase]}
+          </button>
+        ) : (
+          <>
+            {installed && (
+              <button
+                className="button"
+                onClick={() =>
+                  change(
+                    "restarting",
+                    () => api("DELETE /core/install"),
+                    "Could not switch to the bundled core.",
+                  )
+                }
+              >
+                Use bundled {bundled}
+              </button>
+            )}
+            {available && (
+              <button
+                className="button primary"
+                onClick={() =>
+                  change(
+                    "checking",
+                    () =>
+                      api("POST /core/install", {
+                        body: { version: available },
+                      }),
+                    "Could not update the core.",
+                  )
+                }
+              >
+                Update to {available}
+              </button>
+            )}
+          </>
+        )}
+        <code>{coreVersion}</code>
+      </div>
     </div>
   );
 }
