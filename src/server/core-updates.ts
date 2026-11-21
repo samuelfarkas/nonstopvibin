@@ -209,7 +209,7 @@ export class CoreUpdates {
   ): Promise<void> {
     const feed = this.options.feed;
     if (feed === undefined)
-      throw new AppError("Core updates install in installed builds.", 409);
+      throw new AppError("Only installed builds update the core.", 409);
     if (this.pool.shuttingDown)
       throw new AppError("nonstopvibin is shutting down.", 503);
     if (this.phase)

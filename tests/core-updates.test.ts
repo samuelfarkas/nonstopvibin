@@ -341,7 +341,7 @@ test("Settings offers a reviewed core, then the bundled one, and shows progress"
     );
   const bundled = { bundled: "8.0.67", updates: true };
   const development = render("8.0.67", { ...bundled, updates: false });
-  assert.match(development, /Core updates install in installed builds/);
+  assert.match(development, /Installed builds update it here/);
   assert.doesNotMatch(development, /<button[^>]*>Update/);
 
   const offered = render("8.0.67", { ...bundled, available: "8.0.99" });

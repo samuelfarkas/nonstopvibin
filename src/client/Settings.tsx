@@ -291,10 +291,7 @@ function CoreSetting({
       <div className="setting-copy">
         <h3>CLIProxyAPI</h3>
         {!core.updates ? (
-          <p>
-            Included with NonstopVibin. Core updates install in installed
-            builds.
-          </p>
+          <p>Included with NonstopVibin. Installed builds update it here.</p>
         ) : (
           <>
             {installed && <p>Updated from the bundled {bundled}.</p>}

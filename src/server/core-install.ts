@@ -74,11 +74,13 @@ export async function download(
     const response = await fetch(url, {
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
-    if (!response.ok || !response.body)
+    if (!response.ok || !response.body) {
+      await response.body?.cancel();
       throw new AppError(
         `Could not download ${name} (HTTP ${response.status}).`,
         502,
       );
+    }
     return await save(chunks(response.body), path, 0o600);
   } catch (error) {
     signal?.throwIfAborted();
