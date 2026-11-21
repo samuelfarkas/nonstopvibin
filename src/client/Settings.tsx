@@ -282,6 +282,9 @@ function CoreSetting({
       await refresh(await request());
     } catch (error) {
       onError(messageOf(error, fallback));
+      // A refusal answers no state, and the last poll may still show the step it refused in.
+      // If this read fails too, the next poll reports why.
+      await refresh().catch(() => undefined);
     } finally {
       setStarted(undefined);
     }
