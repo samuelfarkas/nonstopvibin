@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- The CLIProxyAPI core updates from **Settings → Proxy core** without a new app
+  release. Installed desktop builds and the packaged server offer a newer core once
+  its reviewed pin is on `main`, install it only when its archive and executable
+  match that pin, check that it starts, then restart running profiles on it.
+  **Use bundled** goes back to the core the app shipped with. A dot on Settings
+  marks an available update. `bun run core:pin` writes the pin for an upstream
+  release.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added
