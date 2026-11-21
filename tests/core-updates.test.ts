@@ -41,7 +41,8 @@ import {
   testApplication,
 } from "./support/application.ts";
 
-const update = "8.0.99";
+// Above any real core, so it stays newer than the bundled one.
+const update = "99.0.0";
 const archiveName = coreArchive(update, process.platform, process.arch);
 let work: string;
 let archive: string;

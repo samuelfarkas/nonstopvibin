@@ -12,6 +12,13 @@
   marks an available update. `bun run core:pin` writes the pin for an upstream
   release.
 
+### Changed
+
+- Upgraded bundled CLIProxyAPI from 8.0.67 to 8.1.0 with reviewed archive and binary
+  hashes for all four targets. It brings upstream's stream failover, Antigravity and
+  Codex fixes. On its first start each profile core writes a generated `server-id`
+  into that profile's config file; NonstopVibin does not use it.
+
 ## [0.2.0] - 2026-11-17
 
 ### Added

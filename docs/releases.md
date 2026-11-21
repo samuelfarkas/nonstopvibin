@@ -190,10 +190,14 @@ signature instead of the app's; that path is untested.
 `core:install` and packaging accept only the bundled pin. Packaging rejects
 mismatched versions, platforms, architectures and binary hashes.
 
-The 8.0.67 upgrade keeps the legacy YAML configuration and `/v0/management`
-routes, which upstream retains alongside its new v8 configuration and OAuth APIs.
-Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain disabled.
-The core now supplies its Claude Code 2.1.321 fingerprint without a wrapper override.
+The 8.1.0 upgrade keeps the legacy YAML configuration and `/v0/management`
+routes, which upstream retains alongside its v8 configuration and OAuth APIs.
+Upstream 8.1.0 adds a GitHub Copilot provider, which NonstopVibin does not offer.
+On its first start a core writes a generated `server-id` into its profile's config
+file. The app rewrites that file at each start, so the ID changes then; nothing
+reads it. Linux uses the standard GLIBC 2.17 release assets; dynamic plugins remain
+disabled. Since 8.0.67 the core supplies its own Claude Code fingerprint without a
+wrapper override.
 App startup upgrades existing owned Pi connections; reload Pi to remove older
 tool-change fallbacks. Core installation replaces the binary for the next process
 start; restart NonstopVibin to replace any running profile cores.
