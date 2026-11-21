@@ -1054,9 +1054,8 @@ input[role="switch"]:disabled {
   font-size: var(--text-caption);
   padding-right: 8px;
 }
-/* An update is available on that page. */
+/* An update is available on that page; it follows the label. */
 .nav-dot {
-  margin-left: auto;
   background: var(--amber);
 }
 
