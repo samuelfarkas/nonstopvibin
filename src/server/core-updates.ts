@@ -14,6 +14,7 @@ import {
   corePinSchema,
   coreVersion,
   fileSha256,
+  verifyCore,
   type CorePin,
 } from "./core-binary.ts";
 import { installCore } from "./core-install.ts";
@@ -125,6 +126,8 @@ export interface CoreUpdatesOptions {
   feed?: string;
   /** Where release archives download from; tests serve their own. */
   archives?: string;
+  /** Whether the bundled core must also match the pin compiled into this build. */
+  requirePinnedCore?: boolean;
   report: Report;
 }
 
@@ -265,10 +268,7 @@ export class CoreUpdates {
       const pin = await this.fetchPin(feed, signal);
       this.pin = pin;
       if (pin.version !== version || !this.offers(pin))
-        throw new AppError(
-          `CLIProxyAPI ${version} is no longer offered. Check for updates again.`,
-          409,
-        );
+        throw new AppError(`CLIProxyAPI ${version} is no longer offered.`, 409);
       this.phase = "downloading";
       ownerOnlyDirectory(this.directory);
       const staging = await mkdtemp(join(this.directory, ".staging-"));
@@ -298,14 +298,18 @@ export class CoreUpdates {
       await prune(this.directory, pin.version);
     });
   }
-  /** Deletes installed updates, then restarts running profiles on the bundled core. */
+  /** Restarts running profiles on the bundled core, then deletes installed updates. */
   async useBundled(): Promise<void> {
     await this.afterCheck();
     return this.run("restarting", async () => {
       if (this.active === this.bundled)
         throw new AppError("NonstopVibin already runs its bundled core.", 409);
-      // Deleted first: after a crash in between, the next start converges on the bundled core.
-      await this.switchTo(this.bundled, () => prune(this.directory));
+      // Startup checked the installed core instead; keep it unless the bundled one is intact.
+      await verifyCore(this.bundled.binary, this.options.requirePinnedCore);
+      await this.switchTo(this.bundled);
+      // Only now does no start still read an installed executable. A crash before this
+      // leaves the update in place, and the next launch runs it.
+      await prune(this.directory);
     });
   }
   /**
@@ -343,17 +347,17 @@ export class CoreUpdates {
     }
   }
   /**
-   * Runs `change`, puts `core` in use, and restarts each running profile on it. It waits for
-   * sign-in actions and credential changes and refuses while a sign-in is pending, so a
-   * restart interrupts none. A profile that does not start again is reported.
+   * Runs `change` if given, puts `core` in use, and restarts each running profile on it. It
+   * waits for sign-in actions and credential changes and refuses while a sign-in is pending,
+   * so a restart interrupts none. A profile that does not start again is reported.
    */
   private switchTo(
     core: ActiveCore,
-    change: () => Promise<void>,
+    change?: () => Promise<void>,
   ): Promise<void> {
     return this.signIn.whileIdle(() =>
       this.credentials.queue(async () => {
-        await change();
+        await change?.();
         this.activate(core);
         for (const profile of this.pool.store.profiles()) {
           // Starts are refused once shutdown begins; that is no failure of the core.

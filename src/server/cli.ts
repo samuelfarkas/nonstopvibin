@@ -695,7 +695,7 @@ export async function main(argv: string[]): Promise<number> {
   });
   const [command, subcommand, ...rest] = positionals;
   if (values.version) {
-    console.log(`nonstopvibin ${version} (CLIProxyAPI ${coreVersion})`);
+    console.log(`nonstopvibin ${version} (bundled CLIProxyAPI ${coreVersion})`);
     return 0;
   }
   if (values.help || !command) {

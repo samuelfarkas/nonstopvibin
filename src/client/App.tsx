@@ -203,7 +203,7 @@ export function App() {
               <Settings2 size={15} />
               <span>Settings</span>
               {state.core.available && (
-                <i className="nav-dot" aria-hidden="true" />
+                <i className="status-dot nav-dot" aria-hidden="true" />
               )}
             </button>
             <code>{state.version}</code>

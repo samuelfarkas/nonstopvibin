@@ -119,8 +119,12 @@ afterAll(async () => {
 }, 30_000);
 
 /** An installed build: it reads the test feed and downloads from the test server. */
-function installedApp(directory: string): Promise<Application> {
+function installedApp(
+  directory: string,
+  binary = coreBinary,
+): Promise<Application> {
   return testApplication(directory, {
+    binary,
     coreFeed: `${origin}/feed.json`,
     cores: { archives: `${origin}/releases` },
   });
@@ -261,6 +265,46 @@ test(
         assert.equal(install.state.coreVersion, coreVersion);
       }
       assert.deepEqual(await readdir(coresDirectory(directory)), []);
+    } finally {
+      await closeApplication(app);
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "going back to a bundled core that fails its integrity check keeps the update",
+  { timeout: 60_000 },
+  async () => {
+    feed = pin;
+    served = undefined;
+    const directory = await mkdtemp(join(tmpdir(), "nv-core-bundled-app-"));
+    // A bundled core of this app's own, so it can be damaged after launch.
+    const bundled = join(directory, "bundled");
+    await mkdir(bundled);
+    for (const file of [coreLayout.binary, coreLayout.manifest])
+      await copyFile(join(coreBinary, "..", file), join(bundled, file));
+    const app = await installedApp(
+      join(directory, "data"),
+      join(bundled, coreLayout.binary),
+    );
+    try {
+      const updated = await call(app, "/core/install", "POST", {
+        version: update,
+      });
+      assert.equal(updated.status, 200, updated.message);
+      await writeFile(join(bundled, coreLayout.binary), "damaged");
+
+      const reverted = await call(app, "/core/install", "DELETE");
+      assert.equal(reverted.status, 503);
+      assert.equal(
+        reverted.message,
+        "The proxy core failed its integrity check. Reinstall NonstopVibin.",
+      );
+      assert.equal(reverted.state.coreVersion, update);
+      assert.deepEqual(await readdir(coresDirectory(join(directory, "data"))), [
+        update,
+      ]);
     } finally {
       await closeApplication(app);
       await rm(directory, { recursive: true, force: true });

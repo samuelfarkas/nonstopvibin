@@ -23,6 +23,8 @@ export interface CoresOptions {
   feed?: string;
   /** Where core release archives download from; tests serve their own. */
   archives?: string;
+  /** Whether the bundled core must also match the pin compiled into this build. */
+  requirePinnedCore?: boolean;
 }
 
 export class Cores {
@@ -74,6 +76,7 @@ export class Cores {
     this.updates = new CoreUpdates(this.pool, this.signIn, this.credentials, {
       feed: options.feed,
       archives: options.archives,
+      requirePinnedCore: options.requirePinnedCore,
       report: options.report,
     });
   }

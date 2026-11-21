@@ -107,20 +107,24 @@ export async function extract(
     stdio: ["ignore", "pipe", "ignore"],
     signal,
   });
-  // Rejects when tar cannot start or is aborted.
-  const closed = once(tar, "close");
-  let sha256;
   try {
-    sha256 = await save(tar.stdout, path, mode);
+    // Awaited together: tar failing to start or being aborted rejects while the copy runs.
+    const [sha256, [code]] = await Promise.all([
+      save(tar.stdout, path, mode),
+      once(tar, "close"),
+    ]);
+    if (code !== 0)
+      throw new AppError(`The core archive has no ${member}.`, 502);
+    return sha256;
   } catch (error) {
     tar.kill("SIGKILL");
-    // The failure that stopped the copy is the one to report.
-    await closed.catch(() => undefined);
-    throw error;
+    signal?.throwIfAborted();
+    if (error instanceof AppError) throw error;
+    throw new AppError(
+      `Could not extract ${member}: ${errorMessage(error)}`,
+      502,
+    );
   }
-  const [code] = await closed;
-  if (code !== 0) throw new AppError(`The core archive has no ${member}.`, 502);
-  return sha256;
 }
 
 export interface InstallOptions {

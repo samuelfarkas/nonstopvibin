@@ -211,7 +211,11 @@ interface ServerOptions {
   /** How the profile cores are reached and timed; tests answer and shorten them. */
   cores?: Omit<
     CoresOptions,
-    "report" | "onStatusChange" | "onSignInCallback" | "feed"
+    | "report"
+    | "onStatusChange"
+    | "onSignInCallback"
+    | "feed"
+    | "requirePinnedCore"
   >;
 }
 export interface HostStatus {
@@ -250,6 +254,7 @@ export class Application {
     this.cores = new Cores(store, options.binary, {
       ...options.cores,
       feed: options.coreFeed,
+      requirePinnedCore: options.requirePinnedCore,
       // The scheduler drains slowly while the gateway still has requests open.
       inFlight: (profileId) => this.gateway.active.get(profileId) ?? 0,
       report: (message) => this.report(message),

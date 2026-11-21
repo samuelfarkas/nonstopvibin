@@ -180,10 +180,10 @@ release URL, and installs it only when the archive and its executable match the
 pin for its platform and architecture. It starts the new core on a throwaway
 profile, keeps it in `cores/<version>` in the data folder, then restarts running
 profiles on it; requests in progress are interrupted. Settings shows it as
-updated from the bundled core, and **Use bundled** deletes installed cores and
-restarts profiles on the bundled one. At launch the newest intact installed core
-above the bundled one runs, so an app update that bundles a newer or equal core
-replaces it. Development runs never install or select cores: they share the data
+updated from the bundled core, and **Use bundled** checks the bundled core,
+restarts profiles on it, then deletes installed cores. At launch the newest intact
+installed core above the bundled one runs, so an app update that bundles a newer
+or equal core replaces it. Development runs never install or select cores: they share the data
 folder with an installed app. On macOS an installed core keeps upstream's own
 signature instead of the app's; that path is untested.
 

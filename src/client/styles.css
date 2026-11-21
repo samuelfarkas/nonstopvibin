@@ -1056,10 +1056,7 @@ input[role="switch"]:disabled {
 }
 /* An update is available on that page. */
 .nav-dot {
-  width: 6px;
-  height: 6px;
   margin-left: auto;
-  border-radius: 50%;
   background: var(--amber);
 }
 
