@@ -35,6 +35,7 @@ if (typeof electron === "string") {
         },
       ],
       coreVersion: "",
+      core: { bundled: "", updates: false },
       gateway: "",
       usageRetentionDays: 0,
       version: "",

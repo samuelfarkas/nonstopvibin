@@ -62,6 +62,21 @@ export function coreArchive(
   if (!suffix) throw new Error(`Unsupported architecture: ${arch}`);
   return `CLIProxyAPI_${version}_${platform}_${suffix}.tar.gz`;
 }
+/** Orders X.Y.Z versions numerically; a prerelease (X.Y.Z-beta.N) sorts below its X.Y.Z. */
+export function compareVersions(a: string, b: string): number {
+  const parts = (version: string) => {
+    const [release = "", prerelease] = version.split("-", 2);
+    return [
+      ...release.split(".").map(Number),
+      prerelease === undefined ? 1 : 0,
+    ];
+  };
+  const [x, y] = [parts(a), parts(b)];
+  for (const [index, part] of x.entries())
+    if (part !== y[index]) return part - (y[index] ?? 0);
+  return 0;
+}
+
 /** The pin this build bundles. */
 export const bundledPin: CorePin = corePinSchema.parse(coreRelease);
 export const coreVersion = bundledPin.version;
@@ -171,6 +186,13 @@ export function checkCoreDirectory(
     );
 }
 
+/** A file's SHA-256, streamed: a core is too large to read into one buffer. */
+export async function fileSha256(path: string): Promise<string> {
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(path)) digest.update(chunk);
+  return digest.digest("hex");
+}
+
 /**
  * Checks the core binary against the `manifest.json` beside it and, when `requirePinnedCore`
  * is set, against the binary hash this build pins for the current platform.
@@ -187,9 +209,7 @@ export async function verifyCore(
   const manifest = record(
     parse(await readFile(join(binary, "..", coreLayout.manifest), "utf8")),
   );
-  const digest = createHash("sha256");
-  for await (const chunk of createReadStream(binary)) digest.update(chunk);
-  const hash = digest.digest("hex");
+  const hash = await fileSha256(binary);
   // Headless releases must also match the compiled pin. Desktop signing
   // changes the binary and refreshes its manifest after packaging verifies it.
   if (
