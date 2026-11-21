@@ -22,6 +22,7 @@
     "dev:web": "vite",
     "dev:server": "bun src/server/standalone.ts",
     "core:install": "bun scripts/install-core.mjs",
+    "core:pin": "bun scripts/pin-core.mjs",
     "check": "tsc --noEmit",
     "test": "bun test",
     "test:desktop": "bun run build && bun run test:desktop:built",
