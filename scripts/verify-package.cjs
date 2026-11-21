@@ -2,7 +2,6 @@ const assert = require("node:assert/strict");
 const { readFileSync, readdirSync } = require("node:fs");
 const { join, relative } = require("node:path");
 const { createHash } = require("node:crypto");
-const { listPackage, extractFile } = require("@electron/asar");
 const { Arch } = require("electron-builder");
 const { coreFiles, coreLayout } = require("../src/server/core-binary.ts");
 const { architecture, privateFilePattern } = require("./distribution.ts");
@@ -16,6 +15,8 @@ function resourcePaths(root, folder = root) {
 }
 
 module.exports = async function verifyPackage(context) {
+  // @electron/asar 4 is ESM-only.
+  const { listPackage, extractFile } = await import("@electron/asar");
   const resources =
     context.electronPlatformName === "darwin"
       ? join(
