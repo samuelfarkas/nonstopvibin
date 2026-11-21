@@ -175,6 +175,18 @@ release. To publish one:
    core at their next check: at launch, and whenever Settings opens. The next app
    release bundles it.
 
+The [Core pin workflow](../.github/workflows/core-pin.yml) does step 2 every 12
+hours, and on demand from the Actions tab. When upstream's latest stable release is
+newer than the pin and at least two hours old, it opens a pull request titled
+`build(deps): update CLIProxyAPI to <version>` with the rest of this list as a
+checklist. Pull requests opened with the workflow's own token start no workflows,
+so it starts the build and security checks on its branch. Closing the pull request
+declines that version; the workflow does not open it again. The workflow never runs
+the downloaded core: the pull request's checks do. It needs **Settings → Actions →
+General → Allow GitHub Actions to create and approve pull requests**. Until that is
+on, each run pushes its branch and then fails to open the pull request. GitHub
+disables scheduled workflows in a public repository after 60 days without activity.
+
 An installed app downloads only the pinned version's archive from upstream's
 release URL, and installs it only when the archive and its executable match the
 pin for its platform and architecture. It starts the new core on a throwaway

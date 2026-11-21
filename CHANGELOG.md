@@ -10,7 +10,7 @@
   match that pin, check that it starts, then restart running profiles on it.
   **Use bundled** goes back to the core the app shipped with. A dot on Settings
   marks an available update. `bun run core:pin` writes the pin for an upstream
-  release.
+  release, and a workflow opens a pull request for each new upstream release.
 
 ### Changed
 
