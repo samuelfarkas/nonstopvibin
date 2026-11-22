@@ -4,8 +4,8 @@ title = "nonstopvibin secret scanning"
 useDefault = true
 
 [[allowlists]]
-description = "RFC 6455 public example nonce in the WebSocket handshake fixture"
+description = "RFC 6455 public example nonce in the WebSocket handshake fixtures"
 condition = "AND"
-paths = ['''^tests/integration\.test\.ts$''']
+paths = ['''^tests/(integration|lazy-cores)\.test\.ts$''']
 regexTarget = "line"
 regexes = ['''"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="''']
