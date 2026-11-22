@@ -318,24 +318,26 @@ test(
       release = resolve;
     });
     let stopping = (_profileId: string) => false;
+    let draining = false;
     const { app, profile, remove } = await lazyApp(400, {
-      // The stop's own final drain, made while its core is stopping, waits for the request below.
+      // The stop's own final drain, made once its core is marked stopping, waits for the
+      // request below.
       management: async (request) => {
         if (
           request.path.startsWith("/usage-queue") &&
           stopping(request.profileId)
-        )
+        ) {
+          draining = true;
           await held;
+        }
         return httpManagement(request);
       },
     });
-    stopping = (profileId) => app.cores.pool.holding(profileId);
+    stopping = (profileId) => !app.cores.pool.usable(profileId);
     try {
       assert.equal((await chat(app, profile)).status, 200);
       const first = app.cores.pool.runtimes.get(profile.id);
-      await until("the stop to begin", () =>
-        app.cores.pool.holding(profile.id),
-      );
+      await until("the stop's final drain", () => draining);
       const late = chat(app, profile);
       await delay(100);
       release();
