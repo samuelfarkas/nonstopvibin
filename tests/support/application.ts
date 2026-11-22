@@ -47,6 +47,25 @@ export function testApplication(
   });
 }
 
+/**
+ * Leaves `profileId` as an earlier run's account sync leaves a profile with one Claude
+ * subscription: launch starts its core, and it never stops for being idle.
+ */
+export function signedIn(store: Store, profileId: string): void {
+  store.saveAccountMetadata(profileId, [
+    {
+      id: "claude.json",
+      name: "Claude",
+      provider: "claude",
+      kind: "oauth",
+      disabled: false,
+      status: "Ready",
+      priority: 0,
+      authIndex: "1",
+    },
+  ]);
+}
+
 /** A compatible-API account without a prefix, named by its ID unless `name` is given. */
 export function customAccount(
   id: string,

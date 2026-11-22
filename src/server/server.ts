@@ -270,7 +270,12 @@ export class Application {
       options.directory,
       (profileId) => {
         this.store.profile(profileId);
-        if (this.closing || !this.cores.pool.running(profileId))
+        // A dormant profile counts: the agent's first request starts its core.
+        if (
+          this.closing ||
+          (!this.cores.pool.running(profileId) &&
+            !this.cores.usage.isDormant(profileId))
+        )
           throw new AppError(
             "Start this profile before connecting an agent.",
             409,
@@ -410,7 +415,9 @@ export class Application {
     const running: string[] = [];
     let streaming = false;
     for (const [id, name] of this.store.profileNames()) {
-      if (!this.cores.pool.running(id)) continue;
+      // A dormant profile still serves: its core starts on the next request.
+      if (!this.cores.pool.running(id) && !this.cores.usage.isDormant(id))
+        continue;
       running.push(name);
       if ((this.gateway.active.get(id) ?? 0) > 0) streaming = true;
     }
@@ -594,8 +601,12 @@ export class Application {
     return {
       "GET /state": {
         body: noBody,
-        query: noQuery,
-        handle: () => this.state(),
+        query: (get) => ({ watch: get("watch") === "1" ? "1" : undefined }),
+        // A UI polls with `watch` while open; the CLI's reads of the version have no side effects.
+        handle: async ({ query }) => {
+          if (query.watch) await this.cores.usage.watch();
+          return this.state();
+        },
       },
       "PUT /usage-retention": {
         body: z
@@ -702,6 +713,8 @@ export class Application {
         }),
         handle: async ({ param, query }) => {
           const id = param("profileId");
+          // The catalog comes from the core: a dormant one starts for it.
+          await this.cores.usage.wake(id);
           const models = await this.cores.pool.models(id);
           return query.metadata === "1"
             ? this.models.enriched(id, models)
@@ -751,6 +764,7 @@ export class Application {
         query: noQuery,
         handle: async ({ param, body }) => {
           const id = param("profileId");
+          await this.cores.usage.wake(id);
           const models = await this.cores.pool.models(id);
           if (!models.length)
             throw new AppError("This profile has no available models.");

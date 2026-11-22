@@ -464,6 +464,8 @@ test(
     try {
       await cores.pool.start(profile.id);
       started = true;
+      // A UI is open, so account maintenance runs.
+      await cores.usage.watch();
       cores.usage.begin();
       await entered;
       assert.ok(

@@ -71,6 +71,8 @@ export class Cores {
     this.usage = new Usage(this.pool, this.accounts, this.quotas, {
       timing: options.usageTiming,
       inFlight: options.inFlight,
+      // The pending authorization lives in the profile's core.
+      signingIn: (profileId) => this.signIn.session?.profileId === profileId,
       report: options.report,
     });
     this.updates = new CoreUpdates(this.pool, this.signIn, this.credentials, {
@@ -85,7 +87,16 @@ export class Cores {
     // Orphans first: if the pending sign-ins cannot be removed, startup fails without leaving one running.
     await this.pool.reapOrphans();
     await this.signIn.discardPending();
-    const reported = await this.pool.restore(this.report, signal);
+    // Profiles without OAuth accounts start on their first request instead, and the
+    // scheduler must know before `begin`, or it restarts them at once.
+    for (const profile of this.pool.store.profiles())
+      if (profile.enabled && this.usage.lazy(profile.id))
+        this.usage.rest(profile.id);
+    const reported = await this.pool.restore(
+      this.report,
+      (profileId) => !this.usage.isDormant(profileId),
+      signal,
+    );
     signal?.throwIfAborted();
     this.usage.begin(reported);
     // Offline at launch stays quiet: Settings checks again when it opens.

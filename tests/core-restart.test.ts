@@ -16,6 +16,7 @@ import {
   closeApplication,
   customAccount,
   management,
+  signedIn,
   temporaryStore,
   testApplication,
 } from "./support/application.ts";
@@ -576,6 +577,8 @@ test(
     });
     try {
       await cores.pool.start(healthy.id);
+      // A UI is open, so account maintenance runs.
+      await cores.usage.watch();
       cores.usage.begin();
       await starting;
       // The healthy profile's account sync falls due 50 ms after `begin`.
@@ -783,6 +786,8 @@ test(
     for (const profile of [early, late]) {
       store.saveProfile({ ...profile, enabled: true });
       store.saveApiAccount(profile.id, apiKey(`${profile.id}-key`), "key");
+      // A subscription: launch starts its core.
+      signedIn(store, profile.id);
     }
     let releaseLate!: () => void;
     const lateGate = new Promise<void>((resolve) => {

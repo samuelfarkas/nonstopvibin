@@ -54,7 +54,7 @@ if (typeof electron === "string") {
       window.setInterval = (callback, ms, ...rest) => interval(callback, Math.min(ms, 50), ...rest);
       window.nonstopvibin = { bootstrap: async () => ({ token: 't' }), releaseWindow: async () => {} };
       window.fetch = async (url) => {
-        if (!String(url).endsWith('/api/state')) return new Response('{}', { status: 404 });
+        if (new URL(url, location.href).pathname !== '/api/state') return new Response('{}', { status: 404 });
         return ++stateCalls === 1
           ? new Response(${JSON.stringify(JSON.stringify(state))}, { status: 200 })
           : new Response(JSON.stringify({ error: { message: 'Fixture poll failed' } }), { status: 503 });

@@ -207,6 +207,10 @@ async function showMain(profileId?: string) {
   }
 }
 function createWindow(view: "main" | "tray"): BrowserWindow {
+  // Touching the session at startup would launch a spare renderer with no window open.
+  session.defaultSession.setPermissionRequestHandler(
+    (_contents, _permission, callback) => callback(false),
+  );
   const root = app.getAppPath();
   const window = new BrowserWindow({
     ...(view === "main"
@@ -313,10 +317,6 @@ function assertSender(event: IpcMainInvokeEvent): void {
     throw new Error("Untrusted desktop request.");
 }
 async function start(): Promise<void> {
-  // Every window uses the default session; deny permissions before any can exist.
-  session.defaultSession.setPermissionRequestHandler(
-    (_contents, _permission, callback) => callback(false),
-  );
   const root = app.getAppPath();
   application = await Application.create({
     directory: userData,

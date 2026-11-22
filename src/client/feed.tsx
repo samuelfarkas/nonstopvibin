@@ -52,7 +52,7 @@ export function useAppState() {
   const [sessionRefused, setSessionRefused] = useState(false);
   // Mutating routes return the full state; pass it to skip a second /state fetch.
   const refresh = useCallback(async (next?: AppState) => {
-    setState(next ?? (await api("GET /state")));
+    setState(next ?? (await api("GET /state", { query: { watch: "1" } })));
   }, []);
   useEffect(() => {
     let mounted = true;

@@ -431,11 +431,12 @@ rotation can invalidate the other copy. Restore does not roll back external
 provider spending, consumer grants or task state.
 
 Profile usage is delayed reporting, **not a crash-safe budget ledger**. Collection
-normally follows requests at about two seconds, settles delayed publication for
-ten seconds, drains every thirty seconds only while a request or WebSocket stays
+follows each finished request at about two seconds and once more ten seconds
+after the last one, drains every thirty seconds only while a request or WebSocket stays
 open, and otherwise sleeps until the next request; crashes between provider
 completion, queue collection and SQLite commit can lose events. Provider quota
-reads are about two minutes apart and readings older than five minutes are stale.
+reads are about two minutes apart while the interface is open, and readings older
+than five minutes are stale.
 Unknown prices/usage remain unknown, not free. The consumer owns atomic durable
 call/token/concurrency reservations and conservative settlement across retries,
 uncertain results and restarts; profile totals cannot enforce hard task budgets.

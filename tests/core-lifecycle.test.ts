@@ -222,6 +222,172 @@ test(
 );
 
 test(
+  "a finished request drains usage once, and once more after the activity window",
+  { timeout: 10_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-drain-count-");
+    let drains = 0;
+    const cores = new Cores(store, coreBinary, {
+      report: () => {},
+      usageTiming: { ...usageTiming, coalesce: 20, activity: 300 },
+      management: async (request) => {
+        if (request.path.startsWith("/usage-queue")) drains++;
+        return httpManagement(request);
+      },
+    });
+    const profile = store.createProfile("Drain fixture");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      await delay(100);
+      const before = drains;
+      cores.usage.markActivity(profile.id);
+      await delay(800);
+      assert.equal(
+        drains - before,
+        2,
+        "not a read of the empty queue every 20 ms through the window",
+      );
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "account status is polled only while a UI reads the state",
+  { timeout: 10_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-watch-cadence-");
+    let syncs = 0;
+    const cores = new Cores(store, coreBinary, {
+      report: () => {},
+      // Every 50 ms while watched; one read watches for 200 ms.
+      usageTiming: { ...usageTiming, coalesce: 20, accounts: 50, watch: 200 },
+      management: async (request) => {
+        if (request.path === "/auth-files") syncs++;
+        return httpManagement(request);
+      },
+    });
+    const profile = store.createProfile("Watch fixture");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      const before = syncs;
+      await delay(400);
+      assert.equal(syncs, before, "no UI reads: no account polling");
+      await cores.usage.watch();
+      assert.equal(
+        syncs,
+        before + 1,
+        "the first read after a pause syncs before it answers",
+      );
+      await delay(150);
+      assert.ok(
+        syncs >= before + 3,
+        `a UI that keeps reading keeps polling on (${syncs - before} syncs)`,
+      );
+      await delay(300);
+      const settled = syncs;
+      await delay(300);
+      assert.equal(syncs, settled, "polling stops once the UI stops reading");
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
+  "the first UI read after a pause shows a cooldown and exhausted quota as they are now",
+  { timeout: 10_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-watch-status-");
+    let cooling = false;
+    let used = 10;
+    const cores = new Cores(store, coreBinary, {
+      report: () => {},
+      usageTiming: {
+        ...usageTiming,
+        coalesce: 20,
+        accounts: 50,
+        quotas: 100,
+        watch: 200,
+      },
+      // The core's own listing and quota call, for one signed-in Codex account.
+      management: async (request) => {
+        if (request.path === "/auth-files")
+          return {
+            files: [
+              {
+                name: "codex-watch.json",
+                type: "codex",
+                provider: "codex",
+                auth_index: "a1",
+                status: "active",
+                unavailable: cooling,
+              },
+            ],
+          };
+        if (request.path === "/api-call")
+          return {
+            status_code: 200,
+            body: {
+              rate_limit: {
+                primary_window: {
+                  used_percent: used,
+                  limit_window_seconds: 18_000,
+                  reset_after_seconds: 600,
+                },
+              },
+            },
+          };
+        return httpManagement(request);
+      },
+    });
+    const profile = store.createProfile("Status fixture");
+    const account = () =>
+      cores.accounts
+        .list(profile.id)
+        .find((item) => item.id === "codex-watch.json");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      assert.equal(account()?.status, "Ready");
+      cooling = true;
+      used = 100;
+      await delay(300);
+      assert.equal(account()?.status, "Ready", "nobody watched: not polled");
+      assert.equal(account()?.quota, undefined, "nobody watched: no quota");
+
+      await cores.usage.watch();
+      assert.equal(
+        account()?.status,
+        "Cooling down",
+        "the read that resumes polling already shows the cooldown",
+      );
+      for (let i = 0; i < 50 && !account()?.quota; i++) await delay(20);
+      assert.equal(
+        account()?.quota?.windows[0]?.remainingPercent,
+        0,
+        "stale quota refreshes once a UI watches",
+      );
+
+      cooling = false;
+      for (let i = 0; i < 10 && account()?.status !== "Ready"; i++) {
+        await cores.usage.watch();
+        await delay(40);
+      }
+      assert.equal(account()?.status, "Ready", "a watching UI sees it end");
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
   "shutdown completes after the core could not spawn",
   { timeout: 10000 },
   async () => {
