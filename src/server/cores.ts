@@ -89,10 +89,9 @@ export class Cores {
     await this.signIn.discardPending();
     // Profiles without OAuth accounts start on their first request instead, and the
     // scheduler must know before `begin`, or it restarts them at once.
-    const resting = this.pool.store
-      .profiles()
-      .filter((profile) => profile.enabled && this.usage.lazy(profile.id));
-    for (const profile of resting) this.usage.rest(profile.id);
+    for (const profile of this.pool.store.profiles())
+      if (profile.enabled && this.usage.lazy(profile.id))
+        this.usage.rest(profile.id);
     const reported = await this.pool.restore(
       this.report,
       (profileId) => !this.usage.isDormant(profileId),
