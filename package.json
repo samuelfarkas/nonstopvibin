@@ -36,7 +36,7 @@
     "package": "bun run build && install-electron && electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
     "dist:mac": "bun run build && electron-builder --mac --publish never",
     "dist:linux": "bun run build && electron-builder --linux --publish never",
-    "dist:built": "electron-builder --publish never",
+    "dist:built": "CSC_FOR_PULL_REQUEST=true electron-builder --publish never",
     "dist:server": "bun run build && bun scripts/build-server.mjs",
     "server:deploy": "bun scripts/server-remote.mjs deploy",
     "server:open": "bun scripts/server-remote.mjs open",

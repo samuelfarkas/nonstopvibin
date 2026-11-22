@@ -6,5 +6,8 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
+  <!-- Ad-hoc code has no Team ID, so hardened Electron processes would fail library validation. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
 </dict>
 </plist>

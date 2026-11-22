@@ -43,14 +43,6 @@ jobs:
         # Backstop above the smoke test's own limits.
         timeout-minutes: 6
         run: bun run test:desktop:built
-      - if: runner.os == 'macOS' && (failure() || cancelled())
-        name: Upload desktop smoke diagnostics
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          retention-days: 7
-          if-no-files-found: ignore
-          name: desktop-smoke-diagnostics-${{ runner.os }}
-          path: test-results/desktop-smoke/
       - if: runner.os == 'macOS'
         name: UI checks
         run: bun run test:ui:built
@@ -67,22 +59,19 @@ jobs:
       # Installers for the host architecture, with the targets in package.json `build`.
       - name: Package
         run: bun run dist:built
-        env:
-          # electron-builder skips signing in pull requests; sign them ad-hoc like releases.
-          CSC_FOR_PULL_REQUEST: "true"
       - if: runner.os == 'macOS'
         name: Update the packaged app in place
         # Backstop above the test's own limits.
         timeout-minutes: 10
         run: bun run test:update:mac
       - if: runner.os == 'macOS' && (failure() || cancelled())
-        name: Upload update test diagnostics
+        name: Upload desktop test diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           retention-days: 7
           if-no-files-found: ignore
-          name: mac-update-diagnostics
-          path: test-results/mac-update/
+          name: desktop-diagnostics-${{ runner.os }}
+          path: test-results/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Empty keeps the repository default for release artifacts.

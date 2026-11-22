@@ -52,13 +52,18 @@ function command(file, args, options = {}) {
   );
   return result;
 }
+// Empty while Squirrel.Mac swaps the bundle.
 const plistVersion = (app) =>
-  command("plutil", [
-    "-extract",
-    "CFBundleShortVersionString",
-    "raw",
-    join(app, "Contents/Info.plist"),
-  ]).stdout.trim();
+  spawnSync(
+    "plutil",
+    [
+      "-extract",
+      "CFBundleShortVersionString",
+      "raw",
+      join(app, "Contents/Info.plist"),
+    ],
+    { encoding: "utf8" },
+  ).stdout.trim();
 
 /** What Squirrel.Mac relies on: a valid deep signature whose requirement is the identifier. */
 function checkSignature(app) {
@@ -77,7 +82,6 @@ function checkSignature(app) {
   assert.match(command("codesign", ["-dv", app]).stderr, /^Signature=adhoc$/m);
 }
 
-/** The pid of a running main executable of `app`, not one of its helpers. */
 async function runningPid(app) {
   const executable = join(app, "Contents/MacOS", pkg.build.productName);
   const { stdout } = await run("ps", ["-ax", "-ww", "-o", "pid=,command="]);
@@ -101,7 +105,7 @@ async function waitFor(what, limit, probe) {
   }
 }
 
-// Clicks a button of the app's native update dialog through the Accessibility API.
+// UI scripting needs Accessibility access, which GitHub's macOS runners grant osascript.
 const clickScript = (pid, button) => `
 tell application "System Events"
   set matches to (processes whose unix id is ${pid})
@@ -148,7 +152,6 @@ try {
     `The packaged ${zip} is ad-hoc signed and requires ${requirement}.`,
   );
 
-  // The same source as an older version whose feed is this server.
   const config = join(work, "electron-builder.json");
   writeFileSync(
     config,
@@ -160,19 +163,10 @@ try {
       mac: { ...pkg.build.mac, target: ["zip"] },
     }),
   );
-  command(
-    "bunx",
-    ["--no-install", "electron-builder", "--mac", "--publish", "never"].concat([
-      "--config",
-      config,
-    ]),
-    // electron-builder skips signing in pull requests unless told otherwise.
-    {
-      cwd: root,
-      stdio: "inherit",
-      env: { ...process.env, CSC_FOR_PULL_REQUEST: "true" },
-    },
-  );
+  command("bun", ["run", "dist:built", "--mac", "--config", config], {
+    cwd: root,
+    stdio: "inherit",
+  });
   const output = readdirSync(join(work, "old")).find(
     (name) =>
       name.startsWith("mac") && existsSync(join(work, "old", name, product)),
@@ -219,9 +213,7 @@ try {
   await waitFor(
     "the updated bundle",
     120_000,
-    () =>
-      existsSync(join(installed, "Contents/Info.plist")) &&
-      plistVersion(installed) === pkg.version,
+    () => plistVersion(installed) === pkg.version,
   );
   const relaunched = await waitFor("the updated app to start", 60_000, () =>
     runningPid(installed),

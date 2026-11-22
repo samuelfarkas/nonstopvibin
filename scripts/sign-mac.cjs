@@ -14,11 +14,6 @@ const {
 // The core and tray helper are not Electron processes, so they get hardened
 // runtime without the JIT/executable-memory exceptions Electron needs.
 const minimal = join(__dirname, "../build/entitlements.mac.minimal.plist");
-// Ad-hoc code has no Team ID, so hardened Electron processes cannot pass library validation.
-const adHocEntitlements = join(
-  __dirname,
-  "../build/entitlements.mac.adhoc.plist",
-);
 
 module.exports = async function signMac(opts, packager) {
   const { signAsync } = require("@electron/osx-sign");
@@ -50,11 +45,6 @@ module.exports = async function signMac(opts, packager) {
     .digest("hex");
   writeCoreManifest(coreDir, manifest);
 
-  // mac.identity "-" signs ad-hoc. An ad-hoc signature's own designated requirement is its
-  // hash, which no later build meets, so Squirrel.Mac would refuse every update. The app
-  // bundle requires its identifier instead; the update's SHA-512 from the HTTPS feed is what
-  // vouches for its content. A Developer ID build keeps the requirement codesign derives.
-  const adHoc = opts.identity === "-";
   const ignore = opts.ignore;
   const optionsForFile = opts.optionsForFile;
   await signAsync({
@@ -62,14 +52,15 @@ module.exports = async function signMac(opts, packager) {
     optionsForFile: (file) => {
       const options = optionsForFile(file);
       if (file === helper) return { ...options, entitlements: minimal };
-      if (!adHoc) return options;
-      return {
-        ...options,
-        entitlements: adHocEntitlements,
-        ...(file === opts.app && {
+      // An ad-hoc signature's own designated requirement is its hash, which no later
+      // build meets, so Squirrel.Mac would refuse every update. An ad-hoc app requires
+      // its bundle identifier instead; a Developer ID build keeps codesign's requirement.
+      if (opts.identity === "-" && file === opts.app)
+        return {
+          ...options,
           requirements: `=designated => identifier "${packager.appInfo.id}"`,
-        }),
-      };
+        };
+      return options;
     },
     ignore: (file) =>
       file === core || (typeof ignore === "function" ? ignore(file) : false),
