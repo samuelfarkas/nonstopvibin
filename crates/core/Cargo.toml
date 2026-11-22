@@ -1,0 +1,17 @@
+[package]
+name = "nsv-core"
+description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, restart policy, pool, management client and updates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-store.workspace = true
+nsv-net.workspace = true
+
+[lints]
+workspace = true

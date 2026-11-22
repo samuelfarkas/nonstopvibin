@@ -1,0 +1,10 @@
+# Tests may unwrap: a panic there is the failure report. Request paths may not (workspace lints).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+avoid-breaking-exported-api = false
+disallowed-methods = [
+  { path = "tokio::sync::mpsc::unbounded_channel", reason = "every queue is bounded" },
+  { path = "std::thread::sleep", reason = "use a timer; sleeping blocks the runtime thread" },
+]

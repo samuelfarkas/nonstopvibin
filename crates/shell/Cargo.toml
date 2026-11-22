@@ -1,0 +1,17 @@
+[package]
+name = "nsv-shell"
+description = "The desktop shell: tray, window-helper supervision, login item and app updates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-net.workspace = true
+nsv-server.workspace = true
+
+[lints]
+workspace = true

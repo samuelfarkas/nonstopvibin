@@ -1,0 +1,16 @@
+[package]
+name = "nsv-agents"
+description = "Agent setup writers for Claude Code, Codex, OpenCode and pi, and the credential socket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-store.workspace = true
+
+[lints]
+workspace = true

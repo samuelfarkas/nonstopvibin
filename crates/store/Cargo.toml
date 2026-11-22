@@ -1,0 +1,15 @@
+[package]
+name = "nsv-store"
+description = "The data directory: layout, owner-only file checks, atomic writes, the vault and the SQLite store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "nsv-domain"
+description = "Ids, wire types, the provider and agent registry, secret newtypes and the window-helper protocol. No I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+secrecy.workspace = true
+serde.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

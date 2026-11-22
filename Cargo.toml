@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+repository = "https://github.com/samuelfarkas/nonstopvibin"
+
+[workspace.dependencies]
+nsv-domain = { path = "crates/domain" }
+nsv-store = { path = "crates/store" }
+nsv-net = { path = "crates/net" }
+nsv-core = { path = "crates/core" }
+nsv-accounts = { path = "crates/accounts" }
+nsv-agents = { path = "crates/agents" }
+nsv-gateway = { path = "crates/gateway" }
+nsv-server = { path = "crates/server" }
+nsv-shell = { path = "crates/shell" }
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+
+[workspace.lints.rust]
+# Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+trivial_casts = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Beyond pedantic: no panics reachable from input, no silent lint exceptions, no stray output.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+exit = "warn"
+mem_forget = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+iter_over_hash_type = "warn"
+infinite_loop = "warn"
+clone_on_ref_ptr = "warn"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3
+# Unwind: a panicking request task ends that request only; the pool, scheduler and store
+# threads turn a panic into a graceful shutdown that stops the cores (docs/decisions/rust-port.md).
+panic = "unwind"
+overflow-checks = true

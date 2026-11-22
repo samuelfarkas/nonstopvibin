@@ -1,0 +1,15 @@
+[package]
+name = "nsv-net"
+description = "The loopback HTTP/1 client and the HTTPS GET client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+
+[lints]
+workspace = true

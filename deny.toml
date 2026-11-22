@@ -1,0 +1,49 @@
+# cargo-deny: advisories, licenses, bans and sources for the Rust workspace.
+# CI runs `cargo deny check`; see docs/security-tooling.md.
+
+[graph]
+all-features = true
+# The platforms releases ship: macOS on Apple silicon, Linux on x64 and arm64 (server archives).
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+# Every RustSec advisory fails, including unmaintained and unsound crates.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+
+[licenses]
+# Permissive licenses compatible with shipping an MIT application binary.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# One TLS stack (rustls with ring): a second one must not arrive through a default feature.
+deny = [
+  { crate = "openssl-sys", reason = "rustls with ring is the only TLS stack" },
+  { crate = "native-tls", reason = "rustls with ring is the only TLS stack" },
+  { crate = "aws-lc-sys", reason = "rustls with ring is the only TLS stack" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,18 @@
+[package]
+name = "nsv-accounts"
+description = "Accounts, quota, usage accounting, the deadline scheduler, sign-in, pricing and the model catalog."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-store.workspace = true
+nsv-net.workspace = true
+nsv-core.workspace = true
+
+[lints]
+workspace = true

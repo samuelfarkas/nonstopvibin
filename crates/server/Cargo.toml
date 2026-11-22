@@ -1,0 +1,21 @@
+[package]
+name = "nsv-server"
+description = "The daemon: listener, Host/Origin/token checks, the management API, the embedded UI and shutdown."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-store.workspace = true
+nsv-net.workspace = true
+nsv-core.workspace = true
+nsv-accounts.workspace = true
+nsv-agents.workspace = true
+nsv-gateway.workspace = true
+
+[lints]
+workspace = true
