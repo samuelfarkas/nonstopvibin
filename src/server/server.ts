@@ -595,7 +595,11 @@ export class Application {
       "GET /state": {
         body: noBody,
         query: noQuery,
-        handle: () => this.state(),
+        // Each UI polls this while open: the cores' account status and quota are polled meanwhile.
+        handle: async () => {
+          await this.cores.usage.watch();
+          return this.state();
+        },
       },
       "PUT /usage-retention": {
         body: z

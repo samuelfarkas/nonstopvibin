@@ -576,6 +576,8 @@ test(
     });
     try {
       await cores.pool.start(healthy.id);
+      // A UI is open, so account maintenance runs.
+      await cores.usage.watch();
       cores.usage.begin();
       await starting;
       // The healthy profile's account sync falls due 50 ms after `begin`.

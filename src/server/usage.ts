@@ -93,8 +93,12 @@ function usageRecord(profileId: string, item: Json): UsageRecord {
 
 /** Scheduler periods in milliseconds. */
 export interface UsageTiming extends RestartTiming {
-  /** Account status refresh for running profiles. */
+  /** Account status refresh for running profiles, while a UI watches. */
   accounts: number;
+  /** How long one UI read of the state keeps account and quota polling on. */
+  watch: number;
+  /** Quota refresh for running profiles, while a UI watches. */
+  quotas: number;
   /** Longest wait between retries of a usage drain that keeps failing. */
   usageBackoff: number;
   /** How long after gateway activity the queue keeps being drained. */
@@ -102,12 +106,17 @@ export interface UsageTiming extends RestartTiming {
 }
 export const usageTiming: UsageTiming = {
   accounts: 20_000,
+  // Three of the UI's 4 s polls: a hidden or closed UI stops polling the cores.
+  watch: 12_000,
+  quotas: quotaRefreshMs,
   coalesce: 2000,
   usageBackoff: 60_000,
   activity: 10_000,
   restartBackoff: 300_000,
   restartLimit: 10,
 };
+/** How long the first UI read after a pause waits for fresh account status. */
+const freshStatusWaitMs = 2000;
 interface Cadence {
   core: Readonly<CoreRuntime> | undefined;
   nextAt: number;
@@ -146,6 +155,10 @@ export class Usage {
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
   private scheduledAt = Infinity;
+  /** Until when a UI read keeps account and quota polling on. */
+  private watchedUntil = 0;
+  private nextAccounts = Infinity;
+  private nextQuotas = Infinity;
   private timer?: NodeJS.Timeout;
   private polling?: Promise<void>;
   private maintenance?: Promise<void>;
@@ -296,6 +309,35 @@ export class Usage {
       .finally(() => this.work.delete(task));
     this.work.add(task);
   }
+  private watched(): boolean {
+    return Date.now() < this.watchedUntil;
+  }
+  /**
+   * A UI read the state. Account status and quota are polled only while one keeps reading,
+   * and the first read after a pause waits briefly for every running profile's account status.
+   */
+  async watch(): Promise<void> {
+    const resumed = !this.watched();
+    this.watchedUntil = Date.now() + this.timing.watch;
+    if (!resumed || !this.schedule) return;
+    // Quota older than its period refreshes in the next maintenance pass, in the background.
+    this.nextAccounts =
+      Date.now() >= this.nextQuotas
+        ? Date.now()
+        : Date.now() + this.timing.accounts;
+    this.schedule();
+    const signal = AbortSignal.timeout(freshStatusWaitMs);
+    await Promise.all(
+      [...this.pool.runtimes.keys()]
+        .filter((profileId) => this.pool.usable(profileId))
+        .map((profileId) =>
+          this.accounts.sync(profileId, signal).catch((error) => {
+            // A core slower than the wait answers the next poll instead.
+            if (!signal.aborted) this.reportFor(profileId, errorMessage(error));
+          }),
+        ),
+    );
+  }
   markActivity(profileId: string): void {
     const cadence = this.cadences.get(profileId);
     if (!cadence) return;
@@ -335,8 +377,8 @@ export class Usage {
   /** Starts scheduling; `reported`: profiles whose failed start the launch restore reported. */
   begin(reported: Iterable<string> = []): void {
     clearTimeout(this.timer);
-    let nextAccounts = Date.now() + this.timing.accounts;
-    let nextQuotas = Date.now() + quotaRefreshMs;
+    this.nextAccounts = Date.now() + this.timing.accounts;
+    this.nextQuotas = Date.now() + this.timing.quotas;
     let nextPrune = Date.now() + 86_400_000;
     this.scheduledAt = Infinity;
     const schedule = () => {
@@ -346,7 +388,10 @@ export class Usage {
       );
       const due = Math.min(
         this.maintenance ? Infinity : nextPrune,
-        this.maintenance || !running.length ? Infinity : nextAccounts,
+        // Account and quota polling only while a UI watches: nothing else reads them.
+        this.maintenance || !running.length || !this.watched()
+          ? Infinity
+          : this.nextAccounts,
         // Only what the restart policy asked for: nothing for a profile that cannot start.
         ...this.restartWakes.values(),
         ...(this.polling
@@ -410,13 +455,11 @@ export class Usage {
           this.polling = undefined;
           schedule();
         });
-      if (
-        !this.maintenance &&
-        (Date.now() >= nextAccounts || Date.now() >= nextPrune)
-      ) {
-        const quotasDue = Date.now() >= nextQuotas;
-        nextAccounts = Date.now() + this.timing.accounts;
-        if (quotasDue) nextQuotas = Date.now() + quotaRefreshMs;
+      const accountsDue = this.watched() && Date.now() >= this.nextAccounts;
+      if (!this.maintenance && (accountsDue || Date.now() >= nextPrune)) {
+        const quotasDue = accountsDue && Date.now() >= this.nextQuotas;
+        if (accountsDue) this.nextAccounts = Date.now() + this.timing.accounts;
+        if (quotasDue) this.nextQuotas = Date.now() + this.timing.quotas;
         this.maintenance = (async () => {
           if (Date.now() >= nextPrune) {
             nextPrune = Date.now() + 86_400_000;
@@ -426,6 +469,7 @@ export class Usage {
               this.report(`History cleanup: ${errorMessage(error)}`);
             }
           }
+          if (!accountsDue) return;
           for (const profileId of this.pool.runtimes.keys()) {
             if (this.pool.shuttingDown) return;
             if (!this.pool.usable(profileId)) continue;
