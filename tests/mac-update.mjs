@@ -1,6 +1,6 @@
 // Run with `bun run test:update:mac` on macOS after `bun run dist:built`: an older build of
 // this source updates itself to the packaged release through its own dialog.
-// CI only: the relaunched app runs without this test's environment, so it opens the default
+// GitHub Actions only: the relaunched app runs without this test's environment, so it opens the default
 // data folder, and Squirrel.Mac keeps its state under the real bundle identifier.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
@@ -27,9 +27,10 @@ import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
 
 assert.equal(process.platform, "darwin", "Run the update test on macOS.");
-assert.ok(
-  process.env.CI,
-  "Run the update test in CI: the updated app opens the default data folder.",
+assert.equal(
+  process.env.GITHUB_ACTIONS,
+  "true",
+  "Run the update test on a GitHub Actions runner: the updated app opens the default data folder.",
 );
 assert.ok(pkg.updatesEnabled, "The update test needs updatesEnabled.");
 

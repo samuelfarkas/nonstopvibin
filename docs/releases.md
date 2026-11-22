@@ -98,7 +98,7 @@ section. Work through these steps in order.
    bun run test:ui:built
    bun test
    bun run dist:built
-   # CI only, on macOS: updates an older build to this one.
+   # On a GitHub Actions macOS runner only: updates an older build to this one.
    bun run test:update:mac
    # On Linux x64, where CI builds and smoke-tests the server archives:
    bun run dist:server && bun run test:server

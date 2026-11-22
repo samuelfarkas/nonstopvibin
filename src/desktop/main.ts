@@ -354,7 +354,7 @@ async function start(): Promise<void> {
         type: "info",
         message: "Move NonstopVibin to update it",
         detail:
-          "NonstopVibin can update itself only from a folder you can change, such as Applications. Quit it, move it there from the disk image or Downloads folder, and open it again.",
+          "NonstopVibin can update itself only from a folder you can change, such as Applications or the Applications folder in your home folder. Quit it, move it there, and open it again.",
       });
     };
   } else if (updatable) {
