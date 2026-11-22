@@ -5,6 +5,7 @@ import { afterAll, beforeAll } from "bun:test";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,7 +146,7 @@ function handshake(
         Authorization: `Bearer ${app.store.clientKey(profile.id)}`,
         Connection: "Upgrade",
         Upgrade: "websocket",
-        "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+        "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
         "Sec-WebSocket-Version": "13",
       },
     });
