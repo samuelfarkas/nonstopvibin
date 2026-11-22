@@ -81,19 +81,22 @@ running as the same OS user.
   reviewed assets/licenses, and the verified core. Exclude `.deepsec`, `.agents`,
   runtime data, environment files, signing keys, local review material, and raw scan
   reports.
-- Sign and notarize the macOS release with the owner's credentials. Follow the
-  [macOS release signing guide](docs/release-signing.md). Signing rewrites the core,
-  so `scripts/sign-mac.cjs` refreshes its packaged manifest hash after
-  `scripts/verify-package.cjs` checks the unsigned copy against the reviewed input.
-  The core and tray helper get hardened runtime without Electron's JIT and
-  executable-memory entitlements (`build/entitlements.mac.minimal.plist`).
-  Until the first signed release, say that builds are unsigned in the README and
-  release notes. Test installation, launch, quit, and reopen on a clean machine.
+- macOS releases are ad-hoc signed and not notarized until a Developer ID is set up
+  ([macOS release signing](docs/release-signing.md)). The app bundle's designated
+  requirement names only its identifier, so an update's authenticity rests on HTTPS
+  to GitHub Releases, the SHA-512 in `latest-mac.yml` and the release attestations.
+  Signing rewrites the core, so `scripts/sign-mac.cjs` refreshes its packaged
+  manifest hash after `scripts/verify-package.cjs` checks the unsigned copy against
+  the reviewed input. The core and tray helper get hardened runtime without
+  Electron's JIT and executable-memory entitlements
+  (`build/entitlements.mac.minimal.plist`). Until the first Developer ID release,
+  say in the README and release notes that macOS builds are not notarized. Test
+  installation, launch, quit, and reopen on a clean machine.
   Test owner-only storage permissions and credential persistence after reopening.
 - Run end-to-end provider verification only with deliberately assigned test accounts.
   Keep live credentials and customer/work profiles out of reusable fixtures.
 - Resolve high/critical findings and document remaining limitations. Dependency and
   regex scans alone cannot establish distribution safety.
 
-Use real signing credentials and record the checks performed on each release.
+Record the checks performed on each release.
 Unverified platforms and providers remain unverified.

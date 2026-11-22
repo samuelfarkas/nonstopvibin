@@ -19,18 +19,14 @@ Done in the repository:
 
 Remaining owner steps:
 
-1. Configure the five Apple signing/notarization secrets in
-   [release signing](release-signing.md). None are configured yet, so a tag push
-   today passes the version preflight and then fails at the macOS build job's
-   signing step. Ordinary CI and local packaging still build unsigned installers.
-2. Protect `main`. It has no branch protection, although this document and
+1. Protect `main`. It has no branch protection, although this document and
    [SECURITY.md](../SECURITY.md) assume reviewed changes and required checks:
    require pull requests with review, and require the `build / desktop (macos-26)`,
    `build / desktop (ubuntu-24.04)`, `dependencies` and `secrets` checks. The desktop
    checks were named `build (macos-26)` and `build (ubuntu-24.04)` before they moved
    into the shared [checks workflow](../.github/workflows/checks.yml).
-3. Run an actual signed upgrade between two versions before advertising updates.
-   The first chance is 0.2.0 to the next release.
+2. Run an actual upgrade between two released versions on a Mac before advertising
+   updates. The first chance is 0.2.0 to the next release.
 
 The workflow checks that the configured update repository equals the repository
 publishing the release. It uses Actions' built-in `GITHUB_TOKEN` only in the publish
@@ -57,7 +53,9 @@ prereleases; the updater selects the release first and falls back to these names
 
 The [Release workflow](../.github/workflows/release.yml) runs the same checks as every
 pull request ([checks.yml](../.github/workflows/checks.yml) and
-[security.yml](../.github/workflows/security.yml)), with macOS signed and notarized.
+[security.yml](../.github/workflows/security.yml)). macOS builds are ad-hoc signed
+and not notarized; [macOS release signing](release-signing.md) explains how they
+update.
 After all checks pass, the final job verifies the assets `scripts/verify-release.mjs`
 expects from `package.json`, metadata versions, payload sizes and SHA-512 hashes, generates
 SHA256SUMS and provenance attestations, uploads a draft release, then publishes it.
@@ -74,20 +72,18 @@ The GitHub-generated source ZIP is not an update payload.
 `package.json` is at 0.2.0 with updates enabled, and `CHANGELOG.md` has a `[0.2.0]`
 section. Work through these steps in order.
 
-1. **Preconditions.** The five signing secrets are configured, and a local signed
-   build passes the checks in [release signing](release-signing.md). `main` is
-   protected as described above, and the 0.2.0 changes are merged through a reviewed
+1. **Preconditions.** `main` is protected as described above, and the 0.2.0 changes are merged through a reviewed
    pull request with green checks. No `v0.2.0` tag or release exists yet
    (`git ls-remote --tags origin`, `gh release list`). The tag ruleset blocks
    deleting or moving a pushed tag, so push it only when everything else is ready.
 2. **Leave the deferred hardening for a later release.** These are owner steps after
-   0.2.0 is signed and published; do not enable them for 0.2.0:
+   the first Developer ID release; do not enable them for 0.2.0:
    - Re-enable the `onlyLoadAppFromAsar` and `enableEmbeddedAsarIntegrityValidation`
      fuses. They stay off because unsigned builds failed to launch with them, so
-     only a real signed build can show that they work.
+     only a real Developer ID build can show that they work.
    - Enable cookie encryption (the `enableCookieEncryption` fuse). It is listed for
-     after the first signed release without a stated reason; proving it needs a
-     signed macOS build and a packaged Linux build, because it changes how Electron
+     after the first Developer ID release without a stated reason; proving it needs
+     a signed macOS build and a packaged Linux build, because it changes how Electron
      protects its browser storage on each platform.
    - Then test packaging, launch, updates, credential access, and agent connections
      before that release.
@@ -102,6 +98,8 @@ section. Work through these steps in order.
    bun run test:ui:built
    bun test
    bun run dist:built
+   # CI only, on macOS: updates an older build to this one.
+   bun run test:update:mac
    # On Linux x64, where CI builds and smoke-tests the server archives:
    bun run dist:server && bun run test:server
    bun run security:deps
@@ -124,10 +122,10 @@ section. Work through these steps in order.
 5. **The Release workflow** then verifies the tag, version, `updatesEnabled` and
    update feed; runs the pull-request checks (security scans, the desktop build,
    tests and smoke tests on both runners, and the server archives with their smoke
-   test); signs, notarizes and verifies the macOS app; and finally verifies the
+   test); updates an older macOS build to the new one; and finally verifies the
    assets and update metadata, writes `SHA256SUMS`, attests provenance, and
-   publishes the release with generated notes. If a job fails for a reason that needs no source change, such as
-   a missing secret, fix it and re-run the failed jobs. If the source must change,
+   publishes the release with generated notes. If a job fails for a reason that needs
+   no source change, such as a runner outage, re-run the failed jobs. If the source must change,
    release 0.2.1 instead; the tag cannot be moved.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
    release with the DMG, macOS ZIP, AppImage, deb, blockmaps, `latest-mac.yml`,
@@ -135,11 +133,12 @@ section. Work through these steps in order.
    `nonstopvibin-server-0.2.0-linux-arm64.tar.gz` and `SHA256SUMS`. In a folder
    with the downloaded assets, `shasum -a 256 -c SHA256SUMS` passes and
    `gh attestation verify <file> -R samuelfarkas/nonstopvibin` passes for an
-   installer. On a clean Mac, the installed app passes
-   `spctl -a -vv -t execute /Applications/NonstopVibin.app` as
-   `accepted, source=Notarized Developer ID`, launches, quits, and reopens with its
-   data. Settings shows 0.2.0, and **Check for updates…** reports that no updates
-   are available.
+   installer. On a clean Mac, drag the app from the DMG to Applications and open it
+   with **Open Anyway** in **System Settings → Privacy & Security**.
+   `codesign -d -r- /Applications/NonstopVibin.app` prints
+   `designated => identifier "app.nonstopvibin.desktop"`. The app launches, quits,
+   and reopens with its data. Settings shows 0.2.0, and **Check for updates…**
+   reports that no updates are available.
 
 ## Updating the CLIProxyAPI core
 
@@ -234,6 +233,12 @@ the data directory. The bundled core is replaced with the app bundle; newer
 reviewed cores install from Settings (see
 [Updating the CLIProxyAPI core](#updating-the-cliproxyapi-core)).
 
+On macOS, the app updates only from a folder the user can change, such as
+Applications. Run from the disk image, from App Translocation or from a folder the
+user cannot change, it does not check, and **Check for updates…** explains how to
+move it. Squirrel.Mac would otherwise fail after the restart or ask to install as
+root.
+
 Existing installations without enabled update support need one manual install.
 Linux deb users continue installing newer deb packages manually.
 
@@ -243,10 +248,11 @@ Run the checks of the first-release checklist above. Verify the packaged archive
 launch the actual Electron build; the desktop bundle includes the updater and
 does not ship a separate node_modules tree.
 
-Before advertising updates, use synthetic profiles to test two signed macOS versions
-and two AppImage versions (the first pair is 0.2.0 and the release after it):
+Before advertising updates, use synthetic profiles to test two macOS versions
+installed from the DMG and two AppImage versions (the first pair is 0.2.0 and the release after it):
 update discovery, Later, explicit restart, shutdown of the core/gateway, restored
 credentials/profile identity, and offline/corrupt-download recovery. Verify beta
-discovery separately before advertising it. Unsigned local builds cannot establish
-macOS update correctness. Installation and Linux desktop behavior remain unverified
+discovery separately before advertising it. `bun run test:update:mac` proves the
+in-place update on a CI runner, which skips Gatekeeper's first-launch check and
+macOS privacy prompts. Installation and Linux desktop behavior remain unverified
 until tested on the supported target systems.

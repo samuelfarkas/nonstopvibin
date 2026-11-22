@@ -8,7 +8,7 @@ Connect **Claude Code, Codex, and pi** to your AI subscriptions and API accounts
 NonstopVibin is a local desktop proxy for **macOS and Linux**, powered by
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
 
-**[Build from source](#build-from-source)** · [Setup](#setup) · [Provider support](docs/providers.md)
+**[Install](#install)** · [Setup](#setup) · [Build from source](#build-from-source) · [Provider support](docs/providers.md)
 
 _Screenshots use sample accounts and simulated quotas. [Capture notes](docs/media/production.md)._
 
@@ -41,6 +41,20 @@ for Claude Code and Codex and use experimental protocol translation.
 
 **Prerelease:** live subscription inference, quota checks, and reset redemption
 remain unverified. See [provider support](docs/providers.md) for the tested scope.
+
+## Install
+
+Download the latest release from
+[GitHub Releases](https://github.com/samuelfarkas/nonstopvibin/releases/latest).
+
+- **macOS, Apple Silicon:** open the DMG and drag NonstopVibin to Applications.
+  Apple has not notarized the app, so macOS blocks its first launch. Open
+  **System Settings → Privacy & Security** and click **Open Anyway**.
+- **Linux, x86_64:** run the AppImage, or install the deb package.
+
+The macOS app and the AppImage then update themselves. They download each new
+release in the background and install it when you choose **Restart to update**.
+Deb installations update when you install the newer package.
 
 ## Setup
 
@@ -104,10 +118,9 @@ Packaged apps do not require Bun. Starting with 0.2.0, packaged macOS and AppIma
 builds check GitHub Releases for updates; deb installations update manually.
 Installed builds, deb included, also update the proxy core from Settings once a
 reviewed core pin reaches `main`. See [releases and app updates](docs/releases.md).
-Locally built macOS apps are unsigned and not notarized until signing is
-configured; installation and tray behavior in an interactive Linux desktop
-session still need verification. See
-[release requirements](SECURITY.md) before distributing builds.
+macOS builds are ad-hoc signed, not signed with an Apple Developer ID or notarized.
+Installation and tray behavior in an interactive Linux desktop session still need
+verification. See [release requirements](SECURITY.md) before distributing builds.
 
 For development, use `bun run dev`; `bun run preview` starts an isolated app with
 sample accounts. Development shares `~/.nonstopvibin` with the desktop app by

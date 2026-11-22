@@ -14,6 +14,13 @@
 
 ### Changed
 
+- The macOS app now installs its own updates. Releases are ad-hoc signed, and an
+  installed app accepts any new version with its bundle identifier, so updates no
+  longer fail Squirrel.Mac's signature check. Releases need no Apple signing secrets. The
+  first launch of a downloaded app still needs **Open Anyway** in
+  **System Settings → Privacy & Security**. Run from the disk image or a folder you
+  cannot change, the app does not check for updates, and **Check for updates…**
+  explains how to move it.
 - Upgraded bundled CLIProxyAPI from 8.0.67 to 8.1.0 with reviewed archive and binary
   hashes for all four targets. It brings upstream's stream failover, Antigravity and
   Codex fixes. On its first start each profile core writes a generated `server-id`
