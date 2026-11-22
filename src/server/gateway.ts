@@ -159,12 +159,16 @@ export class Gateway {
   }
   async proxy(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const { profileId, slug, path } = routeRequest(this.store, req);
-    const port = this.core.port(profileId);
     const url = new URL(path, "http://localhost");
     const agent = curatedCatalog(req, url);
-    if (req.method === "GET" && url.pathname === "/v1/models" && agent) {
-      const release = this.acquire(profileId);
-      try {
+    // Counted before a dormant core starts: the wait is in flight and keeps it from an idle stop.
+    const release = this.acquire(profileId);
+    try {
+      await this.usage.wake(profileId);
+      // The agent hung up while its core started.
+      if (res.destroyed) return;
+      const port = this.core.port(profileId);
+      if (req.method === "GET" && url.pathname === "/v1/models" && agent) {
         const models = await offeredModels(
           agent,
           await this.core.models(profileId),
@@ -185,65 +189,70 @@ export class Gateway {
           ...(entries && { "x-nonstopvibin-profile": slug }),
         });
         res.end(JSON.stringify(payload));
-      } finally {
-        release();
+        return;
       }
-      return;
-    }
-    const release = this.acquire(profileId);
-    const upstream = http.request({
-      hostname: "127.0.0.1",
-      port,
-      method: req.method,
-      path,
-      headers: forwardedHeaders(req, this.store.coreKey(profileId)),
-    });
-    let abandoned = false;
-    const close = () => {
-      abandoned = !res.writableFinished;
-      upstream.destroy();
-    };
-    res.once("close", close);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        upstream.once("error", reject);
-        upstream.once("response", (response) => {
-          res.writeHead(
-            response.statusCode ?? 502,
-            responseHeaders(response.headers, slug),
-          );
-          pipeline(response, res).then(resolve, reject);
-        });
-        pipeline(req, upstream)
-          .then(() => {
-            // Bun can leave native reads paused after unpiping a complete body,
-            // hiding a peer FIN during idle SSE. Restore socket reads once.
-            req.socket.resume();
-          })
-          .catch(reject);
+      const upstream = http.request({
+        hostname: "127.0.0.1",
+        port,
+        method: req.method,
+        path,
+        headers: forwardedHeaders(req, this.store.coreKey(profileId)),
       });
-    } catch (error) {
-      // The agent hung up; there is no socket to answer and nothing failed in the app.
-      if (abandoned || res.destroyed) return;
-      if (res.headersSent) throw error;
-      // Raw socket errors name local ports and internals; the agent needs only the remedy.
-      throw new AppError(
-        "The profile proxy is unavailable. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin.",
-        502,
-      );
+      let abandoned = false;
+      const close = () => {
+        abandoned = !res.writableFinished;
+        upstream.destroy();
+      };
+      res.once("close", close);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          upstream.once("error", reject);
+          upstream.once("response", (response) => {
+            res.writeHead(
+              response.statusCode ?? 502,
+              responseHeaders(response.headers, slug),
+            );
+            pipeline(response, res).then(resolve, reject);
+          });
+          pipeline(req, upstream)
+            .then(() => {
+              // Bun can leave native reads paused after unpiping a complete body,
+              // hiding a peer FIN during idle SSE. Restore socket reads once.
+              req.socket.resume();
+            })
+            .catch(reject);
+        });
+      } catch (error) {
+        // The agent hung up; there is no socket to answer and nothing failed in the app.
+        if (abandoned || res.destroyed) return;
+        if (res.headersSent) throw error;
+        // Raw socket errors name local ports and internals; the agent needs only the remedy.
+        throw new AppError(
+          "The profile proxy is unavailable. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin.",
+          502,
+        );
+      } finally {
+        res.off("close", close);
+        upstream.destroy();
+      }
     } finally {
-      res.off("close", close);
       release();
-      upstream.destroy();
     }
   }
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let release = () => {};
     socket.on("error", () => socket.destroy());
-    try {
+    // A dormant core starts first, so the handshake goes on once it answers.
+    void (async () => {
       const { profileId, slug, path } = routeRequest(this.store, req);
-      const port = this.core.port(profileId);
       release = this.acquire(profileId);
+      await this.usage.wake(profileId);
+      // The agent hung up while its core started.
+      if (socket.destroyed) {
+        release();
+        return;
+      }
+      const port = this.core.port(profileId);
       const upstream = http.request({
         hostname: "127.0.0.1",
         port,
@@ -284,12 +293,12 @@ export class Gateway {
         release();
       });
       upstream.end();
-    } catch (error) {
+    })().catch((error) => {
       release();
       const status = error instanceof AppError ? error.status : 502;
       socket.end(
         `HTTP/1.1 ${status} Proxy error\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
       );
-    }
+    });
   }
 }

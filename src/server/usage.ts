@@ -103,6 +103,8 @@ export interface UsageTiming extends RestartTiming {
   usageBackoff: number;
   /** How long after gateway activity the queue keeps being drained. */
   activity: number;
+  /** How long a profile without OAuth accounts runs its core after its last use. */
+  idle: number;
 }
 export const usageTiming: UsageTiming = {
   accounts: 20_000,
@@ -112,6 +114,8 @@ export const usageTiming: UsageTiming = {
   coalesce: 2000,
   usageBackoff: 60_000,
   activity: 10_000,
+  // Agents pause for minutes between bursts; a start takes about 0.35 s.
+  idle: 600_000,
   restartBackoff: 300_000,
   restartLimit: 10,
 };
@@ -128,6 +132,8 @@ export interface UsageOptions {
   timing?: UsageTiming;
   /** Gateway requests or WebSockets still open for a profile; their usage arrives later. */
   inFlight?: (profileId: string) => number;
+  /** A sign-in is pending in the profile's core. */
+  signingIn?: (profileId: string) => boolean;
   report: Report;
 }
 
@@ -139,6 +145,7 @@ export class Usage {
   private readonly quotas: Quotas;
   private readonly timing: UsageTiming;
   private readonly inFlight: (profileId: string) => number;
+  private readonly signingIn: (profileId: string) => boolean;
   private readonly report: Report;
   private readonly cadences = new Map<string, Cadence>();
   private readonly collections = new Map<string, Promise<number>>();
@@ -148,10 +155,19 @@ export class Usage {
   private readonly restartWakes = new Map<string, number>();
   /** What a profile shows once the scheduler stopped starting it. */
   private readonly shown = new Map<string, string>();
-  /** Automatic starts in flight, each with the quota check after it. */
+  /** Automatic starts in flight, each with the quota check after it, and idle stops. */
   private readonly work = new Set<Promise<void>>();
   /** Profiles whose quota check after an automatic start is in flight. */
   private readonly checking = new Set<string>();
+  /**
+   * Profiles without OAuth accounts whose core is stopped until a request needs it: not
+   * started at launch, or stopped when idle. The restart policy does not keep them running.
+   */
+  private readonly dormant = new Set<string>();
+  /** When each profile last had a gateway request start or end, or its core start. */
+  private readonly lastUsed = new Map<string, number>();
+  /** Idle stops in flight. */
+  private readonly sleeping = new Set<string>();
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
   private scheduledAt = Infinity;
@@ -175,6 +191,7 @@ export class Usage {
     this.quotas = quotas;
     this.timing = options.timing ?? { ...usageTiming };
     this.inFlight = options.inFlight ?? (() => 0);
+    this.signingIn = options.signingIn ?? (() => false);
     this.report = options.report;
   }
   /** A core answered: a new core's drain cadence starts over; a readiness retry of the same core keeps it. */
@@ -194,6 +211,11 @@ export class Usage {
   }
   /** What happened to a profile's core, told by the pool as it happens. */
   coreEvent(event: CoreEvent): void {
+    // Whoever started it, a running core is no longer dormant, and its idle time starts now.
+    if (event.type === "started" && event.running) {
+      this.dormant.delete(event.profileId);
+      this.lastUsed.set(event.profileId, Date.now());
+    }
     this.hear(event.profileId, event);
     this.schedule?.();
   }
@@ -228,7 +250,8 @@ export class Usage {
     if (!this.schedule || this.pool.shuttingDown) return;
     const kept =
       this.store.profileNames().has(profileId) &&
-      this.accounts.keepsRunning(profileId);
+      this.accounts.keepsRunning(profileId) &&
+      !this.dormant.has(profileId);
     const known = this.restarts.get(profileId);
     let state =
       known ??
@@ -313,37 +336,121 @@ export class Usage {
     return Date.now() < this.watchedUntil;
   }
   /**
-   * A UI read the state. Account status and quota are polled only while one keeps reading,
-   * and the first read after a pause waits briefly for every running profile's account status.
+   * A UI read the state. Dormant cores start, so it shows them running. Account status and
+   * quota are polled only while one keeps reading, and the first read after a pause waits
+   * briefly for every running profile's account status.
    */
   async watch(): Promise<void> {
     const resumed = !this.watched();
     this.watchedUntil = Date.now() + this.timing.watch;
-    if (!resumed || !this.schedule) return;
-    // Quota older than its period refreshes in the next maintenance pass, in the background.
-    this.nextAccounts =
-      Date.now() >= this.nextQuotas
-        ? Date.now()
-        : Date.now() + this.timing.accounts;
-    this.schedule();
+    if (!this.schedule) return;
     const signal = AbortSignal.timeout(freshStatusWaitMs);
-    await Promise.all(
-      [...this.pool.runtimes.keys()]
-        .filter((profileId) => this.pool.usable(profileId))
-        .map((profileId) =>
-          this.accounts.sync(profileId, signal).catch((error) => {
-            // A core slower than the wait answers the next poll instead.
-            if (!signal.aborted) this.reportFor(profileId, errorMessage(error));
-          }),
-        ),
+    // A start that fails shows in the profile's state, which this read returns.
+    const work = [...this.dormant].map((profileId) =>
+      this.wake(profileId).catch(() => undefined),
     );
+    if (resumed) {
+      // Quota older than its period refreshes in the next maintenance pass, in the background.
+      this.nextAccounts =
+        Date.now() >= this.nextQuotas
+          ? Date.now()
+          : Date.now() + this.timing.accounts;
+      this.schedule();
+      for (const profileId of this.pool.runtimes.keys())
+        if (this.pool.usable(profileId))
+          work.push(
+            this.accounts.sync(profileId, signal).catch((error) => {
+              // A core slower than the wait answers the next poll instead.
+              if (!signal.aborted)
+                this.reportFor(profileId, errorMessage(error));
+            }),
+          );
+    }
+    if (!work.length) return;
+    await Promise.race([
+      Promise.all(work),
+      new Promise((resolve) =>
+        signal.addEventListener("abort", resolve, { once: true }),
+      ),
+    ]);
   }
   markActivity(profileId: string): void {
+    this.lastUsed.set(profileId, Date.now());
     const cadence = this.cadences.get(profileId);
     if (!cadence) return;
     cadence.activeUntil = Date.now() + this.timing.activity;
     cadence.nextAt = 0;
     this.schedule?.();
+  }
+  /** Profiles without an OAuth account start on demand and stop when idle; OAuth ones must keep refreshing tokens. */
+  lazy(profileId: string): boolean {
+    return this.accounts.oauth(profileId).length === 0;
+  }
+  /** At launch: the profile's core starts on its first request instead of now. */
+  rest(profileId: string): void {
+    this.dormant.add(profileId);
+  }
+  /** Its core is stopped until a request or a UI needs it. */
+  isDormant(profileId: string): boolean {
+    return this.dormant.has(profileId);
+  }
+  /**
+   * Starts a dormant profile's core and waits for it; the restart policy keeps it running
+   * again, so a failed start retries as any other would. Ends at once for other profiles.
+   */
+  async wake(profileId: string): Promise<void> {
+    if (!this.dormant.delete(profileId)) return;
+    this.hear(profileId);
+    this.schedule?.();
+    await this.pool.start(profileId, this.abandon.signal);
+  }
+  /** When a running lazy profile becomes idle enough to stop; Infinity while anything uses it. */
+  private idleAt(profileId: string): number {
+    if (
+      !this.pool.usable(profileId) ||
+      !this.lazy(profileId) ||
+      this.sleeping.has(profileId) ||
+      this.pool.starting.has(profileId) ||
+      this.pool.holding(profileId) ||
+      this.signingIn(profileId) ||
+      this.inFlight(profileId) > 0
+    )
+      return Infinity;
+    return (
+      Math.max(this.lastUsed.get(profileId) ?? 0, this.watchedUntil) +
+      this.timing.idle
+    );
+  }
+  /**
+   * Stops an idle lazy profile's core. Its usage queue is drained first, and a failed read
+   * keeps the core running: stopping would lose that usage. A request that began meanwhile
+   * keeps it running too.
+   */
+  private async sleep(profileId: string): Promise<void> {
+    this.sleeping.add(profileId);
+    try {
+      try {
+        while ((await this.collect(profileId)) === usagePageSize) {
+          // Full pages: more usage is waiting.
+        }
+      } catch (error) {
+        this.reportFor(
+          profileId,
+          `Usage before an idle stop: ${errorMessage(error)}`,
+        );
+        // The next attempt waits another idle period instead of every scheduler wakeup.
+        this.lastUsed.set(profileId, Date.now());
+        return;
+      }
+      this.sleeping.delete(profileId);
+      // Nothing awaited between this check and the stop marking its core as stopping.
+      if (this.idleAt(profileId) > Date.now()) return;
+      this.dormant.add(profileId);
+      this.hear(profileId);
+      await this.pool.stop(profileId);
+    } finally {
+      this.sleeping.delete(profileId);
+    }
   }
   /** Reads one page of the queue. Concurrent reads share one: the queue is destructive. */
   collect(profileId: string): Promise<number> {
@@ -394,6 +501,9 @@ export class Usage {
           : this.nextAccounts,
         // Only what the restart policy asked for: nothing for a profile that cannot start.
         ...this.restartWakes.values(),
+        ...[...this.pool.runtimes.keys()].map((profileId) =>
+          this.idleAt(profileId),
+        ),
         ...(this.polling
           ? []
           : running.map(
@@ -498,6 +608,13 @@ export class Usage {
       // After the drain pass and maintenance are under way, so a start's notices see them.
       for (const [profileId, at] of [...this.restartWakes])
         if (at <= Date.now()) this.hear(profileId, { type: "time" });
+      for (const profileId of this.pool.runtimes.keys())
+        if (this.idleAt(profileId) <= Date.now()) {
+          const stop = this.sleep(profileId)
+            .catch((error) => this.reportFor(profileId, errorMessage(error)))
+            .finally(() => this.work.delete(stop));
+          this.work.add(stop);
+        }
       schedule();
     };
     this.schedule = schedule;

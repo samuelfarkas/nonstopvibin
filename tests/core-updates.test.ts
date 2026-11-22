@@ -214,6 +214,8 @@ test(
       await closeApplication(app);
       app = await installedApp(directory);
       assert.equal(app.state().coreVersion, update);
+      // Without a subscription, the profile's core starts on its first request.
+      await completes(app, profile.id);
       assert.equal(spawnedFrom(app, profile.id), installed);
 
       const reverted = await call(app, "/core/install", "DELETE");

@@ -22,7 +22,11 @@ import {
   serverLockPath,
 } from "../src/server/data-directory.ts";
 import { probe, readSession, startServer } from "../src/server/cli.ts";
-import { clientDirectory, coreBinary } from "./support/application.ts";
+import {
+  clientDirectory,
+  coreBinary,
+  signedIn,
+} from "./support/application.ts";
 import { unusedPort } from "./support/ports.ts";
 
 const binary = coreBinary;
@@ -186,6 +190,8 @@ test(
     for (let i = 0; i < 3; i++) {
       const profile = store.createProfile(`Lifecycle ${i}`);
       store.saveProfile({ ...profile, enabled: true });
+      // A subscription: launch starts its core.
+      signedIn(store, profile.id);
     }
     store.close();
     const processes: RunningCli[] = [];
@@ -295,6 +301,8 @@ test(
     const store = new Store(directory, fileKeyCodec(directory));
     const profile = store.createProfile("Hangup");
     store.saveProfile({ ...profile, enabled: true });
+    // A subscription: launch starts its core.
+    signedIn(store, profile.id);
     store.close();
     const processes: RunningCli[] = [];
     try {

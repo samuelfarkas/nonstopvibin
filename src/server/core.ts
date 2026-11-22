@@ -495,10 +495,16 @@ export class CorePool {
   async reapOrphans(): Promise<void> {
     await reapOrphanedCores(this.store.directory);
   }
-  /** Starts every enabled profile; a profile that fails is reported, not thrown. Answers those reported. */
-  async restore(report: Report, signal?: AbortSignal): Promise<string[]> {
+  /** Starts every enabled profile `eager` picks; one that fails is reported, not thrown. Answers those reported. */
+  async restore(
+    report: Report,
+    eager: (profileId: string) => boolean,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
     const reported: string[] = [];
-    for (const profile of this.store.profiles().filter((p) => p.enabled)) {
+    for (const profile of this.store
+      .profiles()
+      .filter((p) => p.enabled && eager(p.id))) {
       signal?.throwIfAborted();
       try {
         await this.start(profile.id, signal);

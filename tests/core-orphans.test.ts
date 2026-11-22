@@ -31,7 +31,7 @@ import {
   recordCore,
   type Identify,
 } from "../src/server/core-processes.ts";
-import { coreBinary } from "./support/application.ts";
+import { coreBinary, signedIn } from "./support/application.ts";
 
 const run = promisify(execFile);
 const binary = coreBinary;
@@ -225,6 +225,8 @@ test(
           { mode: 0o600 },
         );
       store = new Store(data, fileKeyCodec(data));
+      // A subscription: launch starts its core.
+      signedIn(store, store.profiles()[0]!.id);
       cores = new Cores(store, binary, { report: () => {} });
       await cores.restore();
       assert.ok(

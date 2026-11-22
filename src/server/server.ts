@@ -270,7 +270,12 @@ export class Application {
       options.directory,
       (profileId) => {
         this.store.profile(profileId);
-        if (this.closing || !this.cores.pool.running(profileId))
+        // A dormant profile counts: the agent's first request starts its core.
+        if (
+          this.closing ||
+          (!this.cores.pool.running(profileId) &&
+            !this.cores.usage.isDormant(profileId))
+        )
           throw new AppError(
             "Start this profile before connecting an agent.",
             409,
@@ -410,7 +415,9 @@ export class Application {
     const running: string[] = [];
     let streaming = false;
     for (const [id, name] of this.store.profileNames()) {
-      if (!this.cores.pool.running(id)) continue;
+      // A dormant profile still serves: its core starts on the next request.
+      if (!this.cores.pool.running(id) && !this.cores.usage.isDormant(id))
+        continue;
       running.push(name);
       if ((this.gateway.active.get(id) ?? 0) > 0) streaming = true;
     }
