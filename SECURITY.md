@@ -81,15 +81,10 @@ running as the same OS user.
   reviewed assets/licenses, and the verified core. Exclude `.deepsec`, `.agents`,
   runtime data, environment files, signing keys, local review material, and raw scan
   reports.
-- macOS releases are ad-hoc signed and not notarized until a Developer ID is set up
-  ([macOS release signing](docs/release-signing.md)). The app bundle's designated
-  requirement names only its identifier, so an update's authenticity rests on HTTPS
-  to GitHub Releases, the SHA-512 in `latest-mac.yml` and the release attestations.
-  Signing rewrites the core, so `scripts/sign-mac.cjs` refreshes its packaged
-  manifest hash after `scripts/verify-package.cjs` checks the unsigned copy against
-  the reviewed input. The core and tray helper get hardened runtime without
-  Electron's JIT and executable-memory entitlements
-  (`build/entitlements.mac.minimal.plist`). Until the first Developer ID release,
+- macOS releases are ad-hoc signed and not notarized until a Developer ID is set up.
+  An installed app accepts any update with its bundle identifier, so an update's
+  authenticity rests on GitHub Releases; [macOS release signing](docs/release-signing.md)
+  describes the signing and its trust model. Until the first Developer ID release,
   say in the README and release notes that macOS builds are not notarized. Test
   installation, launch, quit, and reopen on a clean machine.
   Test owner-only storage permissions and credential persistence after reopening.

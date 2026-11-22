@@ -53,8 +53,7 @@ module.exports = async function signMac(opts, packager) {
       const options = optionsForFile(file);
       if (file === helper) return { ...options, entitlements: minimal };
       // An ad-hoc signature's own designated requirement is its hash, which no later
-      // build meets, so Squirrel.Mac would refuse every update. An ad-hoc app requires
-      // its bundle identifier instead; a Developer ID build keeps codesign's requirement.
+      // build meets, so Squirrel.Mac would refuse every update.
       if (opts.identity === "-" && file === opts.app)
         return {
           ...options,

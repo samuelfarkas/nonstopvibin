@@ -337,11 +337,12 @@ async function start(): Promise<void> {
     label: "Check for updates…",
     enabled: false,
   };
+  const appImage =
+    process.platform === "linux" ? process.env.APPIMAGE : undefined;
   const updatable =
     updatesEnabled &&
     app.isPackaged &&
-    (process.platform === "darwin" ||
-      (process.platform === "linux" && process.env.APPIMAGE));
+    (process.platform === "darwin" || appImage);
   if (
     updatable &&
     process.platform === "darwin" &&
@@ -357,11 +358,10 @@ async function start(): Promise<void> {
       });
     };
   } else if (updatable) {
-    if (process.platform === "linux" && process.env.APPIMAGE)
-      await followLinuxLoginItem(
-        app.getPath("appData"),
-        process.env.APPIMAGE,
-      ).catch(reportDesktopError);
+    if (appImage)
+      await followLinuxLoginItem(app.getPath("appData"), appImage).catch(
+        reportDesktopError,
+      );
     const { autoUpdater } = await import("electron-updater");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;

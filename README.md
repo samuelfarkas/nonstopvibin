@@ -118,7 +118,6 @@ Packaged apps do not require Bun. Starting with 0.2.0, packaged macOS and AppIma
 builds check GitHub Releases for updates; deb installations update manually.
 Installed builds, deb included, also update the proxy core from Settings once a
 reviewed core pin reaches `main`. See [releases and app updates](docs/releases.md).
-macOS builds are ad-hoc signed, not signed with an Apple Developer ID or notarized.
 Installation and tray behavior in an interactive Linux desktop session still need
 verification. See [release requirements](SECURITY.md) before distributing builds.
 

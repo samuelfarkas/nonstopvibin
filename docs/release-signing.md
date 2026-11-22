@@ -38,10 +38,8 @@ new code hash, and the app can no longer update.
 `bun run dist:built`, which CI runs, sets `CSC_FOR_PULL_REQUEST`. electron-builder
 otherwise skips signing in pull request builds, and those builds could not update.
 
-`bun run test:update:mac` runs on every pull request and release. It checks the
-packaged zip's signature and requirement, installs an older build of the same source,
-updates it through the app's own dialog, and checks that the new version replaced it
-and started.
+`bun run test:update:mac` updates an older build to the packaged one on every pull
+request and release.
 
 Signing rewrites the bundled core binary. `scripts/sign-mac.cjs` refreshes the packaged
 manifest hash during signing. This happens after `scripts/verify-package.cjs` compares

@@ -50,9 +50,9 @@ test("macOS updates need a writable app bundle and folder", async () => {
   const folder = join(directory, "Applications");
   const bundle = join(folder, "NonstopVibin.app");
   const executable = join(bundle, "Contents/MacOS/NonstopVibin");
+  await mkdir(join(bundle, "Contents/MacOS"), { recursive: true });
+  await writeFile(executable, "");
   try {
-    await mkdir(join(bundle, "Contents/MacOS"), { recursive: true });
-    await writeFile(executable, "");
     assert.equal(replaceableBundle(executable), true);
     await chmod(bundle, 0o555);
     assert.equal(replaceableBundle(executable), false, "bundle not writable");
