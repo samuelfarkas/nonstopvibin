@@ -27,10 +27,24 @@ import {
 
 let upstream: http.Server;
 let upstreamBase: string;
+/** The upstream answers 429 with a 1 s Retry-After while this is set. */
+let limited = false;
 beforeAll(async () => {
   upstream = http.createServer(async (req, res) => {
     for await (const _ of req) {
       // The body is not needed.
+    }
+    if (limited) {
+      res.writeHead(429, {
+        "Content-Type": "application/json",
+        "Retry-After": "1",
+      });
+      res.end(
+        JSON.stringify({
+          error: { message: "quota exhausted", type: "rate_limit_error" },
+        }),
+      );
+      return;
     }
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(
@@ -292,6 +306,41 @@ test(
       assert.equal(app.cores.usage.isDormant(profile.id), false);
     } finally {
       failing = false;
+      await remove();
+    }
+  },
+);
+
+test(
+  "an idle core whose key was rate-limited keeps running until a request on it succeeds",
+  { timeout: 60_000 },
+  async () => {
+    const { app, profile, remove } = await lazyApp(300);
+    try {
+      limited = true;
+      assert.equal((await chat(app, profile)).status, 429);
+      await until(
+        "the 429's usage",
+        () => usageSummary(app.store, profile.id).failed >= 1,
+      );
+      await delay(1000);
+      assert.equal(
+        app.cores.pool.running(profile.id),
+        true,
+        "a new core would forget the cooldown and send the next request to the exhausted key",
+      );
+
+      limited = false;
+      // The core holds its own cooldown (about 10 s) before trying the key again.
+      let status = 0;
+      for (let i = 0; i < 30 && status !== 200; i++) {
+        status = (await chat(app, profile)).status;
+        if (status !== 200) await delay(1000);
+      }
+      assert.equal(status, 200);
+      await until("the idle stop", () => !app.cores.pool.alive(profile.id));
+    } finally {
+      limited = false;
       await remove();
     }
   },

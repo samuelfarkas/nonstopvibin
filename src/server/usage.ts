@@ -168,6 +168,11 @@ export class Usage {
   private readonly lastUsed = new Map<string, number>();
   /** Idle stops in flight. */
   private readonly sleeping = new Set<string>();
+  /** Each profile's latest collected outcome per key (auth index): its time and HTTP status. */
+  private readonly outcomes = new Map<
+    string,
+    Map<string, { timestamp: string; statusCode: number }>
+  >();
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
   private scheduledAt = Infinity;
@@ -442,6 +447,16 @@ export class Usage {
         this.lastUsed.set(profileId, Date.now());
         return;
       }
+      // A rate-limited key's cooldown lives only in the core, which does not persist it:
+      // a new core would send the next request to that key again. Kept until it succeeds.
+      if (
+        [...(this.outcomes.get(profileId)?.values() ?? [])].some(
+          (outcome) => outcome.statusCode === 429,
+        )
+      ) {
+        this.lastUsed.set(profileId, Date.now());
+        return;
+      }
       this.sleeping.delete(profileId);
       // Nothing awaited between this check and the stop marking its core as stopping.
       if (this.idleAt(profileId) > Date.now()) return;
@@ -464,6 +479,13 @@ export class Usage {
       if (!Array.isArray(payload))
         throw new AppError("Unexpected usage queue format.", 502);
       const records = payload.map((item) => usageRecord(profileId, item));
+      const outcomes = this.outcomes.get(profileId) ?? new Map();
+      for (const { account, timestamp, statusCode } of records) {
+        const known = outcomes.get(account);
+        if (!known || known.timestamp <= timestamp)
+          outcomes.set(account, { timestamp, statusCode });
+      }
+      this.outcomes.set(profileId, outcomes);
       this.store.addUsage(records);
       return records.length;
     })().finally(() => {
