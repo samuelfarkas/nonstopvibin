@@ -14,8 +14,13 @@ const {
 // The core and tray helper are not Electron processes, so they get hardened
 // runtime without the JIT/executable-memory exceptions Electron needs.
 const minimal = join(__dirname, "../build/entitlements.mac.minimal.plist");
+// Ad-hoc code has no Team ID, so hardened Electron processes cannot pass library validation.
+const adHocEntitlements = join(
+  __dirname,
+  "../build/entitlements.mac.adhoc.plist",
+);
 
-module.exports = async function signMac(opts) {
+module.exports = async function signMac(opts, packager) {
   const { signAsync } = require("@electron/osx-sign");
   const coreDir = join(opts.app, "Contents/Resources", coreLayout.packaged);
   const core = join(coreDir, coreLayout.binary);
@@ -45,13 +50,26 @@ module.exports = async function signMac(opts) {
     .digest("hex");
   writeCoreManifest(coreDir, manifest);
 
+  // mac.identity "-" signs ad-hoc. An ad-hoc signature's own designated requirement is its
+  // hash, which no later build meets, so Squirrel.Mac would refuse every update. The app
+  // bundle requires its identifier instead; the update's SHA-512 from the HTTPS feed is what
+  // vouches for its content. A Developer ID build keeps the requirement codesign derives.
+  const adHoc = opts.identity === "-";
   const ignore = opts.ignore;
   const optionsForFile = opts.optionsForFile;
   await signAsync({
     ...opts,
     optionsForFile: (file) => {
       const options = optionsForFile(file);
-      return file === helper ? { ...options, entitlements: minimal } : options;
+      if (file === helper) return { ...options, entitlements: minimal };
+      if (!adHoc) return options;
+      return {
+        ...options,
+        entitlements: adHocEntitlements,
+        ...(file === opts.app && {
+          requirements: `=designated => identifier "${packager.appInfo.id}"`,
+        }),
+      };
     },
     ignore: (file) =>
       file === core || (typeof ignore === "function" ? ignore(file) : false),

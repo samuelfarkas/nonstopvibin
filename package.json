@@ -30,9 +30,10 @@
     "test:ui": "bun run build && bun run test:ui:built",
     "test:ui:built": "bun tests/focus.cjs && bun tests/logo-animation.cjs && bun tests/page-layout.cjs && bun tests/tray-guard.cjs && bun tests/root-load.cjs",
     "test:server": "bun tests/server-archive-smoke.mjs",
+    "test:update:mac": "bun tests/mac-update.mjs",
     "build": "bun run check && vite build && bun scripts/build-desktop.mjs",
     "start": "electron .",
-    "package": "bun run build && install-electron && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
+    "package": "bun run build && install-electron && electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
     "dist:mac": "bun run build && electron-builder --mac --publish never",
     "dist:linux": "bun run build && electron-builder --linux --publish never",
     "dist:built": "electron-builder --publish never",
@@ -147,8 +148,9 @@
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
+      "identity": "-",
       "sign": "./scripts/sign-mac.cjs",
-      "notarize": true
+      "notarize": false
     },
     "linux": {
       "category": "Development",

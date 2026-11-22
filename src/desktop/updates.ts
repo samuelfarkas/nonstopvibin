@@ -1,5 +1,31 @@
 import type { AppUpdater } from "electron-updater";
 import type { Dialog } from "electron";
+import { accessSync, constants } from "node:fs";
+import { dirname, resolve } from "node:path";
+
+/**
+ * Whether Squirrel.Mac can replace the app bundle that `executable` runs from. It needs to
+ * write both the bundle and its folder; otherwise (a disk image, App Translocation, a folder
+ * the user cannot change) the install fails after the restart or asks to run as root.
+ */
+export function replaceableBundle(executable: string): boolean {
+  const bundle = resolve(executable, "../../..");
+  try {
+    accessSync(bundle, constants.W_OK);
+    accessSync(dirname(bundle), constants.W_OK);
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "EACCES" ||
+        error.code === "EPERM" ||
+        error.code === "EROFS")
+    )
+      return false;
+    throw error;
+  }
+}
 
 // Keep checks, downloads and dialogs serialized, including manual checks during a download.
 export function updateChecker(
