@@ -41,7 +41,7 @@ import {
 import { mainUrl, trayUrl } from "../shared/renderer-url.ts";
 import { releaseChannel } from "../shared/release-channel.ts";
 import { updatesEnabled } from "../../package.json";
-import { updateChecker } from "./updates.ts";
+import { replaceableBundle, updateChecker } from "./updates.ts";
 import {
   checkoutLayout,
   coreFeed,
@@ -337,17 +337,31 @@ async function start(): Promise<void> {
     label: "Check for updates…",
     enabled: false,
   };
-  if (
+  const appImage =
+    process.platform === "linux" ? process.env.APPIMAGE : undefined;
+  const updatable =
     updatesEnabled &&
     app.isPackaged &&
-    (process.platform === "darwin" ||
-      (process.platform === "linux" && process.env.APPIMAGE))
+    (process.platform === "darwin" || appImage);
+  if (
+    updatable &&
+    process.platform === "darwin" &&
+    !replaceableBundle(process.execPath)
   ) {
-    if (process.platform === "linux" && process.env.APPIMAGE)
-      await followLinuxLoginItem(
-        app.getPath("appData"),
-        process.env.APPIMAGE,
-      ).catch(reportDesktopError);
+    updateMenu.enabled = true;
+    updateMenu.click = () => {
+      void dialog.showMessageBox({
+        type: "info",
+        message: "Move NonstopVibin to update it",
+        detail:
+          "NonstopVibin can update itself only from a folder you can change, such as Applications or the Applications folder in your home folder. Quit it, move it there, and open it again.",
+      });
+    };
+  } else if (updatable) {
+    if (appImage)
+      await followLinuxLoginItem(app.getPath("appData"), appImage).catch(
+        reportDesktopError,
+      );
     const { autoUpdater } = await import("electron-updater");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
@@ -372,6 +386,8 @@ async function start(): Promise<void> {
       async (install) => {
         if (quitting) return;
         quitting = true;
+        // Open app windows would show "Failed to fetch" once the local service stops.
+        for (const window of BrowserWindow.getAllWindows()) window.hide();
         try {
           await application.close();
           installing = true;

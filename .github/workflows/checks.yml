@@ -1,24 +1,12 @@
 name: Checks
 # The desktop and server checks, written once. build.yml runs them on every change;
-# release.yml runs the same steps with `release: true`, which also signs macOS and keeps
-# the artifacts for publishing.
+# release.yml runs the same steps with `release: true`, which keeps the artifacts for publishing.
 on:
   workflow_call:
     inputs:
       release:
         type: boolean
         default: false
-    secrets:
-      CSC_LINK:
-        required: false
-      CSC_KEY_PASSWORD:
-        required: false
-      APPLE_ID:
-        required: false
-      APPLE_APP_SPECIFIC_PASSWORD:
-        required: false
-      APPLE_TEAM_ID:
-        required: false
 permissions:
   contents: read
 jobs:
@@ -29,7 +17,7 @@ jobs:
         # macos-26 is the arm64 image macos-latest pointed to when pinned.
         os: [macos-26, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.release && 30 || 25 }}
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -55,14 +43,6 @@ jobs:
         # Backstop above the smoke test's own limits.
         timeout-minutes: 6
         run: bun run test:desktop:built
-      - if: runner.os == 'macOS' && (failure() || cancelled())
-        name: Upload desktop smoke diagnostics
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          retention-days: 7
-          if-no-files-found: ignore
-          name: desktop-smoke-diagnostics-${{ runner.os }}
-          path: test-results/desktop-smoke/
       - if: runner.os == 'macOS'
         name: UI checks
         run: bun run test:ui:built
@@ -77,46 +57,21 @@ jobs:
           xvfb-run -a bun run test:desktop:built
       - run: bun test
       # Installers for the host architecture, with the targets in package.json `build`.
-      - if: ${{ !inputs.release || runner.os == 'Linux' }}
-        name: Package
+      - name: Package
         run: bun run dist:built
-      - if: inputs.release && runner.os == 'macOS'
-        id: signing
-        run: |
-          if [ -z "$CSC_LINK" ]; then
-            echo "Release builds require macOS signing credentials. See docs/release-signing.md."
-            exit 1
-          else
-            test -n "$APPLE_ID" && test -n "$APPLE_APP_SPECIFIC_PASSWORD" && test -n "$APPLE_TEAM_ID" || {
-              echo "Signed macOS releases require APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID."
-              exit 1
-            }
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - if: steps.signing.outputs.enabled == 'true'
-        name: Package, signed and notarized
-        run: bun run dist:built -c.forceCodeSigning=true
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      - if: steps.signing.outputs.enabled == 'true'
-        name: Verify the signed app
-        run: |
-          set -- release/mac*/*.app
-          [ "$#" -eq 1 ] || exit 1
-          [ -d "$1" ] || exit 1
-          codesign --verify --deep --strict --verbose=2 "$1"
-          xcrun stapler validate "$1"
-          spctl -a -vv -t execute "$1"
+      - if: runner.os == 'macOS'
+        name: Update the packaged app in place
+        # Backstop above the test's own limits.
+        timeout-minutes: 10
+        run: bun run test:update:mac
+      - if: runner.os == 'macOS' && (failure() || cancelled())
+        name: Upload desktop test diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          retention-days: 7
+          if-no-files-found: ignore
+          name: desktop-diagnostics-${{ runner.os }}
+          path: test-results/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Empty keeps the repository default for release artifacts.

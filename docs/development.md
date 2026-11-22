@@ -21,7 +21,8 @@ bun run start       # Launch the built Electron app
 bun run test:desktop # Isolated Electron lifecycle check (requires a desktop)
 bun run test:ui      # Isolated Electron focus, logo, page layout, and tray close-guard checks (requires a desktop)
 bun run test:server  # Installs and runs the linux-x64 server archive (Linux x64, after dist:server)
-bun run package      # Unsigned app folder in release/ for local checks
+bun run test:update:mac # Updates an older build to release/ in place (GitHub Actions macOS runner, after dist:built)
+bun run package      # App folder in release/ for local checks
 bun run dist:mac     # DMG and ZIP, on macOS
 bun run dist:linux   # AppImage and deb, on Linux
 bun run dist:server  # Headless Linux server archives (x64 and arm64), any host
