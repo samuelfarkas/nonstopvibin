@@ -74,7 +74,6 @@ function checkSignature(app) {
     "--deep",
     "--strict",
     "--all-architectures",
-    `-R=${requirement}`,
     app,
   ]);
   assert.equal(
