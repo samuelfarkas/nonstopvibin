@@ -72,8 +72,8 @@ The GitHub-generated source ZIP is not an update payload.
 `package.json` is at 0.2.0 with updates enabled, and `CHANGELOG.md` has a `[0.2.0]`
 section. Work through these steps in order.
 
-1. **Preconditions.** `main` is protected as described above, and the 0.2.0 changes are merged through a reviewed
-   pull request with green checks. No `v0.2.0` tag or release exists yet
+1. **Preconditions.** `main` is protected as described above, and the 0.2.0 changes
+   are merged through a reviewed pull request with green checks. No `v0.2.0` tag or release exists yet
    (`git ls-remote --tags origin`, `gh release list`). The tag ruleset blocks
    deleting or moving a pushed tag, so push it only when everything else is ready.
 2. **Leave the deferred hardening for a later release.** These are owner steps after
@@ -125,8 +125,8 @@ section. Work through these steps in order.
    test); updates an older macOS build to the new one; and finally verifies the
    assets and update metadata, writes `SHA256SUMS`, attests provenance, and
    publishes the release with generated notes. If a job fails for a reason that needs
-   no source change, such as a runner outage, re-run the failed jobs. If the source must change,
-   release 0.2.1 instead; the tag cannot be moved.
+   no source change, such as a runner outage, re-run the failed jobs. If the source
+   must change, release 0.2.1 instead; the tag cannot be moved.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
    release with the DMG, macOS ZIP, AppImage, deb, blockmaps, `latest-mac.yml`,
    `latest-linux.yml`, `nonstopvibin-server-0.2.0-linux-x64.tar.gz`,
@@ -249,10 +249,11 @@ launch the actual Electron build; the desktop bundle includes the updater and
 does not ship a separate node_modules tree.
 
 Before advertising updates, use synthetic profiles to test two macOS versions
-installed from the DMG and two AppImage versions (the first pair is 0.2.0 and the release after it):
+installed from the DMG and two AppImage versions (the first pair is 0.2.0 and the
+release after it):
 update discovery, Later, explicit restart, shutdown of the core/gateway, restored
 credentials/profile identity, and offline/corrupt-download recovery. Verify beta
 discovery separately before advertising it. `bun run test:update:mac` proves the
-in-place update on a CI runner, which skips Gatekeeper's first-launch check and
-macOS privacy prompts. Installation and Linux desktop behavior remain unverified
+in-place update on a CI runner, without Gatekeeper's first-launch check and with the
+runner's pre-granted privacy permissions. Installation and Linux desktop behavior remain unverified
 until tested on the supported target systems.

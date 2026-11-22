@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import YAML from "yaml";
@@ -137,7 +137,6 @@ const feed = createServer((request, response) => {
 });
 await new Promise((done) => feed.listen(0, "127.0.0.1", done));
 const feedUrl = `http://127.0.0.1:${feed.address().port}/`;
-let oldApp;
 let installed;
 let exit = 1;
 try {
@@ -173,7 +172,7 @@ try {
       name.startsWith("mac") && existsSync(join(work, "old", name, product)),
   );
   assert.ok(output, "The older build produced no app.");
-  oldApp = join(work, "old", output, product);
+  const oldApp = join(work, "old", output, product);
   const folder = join(work, "Applications");
   mkdirSync(folder);
   installed = join(folder, product);
@@ -241,12 +240,9 @@ try {
     join(shipIt, "ShipIt_stderr.log"),
     join(shipIt, "ShipIt_stdout.log"),
   ])
-    if (existsSync(file)) cpSync(file, join(results, file.split("/").pop()));
-  for (const app of [installed, oldApp])
-    if (app && existsSync(app)) {
-      const pid = await runningPid(app);
-      if (pid) process.kill(pid, "SIGKILL");
-    }
+    if (existsSync(file)) cpSync(file, join(results, basename(file)));
+  const left = installed && (await runningPid(installed));
+  if (left) process.kill(left, "SIGKILL");
 } finally {
   feed.close();
   rmSync(work, { recursive: true, force: true });
