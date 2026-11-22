@@ -386,6 +386,8 @@ async function start(): Promise<void> {
       async (install) => {
         if (quitting) return;
         quitting = true;
+        // Windows would show "Failed to fetch" once the local service stops.
+        for (const window of BrowserWindow.getAllWindows()) window.hide();
         try {
           await application.close();
           installing = true;
