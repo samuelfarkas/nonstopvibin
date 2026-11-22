@@ -1,0 +1,29 @@
+{
+  "apiKeyHelper": "'/tmp/nsv-ts-fixture/data/agent-connections/equipe-cafe-r-d-ete/claude-key-4318'",
+  "env": {
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_USE_BEDROCK": "0",
+    "CLAUDE_CODE_USE_VERTEX": "0",
+    "CLAUDE_CODE_USE_FOUNDRY": "0",
+    "CLAUDE_CODE_USE_MANTLE": "0",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS": "0",
+    "ANTHROPIC_CUSTOM_HEADERS": "",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4318/p/equipe-cafe-r-d-ete",
+    "ANTHROPIC_AUTH_TOKEN": "",
+    "ANTHROPIC_API_KEY": "",
+    "CLAUDE_CODE_OAUTH_TOKEN": "",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR": ""
+  },
+  "modelPicker": {
+    "options": [
+      {
+        "model": "claude-sonnet-4-5"
+      },
+      {
+        "model": "claude-opus-4-1"
+      }
+    ],
+    "replaceBuiltInOptions": true
+  }
+}

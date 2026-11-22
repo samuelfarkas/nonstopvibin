@@ -19,6 +19,8 @@
     ".agents/",
     "artifacts/",
     "coverage/",
-    "tools/oxlint/anti-slop/"
+    "tools/oxlint/anti-slop/",
+    "tests/fixtures/ts-data-dir/data/",
+    "tests/fixtures/ts-data-dir/agent-home/"
   ]
 }

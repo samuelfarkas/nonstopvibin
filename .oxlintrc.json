@@ -24,10 +24,15 @@
     ".agents/",
     "artifacts/",
     "coverage/",
-    "tools/oxlint/anti-slop/"
+    "tools/oxlint/anti-slop/",
+    "tests/fixtures/ts-data-dir/data/",
+    "tests/fixtures/ts-data-dir/agent-home/"
   ],
   "jsPlugins": [
-    { "name": "anti-slop", "specifier": "./tools/oxlint/anti-slop/index.ts" }
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    }
   ],
   "overrides": [
     {
