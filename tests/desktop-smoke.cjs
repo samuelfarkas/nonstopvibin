@@ -200,6 +200,11 @@ if (typeof electron === "string") {
       0,
       "background startup creates no windows",
     );
+    assert.deepEqual(
+      app.getAppMetrics().filter((metric) => metric.type === "Tab"),
+      [],
+      "background startup launches no renderer",
+    );
     for (let cycle = 0; cycle < 3; cycle++) {
       const started = Date.now();
       stage(`c${cycle}:open-main`);
