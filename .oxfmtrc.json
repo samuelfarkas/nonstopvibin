@@ -22,6 +22,7 @@
     "tools/oxlint/anti-slop/",
     "tests/fixtures/ts-data-dir/data/",
     "tests/fixtures/ts-data-dir/agent-home/",
-    "tests/types/generated/"
+    "tests/types/generated/",
+    "tests/golden/*.json"
   ]
 }
