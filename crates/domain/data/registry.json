@@ -1,0 +1,213 @@
+{
+  "providers": {
+    "claude": {
+      "label": "Claude",
+      "visible": true,
+      "icon": "claude",
+      "catalog": "anthropic",
+      "nativeAgent": "claude",
+      "hosts": [
+        "claude.ai",
+        "console.anthropic.com",
+        "platform.claude.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "name": "Claude",
+        "detail": "Personal or organization seats · the same email can connect more than once",
+        "core": "anthropic",
+        "limits": "5-hour · weekly · opus weekly"
+      },
+      "reconnect": true,
+      "organizations": true
+    },
+    "codex": {
+      "label": "Codex",
+      "visible": true,
+      "icon": "openai",
+      "catalog": "openai",
+      "nativeAgent": "codex",
+      "hosts": [
+        "auth.openai.com",
+        "chatgpt.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "name": "ChatGPT / Codex",
+        "detail": "Plus, Pro, Business, or Enterprise",
+        "limits": "weekly · credits"
+      },
+      "bankedResets": true
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "visible": false,
+      "icon": "antigravity",
+      "hosts": [
+        "accounts.google.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "name": "Antigravity",
+        "detail": "Google account via CLIProxyAPI"
+      }
+    },
+    "kimi": {
+      "label": "Kimi Code",
+      "visible": false,
+      "icon": "kimi",
+      "catalog": "kimi-for-coding",
+      "hosts": [
+        "auth.kimi.com",
+        "www.kimi.com",
+        "kimi.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "name": "Kimi Code",
+        "detail": "Kimi coding subscription"
+      }
+    },
+    "xai": {
+      "label": "Grok",
+      "visible": false,
+      "icon": "xai",
+      "hosts": [
+        "accounts.x.ai",
+        "auth.x.ai",
+        "grok.com",
+        "accounts.xai.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "name": "Grok",
+        "detail": "Grok Build subscription"
+      }
+    },
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "visible": true,
+      "icon": "opencode",
+      "hosts": [
+        "opencode.ai"
+      ],
+      "apiKey": true,
+      "preset": {
+        "name": "OpenCode Go",
+        "detail": "Models are discovered from your subscription.",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "prefix": "go",
+        "protocol": "openai",
+        "fixedEndpoint": true,
+        "upstream": "opencode-go"
+      }
+    },
+    "openai": {
+      "label": "OpenAI",
+      "visible": false,
+      "icon": "openai",
+      "nativeAgent": "codex",
+      "apiKey": true,
+      "preset": {
+        "name": "OpenAI API",
+        "detail": "Discover models or enter the ones you want to expose.",
+        "baseUrl": "https://api.openai.com/v1",
+        "prefix": "openai",
+        "protocol": "openai"
+      }
+    },
+    "anthropic": {
+      "label": "Anthropic API",
+      "visible": false,
+      "icon": "claude",
+      "nativeAgent": "claude",
+      "apiKey": true,
+      "preset": {
+        "name": "Anthropic API",
+        "detail": "Enter model IDs enabled for your API key.",
+        "baseUrl": "https://api.anthropic.com/v1",
+        "prefix": "anthropic",
+        "protocol": "anthropic"
+      }
+    },
+    "gemini": {
+      "label": "Gemini",
+      "visible": false,
+      "catalog": "google",
+      "credentialFile": true,
+      "apiKey": true
+    },
+    "custom": {
+      "label": "Compatible API",
+      "visible": true,
+      "apiKey": true,
+      "preset": {
+        "name": "Other compatible API",
+        "detail": "OpenAI, Anthropic, or Responses compatible endpoints.",
+        "baseUrl": "",
+        "prefix": "",
+        "protocol": "openai"
+      }
+    }
+  },
+  "agents": {
+    "claude": {
+      "title": "Claude Code",
+      "offered": true,
+      "project": true,
+      "native": "Claude"
+    },
+    "codex": {
+      "title": "Codex",
+      "offered": true,
+      "project": false,
+      "native": "OpenAI",
+      "catalog": "header"
+    },
+    "pi": {
+      "title": "pi",
+      "offered": true,
+      "project": false,
+      "catalog": "query"
+    },
+    "opencode": {
+      "title": "OpenCode",
+      "offered": false,
+      "project": false,
+      "catalog": "query"
+    }
+  },
+  "protocols": [
+    "openai",
+    "anthropic",
+    "responses"
+  ],
+  "strategies": [
+    "round-robin",
+    "fill-first"
+  ],
+  "retentionDays": [
+    0,
+    30,
+    90,
+    365
+  ],
+  "limits": {
+    "nameLength": 60,
+    "prefixLength": 30,
+    "priorityLimit": 1000,
+    "credentialFileBytes": 2000000,
+    "allHistoryDays": 3650
+  },
+  "usagePageSize": 500,
+  "quota": {
+    "refreshMs": 120000,
+    "staleMs": 300000
+  },
+  "resetResultCodes": [
+    "reset",
+    "already_redeemed",
+    "nothing_to_reset",
+    "no_credit"
+  ]
+}

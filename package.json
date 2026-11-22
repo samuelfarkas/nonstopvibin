@@ -42,7 +42,7 @@
     "server:open": "bun scripts/server-remote.mjs open",
     "format": "oxfmt --write src tests scripts *.json *.ts index.html .github .vscode .oxlintrc.json .oxfmtrc.json",
     "lint": "oxlint . --max-warnings 0",
-    "quality": "bun run check && bun run lint && bun run format:check",
+    "quality": "bun run check && bun run lint && bun run format:check && bun run registry:check",
     "security:deps": "bun audit --audit-level=high",
     "security:scan": "bun run --cwd .deepsec scan",
     "security:report": "bun run --cwd .deepsec report",
@@ -53,6 +53,8 @@
     "security:history": "git rev-parse --verify HEAD >/dev/null && .vendor/security/gitleaks git . --config .gitleaks.toml --redact --no-banner --log-opts=--all",
     "security:tooling": "bun run --cwd .deepsec audit",
     "icons": "bun scripts/icons.mjs",
+    "registry:export": "bun scripts/export-registry.ts",
+    "registry:check": "bun scripts/export-registry.ts --check",
     "format:check": "oxfmt --check src tests scripts *.json *.ts index.html .github .vscode .oxlintrc.json .oxfmtrc.json"
   },
   "dependencies": {

@@ -26,6 +26,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 subtle = "2.6.1"
 thiserror = "2.0.21"
+ts-rs = { version = "12.0.1", default-features = false, features = ["no-serde-warnings", "serde-compat"] }
 
 [workspace.lints.rust]
 # Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.
