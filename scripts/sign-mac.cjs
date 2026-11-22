@@ -15,7 +15,11 @@ const {
 // runtime without the JIT/executable-memory exceptions Electron needs.
 const minimal = join(__dirname, "../build/entitlements.mac.minimal.plist");
 
-module.exports = async function signMac(opts, packager) {
+module.exports = async function signMac(builderOptions, packager) {
+  // For mac.identity "-", electron-builder first signs with any keychain identity whose
+  // name contains "-", and that build could not install ad-hoc release updates.
+  const adhoc = packager.platformSpecificBuildOptions.identity === "-";
+  const opts = adhoc ? { ...builderOptions, identity: "-" } : builderOptions;
   const { signAsync } = require("@electron/osx-sign");
   const coreDir = join(opts.app, "Contents/Resources", coreLayout.packaged);
   const core = join(coreDir, coreLayout.binary);
@@ -54,7 +58,7 @@ module.exports = async function signMac(opts, packager) {
       if (file === helper) return { ...options, entitlements: minimal };
       // An ad-hoc signature's own designated requirement is its hash, which no later
       // build meets, so Squirrel.Mac would refuse every update.
-      if (opts.identity === "-" && file === opts.app)
+      if (adhoc && file === opts.app)
         return {
           ...options,
           requirements: `=designated => identifier "${packager.appInfo.id}"`,

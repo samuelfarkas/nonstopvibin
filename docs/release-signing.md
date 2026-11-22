@@ -32,10 +32,6 @@ macOS blocks the first launch of a downloaded app that Apple has not notarized. 
 open **System Settings → Privacy & Security** and click **Open Anyway** once. Updates
 are not quarantined, so the updated app opens without that step.
 
-electron-builder first looks for a keychain identity whose name contains `-`. A local
-build on a Mac with such an identity is signed with it instead, and cannot install
-ad-hoc release updates. CI runners have no such identity.
-
 Do not re-sign an installed app. `codesign --force` replaces the requirement with the
 new code hash, and the app can no longer update.
 
