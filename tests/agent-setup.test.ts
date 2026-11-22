@@ -385,12 +385,18 @@ test(
             supportsMidConvoSystemMessages: true,
             supportsMidConvoEffort: false,
             supportsMidConvoToolChanges: true,
+            sendSessionAffinityHeaders: true,
           });
           assert.equal(known.cost.input, 9);
           assert.equal(known.provider, undefined);
           assert.equal(known.headers, undefined);
           assert.equal(unknown.id, "second-fixture");
           assert.equal(unknown.api, "openai-completions");
+          assert.equal(
+            unknown.compat.sendSessionAffinityHeaders,
+            true,
+            "pi sends its session id under a name the core recognises",
+          );
           assert.equal(unknown.baseUrl, "http://127.0.0.1:4318/p/work/v1");
           assert.equal(unknown.name, "second-fixture · API list price");
           assert.deepEqual(unknown.input, ["text"]);

@@ -65,7 +65,8 @@ export default async function (pi) {
     models = await Promise.all(models.map(async (model) => {
       const { provider, headers, compat, ...known } = getBuiltinModel(builtin[model.api], model.id) ?? await refreshedModel(builtin[model.api], model.id) ?? {};
       // Keep pi's effort fallback; native tool changes use the builtin model's capabilities.
-      return { ...model, ...known, compat: { ...compat, supportsMidConvoEffort: false }, api: model.api, baseUrl: model.api === "anthropic-messages" ? ${JSON.stringify(profileBase(port, profile.slug))} : ${JSON.stringify(endpoint)} };
+      // pi sends its session id only when asked; without one the core fingerprints the whole conversation on every request.
+      return { ...model, ...known, compat: { ...compat, supportsMidConvoEffort: false, sendSessionAffinityHeaders: true }, api: model.api, baseUrl: model.api === "anthropic-messages" ? ${JSON.stringify(profileBase(port, profile.slug))} : ${JSON.stringify(endpoint)} };
     }));
     pi.registerProvider(${JSON.stringify(provider)}, {
       name: ${printable(profile.name)}, baseUrl: ${JSON.stringify(endpoint)}, apiKey: ${JSON.stringify(`!${shellQuote(helper)}`)},
