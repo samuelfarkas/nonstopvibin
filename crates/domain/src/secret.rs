@@ -5,6 +5,7 @@
 use std::fmt;
 
 use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -47,6 +48,13 @@ macro_rules! secret {
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_str(concat!(stringify!($name), "(<redacted>)"))
+            }
+        }
+
+        /// A secret may arrive in a request body; it never leaves through serde.
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                String::deserialize(deserializer).map(Self::new)
             }
         }
     };

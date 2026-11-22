@@ -26,7 +26,8 @@
     "coverage/",
     "tools/oxlint/anti-slop/",
     "tests/fixtures/ts-data-dir/data/",
-    "tests/fixtures/ts-data-dir/agent-home/"
+    "tests/fixtures/ts-data-dir/agent-home/",
+    "tests/types/generated/"
   ],
   "jsPlugins": [
     {

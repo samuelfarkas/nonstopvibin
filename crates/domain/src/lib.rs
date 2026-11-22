@@ -5,3 +5,4 @@
 pub mod id;
 pub mod registry;
 pub mod secret;
+pub mod wire;

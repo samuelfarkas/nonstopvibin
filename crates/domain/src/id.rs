@@ -17,6 +17,7 @@ macro_rules! id {
         $(#[$meta])*
         #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
+        #[cfg_attr(test, derive(ts_rs::TS), ts(type = "string"))]
         pub struct $name(Arc<str>);
 
         impl $name {
