@@ -121,6 +121,19 @@ export const usageTiming: UsageTiming = {
 };
 /** How long the first UI read after a pause waits for fresh account status. */
 const freshStatusWaitMs = 2000;
+/**
+ * How long the pinned core (CLIProxyAPI 8.1.0, conductor_cooldown.go) keeps a key or model
+ * from requests after an upstream status, at most: 429 backs off up to 30 minutes. It keeps
+ * this only in memory, so a core that stops forgets it. Other failures cool down for a
+ * minute, which no idle period outlasts.
+ */
+const coreCooldownMs = new Map([
+  [401, 1_800_000],
+  [402, 1_800_000],
+  [403, 1_800_000],
+  [404, 43_200_000],
+  [429, 1_800_000],
+]);
 interface Cadence {
   core: Readonly<CoreRuntime> | undefined;
   nextAt: number;
@@ -133,7 +146,7 @@ export interface UsageOptions {
   /** Gateway requests or WebSockets still open for a profile; their usage arrives later. */
   inFlight?: (profileId: string) => number;
   /** A sign-in is pending in the profile's core. */
-  signingIn?: (profileId: string) => boolean;
+  signingIn: (profileId: string) => boolean;
   report: Report;
 }
 
@@ -168,10 +181,10 @@ export class Usage {
   private readonly lastUsed = new Map<string, number>();
   /** Idle stops in flight. */
   private readonly sleeping = new Set<string>();
-  /** Each profile's latest collected outcome per key (auth index): its time and HTTP status. */
+  /** Each profile's latest outcome per key (auth index) and model from its current core, and when it was collected. */
   private readonly outcomes = new Map<
     string,
-    Map<string, { timestamp: string; statusCode: number }>
+    Map<string, { statusCode: number; at: number }>
   >();
   /** Ends an automatic start still waiting for its core once shutdown begins. */
   private readonly abandon = new AbortController();
@@ -196,7 +209,7 @@ export class Usage {
     this.quotas = quotas;
     this.timing = options.timing ?? { ...usageTiming };
     this.inFlight = options.inFlight ?? (() => 0);
-    this.signingIn = options.signingIn ?? (() => false);
+    this.signingIn = options.signingIn;
     this.report = options.report;
   }
   /** A core answered: a new core's drain cadence starts over; a readiness retry of the same core keeps it. */
@@ -216,10 +229,12 @@ export class Usage {
   }
   /** What happened to a profile's core, told by the pool as it happens. */
   coreEvent(event: CoreEvent): void {
-    // Whoever started it, a running core is no longer dormant, and its idle time starts now.
+    // Whoever started it, a running core is no longer dormant, its idle time starts now,
+    // and it holds no cooldowns.
     if (event.type === "started" && event.running) {
       this.dormant.delete(event.profileId);
       this.lastUsed.set(event.profileId, Date.now());
+      this.outcomes.delete(event.profileId);
     }
     this.hear(event.profileId, event);
     this.schedule?.();
@@ -404,10 +419,17 @@ export class Usage {
    * again, so a failed start retries as any other would. Ends at once for other profiles.
    */
   async wake(profileId: string): Promise<void> {
-    if (!this.dormant.delete(profileId)) return;
-    this.hear(profileId);
-    this.schedule?.();
-    await this.pool.start(profileId, this.abandon.signal);
+    if (!this.dormant.has(profileId)) return;
+    try {
+      // Callers meanwhile share the pool's one start, and the profile still serves.
+      await this.pool.start(profileId, this.abandon.signal);
+    } finally {
+      // A core that runs ended dormancy already; after a failed start, the policy retries.
+      if (this.dormant.delete(profileId)) {
+        this.hear(profileId);
+        this.schedule?.();
+      }
+    }
   }
   /** When a running lazy profile becomes idle enough to stop; Infinity while anything uses it. */
   private idleAt(profileId: string): number {
@@ -447,11 +469,11 @@ export class Usage {
         this.lastUsed.set(profileId, Date.now());
         return;
       }
-      // A rate-limited key's cooldown lives only in the core, which does not persist it:
-      // a new core would send the next request to that key again. Kept until it succeeds.
+      // A new core would send the next request to a key or model this one cools down.
       if (
         [...(this.outcomes.get(profileId)?.values() ?? [])].some(
-          (outcome) => outcome.statusCode === 429,
+          ({ statusCode, at }) =>
+            Date.now() < at + (coreCooldownMs.get(statusCode) ?? 0),
         )
       ) {
         this.lastUsed.set(profileId, Date.now());
@@ -465,6 +487,8 @@ export class Usage {
       await this.pool.stop(profileId);
     } finally {
       this.sleeping.delete(profileId);
+      // A stop that was held back is due again an idle period from now.
+      this.schedule?.();
     }
   }
   /** Reads one page of the queue. Concurrent reads share one: the queue is destructive. */
@@ -480,11 +504,12 @@ export class Usage {
         throw new AppError("Unexpected usage queue format.", 502);
       const records = payload.map((item) => usageRecord(profileId, item));
       const outcomes = this.outcomes.get(profileId) ?? new Map();
-      for (const { account, timestamp, statusCode } of records) {
-        const known = outcomes.get(account);
-        if (!known || known.timestamp <= timestamp)
-          outcomes.set(account, { timestamp, statusCode });
-      }
+      // The queue is in completion order, so a later record is the later outcome.
+      for (const { account, model, statusCode } of records)
+        outcomes.set(`${account}\u0000${model}`, {
+          statusCode,
+          at: Date.now(),
+        });
       this.outcomes.set(profileId, outcomes);
       this.store.addUsage(records);
       return records.length;
@@ -566,8 +591,11 @@ export class Usage {
             try {
               const count = await this.collect(profileId);
               cadence.failures = 0;
-              if (count === usagePageSize || Date.now() < cadence.activeUntil)
-                cadence.nextAt = 0;
+              if (count === usagePageSize) cadence.nextAt = 0;
+              // Once more when requests have been quiet for the whole window: the core can
+              // record a request's usage just after its response ends.
+              else if (cadence.nextAt !== 0 && Date.now() < cadence.activeUntil)
+                cadence.nextAt = Math.min(cadence.nextAt, cadence.activeUntil);
             } catch (error) {
               cadence.failures++;
               cadence.nextAt =

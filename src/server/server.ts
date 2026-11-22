@@ -601,10 +601,10 @@ export class Application {
     return {
       "GET /state": {
         body: noBody,
-        query: noQuery,
-        // Each UI polls this while open: the cores' account status and quota are polled meanwhile.
-        handle: async () => {
-          await this.cores.usage.watch();
+        query: (get) => ({ watch: get("watch") === "1" ? "1" : undefined }),
+        // A UI polls with `watch` while open; the CLI's reads of the version have no side effects.
+        handle: async ({ query }) => {
+          if (query.watch) await this.cores.usage.watch();
           return this.state();
         },
       },
@@ -713,6 +713,8 @@ export class Application {
         }),
         handle: async ({ param, query }) => {
           const id = param("profileId");
+          // The catalog comes from the core: a dormant one starts for it.
+          await this.cores.usage.wake(id);
           const models = await this.cores.pool.models(id);
           return query.metadata === "1"
             ? this.models.enriched(id, models)
@@ -762,6 +764,7 @@ export class Application {
         query: noQuery,
         handle: async ({ param, body }) => {
           const id = param("profileId");
+          await this.cores.usage.wake(id);
           const models = await this.cores.pool.models(id);
           if (!models.length)
             throw new AppError("This profile has no available models.");

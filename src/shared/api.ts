@@ -59,7 +59,8 @@ export interface ApiAccountInput {
  * Routes answering `AppState` return the whole state after their change.
  */
 export interface Routes {
-  "GET /state": { response: AppState };
+  /** `watch=1`: a UI that shows this state, so the cores' status is polled and dormant ones start. */
+  "GET /state": { query: { watch?: "1" }; response: AppState };
   "PUT /usage-retention": {
     body: { days: RetentionDays };
     response: AppState;

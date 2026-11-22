@@ -222,6 +222,40 @@ test(
 );
 
 test(
+  "a finished request drains usage once, and once more after the activity window",
+  { timeout: 10_000 },
+  async () => {
+    const { store, remove } = await temporaryStore("nv-drain-count-");
+    let drains = 0;
+    const cores = new Cores(store, coreBinary, {
+      report: () => {},
+      usageTiming: { ...usageTiming, coalesce: 20, activity: 300 },
+      management: async (request) => {
+        if (request.path.startsWith("/usage-queue")) drains++;
+        return httpManagement(request);
+      },
+    });
+    const profile = store.createProfile("Drain fixture");
+    try {
+      await cores.pool.start(profile.id);
+      cores.usage.begin();
+      await delay(100);
+      const before = drains;
+      cores.usage.markActivity(profile.id);
+      await delay(800);
+      assert.equal(
+        drains - before,
+        2,
+        "not a read of the empty queue every 20 ms through the window",
+      );
+    } finally {
+      await cores.shutdown();
+      await remove();
+    }
+  },
+);
+
+test(
   "account status is polled only while a UI reads the state",
   { timeout: 10_000 },
   async () => {
