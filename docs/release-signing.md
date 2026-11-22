@@ -22,6 +22,11 @@ HTTPS to GitHub Releases and the SHA-512 of the zip in `latest-mac.yml`, as for 
 AppImage. Users can check a download with
 `gh attestation verify <file> -R samuelfarkas/nonstopvibin`.
 
+macOS also recognizes the app by this requirement in privacy permissions and keychain
+access, so any ad-hoc code with that identifier counts as NonstopVibin there. The app
+uses neither today. Cookie encryption, which would add a keychain item, waits for a
+Developer ID.
+
 Ad-hoc code has no Team ID, so hardened Electron processes would fail library
 validation. `build/entitlements.mac.plist` gives Electron's binaries
 `com.apple.security.cs.disable-library-validation` with the JIT and executable-memory
@@ -89,6 +94,9 @@ Keep the `.p12` file and its password out of the repository. Rotate the certific
    them to its macOS `Package` step only in releases. Pull requests must not receive
    them.
 3. Make `tests/mac-update.mjs` expect a Developer ID signature instead of an ad-hoc one.
+4. Remove the **Open Anyway** instructions from the release notes in
+   `.github/workflows/release.yml`, the README's Install section, and step 6 of the
+   first-release checklist in [releases](releases.md).
 
 The first Developer ID release still updates ad-hoc installs, because it satisfies
 their `identifier "app.nonstopvibin.desktop"` requirement. Later releases must satisfy
