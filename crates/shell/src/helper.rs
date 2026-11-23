@@ -4,7 +4,7 @@
 
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
+use std::process::{self, ExitStatus, Stdio};
 
 use nsv_desktop::pipe::{self, Failure, FromHelper, Reason, Start, ToHelper};
 use nsv_domain::secret::SessionToken;
@@ -29,17 +29,29 @@ pub fn beside_executable() -> io::Result<PathBuf> {
     Ok(directory.join(NAME))
 }
 
+/// The helper at `program`, reading the pipe on its stdin and logging to the daemon's stderr.
+fn command(program: &Path, stdout: Stdio) -> process::Command {
+    let mut command = process::Command::new(program);
+    command
+        .stdin(Stdio::piped())
+        .stdout(stdout)
+        .stderr(Stdio::inherit());
+    // WebKitGTK's DMA-BUF renderer shows a blank window on NVIDIA's driver.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        && Path::new("/proc/driver/nvidia/version").exists()
+    {
+        command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+    command
+}
+
 /// Shows why the desktop app failed in the helper's error dialog, as main.ts's error box did,
 /// and returns once it is dismissed: call it off the async runtime. Without a helper that can show it, Linux posts a desktop
 /// notification instead.
 pub fn alert(failure: Failure, reason: &str) {
     let reason = Reason::new(reason);
     let shown = beside_executable().and_then(|program| {
-        let mut child = std::process::Command::new(program)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+        let mut child = command(&program, Stdio::null()).spawn()?;
         let message = ToHelper::Alert {
             failure,
             reason: reason.clone(),
@@ -123,18 +135,7 @@ impl Helper {
         start: Start,
         token: &SessionToken,
     ) -> io::Result<Self> {
-        let mut command = Command::new(program);
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        // WebKitGTK's DMA-BUF renderer shows a blank window on NVIDIA's driver.
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
-            && Path::new("/proc/driver/nvidia/version").exists()
-        {
-            command.env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        }
-        let mut child = command.spawn()?;
+        let mut child = Command::from(command(program, Stdio::piped())).spawn()?;
         let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(io::Error::other("the helper's pipes are missing"));
         };

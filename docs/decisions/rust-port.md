@@ -44,7 +44,7 @@ option below. Only the host changes.
   Electron showed it whenever the app ran. The quota popup closes on focus loss and Escape,
   and the Swift click monitor is deleted.
 - **Linux:** the helper uses the system WebKitGTK. If it cannot start, the daemon opens the
-  session link in the system browser. On NVIDIA systems the helper sets
+  session link in the system browser. On NVIDIA systems the daemon starts every helper with
   `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user set it.
 
 ### The bridge to the UI
