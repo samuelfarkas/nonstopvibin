@@ -143,3 +143,48 @@ pub fn same_seat(a: &SeatIdentity, b: &SeatIdentity) -> bool {
             && b.account_uuid.as_ref() == Some(account)
             && b.organization_uuid.as_ref() == Some(organization))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seat_matching_requires_both_uuids() {
+        let ids = [
+            "abcdef01-2345-4678-9abc-def012345678",
+            "00000000-0000-4000-8000-000000000002",
+            "00000000-0000-4000-8000-000000000003",
+        ];
+        let seat = |account: &str, organization: &str| {
+            claude_identity(&json!({ "account_uuid": account, "organization_uuid": organization }))
+        };
+        for subject in ids {
+            for organization in ids {
+                let identity = seat(subject, organization);
+                for other_subject in ids {
+                    for other_organization in ids {
+                        assert_eq!(
+                            same_seat(&identity, &seat(other_subject, other_organization)),
+                            subject == other_subject && organization == other_organization,
+                            "{subject}/{organization} against {other_subject}/{other_organization}"
+                        );
+                    }
+                }
+                let account_only = SeatIdentity {
+                    account_uuid: Some(subject.to_owned()),
+                    ..SeatIdentity::default()
+                };
+                let organization_only = SeatIdentity {
+                    organization_uuid: Some(organization.to_owned()),
+                    ..SeatIdentity::default()
+                };
+                assert!(!same_seat(&identity, &account_only));
+                assert!(!same_seat(&identity, &organization_only));
+            }
+        }
+        assert!(!same_seat(
+            &SeatIdentity::default(),
+            &SeatIdentity::default()
+        ));
+    }
+}
