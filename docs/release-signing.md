@@ -17,9 +17,12 @@ designated => identifier "app.nonstopvibin.desktop"
 ```
 
 Any later build with that identifier and a valid signature can replace the app. The
-requirement does not identify the publisher. The update's authenticity comes from
-HTTPS to GitHub Releases and the SHA-512 of the zip in `latest-mac.yml`, as for the
-AppImage. Users can check a download with
+Rust updater applies the same rule: it checks the unpacked bundle against the running
+bundle's designated requirement before it swaps it in. The requirement does not
+identify the publisher. The update's authenticity comes from HTTPS to GitHub Releases
+and the SHA-512 of the zip in `latest-mac.yml`, as for the AppImage, and in the Rust
+app from the signed `SHA256SUMS` once the release key is committed
+([SECURITY.md](../SECURITY.md#app-updates)). Users can check a download with
 `gh attestation verify <file> -R samuelfarkas/nonstopvibin`.
 
 macOS also recognizes the app by this requirement in privacy permissions and keychain

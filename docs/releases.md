@@ -225,7 +225,8 @@ builds older than 0.2.0 install that manually. Development checkouts rerun
 ## Installed behavior
 
 Enabled packaged macOS and AppImage builds check shortly after startup and then
-periodically (the delays are in `src/desktop/main.ts`). **Check for updates…** is available in the app menu and the tray's
+periodically: 30 seconds after start, then every 6 hours (`crates/shell/src/update`
+in the Rust app, `src/desktop/main.ts` in Electron builds). **Check for updates…** is available in the app menu and the tray's
 right-click menu; it is disabled on unsupported or unconfigured builds.
 
 Downloads happen in the background. A native dialog offers **Restart to update**
@@ -233,7 +234,9 @@ or **Later**, defaulting to Later because restart interrupts connected agents.
 After Later, use the same menu command to install the downloaded update. Ordinary
 Quit does not opt into installation. Checks and downloads are serialized, and
 background failures remain quiet. Restart closes the local service before handing
-off to the updater. Credentials, the database and installed core updates remain in
+off to the updater. The Rust app verifies the release first: its signed `SHA256SUMS`,
+the feed and the payload hashes, and on macOS the bundle's signature and core
+([SECURITY.md](../SECURITY.md#app-updates)). Credentials, the database and installed core updates remain in
 the data directory. The bundled core is replaced with the app bundle; newer
 reviewed cores install from Settings (see
 [Updating the CLIProxyAPI core](#updating-the-cliproxyapi-core)).
@@ -259,6 +262,9 @@ release after it):
 update discovery, Later, explicit restart, shutdown of the core/gateway, restored
 credentials/profile identity, and offline/corrupt-download recovery. Verify beta
 discovery separately before advertising it. `bun run test:update:mac` proves the
-in-place update on a CI runner, without Gatekeeper's first-launch check and with the
-runner's pre-granted privacy permissions. Installation and Linux desktop behavior remain unverified
-until tested on the supported target systems.
+Electron-to-Rust update and `bun tests/mac-update-rust.mjs` the Rust-to-Rust update in
+place on a CI runner, without Gatekeeper's first-launch check and with the runner's
+pre-granted privacy permissions. `tests/linux-update.sh` updates an AppImage in a
+container and checks that a tampered payload and a foreign signature are refused.
+Installation and Linux desktop behavior remain unverified until tested on the
+supported target systems.

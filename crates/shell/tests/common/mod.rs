@@ -91,6 +91,9 @@ impl ShellHost for Host {
     fn shutdown(&self) {
         self.shut_down.store(true, Ordering::SeqCst);
     }
+    fn close(&self) -> impl Future<Output = Result<(), String>> {
+        std::future::ready(Ok(()))
+    }
 }
 
 pub(crate) fn directory(name: &str) -> PathBuf {
@@ -123,7 +126,9 @@ pub(crate) fn spawn_shell(host: &Arc<Host>, options: Options) -> thread::JoinHan
                 .enable_all()
                 .build()
                 .unwrap();
-            runtime.block_on(nsv_shell::run(&*host, options, link));
+            runtime
+                .block_on(nsv_shell::run(&*host, options, link))
+                .unwrap();
             0
         });
         assert_eq!(code, std::process::ExitCode::SUCCESS);

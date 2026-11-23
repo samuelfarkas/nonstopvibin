@@ -9,7 +9,7 @@ use ksni::{Handle, ToolTip, TrayMethods};
 use nsv_domain::helper::Rect;
 use tokio::sync::mpsc;
 
-use super::{Action, Entry, Icon, Look, MENU, rgba};
+use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};
 use crate::log;
 
 /// Nothing on Linux: the tray joins the daemon's runtime when [`crate::run`] starts.
@@ -62,6 +62,7 @@ impl Pixmaps {
 
 struct Item {
     look: Look,
+    updates: bool,
     pixmaps: Arc<Pixmaps>,
     actions: mpsc::Sender<Action>,
 }
@@ -115,9 +116,9 @@ impl ksni::Tray for Item {
             .map(|entry| match *entry {
                 Entry::Item { label, action } => StandardItem {
                     label: label.to_owned(),
-                    enabled: action.is_some(),
+                    enabled: enabled(action, self.updates),
                     activate: Box::new(move |item: &mut Self| {
-                        if let Some(action) = action {
+                        if enabled(action, item.updates) {
                             item.send(action);
                         }
                     }),
@@ -138,12 +139,14 @@ pub(crate) struct Tray {
 impl Tray {
     /// Registers the item with the `StatusNotifierWatcher`. Without a session bus or a tray host
     /// the shell runs on without a tray, as Electron did.
-    pub(crate) async fn start(_link: TrayLink, look: Look) -> Self {
+    /// `updates` enables "Check for updates…".
+    pub(crate) async fn start(_link: TrayLink, look: Look, updates: bool) -> Self {
         let (sender, actions) = mpsc::channel(8);
         let handle = match Pixmaps::decode() {
             Ok(pixmaps) => {
                 let item = Item {
                     look,
+                    updates,
                     pixmaps: Arc::new(pixmaps),
                     actions: sender,
                 };

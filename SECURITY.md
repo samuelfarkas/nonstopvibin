@@ -69,6 +69,45 @@ fixed. Installed cores are owner-only files in the data folder, checked against
 their manifest at launch. Like the database, they are not protected from software
 running as the same OS user.
 
+## App updates
+
+The Rust app updates itself from this repository's GitHub Releases
+(`crates/shell/src/update`). It reads `releases.atom` for the newest version it may
+install (a beta only from a beta, never a downgrade), then that release's
+`SHA256SUMS`, `latest-mac.yml` or `latest-linux.yml`, and the zip or AppImage. It
+accepts the update only when:
+
+- `SHA256SUMS.minisig` verifies with the public key compiled in from
+  `build/update-signing.pub`, and its trusted comment names this version, once the
+  owner has committed that key ([release signing](docs/release-signing.md#sign-updates-for-the-rust-updater));
+- the feed and the payload match their lines in `SHA256SUMS`, and the payload
+  matches the feed's size and SHA-512, the check electron-updater made;
+- on macOS, the unpacked bundle satisfies the running bundle's designated
+  requirement (`codesign --verify --deep --strict`) and its core matches its manifest.
+
+Requests use HTTPS with the bundled web PKI roots, follow redirects only to
+`github.com`, `objects.githubusercontent.com` and
+`release-assets.githubusercontent.com`, and read at most the feed's payload size.
+The update is staged beside the app and swapped in with one atomic rename where the
+file system supports it. Logs never contain response bodies.
+
+**What the signature adds.** Electron builds trusted whatever the release served
+over HTTPS: the SHA-512 sits in a feed from the same release, so anyone who can
+upload or replace release assets (a leaked token with `contents: write`, a hijacked
+GitHub session, a compromised workflow outside the `release` environment) could ship
+an update, and an ad-hoc macOS requirement accepts any code with the bundle
+identifier. With the key committed, that attacker also needs the minisign secret,
+which only the `release` environment holds and only `v*` tags reach.
+
+**What it does not cover.** Anything that runs in the release workflow can sign: a
+malicious change merged and tagged, a compromised action in `release.yml`, or an
+admin who changes the environment's rules. Signing proves the release workflow
+published the files, not what source they came from; build provenance
+(`gh attestation verify`) covers that. Builds from before the key was committed
+verify nothing beyond HTTPS and the hashes, and their first update with a key is
+trusted that way. A lost or leaked key needs a release that ships a new public key.
+Software running as the same OS user can replace the app directly.
+
 ## Distribution checklist
 
 - Include the application MIT license and preserve third-party licenses. Audit the
@@ -83,8 +122,9 @@ running as the same OS user.
   reports.
 - macOS releases are ad-hoc signed and not notarized until a Developer ID is set up.
   An installed app accepts any update with its bundle identifier, so an update's
-  authenticity rests on GitHub Releases; [macOS release signing](docs/release-signing.md)
-  describes the signing and its trust model. Until the first Developer ID release,
+  authenticity rests on GitHub Releases and, in the Rust app, the release key
+  ([App updates](#app-updates)); [macOS release signing](docs/release-signing.md)
+  describes the signing. Until the first Developer ID release,
   say in the README and release notes that macOS builds are not notarized. Test
   installation, launch, quit, and reopen on a clean machine.
   Test owner-only storage permissions and credential persistence after reopening.

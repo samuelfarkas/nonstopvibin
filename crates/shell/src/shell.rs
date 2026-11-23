@@ -14,7 +14,8 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::helper::{Event, Helper};
 use crate::login::{Login, UNPACKAGED};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
-use crate::{HostEvent, ShellHost, external, log};
+use crate::update::{Staged, Updates};
+use crate::{HostEvent, ShellHost, UpdateFailed, external, log};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -27,16 +28,28 @@ pub struct Options {
     pub login: Login,
 }
 
-/// Runs the tray and the windows until Quit, or until the daemon's event channel closes.
+/// Runs the tray, the windows and app updates until Quit, until the daemon's event channel
+/// closes, or until "Restart to update" has stopped the daemon and started the update.
 /// Dropping the future closes the helper's stdin, and the helper exits with its windows.
-pub async fn run(host: &impl ShellHost, options: Options, link: TrayLink) {
+///
+/// # Errors
+/// [`UpdateFailed`] when the daemon stopped for an update that could not be installed; the
+/// process should exit with a failure, as Electron's did.
+pub async fn run(
+    host: &impl ShellHost,
+    options: Options,
+    link: TrayLink,
+) -> Result<(), UpdateFailed> {
     let open_window = options.open_window && !link.login_launch();
     let mut status = host.tray_status();
     let mut events = host.events();
     let look = Look::of(&status.borrow_and_update());
+    let updates = Updates::detect(options.packaged);
     let mut shell = Shell {
         host,
-        tray: Tray::start(link, look.clone()).await,
+        tray: Tray::start(link, look.clone(), updates.possible()).await,
+        updates,
+        failed: false,
         tray_alive: true,
         look,
         options,
@@ -88,10 +101,21 @@ pub async fn run(host: &impl ShellHost, options: Options, link: TrayLink) {
                 Err(RecvError::Lagged(_)) => Step::Continue,
                 Err(RecvError::Closed) => Step::Stop,
             },
+            dialog = shell.updates.next() => {
+                if let Some(kind) = dialog {
+                    shell.show(View::Dialog { kind }).await;
+                }
+                Step::Continue
+            }
         };
         if step == Step::Stop {
             break;
         }
+    }
+    if shell.failed {
+        Err(UpdateFailed)
+    } else {
+        Ok(())
     }
 }
 
@@ -112,6 +136,9 @@ struct Shell<'a, H> {
     host: &'a H,
     tray: Tray,
     tray_alive: bool,
+    updates: Updates,
+    /// An update stopped the daemon and could not be installed.
+    failed: bool,
     look: Look,
     options: Options,
     helper: Option<Helper>,
@@ -142,9 +169,50 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.toggle_quota().await;
             }
             Action::OpenMain => self.show(View::Main { profile: None }).await,
+            Action::CheckUpdates => self.check_updates().await,
             Action::Quit => return self.quit().await,
         }
         Step::Continue
+    }
+
+    /// "Check for updates…" in the tray or the app menu.
+    async fn check_updates(&mut self) {
+        if let Some(kind) = self.updates.check(true) {
+            self.show(View::Dialog { kind }).await;
+        }
+    }
+
+    /// "Restart to update": closes the windows, stops the daemon as Quit would (open requests
+    /// finish, usage drains, cores stop), then swaps the update in and starts it. A failure
+    /// shows main.ts's error and ends the shell with [`UpdateFailed`].
+    async fn install(&mut self, update: Staged) -> Step {
+        // Open windows would show "Failed to fetch" once the local service stops.
+        self.send(&ToHelper::Quit).await;
+        self.helper = None;
+        self.forget_windows();
+        let failure = match self.host.close().await {
+            Err(error) => {
+                log(format_args!("could not stop for the update: {error}"));
+                DialogKind::CouldNotRestart
+            }
+            Ok(()) => match update.install() {
+                Ok(()) => return Step::Stop,
+                Err(error) => {
+                    log(format_args!("could not install the update: {error}"));
+                    DialogKind::CouldNotInstall
+                }
+            },
+        };
+        self.failed = true;
+        self.show(View::Dialog { kind: failure }).await;
+        // Electron's error box held the exit until it was dismissed.
+        while let Some(helper) = &mut self.helper {
+            match helper.next().await {
+                Event::Message(FromHelper::Closed { .. }) | Event::Exited(_) => break,
+                Event::Message(_) => {}
+            }
+        }
+        Step::Stop
     }
 
     async fn host_event(&mut self, event: HostEvent) -> Step {
@@ -181,8 +249,12 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.opened(&view);
                 return;
             }
-            // It is exiting, and takes its windows along.
+            // It is exiting, and takes its windows along. A dialog to show came from the
+            // updater, which already counts it as open.
             self.helper = None;
+            if !matches!(view, View::Dialog { .. }) {
+                self.updates.closed(None);
+            }
         }
         self.forget_windows();
         self.opened(&view);
@@ -191,6 +263,7 @@ impl<H: ShellHost> Shell<'_, H> {
             view: view.clone(),
             bounds: self.bounds,
             data_directory: self.host.data_directory().to_owned(),
+            updates: self.updates.possible(),
         };
         match Helper::spawn(&self.options.helper, &start, self.host.session_token()).await {
             Ok(helper) => self.helper = Some(helper),
@@ -198,6 +271,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 log(format_args!("could not start the window helper: {error}"));
                 self.fall_back();
                 self.forget_windows();
+                self.updates.closed(None);
             }
         }
     }
@@ -267,6 +341,7 @@ impl<H: ShellHost> Shell<'_, H> {
                     log(format_args!("the window helper stopped ({status:?})"));
                 }
                 self.forget_windows();
+                self.updates.closed(None);
             }
         }
         Step::Continue
@@ -290,7 +365,10 @@ impl<H: ShellHost> Shell<'_, H> {
                             at: Some(Instant::now()),
                         };
                     }
-                    ViewKind::Dialog { kind } => self.dialogs.retain(|open| *open != kind),
+                    ViewKind::Dialog { kind } => {
+                        self.dialogs.retain(|open| *open != kind);
+                        self.updates.closed(Some(kind));
+                    }
                 }
                 if !self.main && self.popup != Popup::Open && self.dialogs.is_empty() {
                     // The helper exits with its last window: the next view needs a new one.
@@ -323,8 +401,12 @@ impl<H: ShellHost> Shell<'_, H> {
             }
             FromHelper::ToggleQuota => self.toggle_quota().await,
             FromHelper::QuitApp => return self.quit().await,
-            // The app updater answers these.
-            FromHelper::CheckUpdates | FromHelper::RestartToUpdate => {}
+            FromHelper::CheckUpdates => self.check_updates().await,
+            FromHelper::RestartToUpdate => {
+                if let Some(update) = self.updates.restart() {
+                    return self.install(update).await;
+                }
+            }
         }
         Step::Continue
     }

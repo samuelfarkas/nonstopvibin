@@ -258,6 +258,7 @@ impl Helper {
             view,
             bounds,
             data_directory: directory.to_owned(),
+            updates: false,
         };
         helper::write(&mut input, &start).unwrap();
         writeln!(input, "{token}").unwrap();

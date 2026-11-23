@@ -39,6 +39,9 @@ impl ShellHost for Idle {
     }
     fn report(&self, _message: &str) {}
     fn shutdown(&self) {}
+    fn close(&self) -> impl Future<Output = Result<(), String>> {
+        std::future::ready(Ok(()))
+    }
 }
 
 fn main() -> ExitCode {
@@ -73,7 +76,10 @@ fn main() -> ExitCode {
         else {
             return 1;
         };
-        runtime.block_on(nsv_shell::run(&host, options, link));
-        0
+        u8::from(
+            runtime
+                .block_on(nsv_shell::run(&host, options, link))
+                .is_err(),
+        )
     })
 }

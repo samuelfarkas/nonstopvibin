@@ -129,19 +129,20 @@ async fn start(
 async fn run_until_stopped(
     daemon: &Daemon<Https>,
     signals: &mut Signals,
-    shell: impl Future<Output = ()>,
+    shell: impl Future<Output = Result<(), nsv_shell::UpdateFailed>>,
 ) -> u8 {
+    let mut update_failed = false;
     tokio::select! {
         () = signals.received() => {}
         () = daemon.stopping() => {}
         () = panic::fatal() => {}
-        () = shell => {}
+        ended = shell => update_failed = ended.is_err(),
     }
     let closed = daemon.close().await;
     if let Err(error) = &closed {
         complain(&error.to_string());
     }
-    u8::from(closed.is_err() || panic::panicked())
+    u8::from(update_failed || closed.is_err() || panic::panicked())
 }
 
 fn agents() -> Result<AgentDirectories, CliError> {

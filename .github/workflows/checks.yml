@@ -150,6 +150,12 @@ jobs:
         run: |
           (cd electron-4ea188a && bun run setup && bun run build)
           NSV_ELECTRON_CHECKOUT="$PWD/electron-4ea188a" bun run test:update:mac
+      - if: runner.os == 'macOS'
+        name: Update an installed Rust build in place
+        # This checkout rebuilt as 0.0.1 refuses a forged bundle and a foreign signature, then
+        # installs the packaged zip from a local feed signed with a throwaway key and relaunches it.
+        timeout-minutes: 25
+        run: bun tests/mac-update-rust.mjs
       - if: runner.os == 'macOS' && (failure() || cancelled())
         name: Upload update test diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
