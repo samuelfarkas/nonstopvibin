@@ -64,7 +64,7 @@ fn copy_fixture(root: &Path, expected: &Value) -> PathBuf {
         let path = file["path"].as_str().unwrap();
         if path.starts_with("data/") {
             if file["type"] == "directory" {
-                std::fs::create_dir_all(root.join(path)).unwrap();
+                fs::create_dir_all(root.join(path)).unwrap();
             }
             let mode = u32::from_str_radix(file["mode"].as_str().unwrap(), 8).unwrap();
             set_mode(&root.join(path), mode);
