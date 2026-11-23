@@ -204,6 +204,43 @@ fn text(request: &Request<Incoming>, name: header::HeaderName) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+/// What a request asks to switch to. Node's `upgrade` event fired for `Connection: upgrade`
+/// with an `Upgrade` header; without the token the `Upgrade` header is ignored.
+enum Switch {
+    None,
+    WebSocket,
+    Other,
+}
+
+fn switch(headers: &HeaderMap) -> Switch {
+    let tokens = |name| {
+        headers
+            .get_all(name)
+            .into_iter()
+            .flat_map(|value| value.as_bytes().split(|&byte| byte == b','))
+            .map(<[u8]>::trim_ascii)
+    };
+    let requested = headers.contains_key(header::UPGRADE)
+        && tokens(header::CONNECTION).any(|token| token.eq_ignore_ascii_case(b"upgrade"));
+    if !requested {
+        Switch::None
+    } else if tokens(header::UPGRADE).any(|token| token.eq_ignore_ascii_case(b"websocket")) {
+        Switch::WebSocket
+    } else {
+        Switch::Other
+    }
+}
+
+/// An empty answer that closes the connection, as the upgrade path wrote to its socket.
+fn closed(status: StatusCode) -> Response<Body> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+    response
+}
+
 /// A browser Origin: an empty header counts as none, as it did in Node.
 fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
     let value = request.headers().get(header::ORIGIN)?;
@@ -250,8 +287,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
     }
 
     async fn dispatch(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
-        if request.headers().contains_key(header::UPGRADE) {
-            return self.upgrade(request).await;
+        match switch(request.headers()) {
+            Switch::None => {}
+            Switch::WebSocket => return self.upgrade(request).await,
+            // The upgrade path sends a bodiless GET, which would drop this request's method
+            // and body; main's core answered it with an error too.
+            Switch::Other => return closed(StatusCode::BAD_REQUEST),
         }
         match self.handle(request).await {
             Ok(response) => response,
@@ -263,12 +304,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
     async fn upgrade(&self, request: Request<Incoming>) -> Response<Body> {
         let host = text(&request, header::HOST);
         if !self.valid_host(host) || self.allowed_host(host) || origin(&request).is_some() {
-            let mut response = Response::new(Body::empty());
-            *response.status_mut() = StatusCode::FORBIDDEN;
-            let headers = response.headers_mut();
-            headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
-            headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
-            return response;
+            return closed(StatusCode::FORBIDDEN);
         }
         self.gateway.upgrade(request).await
     }

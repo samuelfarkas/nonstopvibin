@@ -798,6 +798,42 @@ async fn profile_keys_never_manage_or_cross_profiles() {
     assert_eq!(daemon.exited().await.0, 0);
 }
 
+#[tokio::test]
+async fn only_a_websocket_switch_takes_the_upgrade_path() {
+    let upstream = stub_upstream().await.port;
+    let root = Root::new("switch");
+    let seeded = seed(&root.data(), 1, upstream).await;
+    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let bearer = format!("Bearer {}", seeded[0].key);
+    // An Upgrade without `Connection: upgrade` is an ordinary request; a switch to anything
+    // but WebSocket is refused rather than sent on as a bodiless GET.
+    let ignored = send(
+        daemon.port,
+        "POST",
+        "/v1/chat/completions",
+        &[("Authorization", &bearer), ("Upgrade", "websocket")],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(ignored.status, 200, "{}", ignored.body);
+    let h2c = send(
+        daemon.port,
+        "POST",
+        "/v1/chat/completions",
+        &[
+            ("Authorization", &bearer),
+            ("Connection", "Upgrade, HTTP2-Settings"),
+            ("Upgrade", "h2c"),
+            ("HTTP2-Settings", "AAMAAABkAAQCAAAAAAIAAAAA"),
+        ],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(h2c.status, 400);
+    daemon.signal("TERM");
+    assert_eq!(daemon.exited().await.0, 0);
+}
+
 /// A Responses WebSocket handshake through the gateway: the answer's status and headers.
 async fn handshake(port: u16, slug: &str, key: &str) -> (u16, Vec<(String, String)>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
