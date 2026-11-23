@@ -35,7 +35,7 @@ pub(crate) trait Native {
     const MAIN_DRAG_REGIONS: bool;
 
     fn event_loop<T: 'static>() -> EventLoop<T>;
-    /// Once the loop runs. `updates` enables "Check for updates…".
+    /// Once the loop runs.
     fn start(state: &mut Self::State, proxy: &Proxy, updates: bool);
     /// After each event; `main_on_screen` tells whether the main window shows.
     fn settle(state: &mut Self::State, target: &Target, main_on_screen: impl FnOnce() -> bool);

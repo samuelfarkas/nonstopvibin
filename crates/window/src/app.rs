@@ -218,7 +218,6 @@ pub(crate) fn run(boot: Boot) -> ! {
     })
 }
 
-/// Reads the daemon's messages on a thread of their own.
 fn read_daemon(proxy: &Proxy) {
     let reader = proxy.clone();
     let spawned = std::thread::Builder::new()
@@ -474,8 +473,9 @@ impl App {
         self.report_closed(ViewKind::Main, self.main_bounds);
     }
 
-    /// The draft guard (`useKeepDraft`): the page may veto, as with Electron's
-    /// `will-prevent-unload`; then the window hides and closes on `releaseWindow`.
+    /// The draft guard (`useKeepDraft` in src/client/controls.tsx is the page's half): the page
+    /// may veto, as with Electron's `will-prevent-unload`; then the window hides and closes on
+    /// `releaseWindow`.
     fn ask_to_close_main(&mut self) {
         let Some(main) = &self.main else { return };
         if self.main_closing == Closing::Asking {
@@ -584,7 +584,6 @@ impl App {
         };
         match event {
             WindowEvent::Focused(true) => quota.focused = true,
-            // Focus loss closes the popup, once it has had focus.
             WindowEvent::Focused(false) if quota.focused => self.close_quota(),
             WindowEvent::CloseRequested => self.close_quota(),
             _ => {}
