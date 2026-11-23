@@ -56,6 +56,23 @@ States: (a) started, no window ever opened; (b) after three open/close cycles an
   WebKit starting in a fresh process; it was not broken down further.
 - Not measured: macOS, a desktop session with shared libraries, and the real UI bundle.
 
+## The desktop shell idle (Linux, Docker)
+
+`nsv-shell` alone (`crates/shell/examples/idle.rs`, release build): its tray registered with a
+StatusNotifierWatcher on a session bus, no window ever opened, measured for 60 s after a 5 s
+settle by `crates/shell/tests/desktop.rs` (`measure_idle`). Three runs at load 0.4–2.7.
+
+| Measure                                | Value (3 runs)      |
+| -------------------------------------- | ------------------- |
+| PSS                                    | 3.5 MiB (3.48–3.51) |
+| Threads                                | 1                   |
+| Context switches in 60 s (all threads) | 0, 0, 0             |
+
+- The tray and the supervisor add no wakeups. One thread runs tokio's current-thread runtime and
+  ksni's D-Bus connection, and with no timer set it does not wake. A tray host that queries the
+  item wakes it; the test's watcher does not.
+- The figure excludes the server, which the daemon adds, and a real tray host.
+
 ## Main (4ea188a) on the before/after harness
 
 Three API-key profiles on a synthetic upstream. Streamed events are paced 5 ms apart. Two runs
