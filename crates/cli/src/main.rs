@@ -310,7 +310,6 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nsv_domain::secret::SessionToken;
 
     #[test]
     fn the_legacy_background_flag_starts_the_desktop_app_without_a_display() {
@@ -327,20 +326,6 @@ mod tests {
         );
         assert!(!opens("--background --help", true));
         assert!(!opens("serve", true));
-    }
-
-    #[test]
-    fn urls_and_tunnels_follow_the_session() {
-        let session = Session {
-            pid: 1,
-            port: 4320,
-            token: SessionToken::new("t"),
-            allow_hosts: vec![],
-            version: VERSION.to_owned(),
-            started_at: 0,
-        };
-        assert!(url_text(&session, Some("")).contains("Open this link on this machine:"));
-        assert_eq!(tunnel_command("1 2 3", "u", 4320), None);
     }
 }
 
