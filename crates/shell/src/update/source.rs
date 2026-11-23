@@ -1,6 +1,7 @@
 //! Where releases come from: GitHub over HTTPS, following redirects only to its release-asset
-//! hosts, or a test feed on loopback HTTP that only a build can name (`NONSTOPVIBIN_UPDATE_FEED`
-//! at compile time, read by build.rs). Every read has a size cap.
+//! hosts, or a test feed on loopback HTTP that only the build environment can name
+//! (`NONSTOPVIBIN_TEST_UPDATE_FEED=http://127.0.0.1:<port>/`, which tests/linux-update.sh and
+//! tests/mac-update-rust.mjs set and release builds never do). Every read has a size cap.
 
 use std::path::Path;
 use std::time::Duration;
@@ -29,7 +30,7 @@ pub(crate) enum Source {
 impl Source {
     /// GitHub, unless this build names a test feed. `Err` holds what to log.
     pub(crate) fn new() -> Result<Self, String> {
-        match option_env!("NSV_UPDATE_FEED") {
+        match option_env!("NONSTOPVIBIN_TEST_UPDATE_FEED") {
             None => Https::new()
                 .map(Self::GitHub)
                 .map_err(|error| error.to_string()),

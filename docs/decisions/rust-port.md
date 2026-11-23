@@ -140,9 +140,13 @@ Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 - Releases keep publishing `latest-mac.yml` and `latest-linux.yml` with the same bundle
   identifier, designated requirement, artifact names and zip layout. Installed Electron builds
   therefore update onto the Rust build through electron-updater.
-- The Rust updater reads the same feed. On macOS it stages beside the bundle, verifies the code
-  signature against the requirement and the bundled core against its manifest, swaps the bundle
-  by rename with rollback, and restarts. On Linux it replaces the AppImage in place.
+- The Rust updater (`crates/shell/src/update`) reads the same feed. It finds the newest release
+  in `releases.atom`, as electron-updater did for betas, and keeps electron-updater's channel,
+  timing, dialogs and SHA-512 check. On macOS it stages beside the bundle, verifies the code
+  signature against the running bundle's requirement and the bundled core against its manifest,
+  swaps the bundle with one atomic exchange (two renames with rollback where the file system has
+  none), and starts the new daemon itself with the old one's environment. On Linux it swaps the
+  AppImage in place the same way. Squirrel.Mac relaunched without the environment.
 - Login item: `SMAppService.mainApp` on macOS, the registration Electron made. On Linux it is
   the same `~/.config/autostart` entry.
 - Entitlements become empty: no JIT, executable memory or library-validation exceptions.
