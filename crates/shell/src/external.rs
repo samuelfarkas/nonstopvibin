@@ -9,6 +9,8 @@ use nsv_domain::registry::registry;
 use tokio::process::Command;
 use url::Url;
 
+use crate::platform::{Opener, Os};
+
 const NOT_APPROVED: &str = "This external URL is not an approved provider sign-in page.";
 
 /// main.ts's `safeExternal`: `https:` with no user name or password on a host some provider
@@ -43,39 +45,36 @@ pub(crate) fn open_approved(url: &str) -> Result<(), String> {
 
 /// Opens `url`, which [`safe_external`] approved or which is the daemon's own session link.
 pub(crate) fn open(url: &str) -> Result<(), String> {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    launch(Command::new(opener).arg(url))
+    launch(Command::new(Os::OPEN).arg(url))
 }
 
-/// Shows `file` selected in the file manager, as Electron's `showItemInFolder`.
 #[cfg(target_os = "macos")]
-#[expect(
-    clippy::unused_async,
-    reason = "the Linux twin asks the file manager over D-Bus"
-)]
-pub(crate) async fn reveal(file: &Path) -> Result<(), String> {
-    launch(Command::new("open").arg("-R").arg(file))
+impl Opener for Os {
+    const OPEN: &'static str = "open";
+
+    fn reveal(file: &Path) -> impl Future<Output = Result<(), String>> {
+        std::future::ready(launch(Command::new("open").arg("-R").arg(file)))
+    }
 }
 
-/// Shows `file` selected in the file manager, as Electron's `showItemInFolder`: the
-/// `FileManager1` D-Bus interface, else the folder in the default file manager.
 #[cfg(target_os = "linux")]
-pub(crate) async fn reveal(file: &Path) -> Result<(), String> {
-    let Ok(uri) = Url::from_file_path(file) else {
-        return Err("The data folder's path is not absolute.".to_owned());
-    };
-    match show_items(uri.as_str()).await {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            crate::log(format_args!(
-                "no FileManager1 ({error}); opening the folder"
-            ));
-            let folder = file.parent().unwrap_or(file);
-            launch(Command::new("xdg-open").arg(folder))
+impl Opener for Os {
+    const OPEN: &'static str = "xdg-open";
+
+    /// The `FileManager1` D-Bus interface, else the folder in the default file manager.
+    async fn reveal(file: &Path) -> Result<(), String> {
+        let Ok(uri) = Url::from_file_path(file) else {
+            return Err("The data folder's path is not absolute.".to_owned());
+        };
+        match show_items(uri.as_str()).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                crate::log(format_args!(
+                    "no FileManager1 ({error}); opening the folder"
+                ));
+                let folder = file.parent().unwrap_or(file);
+                launch(Command::new(Self::OPEN).arg(folder))
+            }
         }
     }
 }

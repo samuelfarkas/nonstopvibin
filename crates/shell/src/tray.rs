@@ -12,13 +12,17 @@ use nsv_desktop::pipe::Anchor;
 use nsv_desktop::{Command, TrayStatus};
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::Tray;
-#[cfg(target_os = "linux")]
-pub use linux::{TrayLink, run_desktop};
+pub(crate) use linux::{Link, Tray};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::Tray;
-#[cfg(target_os = "macos")]
-pub use macos::{TrayLink, run_desktop};
+pub(crate) use macos::{Link, StatusItem, Tray};
+
+/// What the main thread hands the daemon thread ([`crate::run_desktop`]).
+#[derive(Debug)]
+pub struct TrayLink {
+    /// Opened by the login item: the daemon starts without a window, as with `--background`.
+    pub(crate) login_launch: bool,
+    pub(crate) tray: Link,
+}
 
 /// The colored mirrorball while a profile runs, the grey one when none does
 /// (docs/design/icons.md).

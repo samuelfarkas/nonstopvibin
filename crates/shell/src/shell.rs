@@ -14,6 +14,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::helper::{Event, Helper};
 use crate::login::{Login, UNPACKAGED};
+use crate::platform::{LoginItem, Opener, Os, SystemTray};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
 use crate::update::{Staged, Updates};
 use crate::{ShellHost, UpdateFailed, external, log};
@@ -41,14 +42,14 @@ pub async fn run(
     options: Options,
     link: TrayLink,
 ) -> Result<(), UpdateFailed> {
-    let open_window = options.open_window && !link.login_launch();
+    let open_window = options.open_window && !link.login_launch;
     let mut status = host.tray_status();
     let mut events = host.events();
     let look = Look::of(&status.borrow_and_update());
     let updates = Updates::detect(options.packaged);
     let mut shell = Shell {
         host,
-        tray: Tray::start(link, look.clone(), updates.possible()).await,
+        tray: Tray::start(link.tray, look.clone(), updates.possible()).await,
         updates,
         failed: false,
         tray_alive: true,
@@ -402,7 +403,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.options.login.set(enabled).map(Value::Bool)
             }
             DaemonCall::RevealData => {
-                external::reveal(&self.host.data_directory().database()).await?;
+                Os::reveal(&self.host.data_directory().database()).await?;
                 Ok(Value::Null)
             }
         }

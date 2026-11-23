@@ -36,7 +36,7 @@ pub(crate) fn options(
 pub(crate) fn spawn_shell(host: &Arc<Host>, options: Options) -> thread::JoinHandle<()> {
     let host = Arc::clone(host);
     thread::spawn(move || {
-        let code = nsv_shell::run_desktop(|link| {
+        let code = nsv_shell::run_desktop(move |link| {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()

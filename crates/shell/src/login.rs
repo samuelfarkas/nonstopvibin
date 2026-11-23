@@ -17,6 +17,8 @@ mod linux {
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
 
+    use crate::platform::LoginItem;
+
     const FILE: &str = "app.nonstopvibin.desktop";
 
     /// The autostart entry and the executable it starts.
@@ -58,12 +60,14 @@ mod linux {
         fn file(&self) -> PathBuf {
             self.autostart.join(FILE)
         }
+    }
 
-        pub(crate) fn enabled(&self) -> bool {
+    impl LoginItem for Login {
+        fn enabled(&self) -> bool {
             self.file().exists()
         }
 
-        pub(crate) fn set(&self, enabled: bool) -> Result<bool, String> {
+        fn set(&self, enabled: bool) -> Result<bool, String> {
             let file = self.file();
             if enabled {
                 let entry = desktop_entry(&self.executable)?;
@@ -91,9 +95,8 @@ mod linux {
             Ok(self.enabled())
         }
 
-        /// An update may rename the `AppImage`: points an existing entry at this executable and
-        /// creates none.
-        pub(crate) fn follow(&self) -> Result<(), String> {
+        /// An update may rename the `AppImage`.
+        fn follow(&self) -> Result<(), String> {
             if self.enabled() {
                 self.set(true)?;
             }
@@ -129,6 +132,7 @@ mod linux {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::platform::LoginItem;
         use std::os::unix::fs::PermissionsExt;
 
         fn entry_exec(executable: &str) -> String {
@@ -217,6 +221,7 @@ mod macos {
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
     use crate::log;
+    use crate::platform::LoginItem;
 
     /// `SMAppService.mainApp`: the app bundle itself. Electron registered the same service
     /// (`setLoginItemSettings` on macOS 13 and later), so existing registrations carry over.
@@ -228,10 +233,11 @@ mod macos {
         pub fn new() -> Self {
             Self
         }
+    }
 
+    impl LoginItem for Login {
         #[expect(unsafe_code, reason = "objc2 marks every SMAppService method unsafe")]
-        #[expect(clippy::unused_self, reason = "the Linux twin reads its own entry")]
-        pub(crate) fn enabled(&self) -> bool {
+        fn enabled(&self) -> bool {
             // SAFETY: a class method without arguments that returns a retained object.
             let service = unsafe { SMAppService::mainAppService() };
             // SAFETY: a getter on that live object.
@@ -242,7 +248,7 @@ mod macos {
         /// As `setLoginItemSettings` then `getLoginItemSettings`: macOS may refuse or ask the user,
         /// and only the status says what it did.
         #[expect(unsafe_code, reason = "objc2 marks every SMAppService method unsafe")]
-        pub(crate) fn set(&self, enabled: bool) -> Result<bool, String> {
+        fn set(&self, enabled: bool) -> Result<bool, String> {
             // SAFETY: a class method without arguments that returns a retained object.
             let service = unsafe { SMAppService::mainAppService() };
             let changed = if enabled {
@@ -262,9 +268,8 @@ mod macos {
             }
         }
 
-        #[expect(clippy::unnecessary_wraps, reason = "the Linux twin rewrites a file")]
-        #[expect(clippy::unused_self, reason = "the Linux twin rewrites a file")]
-        pub(crate) fn follow(&self) -> Result<(), String> {
+        /// The registration names the bundle, which an update replaces in place.
+        fn follow(&self) -> Result<(), String> {
             Ok(())
         }
     }

@@ -7,6 +7,8 @@
 mod external;
 mod helper;
 mod login;
+mod platform;
+mod process;
 mod shell;
 mod tray;
 mod update;
@@ -20,8 +22,9 @@ use tokio::sync::{broadcast, watch};
 
 pub use helper::{alert, beside_executable as helper_beside_executable};
 pub use login::Login;
+pub use process::run_desktop;
 pub use shell::{Options, run};
-pub use tray::{TrayLink, run_desktop};
+pub use tray::TrayLink;
 
 /// What the shell needs from the daemon.
 pub trait ShellHost {

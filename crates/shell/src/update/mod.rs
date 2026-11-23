@@ -28,15 +28,16 @@ use sha2::{Digest, Sha256, Sha512};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 
 #[cfg(target_os = "linux")]
-use linux as platform;
+use linux::Target;
 #[cfg(target_os = "macos")]
-use macos as platform;
+use macos::Target;
 
 use self::feed::{Rejected, Sums};
 use self::machine::{Checked, Command, Machine};
 use self::source::Source;
 use self::version::Version;
 use crate::log;
+use crate::platform::UpdateTarget;
 
 const FIRST_CHECK: Duration = Duration::from_secs(30);
 const EVERY: Duration = Duration::from_hours(6);
@@ -61,8 +62,8 @@ enum Mode {
     On(Box<Updater>),
 }
 
-/// What [`platform::Target::detect`] found.
-enum Detected<T> {
+/// What [`UpdateTarget::detect`] found.
+pub(crate) enum Detected<T> {
     None,
     #[cfg_attr(
         not(target_os = "macos"),
@@ -76,7 +77,7 @@ enum Detected<T> {
 }
 
 struct Updater {
-    target: platform::Target,
+    target: Target,
     current: Version,
     machine: Machine<Staged>,
     timer: Interval,
@@ -94,7 +95,7 @@ impl Updates {
         if !packaged || !cfg!(updates_enabled) {
             return Self(Mode::Off);
         }
-        match platform::Target::detect() {
+        match Target::detect() {
             Detected::None => Self(Mode::Off),
             Detected::NotReplaceable => Self(Mode::MoveFirst),
             Detected::Target(target) => {
@@ -207,7 +208,7 @@ enum Failure {
 }
 
 /// Finds the newest release this build takes, then downloads, verifies and stages it.
-async fn find(target: &platform::Target, current: Version) -> Result<Option<Staged>, Failure> {
+async fn find(target: &Target, current: Version) -> Result<Option<Staged>, Failure> {
     let key = release_key();
     let source = Source::new().map_err(Failure::Local)?;
     let atom = source
@@ -229,15 +230,15 @@ async fn find(target: &platform::Target, current: Version) -> Result<Option<Stag
     }
     let sums = Sums::parse(text(&sums, "SHA256SUMS is not text")?)?;
     let feed = source
-        .get(&format!("{release}{}", platform::FEED), "*/*", SMALL_FILE)
+        .get(&format!("{release}{}", Target::FEED), "*/*", SMALL_FILE)
         .await?;
-    if Sha256::digest(&feed)[..] != sums.of(platform::FEED)?[..] {
+    if Sha256::digest(&feed)[..] != sums.of(Target::FEED)?[..] {
         return Err(Rejected("the update feed does not match SHA256SUMS").into());
     }
     let payload = feed::payload(
         text(&feed, "the update feed is not text")?,
         version,
-        platform::PAYLOAD,
+        Target::PAYLOAD,
     )?;
     let sha256 = *sums.of(&payload.name)?;
     let staging = staging(target);
@@ -368,7 +369,7 @@ fn unsupported(error: &std::io::Error) -> bool {
 }
 
 /// `<folder>/.<app name>.update`: beside the app, so the swap stays on one file system.
-fn staging(target: &platform::Target) -> PathBuf {
+fn staging(target: &Target) -> PathBuf {
     let path = target.path();
     let name = path
         .file_name()

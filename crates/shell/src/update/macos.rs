@@ -11,9 +11,7 @@ use tokio::process::Command;
 
 use super::Detected;
 use crate::log;
-
-pub(super) const FEED: &str = "latest-mac.yml";
-pub(super) const PAYLOAD: &str = ".zip";
+use crate::platform::UpdateTarget;
 /// The bundle the release zip holds at its root.
 const BUNDLE: &str = "NonstopVibin.app";
 
@@ -24,8 +22,11 @@ pub(super) struct Target {
     executable: PathBuf,
 }
 
-impl Target {
-    pub(super) fn detect() -> Detected<Self> {
+impl UpdateTarget for Target {
+    const FEED: &'static str = "latest-mac.yml";
+    const PAYLOAD: &'static str = ".zip";
+
+    fn detect() -> Detected<Self> {
         let Some((executable, bundle)) = std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .ok()
@@ -51,16 +52,16 @@ impl Target {
         }
     }
 
-    pub(super) fn path(&self) -> &Path {
+    fn path(&self) -> &Path {
         &self.bundle
     }
 
-    pub(super) fn executable(&self) -> &Path {
+    fn executable(&self) -> &Path {
         &self.executable
     }
 
-    /// Unpacks the zip in `staging` and checks the bundle in it; answers its path.
-    pub(super) async fn prepare(&self, staging: &Path, payload: &Path) -> Result<PathBuf, String> {
+    /// Unpacks the zip in `staging` and checks the bundle in it.
+    async fn prepare(&self, staging: &Path, payload: &Path) -> Result<PathBuf, String> {
         let unpacked = staging.join("unpacked");
         run(
             Command::new("/usr/bin/ditto")
