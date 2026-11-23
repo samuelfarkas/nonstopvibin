@@ -598,10 +598,7 @@ async fn a_profile_the_launch_started_that_exited_before_scheduling_is_reported_
     world.fake.script(
         &early,
         [
-            Script {
-                exits_after: Some(Duration::from_millis(100)),
-                ..Script::default()
-            },
+            Script::default(),
             Script {
                 answers: None,
                 ..Script::default()
@@ -615,7 +612,16 @@ async fn a_profile_the_launch_started_that_exited_before_scheduling_is_reported_
             ..Script::default()
         }],
     );
-    world.run(world.scheduler.launch()).await.unwrap();
+    let mut launch = std::pin::pin!(world.scheduler.launch());
+    let mut pool = world.pool().subscribe();
+    // Early's start needs no clock, so Late cannot answer before it ends. Moving the clock
+    // while its accounts sync could make its start fail, which the launch would report.
+    tokio::select! {
+        _ = &mut launch => panic!("the launch ended before Late answered"),
+        _ = pool.wait_for(|pool| pool.running(&early) && !pool.starting(&early)) => {}
+    }
+    world.fake.kill(&early);
+    world.run(launch).await.unwrap();
     assert!(
         !world.fake.latest(&early).unwrap().alive(),
         "Early exited during the launch"
