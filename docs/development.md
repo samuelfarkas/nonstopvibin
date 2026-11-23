@@ -194,7 +194,7 @@ recorded in [security tooling](security-tooling.md). UI work follows the
 The packaging scripts (`scripts/package-mac.ts`, `package-linux.ts` and
 `package-server.ts`) build the Rust binaries, copy `dist/client` to `client/`
 beside the daemon (`Contents/Resources/client` in the macOS bundle), and stage the
-pinned core and licenses. `scripts/verify-rust-package.ts` then checks each
+pinned core and licenses. `scripts/package-layout.ts` then checks each
 artifact: the exact file layout, the pinned core's version and hash, each
 executable's platform and architecture, a static Linux daemon, macOS executables
 that link only system libraries, the licenses, and no private files. Run it on a

@@ -64,7 +64,7 @@ the database, so this does not protect against software running as the same OS u
 Project-specific lifecycle checks: closing the window differs from **Quit**.
 Verify that the daemon exits after gateway and core shutdown, then reopen. Test a
 second launch and tray events while windows close. Packaging validation belongs
-in the real packaged app, which `scripts/verify-rust-package.ts` checks, not only
+in the real packaged app, which `scripts/package-layout.ts` checks, not only
 in `cargo test`. Follow SECURITY.md for release integrity, signing, and native
 platform checks.
 [Rust API guidelines](https://rust-lang.github.io/api-guidelines/),

@@ -150,12 +150,11 @@ lists each crate's direct workspace dependencies:
 - Packaging is hand-rolled in `scripts/`, which already holds the signing, core validation and
   package verification. It produces the `.app` bundle, zip and dmg, and on Linux
   `appimagetool` and `dpkg-deb`.
-- Layouts. macOS: `Contents/MacOS/NonstopVibin` (the daemon, still the bundle executable)
-  and `nonstopvibin-window`, `Contents/Resources/core/` and `licenses/`. Linux, the AppImage
-  root (`AppRun` links to the daemon) and the deb's `/opt/NonstopVibin/`, where the Electron
-  executable was: `nonstopvibin`, `nonstopvibin-window`, `core/`, `licenses/`. Server archive:
-  `nonstopvibin`, `core/`, `licenses/`, `install.sh`, `README.md`. The daemon finds `core/` in
-  `../Resources` on macOS and beside its real path on Linux. Menus start it without
+- Layouts: `scripts/package-layout.ts` checks each package's exact file list, and
+  `serverArchive` in `scripts/distribution.ts` names the server archive's entries. On macOS
+  the daemon stays the bundle executable; on Linux the deb installs to `/opt/NonstopVibin/`,
+  where the Electron executable was, and the AppImage's `AppRun` links to the daemon. The
+  daemon finds `core/` in `../Resources` on macOS and beside its real path on Linux. Menus start it without
   arguments; existing Electron autostart entries pass `--background`.
 - Releases keep publishing `latest-mac.yml` and `latest-linux.yml` with the same bundle
   identifier, designated requirement, artifact names and zip layout. Installed Electron builds
@@ -171,7 +170,7 @@ lists each crate's direct workspace dependencies:
   the same `~/.config/autostart` entry.
 - Entitlements become empty: no JIT, executable memory or library-validation exceptions.
   WebKit's JIT runs in Apple's WebContent process, and both executables link only system
-  libraries, which library validation accepts. `scripts/verify-rust-package.ts` fails the
+  libraries, which library validation accepts. `scripts/package-layout.ts` fails the
   package if an executable links anything outside `/System/Library` or `/usr/lib`.
 - The Linux daemon is static musl. A glibc build on ubuntu-24.04 needs `GLIBC_2.34`
   (`__libc_start_main`, the pthread symbols) and refuses to start on Rocky 8 (glibc 2.28) from
