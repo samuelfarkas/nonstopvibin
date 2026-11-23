@@ -36,7 +36,7 @@ use crate::sandbox::{Backends, Sandbox};
 use crate::sign_in::SignIn;
 use crate::task::{Report, about, blocking, detached};
 
-pub struct UpdateOptions {
+pub(crate) struct UpdateOptions {
     pub outside: Arc<dyn Outside>,
     pub source: CoreSource,
     /// The bundled core, which profiles start from unless an update is selected.
@@ -50,7 +50,7 @@ pub struct UpdateOptions {
 }
 
 /// Checks the feed, installs a reviewed core, or goes back to the bundled one.
-pub struct CoreUpdates(Arc<Inner>);
+pub(crate) struct CoreUpdates(Arc<Inner>);
 
 impl Clone for CoreUpdates {
     fn clone(&self) -> Self {
@@ -89,7 +89,7 @@ fn io_error(error: &io::Error) -> AppError {
 impl CoreUpdates {
     /// # Errors
     /// The bundled pin or this platform is unknown, which a build rules out.
-    pub fn new(
+    pub(crate) fn new(
         store: Store,
         pool: Pool,
         sign_in: SignIn,
@@ -122,19 +122,19 @@ impl CoreUpdates {
 
     /// Whether this run installs reviewed core updates.
     #[must_use]
-    pub fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         matches!(self.0.options.source, CoreSource::Package { .. })
     }
 
     /// The version of the core profiles start from (`state.coreVersion`).
     #[must_use]
-    pub fn version(&self) -> String {
+    pub(crate) fn version(&self) -> String {
         self.0.status().active.version.to_string()
     }
 
     /// `state.core`.
     #[must_use]
-    pub fn state(&self) -> CoreState {
+    pub(crate) fn state(&self) -> CoreState {
         let status = self.0.status();
         CoreState {
             bundled: self.0.bundled.version.to_string(),
@@ -179,7 +179,7 @@ impl CoreUpdates {
     /// # Errors
     /// 409 in development runs or while an install or revert runs, 503 during shutdown, 502
     /// when the feed cannot be read or is not a pin.
-    pub async fn check(&self) -> Result<(), AppError> {
+    pub(crate) async fn check(&self) -> Result<(), AppError> {
         let mut checking = {
             let mut status = self.0.status();
             if let Some(checking) = &status.checking {
@@ -217,7 +217,7 @@ impl CoreUpdates {
     /// As [`CoreUpdates::check`], 409 when `version` is no longer offered or a sign-in is
     /// pending, 502 for a download that does not match the pin or a core that does not start;
     /// nothing changed then.
-    pub async fn install(&self, version: &str) -> Result<(), AppError> {
+    pub(crate) async fn install(&self, version: &str) -> Result<(), AppError> {
         self.0.after_check().await;
         let version = version.to_owned();
         Arc::clone(&self.0)
@@ -233,7 +233,7 @@ impl CoreUpdates {
     /// # Errors
     /// As [`CoreUpdates::check`], 409 when the bundled core already runs or a sign-in is
     /// pending, 503 when the bundled core fails its integrity check; the update stays then.
-    pub async fn use_bundled(&self) -> Result<(), AppError> {
+    pub(crate) async fn use_bundled(&self) -> Result<(), AppError> {
         self.0.after_check().await;
         Arc::clone(&self.0)
             .run(CorePhase::Restarting, |inner, _feed| async move {
@@ -256,7 +256,7 @@ impl CoreUpdates {
     }
 
     /// Aborts a download or start check, then waits for the operation in progress to end.
-    pub async fn shutdown(&self) {
+    pub(crate) async fn shutdown(&self) {
         self.0.closing.send_replace(true);
         let mut phase = self.0.phase.subscribe();
         // The sender lives in `self`, so the wait ends only when the operation does.

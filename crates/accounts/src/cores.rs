@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_core::install::CoreSource;
-use nsv_core::pool::{BoxFuture, Phase, Pool, PoolState};
+use nsv_core::pool::{BoxFuture, Pool, PoolState};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::OAuthProvider;
@@ -86,11 +86,7 @@ pub struct ProfileStatus {
 
 impl ProfileStatus {
     fn of(pool: &PoolState, tracked: Tracked, profile: &ProfileId) -> Self {
-        let (runtime, _) = pool.runtime(profile);
-        let error = match pool.core(profile).map(|core| &core.phase) {
-            Some(Phase::Failed(error)) => Some(Arc::clone(error)),
-            _ => None,
-        };
+        let (runtime, error) = pool.runtime(profile);
         Self {
             serving: pool.running(profile) || tracked.dormant,
             // Once the scheduler stopped restarting it, the profile says so instead of its last
@@ -98,7 +94,7 @@ impl ProfileStatus {
             error: tracked
                 .gave_up
                 .filter(|_| runtime != Runtime::Running)
-                .or(error),
+                .or_else(|| error.cloned()),
             runtime,
             streaming: tracked.open,
         }
@@ -480,12 +476,6 @@ impl Cores {
     #[must_use]
     pub fn sign_in_session(&self, profile: &ProfileId) -> Option<OAuthSession> {
         self.sign_in.session(profile)
-    }
-
-    /// The sign-in in progress as it changes.
-    #[must_use]
-    pub fn sign_in_sessions(&self) -> watch::Receiver<Option<OAuthSession>> {
-        self.sign_in.sessions()
     }
 
     /// The port of the sign-in's callback listener while it listens.

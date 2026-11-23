@@ -108,7 +108,8 @@ pub(crate) async fn discard_all(data: &DataDir, backends: &Backends) -> Result<(
             .map(|entry| entry.map(|entry| entry.path()))
             .collect::<io::Result<Vec<PathBuf>>>()
             .map_err(AppError::internal),
-        Err(_) => Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(AppError::internal(error)),
     })
     .await?;
     for entry in entries {

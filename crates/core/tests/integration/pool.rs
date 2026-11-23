@@ -118,7 +118,7 @@ async fn a_core_that_never_becomes_ready_and_ignores_sigterm_is_killed_before_st
     let state = world.pool().state();
     assert_eq!(
         state.runtime(&profile),
-        (Runtime::Error, Some(error.message.as_str()))
+        (Runtime::Error, Some(&Arc::from(error.message.as_str())))
     );
 }
 

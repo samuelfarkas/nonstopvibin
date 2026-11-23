@@ -162,7 +162,7 @@ impl PoolState {
 
     /// What the interface shows: the profile's runtime and its last failure.
     #[must_use]
-    pub fn runtime(&self, profile: &ProfileId) -> (Runtime, Option<&str>) {
+    pub fn runtime(&self, profile: &ProfileId) -> (Runtime, Option<&Arc<str>>) {
         match self.core(profile).map(|core| &core.phase) {
             None | Some(Phase::Stopped) => (Runtime::Stopped, None),
             Some(Phase::Starting | Phase::Stopping { answered: false }) => {
