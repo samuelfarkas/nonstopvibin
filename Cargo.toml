@@ -26,15 +26,15 @@ publish = false
 repository = "https://github.com/samuelfarkas/nonstopvibin"
 
 [workspace.dependencies]
-nsv-domain = { path = "crates/domain" }
-nsv-store = { path = "crates/store" }
-nsv-net = { path = "crates/net" }
-nsv-core = { path = "crates/core" }
 nsv-accounts = { path = "crates/accounts" }
 nsv-agents = { path = "crates/agents" }
+nsv-core = { path = "crates/core" }
+nsv-domain = { path = "crates/domain" }
 nsv-gateway = { path = "crates/gateway" }
+nsv-net = { path = "crates/net" }
 nsv-server = { path = "crates/server" }
 nsv-shell = { path = "crates/shell" }
+nsv-store = { path = "crates/store" }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 base64 = "0.23.1"
 getrandom = "0.4.3"
@@ -42,26 +42,9 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 proptest = "1.12.0"
-# The desktop shell (crates/shell): the Linux tray over D-Bus, without GTK.
-ksni = "0.3.7"
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
-png = "0.18.1"
-url = "2.5.9"
-# The desktop shell on macOS: the menu bar item and the login item.
-tray-icon = { version = "0.26.1", default-features = false }
-objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
-# The window helper only (crates/window): webview, windows, native dialogs, clipboard, menus.
-gtk = "0.18.2"
-muda = { version = "0.21.2", default-features = false }
-objc2 = "0.6.3"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSScreen", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSArray", "NSString", "NSURL", "objc2-core-services"] }
-tao = { version = "0.37.3", default-features = false, features = ["rwh_06", "x11"] }
-wry = "0.57.3"
-x11-dl = "2.21.0"
 rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "cache"] }
-rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -74,6 +57,24 @@ ts-rs = { version = "12.0.1", default-features = false, features = ["no-serde-wa
 unicode-normalization = "0.1.26"
 webpki-roots = "1.0.12"
 zeroize = "1.9.2"
+# Desktop GUI only: the shell (crates/shell, linked into the nonstopvibin binary) and the window
+# helper (crates/window, its own binary). The shell links no GTK: on Linux its tray is ksni over
+# zbus (D-Bus); on macOS it uses tray-icon, and objc2-service-management for the login item.
+# Only the window helper links gtk, wry (WebKitGTK on Linux) and x11-dl.
+gtk = "0.18.2"
+ksni = "0.3.7"
+muda = { version = "0.21.2", default-features = false }
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSArray", "NSString", "NSURL", "objc2-core-services"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
+png = "0.18.1"
+tao = { version = "0.37.3", default-features = false, features = ["rwh_06", "x11"] }
+tray-icon = { version = "0.26.1", default-features = false }
+url = "2.5.9"
+wry = "0.57.3"
+x11-dl = "2.21.0"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [workspace.lints.rust]
 # Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.
