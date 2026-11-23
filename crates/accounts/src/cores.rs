@@ -7,7 +7,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use nsv_core::binary::{bundled_pin, verify_core};
-use nsv_core::install::Releases;
 use nsv_core::pool::{BoxFuture, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -17,14 +16,14 @@ use tokio::sync::watch;
 
 use crate::accounts::{Accounts, PoolSource};
 use crate::credentials::Credentials;
-use crate::fetch::Fetch;
+use crate::fetch::Outside;
 use crate::quota::Quotas;
 use crate::resets::CodexResets;
 use crate::scheduler::{Host, Scheduler, Timing};
 use crate::sign_in::{Backends, Report, SignIn, SignInOptions};
 use crate::updates::{CoreUpdates, UpdateOptions};
 
-pub struct CoresOptions<F, R> {
+pub struct CoresOptions {
     pub store: Store,
     /// The bundled core.
     pub binary: PathBuf,
@@ -33,10 +32,9 @@ pub struct CoresOptions<F, R> {
     /// How long a new core gets to answer ([`nsv_core::pool::READY`]).
     pub ready: Duration,
     pub timing: Timing,
-    /// Provider requests: quota, model discovery, identity checks.
-    pub fetch: F,
-    /// The pin feed and release archives.
-    pub releases: R,
+    /// Provider requests (quota, model discovery, identity checks), the pin feed and release
+    /// archives.
+    pub outside: Arc<dyn Outside>,
     /// The reviewed pin feed of an installed build; `None` in development runs. See
     /// [`UpdateOptions::feed`].
     pub feed: Option<String>,
@@ -54,14 +52,14 @@ pub struct CoresOptions<F, R> {
 }
 
 /// The pool's scheduler and the account features that drive it.
-pub struct Cores<F, R> {
+pub struct Cores {
     pub scheduler: Scheduler,
     pub accounts: Arc<Accounts>,
-    pub quotas: Arc<Quotas<PoolSource, F>>,
-    pub credentials: Credentials<F>,
-    pub sign_in: SignIn<F>,
+    pub quotas: Arc<Quotas<PoolSource>>,
+    pub credentials: Credentials,
+    pub sign_in: SignIn,
     pub resets: CodexResets,
-    pub updates: CoreUpdates<F, R>,
+    pub updates: CoreUpdates,
     store: Store,
     binary: PathBuf,
     backends: Backends,
@@ -71,13 +69,13 @@ pub struct Cores<F, R> {
 
 /// What the scheduler asks of the features. It holds no handle to the scheduler, so nothing
 /// keeps the scheduler alive in a cycle.
-struct FeatureHost<F> {
+struct FeatureHost {
     report: Report,
-    quotas: OnceLock<Arc<Quotas<PoolSource, F>>>,
+    quotas: OnceLock<Arc<Quotas<PoolSource>>>,
     sessions: OnceLock<watch::Receiver<Option<OAuthSession>>>,
 }
 
-impl<F: Fetch + 'static> Host for FeatureHost<F> {
+impl Host for FeatureHost {
     fn report(&self, message: String) {
         (self.report)(message);
     }
@@ -116,18 +114,17 @@ impl<F: Fetch + 'static> Host for FeatureHost<F> {
     }
 }
 
-impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
+impl Cores {
     /// # Errors
     /// The bundled pin or this platform is unknown, which a build rules out.
-    pub fn new(options: CoresOptions<F, R>) -> Result<Self, AppError> {
+    pub fn new(options: CoresOptions) -> Result<Self, AppError> {
         let CoresOptions {
             store,
             binary,
             backends,
             ready,
             timing,
-            fetch,
-            releases,
+            outside,
             feed,
             require_pinned_core,
             allow_missing_core,
@@ -141,7 +138,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             quotas: OnceLock::new(),
             sessions: OnceLock::new(),
         });
-        let hooks: Arc<dyn Host> = Arc::<FeatureHost<F>>::clone(&host);
+        let hooks: Arc<dyn Host> = Arc::<FeatureHost>::clone(&host);
         let scheduler = Scheduler::new(
             store.clone(),
             binary.clone(),
@@ -155,7 +152,12 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             pool: scheduler.pool().clone(),
             accounts: Arc::clone(&accounts),
         };
-        let quotas = Arc::new(Quotas::new(store.clone(), source, fetch, clock));
+        let quotas = Arc::new(Quotas::new(
+            store.clone(),
+            source,
+            Arc::clone(&outside),
+            clock,
+        ));
         let credentials = Credentials::new(
             store.clone(),
             scheduler.clone(),
@@ -182,7 +184,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             sign_in.clone(),
             credentials.clone(),
             UpdateOptions {
-                releases,
+                outside,
                 feed,
                 bundled: binary.clone(),
                 require_pinned_core,
@@ -243,7 +245,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             .reap_orphans()
             .await
             .map_err(AppError::internal)?;
-        SignIn::<F>::discard_pending(self.store.directory(), &self.backends).await?;
+        SignIn::discard_pending(self.store.directory(), &self.backends).await?;
         self.scheduler.launch().await?;
         if self.updates.enabled() {
             let updates = self.updates.clone();

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use nsv_agents::AgentDirectories;
@@ -103,9 +104,9 @@ fn now() -> i64 {
 /// started is stopped again.
 async fn start(
     signals: &mut Signals,
-    options: Options<Https>,
+    options: Options,
     lock: ServerLock,
-) -> Result<Option<Daemon<Https>>, CliError> {
+) -> Result<Option<Daemon>, CliError> {
     let daemon = tokio::select! {
         started = Daemon::start(options, lock) => {
             started.map_err(CliError::from_display)?
@@ -133,7 +134,7 @@ async fn start(
 /// after such a panic or a failed close; the desktop app (`desktop`) first shows a failed
 /// close in main.ts's error box until it is dismissed.
 async fn run_until_stopped(
-    daemon: &Daemon<Https>,
+    daemon: &Daemon,
     signals: &mut Signals,
     shell: impl Future<Output = Result<(), nsv_shell::UpdateFailed>>,
     desktop: bool,
@@ -212,7 +213,7 @@ pub(crate) async fn serve(
         },
         agents: agents()?,
         backends: processes(),
-        fetch: https()?,
+        outside: Arc::new(https()?),
         clock: now,
         timing: *TIMING,
     };
@@ -306,7 +307,7 @@ async fn desktop_daemon(
         },
         agents: agents()?,
         backends: processes(),
-        fetch: https()?,
+        outside: Arc::new(https()?),
         clock: now,
         timing: *TIMING,
     };

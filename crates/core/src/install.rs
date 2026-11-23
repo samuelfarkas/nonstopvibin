@@ -16,6 +16,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::CoreError;
 use crate::binary::{BINARY, CoreManifest, CorePin, CoreTarget, LICENSE, Sha256Digest, Version};
+use crate::pool::BoxFuture;
 
 /// The upstream repository, `CLIProxyAPI`'s GitHub owner and name.
 macro_rules! repository {
@@ -95,45 +96,36 @@ pub async fn download(https: &Https, url: &str, path: &Path) -> Result<Sha256Dig
 /// daemon; tests serve their own.
 pub trait Releases: Send + Sync + 'static {
     /// The pin feed at `url`, whatever its status.
-    fn feed(&self, url: &str) -> impl Future<Output = Result<Response, NetError>> + Send;
+    fn feed<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Response, NetError>>;
 
     /// See [`download`].
-    fn download(
-        &self,
-        url: &str,
-        path: &Path,
-    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send;
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+        path: &'a Path,
+    ) -> BoxFuture<'a, Result<Sha256Digest, AppError>>;
 }
 
 impl Releases for Https {
-    async fn feed(&self, url: &str) -> Result<Response, NetError> {
-        self.get(&Get {
-            url,
-            headers: &[],
-            timeout: FEED_TIMEOUT,
-            limit: FEED_LIMIT,
-            redirects: Redirects::Follow(FEED_HOSTS),
+    fn feed<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Response, NetError>> {
+        Box::pin(async move {
+            self.get(&Get {
+                url,
+                headers: &[],
+                timeout: FEED_TIMEOUT,
+                limit: FEED_LIMIT,
+                redirects: Redirects::Follow(FEED_HOSTS),
+            })
+            .await
         })
-        .await
     }
 
-    async fn download(&self, url: &str, path: &Path) -> Result<Sha256Digest, AppError> {
-        download(self, url, path).await
-    }
-}
-
-/// One source shared, as tests share theirs.
-impl<T: Releases> Releases for std::sync::Arc<T> {
-    fn feed(&self, url: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
-        T::feed(self, url)
-    }
-
-    fn download(
-        &self,
-        url: &str,
-        path: &Path,
-    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send {
-        T::download(self, url, path)
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+        path: &'a Path,
+    ) -> BoxFuture<'a, Result<Sha256Digest, AppError>> {
+        Box::pin(download(self, url, path))
     }
 }
 
@@ -142,7 +134,10 @@ impl<T: Releases> Releases for std::sync::Arc<T> {
 /// # Errors
 /// [`AppError`] 502 "Could not check for core updates: …" when the feed cannot be read or is
 /// not a core pin.
-pub async fn fetch_pin(releases: &impl Releases, url: &str) -> Result<CorePin, AppError> {
+pub async fn fetch_pin(
+    releases: &(impl Releases + ?Sized),
+    url: &str,
+) -> Result<CorePin, AppError> {
     let failed = |reason: &dyn std::fmt::Display| {
         AppError::new(format!("Could not check for core updates: {reason}"), 502)
     };
@@ -231,7 +226,7 @@ pub async fn extract(
 /// # Errors
 /// [`CoreError::App`] 502 for a failed download, extraction or pin check.
 pub async fn install_core(
-    releases: &impl Releases,
+    releases: &(impl Releases + ?Sized),
     archives: &str,
     pin: &CorePin,
     target: CoreTarget,

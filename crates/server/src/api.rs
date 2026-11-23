@@ -11,9 +11,7 @@ use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use nsv_accounts::accounts::listed;
 use nsv_accounts::catalog::profile_models;
-use nsv_accounts::fetch::Fetch;
 use nsv_agents::connection_models;
-use nsv_core::install::Releases;
 use nsv_domain::endpoint::{profile_endpoint, profile_path};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
@@ -131,7 +129,7 @@ fn ok() -> Value {
     json!({ "ok": true })
 }
 
-impl<F: Fetch + Releases + Clone + 'static> App<F> {
+impl App {
     pub(crate) async fn api(
         &self,
         request: Request<Incoming>,

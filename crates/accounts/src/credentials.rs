@@ -28,7 +28,6 @@ use tokio::sync::Mutex;
 
 use crate::accounts::{Accounts, CredentialFile, PoolSource, credential_path};
 use crate::api_accounts::api_account;
-use crate::fetch::Fetch;
 use crate::identity::{claude_identity, same_seat};
 use crate::quota::Quotas;
 use crate::scheduler::Scheduler;
@@ -64,19 +63,19 @@ impl SeatMatch {
 }
 
 /// The app's credential changes. Clones share one queue.
-pub struct Credentials<F>(Arc<Inner<F>>);
+pub struct Credentials(Arc<Inner>);
 
-impl<F> Clone for Credentials<F> {
+impl Clone for Credentials {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-struct Inner<F> {
+struct Inner {
     store: Store,
     scheduler: Scheduler,
     accounts: Arc<Accounts>,
-    quotas: Arc<Quotas<PoolSource, F>>,
+    quotas: Arc<Quotas<PoolSource>>,
     queue: Arc<Mutex<()>>,
 }
 
@@ -99,13 +98,13 @@ where
     .map_err(AppError::internal)?
 }
 
-impl<F: Fetch + 'static> Credentials<F> {
+impl Credentials {
     #[must_use]
     pub fn new(
         store: Store,
         scheduler: Scheduler,
         accounts: Arc<Accounts>,
-        quotas: Arc<Quotas<PoolSource, F>>,
+        quotas: Arc<Quotas<PoolSource>>,
     ) -> Self {
         Self(Arc::new(Inner {
             store,

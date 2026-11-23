@@ -5,9 +5,10 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use nsv_accounts::fetch::{Fetch, Request};
+use nsv_accounts::fetch::{Outside, Request};
 use nsv_core::binary::Sha256Digest;
 use nsv_core::install::Releases;
+use nsv_core::pool::BoxFuture;
 use nsv_domain::error::AppError;
 use nsv_net::{HeaderMap, Loopback, NetError, Response, StatusCode};
 use nsv_testkit::dechunk;
@@ -47,17 +48,19 @@ impl ModelsDev {
     }
 }
 
-impl Fetch for ModelsDev {
-    fn https(&self, request: Request) -> impl Future<Output = Result<Response, NetError>> + Send {
-        std::future::ready(if request.url == "https://models.dev/api.json" {
-            Ok(Response {
-                status: StatusCode::OK,
-                headers: HeaderMap::new(),
-                body: self.0.to_vec(),
-            })
-        } else {
-            Err(NetError::Invalid("offline"))
-        })
+impl Outside for ModelsDev {
+    fn https(&self, request: Request) -> BoxFuture<'_, Result<Response, NetError>> {
+        Box::pin(std::future::ready(
+            if request.url == "https://models.dev/api.json" {
+                Ok(Response {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    body: self.0.to_vec(),
+                })
+            } else {
+                Err(NetError::Invalid("offline"))
+            },
+        ))
     }
 
     fn loopback(
@@ -65,22 +68,22 @@ impl Fetch for ModelsDev {
         _: Loopback,
         _: String,
         _: Request,
-    ) -> impl Future<Output = Result<Response, NetError>> + Send {
-        std::future::ready(Err(NetError::Invalid("offline")))
+    ) -> BoxFuture<'_, Result<Response, NetError>> {
+        Box::pin(std::future::ready(Err(NetError::Invalid("offline"))))
     }
 }
 
 impl Releases for ModelsDev {
-    fn feed(&self, _: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
-        std::future::ready(Err(NetError::Invalid("offline")))
+    fn feed<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Response, NetError>> {
+        Box::pin(std::future::ready(Err(NetError::Invalid("offline"))))
     }
 
-    fn download(
-        &self,
-        _: &str,
-        _: &Path,
-    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send {
-        std::future::ready(Err(AppError::new("offline", 502)))
+    fn download<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a Path,
+    ) -> BoxFuture<'a, Result<Sha256Digest, AppError>> {
+        Box::pin(std::future::ready(Err(AppError::new("offline", 502))))
     }
 }
 

@@ -76,12 +76,12 @@ async fn period_totals_update_incrementally_as_typescript_did() {
     store.call(move |db| db.add_usage(&records)).await.unwrap();
     let body = payload(&cases);
     let catalog = Arc::new(ModelCatalog::new(
-        StubFetch::new(move |_| Ok(response(200, body.clone()))),
+        Arc::new(StubFetch::new(move |_| Ok(response(200, body.clone())))),
         fixed,
     ));
     catalog.models(&[], &[]).await.unwrap();
     let prices = Arc::new(UsagePrices::new(
-        StubFetch::new(|_| Ok(response(503, "{}"))),
+        Arc::new(StubFetch::new(|_| Ok(response(503, "{}")))),
         fixed,
     ));
     let mut replayed = 0;
@@ -148,7 +148,7 @@ async fn a_malformed_catalog_is_a_502() {
     let golden = case(&cases, "catalog malformed payload");
     let body = golden["input"].to_string();
     let catalog = ModelCatalog::new(
-        StubFetch::new(move |_| Ok(response(200, body.clone()))),
+        Arc::new(StubFetch::new(move |_| Ok(response(200, body.clone())))),
         fixed,
     );
     let model = Model {

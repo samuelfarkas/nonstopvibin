@@ -286,7 +286,7 @@ async fn quota_refreshes_and_resets_replay_in_order() {
     let quotas = Quotas::new(
         store.clone(),
         Arc::clone(&source),
-        Arc::clone(&fetch),
+        Arc::<StubFetch>::clone(&fetch),
         fixed,
     );
     let mut replayed = 0;

@@ -26,7 +26,7 @@ use nsv_store::{Store, StoreError};
 use serde_json::{Map, Value, json};
 
 use crate::accounts::PoolSource;
-use crate::fetch::{Fetch, Request};
+use crate::fetch::{Outside, Request};
 
 /// The beta flag Anthropic's OAuth account endpoints require.
 pub const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
@@ -653,10 +653,10 @@ pub trait RefreshQuota: Send + Sync {
 }
 
 /// Quota checks, one at a time per account.
-pub struct Quotas<S, F> {
+pub struct Quotas<S> {
     store: Store,
     source: S,
-    fetch: F,
+    fetch: Arc<dyn Outside>,
     /// Milliseconds since the epoch.
     clock: fn() -> i64,
     refreshing: Mutex<HashSet<(ProfileId, AccountId)>>,
@@ -674,9 +674,9 @@ impl Drop for Running<'_> {
     }
 }
 
-impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
+impl<S: QuotaSource> Quotas<S> {
     #[must_use]
-    pub fn new(store: Store, source: S, fetch: F, clock: fn() -> i64) -> Self {
+    pub fn new(store: Store, source: S, fetch: Arc<dyn Outside>, clock: fn() -> i64) -> Self {
         Self {
             store,
             source,
@@ -693,8 +693,8 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
 
     /// The outgoing requests' client, which model discovery and identity checks share.
     #[must_use]
-    pub fn fetch(&self) -> &F {
-        &self.fetch
+    pub fn fetch(&self) -> &dyn Outside {
+        &*self.fetch
     }
 
     /// Asks one account's quota and stores it. A check already running for the account answers
@@ -895,7 +895,7 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
     }
 }
 
-impl<F: Fetch> Quotas<PoolSource, F> {
+impl Quotas<PoolSource> {
     /// Reads the profile's accounts from its core again, then refreshes the quota of each
     /// account `wanted` picks, in order, asking `wanted` as each one's turn comes
     /// (`Quotas.refreshAccounts`). Dropping the future abandons the check in flight: nothing is
@@ -919,7 +919,7 @@ impl<F: Fetch> Quotas<PoolSource, F> {
     }
 }
 
-impl<S: QuotaSource, F: Fetch> RefreshQuota for Quotas<S, F> {
+impl<S: QuotaSource> RefreshQuota for Quotas<S> {
     fn refresh(
         &self,
         profile: &ProfileId,

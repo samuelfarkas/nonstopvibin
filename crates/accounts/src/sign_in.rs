@@ -40,7 +40,6 @@ use url::Url;
 use crate::accounts::{Accounts, PoolSource, credential_path, read_credential};
 use crate::callback::{Callback, Handler, Reply};
 use crate::credentials::{Credentials, SeatMatch, detached};
-use crate::fetch::Fetch;
 use crate::identity::{claude_identity, verify_claude_identity};
 use crate::quota::Quotas;
 use crate::scheduler::Scheduler;
@@ -101,20 +100,20 @@ pub struct SignInOptions {
 }
 
 /// Browser sign-in. Clones share the one sign-in in progress.
-pub struct SignIn<F>(Arc<Inner<F>>);
+pub struct SignIn(Arc<Inner>);
 
-impl<F> Clone for SignIn<F> {
+impl Clone for SignIn {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-struct Inner<F> {
+struct Inner {
     store: Store,
     scheduler: Scheduler,
     accounts: Arc<Accounts>,
-    credentials: Credentials<F>,
-    quotas: Arc<Quotas<PoolSource, F>>,
+    credentials: Credentials,
+    quotas: Arc<Quotas<PoolSource>>,
     options: SignInOptions,
     /// The action queue, and what only actions change.
     state: Arc<Mutex<State>>,
@@ -205,14 +204,14 @@ async fn remove_tree(directory: PathBuf) -> Result<(), AppError> {
     .await
 }
 
-impl<F: Fetch + 'static> SignIn<F> {
+impl SignIn {
     #[must_use]
     pub fn new(
         store: Store,
         scheduler: Scheduler,
         accounts: Arc<Accounts>,
-        credentials: Credentials<F>,
-        quotas: Arc<Quotas<PoolSource, F>>,
+        credentials: Credentials,
+        quotas: Arc<Quotas<PoolSource>>,
         options: SignInOptions,
     ) -> Self {
         Self(Arc::new(Inner {
@@ -407,7 +406,7 @@ impl<F: Fetch + 'static> SignIn<F> {
     }
 }
 
-impl<F: Fetch + 'static> Inner<F> {
+impl Inner {
     fn pool(&self) -> &Pool {
         self.scheduler.pool()
     }

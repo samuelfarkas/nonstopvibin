@@ -40,7 +40,7 @@ async fn seeded(root: &TempDir) -> std::path::PathBuf {
     data
 }
 
-async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
+async fn daemon(root: &TempDir, desktop: bool) -> Daemon {
     let data = seeded(root).await;
     let options = Options {
         port: 0,
@@ -56,7 +56,7 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
         },
         agents: AgentDirectories::new(root.path().join("home")),
         backends: processes(),
-        fetch: ModelsDev::new(),
+        outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
         timing: *TIMING,
     };

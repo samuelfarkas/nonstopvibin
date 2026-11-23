@@ -8,7 +8,7 @@
 )]
 
 use std::cell::Cell;
-use std::future::{Future, ready};
+use std::future::ready;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nsv_accounts::cores::{Cores, CoresOptions};
-use nsv_accounts::fetch::{Fetch, Request};
+use nsv_accounts::fetch::{Outside, Request};
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::binary::{CoreManifest, CoreTarget, Sha256Digest, bundled_pin};
 use nsv_core::install::Releases;
-use nsv_core::pool::Backend;
+use nsv_core::pool::{Backend, BoxFuture};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_files::{DataDir, owner_only_directory};
@@ -57,11 +57,13 @@ pub struct Seen {
 
 type Answer = Box<dyn Fn(&str) -> Result<Response, NetError> + Send + Sync>;
 
-/// Answers each request by its URL and records it; a gate holds answers until it opens.
+/// The outside world of a test: answers each provider request by its URL and records it (a
+/// gate holds answers until it opens), and serves [`StubFetch::releases`].
 pub struct StubFetch {
     pub seen: Mutex<Vec<Seen>>,
     answer: Mutex<Answer>,
     gate: Option<Arc<Semaphore>>,
+    pub releases: Arc<TestReleases>,
 }
 
 impl StubFetch {
@@ -72,6 +74,7 @@ impl StubFetch {
             seen: Mutex::new(Vec::new()),
             answer: Mutex::new(Box::new(answer)),
             gate: None,
+            releases: Arc::default(),
         }
     }
 
@@ -107,26 +110,38 @@ impl StubFetch {
     }
 }
 
-impl Fetch for StubFetch {
-    async fn https(&self, request: Request) -> Result<Response, NetError> {
-        self.reply(Seen {
+impl Outside for StubFetch {
+    fn https(&self, request: Request) -> BoxFuture<'_, Result<Response, NetError>> {
+        Box::pin(self.reply(Seen {
             request,
             loopback: None,
-        })
-        .await
+        }))
     }
 
-    async fn loopback(
+    fn loopback(
         &self,
         to: Loopback,
         target: String,
         request: Request,
-    ) -> Result<Response, NetError> {
-        self.reply(Seen {
+    ) -> BoxFuture<'_, Result<Response, NetError>> {
+        Box::pin(self.reply(Seen {
             request,
             loopback: Some((to, target)),
-        })
-        .await
+        }))
+    }
+}
+
+impl Releases for StubFetch {
+    fn feed<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Response, NetError>> {
+        self.releases.feed(url)
+    }
+
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+        path: &'a Path,
+    ) -> BoxFuture<'a, Result<Sha256Digest, AppError>> {
+        self.releases.download(url, path)
     }
 }
 
@@ -155,24 +170,31 @@ pub struct TestReleases {
 }
 
 impl Releases for TestReleases {
-    fn feed(&self, _: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
-        ready(Ok(response(200, self.feed.lock().unwrap().to_string())))
+    fn feed<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Result<Response, NetError>> {
+        Box::pin(ready(Ok(response(
+            200,
+            self.feed.lock().unwrap().to_string(),
+        ))))
     }
 
-    async fn download(&self, url: &str, path: &Path) -> Result<Sha256Digest, AppError> {
-        self.downloads.lock().unwrap().push(url.to_owned());
-        let hold = self.hold.lock().unwrap().clone();
-        if let Some((waiting, release)) = hold {
-            waiting.notify_one();
-            release.notified().await;
-        }
-        let bytes = self.archive.lock().unwrap().clone();
-        std::fs::write(path, &bytes).unwrap();
-        Ok(Sha256Digest::of_file(path).unwrap())
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+        path: &'a Path,
+    ) -> BoxFuture<'a, Result<Sha256Digest, AppError>> {
+        Box::pin(async move {
+            self.downloads.lock().unwrap().push(url.to_owned());
+            let hold = self.hold.lock().unwrap().clone();
+            if let Some((waiting, release)) = hold {
+                waiting.notify_one();
+                release.notified().await;
+            }
+            let bytes = self.archive.lock().unwrap().clone();
+            std::fs::write(path, &bytes).unwrap();
+            Ok(Sha256Digest::of_file(path).unwrap())
+        })
     }
 }
-
-pub type TestCores = Cores<Arc<StubFetch>, Arc<TestReleases>>;
 
 pub struct World {
     pub directory: TempDir,
@@ -180,7 +202,7 @@ pub struct World {
     pub fake: FakeCores,
     pub fetch: Arc<StubFetch>,
     pub releases: Arc<TestReleases>,
-    pub cores: Arc<TestCores>,
+    pub cores: Arc<Cores>,
     pub reports: Arc<Mutex<Vec<String>>>,
     pub accepted: Arc<AtomicUsize>,
     pub bundled: PathBuf,
@@ -266,7 +288,7 @@ impl World {
     ) -> Self {
         let store = open_store(data).await;
         let fetch = Arc::new(StubFetch::new(|_| Ok(response(404, "{}"))));
-        let releases = Arc::new(TestReleases::default());
+        let releases = Arc::clone(&fetch.releases);
         let reports = Arc::new(Mutex::new(Vec::new()));
         let accepted = Arc::new(AtomicUsize::new(0));
         let backends_fake = fake.clone();
@@ -280,8 +302,7 @@ impl World {
                 }),
                 ready: Duration::from_secs(5),
                 timing,
-                fetch: Arc::clone(&fetch),
-                releases: Arc::clone(&releases),
+                outside: Arc::<StubFetch>::clone(&fetch),
                 feed: feed.map(str::to_owned),
                 require_pinned_core: false,
                 allow_missing_core: false,

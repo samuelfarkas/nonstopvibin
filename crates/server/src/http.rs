@@ -13,10 +13,8 @@ use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use nsv_accounts::catalog::{ModelCatalog, profile_models};
-use nsv_accounts::fetch::Fetch;
 use nsv_accounts::scheduler::Scheduler;
 use nsv_agents::{CatalogAnswer, curated, gateway_catalog};
-use nsv_core::install::Releases;
 use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -141,7 +139,7 @@ fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
     Some(String::from_utf8_lossy(value.as_bytes()))
 }
 
-impl<F: Fetch + Releases + Clone + 'static> App<F> {
+impl App {
     fn valid_host(&self, host: Option<&str>) -> bool {
         let Some(host) = host else { return false };
         host.strip_prefix(LOOPBACK_HOST)
@@ -250,10 +248,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
 }
 
 /// Accepts until shutdown begins; each connection serves its requests in a task of its own.
-pub(crate) fn serve<F: Fetch + Releases + Clone + 'static>(
-    app: &Arc<App<F>>,
-    listener: TcpListener,
-) {
+pub(crate) fn serve(app: &Arc<App>, listener: TcpListener) {
     let app = Arc::clone(app);
     tokio::spawn(async move {
         let mut phase = app.phase.subscribe();
@@ -279,7 +274,7 @@ async fn draining(phase: &mut watch::Receiver<Phase>) {
     let _ = phase.wait_for(|phase| *phase != Phase::Serving).await;
 }
 
-fn connection<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>, stream: TcpStream) {
+fn connection(app: &Arc<App>, stream: TcpStream) {
     let served = Arc::clone(app);
     let service = service_fn(move |request| {
         let app = Arc::clone(&served);
@@ -325,17 +320,17 @@ impl GatewayProfiles {
 
 /// The gateway's view of the daemon: the store's key snapshot, the scheduler's wake and the
 /// agents' curated catalogs. It holds no management key.
-pub(crate) struct GatewayHost<F> {
+pub(crate) struct GatewayHost {
     pub(crate) shared: Arc<Shared>,
     pub(crate) auth: watch::Receiver<Arc<AuthSnapshot>>,
     /// The gateway's entries for the store's latest snapshot, built when it changes.
     pub(crate) profiles: Mutex<Option<GatewayProfiles>>,
     pub(crate) scheduler: Scheduler,
-    pub(crate) catalog: Arc<ModelCatalog<F>>,
+    pub(crate) catalog: Arc<ModelCatalog>,
     pub(crate) store: Store,
 }
 
-impl<F: Fetch + Clone + 'static> GatewayHost<F> {
+impl GatewayHost {
     async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, AppError> {
         let models = self.scheduler.pool().models(profile).await?;
         let offered = curated(agent, models, false, |models| async move {
@@ -349,7 +344,7 @@ impl<F: Fetch + Clone + 'static> GatewayHost<F> {
     }
 }
 
-impl<F: Fetch + Clone + 'static> Host for GatewayHost<F> {
+impl Host for GatewayHost {
     fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
         // The current snapshot on every request, so a deleted or rotated key fails at once.
         let snapshot = Arc::clone(&self.auth.borrow());

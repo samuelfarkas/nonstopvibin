@@ -20,7 +20,7 @@ use nsv_store::{Store, StoreError};
 use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 
-use crate::fetch::{Fetch, Request};
+use crate::fetch::{Outside, Request};
 
 const SOURCE: &str = "https://models.dev/api.json";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -350,17 +350,16 @@ impl Snapshot {
 }
 
 /// The application's models.dev catalog.
-#[derive(Debug)]
-pub struct ModelCatalog<F> {
-    fetch: F,
+pub struct ModelCatalog {
+    fetch: Arc<dyn Outside>,
     /// Milliseconds since the epoch.
     clock: fn() -> i64,
     state: Mutex<State>,
 }
 
-impl<F: Fetch + 'static> ModelCatalog<F> {
+impl ModelCatalog {
     #[must_use]
-    pub fn new(fetch: F, clock: fn() -> i64) -> Self {
+    pub fn new(fetch: Arc<dyn Outside>, clock: fn() -> i64) -> Self {
         Self {
             fetch,
             clock,
@@ -477,8 +476,8 @@ impl<F: Fetch + 'static> ModelCatalog<F> {
 ///
 /// # Errors
 /// A store failure, or 502 when models.dev cannot be fetched.
-pub async fn profile_models<F: Fetch + 'static>(
-    catalog: &ModelCatalog<F>,
+pub async fn profile_models(
+    catalog: &ModelCatalog,
     store: &Store,
     profile: &ProfileId,
     models: &[Model],

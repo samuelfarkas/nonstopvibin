@@ -11,13 +11,12 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use nsv_accounts::catalog::ModelCatalog;
 use nsv_accounts::cores::{Cores, CoresOptions};
-use nsv_accounts::fetch::Fetch;
+use nsv_accounts::fetch::Outside;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
 use nsv_accounts::scheduler::{Scheduler, Timing};
 use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
-use nsv_core::install::Releases;
 use nsv_core::pool::{Backend, PoolState, Processes, READY};
 use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::{self, Origin};
@@ -39,7 +38,7 @@ use crate::session::Session;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// How the daemon runs.
-pub struct Options<F> {
+pub struct Options {
     /// The loopback port; 0 takes any free one.
     pub port: u16,
     /// Exact DNS names an HTTPS reverse proxy (such as Tailscale Serve) uses for the interface
@@ -57,7 +56,7 @@ pub struct Options<F> {
     pub backends: Backends,
     /// The outside requests: models.dev, the euro rate, provider APIs, the core feed and
     /// release downloads.
-    pub fetch: F,
+    pub outside: Arc<dyn Outside>,
     /// Milliseconds since the epoch, for usage periods, pricing and retention.
     pub clock: fn() -> i64,
     /// The scheduler's periods: [`nsv_accounts::scheduler::TIMING`] outside tests.
@@ -205,7 +204,7 @@ impl Shared {
 }
 
 /// Everything a request may reach.
-pub(crate) struct App<F> {
+pub(crate) struct App {
     pub(crate) shared: Arc<Shared>,
     pub(crate) directory: DataDir,
     pub(crate) allow_hosts: Vec<String>,
@@ -222,11 +221,11 @@ pub(crate) struct App<F> {
     pub(crate) store: Store,
     /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
     /// and core updates.
-    pub(crate) cores: Cores<F, F>,
-    pub(crate) gateway: Gateway<GatewayHost<F>>,
+    pub(crate) cores: Cores,
+    pub(crate) gateway: Gateway<GatewayHost>,
     pub(crate) agents: AgentSetup,
-    pub(crate) catalog: Arc<ModelCatalog<F>>,
-    pub(crate) prices: Arc<UsagePrices<F>>,
+    pub(crate) catalog: Arc<ModelCatalog>,
+    pub(crate) prices: Arc<UsagePrices>,
     pub(crate) imports: Arc<Mutex<ImportCatalog>>,
     pub(crate) phase: watch::Sender<Phase>,
     lock: Mutex<Option<ServerLock>>,
@@ -235,21 +234,21 @@ pub(crate) struct App<F> {
 }
 
 /// The running daemon. Clones share it.
-pub struct Daemon<F: Fetch + Releases + Clone + 'static>(Arc<App<F>>);
+pub struct Daemon(Arc<App>);
 
-impl<F: Fetch + Releases + Clone + 'static> Clone for Daemon<F> {
+impl Clone for Daemon {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
+impl Daemon {
     /// Opens the store, prunes old usage and starts accepting on the loopback port; requests
     /// are served from here on. Then [`Daemon::restore`] starts the profiles.
     ///
     /// # Errors
     /// An invalid allowed host, a port in use, or a store that does not open.
-    pub async fn start(options: Options<F>, lock: ServerLock) -> Result<Self, StartError> {
+    pub async fn start(options: Options, lock: ServerLock) -> Result<Self, StartError> {
         if let Some(host) = options
             .allow_hosts
             .iter()
@@ -274,7 +273,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
     }
 
     async fn assemble(
-        options: Options<F>,
+        options: Options,
         lock: ServerLock,
         store: Store,
     ) -> Result<Self, StartError> {
@@ -302,8 +301,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             backends: options.backends,
             ready: READY,
             timing: options.timing,
-            fetch: options.fetch.clone(),
-            releases: options.fetch.clone(),
+            outside: Arc::clone(&options.outside),
             feed: options.core.feed,
             require_pinned_core: options.core.pinned,
             allow_missing_core: options.core.allow_missing,
@@ -311,8 +309,11 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             report: Arc::new(move |message| reported.errors.report(message)),
             sign_in_accepted: Arc::new(move || accepted.sign_in_accepted()),
         })?;
-        let catalog = Arc::new(ModelCatalog::new(options.fetch.clone(), options.clock));
-        let prices = Arc::new(UsagePrices::new(options.fetch, options.clock));
+        let catalog = Arc::new(ModelCatalog::new(
+            Arc::clone(&options.outside),
+            options.clock,
+        ));
+        let prices = Arc::new(UsagePrices::new(options.outside, options.clock));
         let gateway = Gateway::new(GatewayHost {
             shared: Arc::clone(&shared),
             auth: store.auth(),
@@ -485,7 +486,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
     }
 }
 
-impl<F: Fetch + Releases + Clone + 'static> App<F> {
+impl App {
     pub(crate) fn update_tray(&self) {
         if self.shared.desktop {
             self.shared
@@ -532,7 +533,7 @@ fn bind(port: u16) -> Result<TcpListener, StartError> {
 }
 
 /// The desktop tray follows each change the pool or the store's profile facts publish.
-fn follow_tray<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>) {
+fn follow_tray(app: &Arc<App>) {
     let weak = Arc::downgrade(app);
     let mut pool = app.cores.pool().subscribe();
     let mut facts = app.store.facts();

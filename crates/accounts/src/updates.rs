@@ -19,8 +19,7 @@ use std::time::Duration;
 
 use nsv_core::binary::{BINARY, CorePin, CoreTarget, Version, bundled_pin, verify_core};
 use nsv_core::install::{
-    ActiveCore, CORE_ARCHIVES, Releases, Staging, fetch_pin, install_core, prune,
-    select_installed_core,
+    ActiveCore, CORE_ARCHIVES, Staging, fetch_pin, install_core, prune, select_installed_core,
 };
 use nsv_core::pool::{NoHooks, Pool};
 use nsv_domain::error::AppError;
@@ -31,12 +30,12 @@ use nsv_store::Store;
 use tokio::sync::watch;
 
 use crate::credentials::{Credentials, detached};
-use crate::fetch::Fetch;
+use crate::fetch::Outside;
 use crate::scheduler::Scheduler;
 use crate::sign_in::{Backends, Report, SignIn};
 
-pub struct UpdateOptions<R> {
-    pub releases: R,
+pub struct UpdateOptions {
+    pub outside: Arc<dyn Outside>,
     /// The reviewed pin feed of an installed build: [`nsv_core::install::CORE_FEED`], or
     /// `NONSTOPVIBIN_CORE_FEED`. `None` in development runs, which never select, install or
     /// delete installed cores.
@@ -52,20 +51,20 @@ pub struct UpdateOptions<R> {
 }
 
 /// Checks the feed, installs a reviewed core, or goes back to the bundled one.
-pub struct CoreUpdates<F, R>(Arc<Inner<F, R>>);
+pub struct CoreUpdates(Arc<Inner>);
 
-impl<F, R> Clone for CoreUpdates<F, R> {
+impl Clone for CoreUpdates {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
 }
 
-struct Inner<F, R> {
+struct Inner {
     store: Store,
     scheduler: Scheduler,
-    sign_in: SignIn<F>,
-    credentials: Credentials<F>,
-    options: UpdateOptions<R>,
+    sign_in: SignIn,
+    credentials: Credentials,
+    options: UpdateOptions,
     cores: PathBuf,
     bundled: ActiveCore,
     target: CoreTarget,
@@ -97,15 +96,15 @@ async fn blocking<T: Send + 'static>(
         .map_err(AppError::internal)?
 }
 
-impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
+impl CoreUpdates {
     /// # Errors
     /// The bundled pin or this platform is unknown, which a build rules out.
     pub fn new(
         store: Store,
         scheduler: Scheduler,
-        sign_in: SignIn<F>,
-        credentials: Credentials<F>,
-        options: UpdateOptions<R>,
+        sign_in: SignIn,
+        credentials: Credentials,
+        options: UpdateOptions,
     ) -> Result<Self, AppError> {
         let pin = bundled_pin().map_err(AppError::internal)?;
         let bundled = ActiveCore {
@@ -282,7 +281,7 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
     }
 }
 
-impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
+impl Inner {
     fn status(&self) -> MutexGuard<'_, Status> {
         locked(&self.status)
     }
@@ -364,7 +363,7 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
 
     async fn fetch_pin(&self) -> Result<CorePin, AppError> {
         let feed = self.options.feed.as_deref().unwrap_or_default();
-        self.abortable(fetch_pin(&self.options.releases, feed))
+        self.abortable(fetch_pin(&*self.options.outside, feed))
             .await
     }
 
@@ -387,7 +386,7 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
             blocking(move || Staging::create(&cores).map_err(|error| io_error(&error))).await?;
         self.abortable(async {
             Ok(install_core(
-                &self.options.releases,
+                &*self.options.outside,
                 CORE_ARCHIVES,
                 &pin,
                 self.target,

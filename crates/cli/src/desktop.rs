@@ -5,12 +5,11 @@ use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use nsv_files::DataDir;
-use nsv_net::Https;
 use nsv_server::Daemon;
 use nsv_shell::ShellHost;
 use tokio::sync::{broadcast, watch};
 
-pub(crate) struct Desktop(pub(crate) Daemon<Https>);
+pub(crate) struct Desktop(pub(crate) Daemon);
 
 impl ShellHost for Desktop {
     fn origin(&self) -> &Origin {

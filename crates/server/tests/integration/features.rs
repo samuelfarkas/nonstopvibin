@@ -1,25 +1,19 @@
 //! Sign-in, credentials, resets, API accounts and core updates through the daemon's HTTP API:
-//! the daemon assembles its own `Cores` over the fake cores, stub provider fetch and stub
-//! releases of `nsv_testkit`. No provider is contacted and no real core runs.
+//! the daemon assembles its own `Cores` over the fake cores and the stub outside world of
+//! `nsv_testkit`. No provider is contacted and no real core runs.
 
-use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 
-use nsv_accounts::fetch::{Fetch, Request};
 use nsv_agents::AgentDirectories;
-use nsv_core::binary::{Sha256Digest, bundled_pin};
-use nsv_core::install::Releases;
+use nsv_core::binary::bundled_pin;
 use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
-use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
-use nsv_net::{Loopback, NetError, Response};
 use nsv_server::{CoreOptions, Daemon, Options, TIMING};
 use nsv_testkit::fake::{Directory, FakeCores, response};
 use nsv_testkit::world::{
-    ACCOUNT, ORGANIZATION_A, StubFetch, TestReleases, UPDATE, bundled_core, claude, release,
+    ACCOUNT, ORGANIZATION_A, StubFetch, UPDATE, bundled_core, claude, release,
 };
 use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
@@ -30,47 +24,11 @@ use crate::common::now;
 
 const FEED: &str = "https://feed.example.invalid/core-release.json";
 
-/// Provider requests go to the stub fetch, the core feed and archives to the stub releases.
-#[derive(Clone)]
-struct Outside {
-    fetch: Arc<StubFetch>,
-    releases: Arc<TestReleases>,
-}
-
-impl Fetch for Outside {
-    fn https(&self, request: Request) -> impl Future<Output = Result<Response, NetError>> + Send {
-        self.fetch.https(request)
-    }
-
-    fn loopback(
-        &self,
-        to: Loopback,
-        target: String,
-        request: Request,
-    ) -> impl Future<Output = Result<Response, NetError>> + Send {
-        self.fetch.loopback(to, target, request)
-    }
-}
-
-impl Releases for Outside {
-    fn feed(&self, url: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
-        self.releases.feed(url)
-    }
-
-    fn download(
-        &self,
-        url: &str,
-        path: &Path,
-    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send {
-        self.releases.download(url, path)
-    }
-}
-
 struct Running {
     root: TempDir,
-    daemon: Daemon<Outside>,
+    daemon: Daemon,
     fake: FakeCores,
-    outside: Outside,
+    outside: Arc<StubFetch>,
     token: String,
 }
 
@@ -80,10 +38,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
     let data = root.path().join("data");
     nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
     let fake = FakeCores::default();
-    let outside = Outside {
-        fetch: Arc::new(StubFetch::new(|_| Ok(response(404, "{}")))),
-        releases: Arc::new(TestReleases::default()),
-    };
+    let outside = Arc::new(StubFetch::new(|_| Ok(response(404, "{}"))));
     let backends_fake = fake.clone();
     let options = Options {
         port: 0,
@@ -101,7 +56,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
         backends: Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
             Arc::new(Directory(backends_fake.clone(), data.to_owned()))
         }),
-        fetch: outside.clone(),
+        outside: Arc::<StubFetch>::clone(&outside),
         clock: now,
         timing: *TIMING,
     };
@@ -286,7 +241,7 @@ async fn imported_accounts_reconnect_change_and_go_away() {
     )
     .await;
     // A Claude seat, whose identity the stub provider confirms.
-    app.outside.fetch.answer(|_| {
+    app.outside.answer(|_| {
         Ok(response(
             200,
             json!({
@@ -402,7 +357,7 @@ async fn an_api_account_is_added_once_and_its_profile_starts() {
         "models": [],
     });
     // Without model ids, the stub upstream lists them.
-    app.outside.fetch.answer(|url| {
+    app.outside.answer(|url| {
         assert_eq!(url, "https://api.example.invalid/v1/models");
         Ok(response(
             200,
@@ -424,7 +379,7 @@ async fn an_api_account_is_added_once_and_its_profile_starts() {
             &json!("This API key is already connected to this profile.")
         )
     );
-    let seen = app.outside.fetch.seen.lock().unwrap().clone();
+    let seen = app.outside.seen.lock().unwrap().clone();
     let authorization = seen[0]
         .request
         .headers

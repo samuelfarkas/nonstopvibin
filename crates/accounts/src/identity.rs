@@ -10,7 +10,7 @@ use nsv_domain::js;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::fetch::{Fetch, Request};
+use crate::fetch::{Outside, Request};
 use crate::quota::CLAUDE_OAUTH_BETA;
 
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
@@ -64,7 +64,7 @@ fn label(value: Option<&Value>) -> Option<String> {
 /// 502 for a credential without an access token, a failed or refused request, an unreadable
 /// profile, or one without both UUIDs.
 pub async fn verify_claude_identity(
-    fetch: &impl Fetch,
+    fetch: &dyn Outside,
     raw: &Map<String, Value>,
 ) -> Result<Map<String, Value>, AppError> {
     let token = js::text(raw.get("access_token"))

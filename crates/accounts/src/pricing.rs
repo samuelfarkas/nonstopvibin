@@ -24,7 +24,7 @@ use nsv_store::{Store, StoreError, UsageCursor, UsageRange};
 use serde_json::Value;
 
 use crate::catalog::{ModelCatalog, Snapshot};
-use crate::fetch::{Fetch, Request};
+use crate::fetch::{Outside, Request};
 
 const FX_SOURCE: &str = "https://api.frankfurter.dev/v2/providers/ecb/rate/usd/eur";
 const FX_TIMEOUT: Duration = Duration::from_secs(5);
@@ -300,9 +300,8 @@ struct Euro {
 }
 
 /// Activity's prices: one bounded aggregate per profile, never its history rows.
-#[derive(Debug)]
-pub struct UsagePrices<F> {
-    fetch: F,
+pub struct UsagePrices {
+    fetch: Arc<dyn Outside>,
     /// Milliseconds since the epoch.
     clock: fn() -> i64,
     totals: Mutex<HashMap<ProfileId, Aggregate>>,
@@ -312,9 +311,9 @@ pub struct UsagePrices<F> {
     euro: Mutex<Euro>,
 }
 
-impl<F: Fetch + 'static> UsagePrices<F> {
+impl UsagePrices {
     #[must_use]
-    pub fn new(fetch: F, clock: fn() -> i64) -> Self {
+    pub fn new(fetch: Arc<dyn Outside>, clock: fn() -> i64) -> Self {
         Self {
             fetch,
             clock,
@@ -328,10 +327,10 @@ impl<F: Fetch + 'static> UsagePrices<F> {
     /// Each record's price against the catalog now, without waiting for the network: the
     /// catalog and the euro rate refresh in the background (the rate at most once a minute
     /// after a failure, once a day after a success).
-    pub fn snapshot<C: Fetch + 'static>(
+    pub fn snapshot(
         self: &Arc<Self>,
         records: &[UsageRecord],
-        catalog: &Arc<ModelCatalog<C>>,
+        catalog: &Arc<ModelCatalog>,
     ) -> UsagePricing {
         let snapshot = (!records.is_empty()).then(|| catalog.snapshot());
         self.pricing(records, snapshot.as_ref())
@@ -415,12 +414,12 @@ impl<F: Fetch + 'static> UsagePrices<F> {
     ///
     /// # Errors
     /// A store failure, or [`PricingError::Closed`] once [`UsagePrices::close`] began.
-    pub async fn history<C: Fetch + 'static>(
+    pub async fn history(
         self: &Arc<Self>,
         store: &Store,
         profile: &ProfileId,
         since: &str,
-        catalog: &Arc<ModelCatalog<C>>,
+        catalog: &Arc<ModelCatalog>,
     ) -> Result<UsageHistory, PricingError> {
         let turn = Arc::clone(locked(&self.histories).entry(profile.clone()).or_default());
         let result = {
@@ -439,12 +438,12 @@ impl<F: Fetch + 'static> UsagePrices<F> {
         result
     }
 
-    async fn summarize<C: Fetch + 'static>(
+    async fn summarize(
         self: &Arc<Self>,
         store: &Store,
         profile: &ProfileId,
         since: &str,
-        catalog: &Arc<ModelCatalog<C>>,
+        catalog: &Arc<ModelCatalog>,
     ) -> Result<UsageHistory, PricingError> {
         loop {
             // One store snapshot before yielding: the records and where the total stops.

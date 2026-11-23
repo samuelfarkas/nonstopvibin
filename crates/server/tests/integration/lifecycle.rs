@@ -26,7 +26,7 @@ fn pinned_core() -> PathBuf {
 /// A desktop-less daemon on `data` and its options, serving the interface from `root/client`.
 struct Run {
     data: DataDir,
-    options: Options<ModelsDev>,
+    options: Options,
 }
 
 fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Run {
@@ -40,7 +40,7 @@ fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Ru
         core,
         agents: AgentDirectories::new(root.path().join("home")),
         backends: processes(),
-        fetch: ModelsDev::new(),
+        outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
         timing,
     };
@@ -59,7 +59,7 @@ fn core(binary: PathBuf, pinned: bool, allow_missing: bool) -> CoreOptions {
     }
 }
 
-async fn start(run: Run) -> Daemon<ModelsDev> {
+async fn start(run: Run) -> Daemon {
     let lock = run.data.lock().unwrap();
     let daemon = Daemon::start(run.options, lock).await.unwrap();
     daemon.restore().await.unwrap();

@@ -13,7 +13,7 @@ use nsv_domain::wire::{ApiAccount, ApiAccountInput, ApiModel, Extra};
 use nsv_net::{Loopback, NetError, USER_AGENT};
 use serde_json::Value;
 
-use crate::fetch::{Fetch, Request};
+use crate::fetch::{Outside, Request};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 const DISCOVERY_LIMIT: u64 = 16 * 1024 * 1024;
@@ -90,7 +90,7 @@ fn model_protocol(upstream: Provider, id: &str, endpoint: Option<&str>) -> Optio
 /// URL; a network or JSON failure of discovery.
 pub async fn api_account(
     input: &ApiAccountInput,
-    fetch: &impl Fetch,
+    fetch: &dyn Outside,
 ) -> Result<ApiAccount, ApiAccountError> {
     let url = ProviderUrl::parse(&input.base_url).ok_or(ApiAccountError::InvalidUrl)?;
     if !url.allowed() {
@@ -149,7 +149,7 @@ async fn discover_models(
     input: &ApiAccountInput,
     base_url: &str,
     upstream: Option<Provider>,
-    fetch: &impl Fetch,
+    fetch: &dyn Outside,
 ) -> Result<Vec<ApiModel>, ApiAccountError> {
     let key = input.api_key.expose_secret();
     let anthropic = input.provider == Provider::Anthropic || input.protocol == Protocol::Anthropic;

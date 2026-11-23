@@ -8,8 +8,6 @@ use std::time::UNIX_EPOCH;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
 use hyper::{Request, Response, StatusCode};
-use nsv_accounts::fetch::Fetch;
-use nsv_core::install::Releases;
 use nsv_domain::endpoint::CSP;
 use nsv_domain::error::AppError;
 use nsv_domain::wire::JsNumber;
@@ -139,7 +137,7 @@ fn unchanged(request: &Request<Incoming>, etag: &str) -> bool {
         })
 }
 
-impl<F: Fetch + Releases + Clone + 'static> App<F> {
+impl App {
     /// `GET` or `HEAD` of a file of the interface; any path without an extension is the
     /// single-page app's `index.html`.
     pub(crate) async fn asset(

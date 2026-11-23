@@ -223,7 +223,7 @@ fn pairs(value: &Value) -> Vec<(String, String)> {
 }
 
 /// The daemon on the fixture, as the recorder started the `Application`.
-async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
+async fn launch(root: &Path) -> (Daemon, Placeholders) {
     let (data, agent_home) = (root.join("data"), root.join("agent-home"));
     let agents = AgentDirectories::new(agent_home.clone());
     let options = Options {
@@ -240,7 +240,7 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
         },
         agents,
         backends: processes(),
-        fetch: ModelsDev::new(),
+        outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
         timing: *TIMING,
     };
