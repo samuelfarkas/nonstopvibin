@@ -46,13 +46,117 @@ export const serverArchitectures = ["x64", "arm64"];
 /** install.sh's default prefix, relative to $HOME. */
 export const serverPrefix = ".local";
 
+/**
+ * The desktop app as installed builds and the update feed know it. Electron builds take the
+ * same values from package.json `build`, and tests/distribution.test.mjs keeps the two equal:
+ * an installed Electron build only accepts a Rust update with this identity.
+ */
+export const product = {
+  name: "NonstopVibin",
+  /** Bundle identifier, the ad-hoc designated requirement and the ShipIt cache name. */
+  id: "app.nonstopvibin.desktop",
+  /** The daemon on Linux, and the deb package, desktop file and icon name. */
+  executable: "nonstopvibin",
+  /** The WebKit window helper, beside the daemon. */
+  helper: "nonstopvibin-window",
+  feed: { owner: "samuelfarkas", repo: "nonstopvibin" },
+  macCategory: "public.app-category.developer-tools",
+  linuxCategory: "Development",
+  maintainer: "nonstopvibin",
+  /** SMAppService, the login item, needs macOS 13. */
+  minimumMacOS: "13.0",
+} as const;
+
+/** Installers per platform. The update payload is the one electron-updater downloads. */
+export const desktopTargets = {
+  mac: ["dmg", "zip"],
+  linux: ["AppImage", "deb"],
+} as const;
+export const updatePayload = { mac: "zip", linux: "AppImage" } as const;
+export type DesktopPlatform = keyof typeof desktopTargets;
+
+/** electron-builder's `${productName}-${version}-${os}-${arch}.${ext}` with its arch names. */
+export function desktopArtifact(
+  version: string,
+  platform: DesktopPlatform,
+  arch: string,
+  ext: string,
+): string {
+  architecture(arch);
+  const name =
+    arch !== "x64"
+      ? arch
+      : ext === "AppImage"
+        ? "x86_64"
+        : ext === "deb"
+          ? "amd64"
+          : arch;
+  return `${product.name}-${version}-${platform}-${name}.${ext}`;
+}
+
+/**
+ * Rust targets per platform and Node architecture name. The Linux daemon is static musl: a
+ * glibc build links the build host's newest symbols (GLIBC_2.39 on ubuntu-24.04), which would
+ * drop most distributions in docs/server.md. The helper links the system WebKitGTK, so glibc.
+ */
+export const rustTargets = {
+  macos: { x64: "x86_64-apple-darwin", arm64: "aarch64-apple-darwin" },
+  linuxDaemon: {
+    x64: "x86_64-unknown-linux-musl",
+    arm64: "aarch64-unknown-linux-musl",
+  },
+  linuxHelper: {
+    x64: "x86_64-unknown-linux-gnu",
+    arm64: "aarch64-unknown-linux-gnu",
+  },
+} as const;
+
+/** The Rust target triple of one kind of binary for a Node architecture name. */
+export function rustTarget(
+  kind: keyof typeof rustTargets,
+  arch: string,
+): string {
+  const target = new Map<string, string>(Object.entries(rustTargets[kind])).get(
+    arch,
+  );
+  if (!target) throw new Error(`No ${kind} build for ${arch}`);
+  return target;
+}
+
+/**
+ * Licence files every Rust package ships in its `licenses/` folder. THIRD-PARTY.txt covers the
+ * UI's npm packages (`bun run build`), THIRD-PARTY-RUST.txt the crates compiled into the
+ * binaries and Rust-std.html the standard library with musl (scripts/rust-licenses.ts),
+ * CLIProxyAPI.txt the core (core:install).
+ */
+export const rustLicenses = [
+  "LICENSE",
+  "NOTICE.md",
+  "THIRD-PARTY.txt",
+  "THIRD-PARTY-RUST.txt",
+  "Rust-std.html",
+  "CLIProxyAPI.txt",
+] as const;
+
+/**
+ * The Rust server archive's top-level entries. The daemon embeds the UI, so there is no
+ * `client/`; it finds `core/` beside its real path.
+ */
+export const rustServerArchive = {
+  executable: "nonstopvibin",
+  core: "core",
+  licenses: "licenses",
+  installer: "install.sh",
+  readme: "README.md",
+} as const;
+
 /** scripts/server-install.sh with the values it must agree on filled in. */
 export function renderInstaller(
   source: string,
   version: string,
   arch: string,
+  entries: readonly string[] = Object.values(serverArchive),
 ): string {
-  const entries = Object.values(serverArchive);
   // An archive without any entry but these two cannot be installed.
   const required = entries.filter(
     (entry) =>
