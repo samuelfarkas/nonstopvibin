@@ -11,12 +11,10 @@
 )]
 mod common;
 
-use std::sync::Arc;
-
 use nsv_agents::AgentDirectories;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
-use nsv_server::{CoreOptions, Daemon, Options, Unwired};
+use nsv_server::{CoreOptions, Daemon, Options, processes};
 use nsv_shell::{HostEvent, ShellHost};
 use nsv_store::{ServerLock, Store, Vault};
 use serde_json::json;
@@ -69,13 +67,12 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
             opencode: None,
             pi: None,
         },
+        backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,
     };
     let lock = ServerLock::acquire(&data).unwrap();
-    let daemon = Daemon::start(options, lock, |_| Arc::new(Unwired))
-        .await
-        .unwrap();
+    let daemon = Daemon::start(options, lock).await.unwrap();
     daemon.restore().await.unwrap();
     daemon
 }

@@ -9,6 +9,7 @@ use hyper::body::Incoming;
 use hyper::header::{self, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use nsv_accounts::fetch::Fetch;
+use nsv_core::install::Releases;
 use nsv_domain::wire::JsNumber;
 use nsv_gateway::Body;
 
@@ -140,7 +141,7 @@ fn unchanged(request: &Request<Incoming>, etag: &str) -> bool {
         })
 }
 
-impl<F: Fetch + Clone + 'static> App<F> {
+impl<F: Fetch + Releases + Clone + 'static> App<F> {
     /// `GET` or `HEAD` of a file of the interface; any path without an extension is the
     /// single-page app's `index.html`.
     pub(crate) async fn asset(

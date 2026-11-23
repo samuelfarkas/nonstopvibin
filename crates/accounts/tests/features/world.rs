@@ -143,6 +143,7 @@ impl World {
                 releases: Arc::clone(&releases),
                 feed: feed.map(str::to_owned),
                 require_pinned_core: false,
+                allow_missing_core: false,
                 clock,
                 report: Arc::new(move |message| reported.lock().unwrap().push(message)),
                 sign_in_accepted: Arc::new(move || {

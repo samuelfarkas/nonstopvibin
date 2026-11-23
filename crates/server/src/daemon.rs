@@ -7,21 +7,21 @@ use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use nsv_accounts::accounts::Accounts;
 use nsv_accounts::catalog::ModelCatalog;
+use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Fetch;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
-use nsv_accounts::scheduler::{self, Scheduler, TIMING};
+use nsv_accounts::scheduler::{Scheduler, TIMING};
+use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
-use nsv_core::binary::{CoreTarget, bundled_pin, verify_core};
-use nsv_core::install::select_installed_core;
-use nsv_core::pool::{BoxFuture, Pool, PoolState, Processes, READY};
+use nsv_core::install::Releases;
+use nsv_core::pool::{Backend, PoolState, Processes, READY};
 use nsv_domain::error::AppError;
 use nsv_domain::helper::Origin;
 use nsv_domain::id::ProfileId;
@@ -29,12 +29,10 @@ use nsv_domain::secret::SessionToken;
 use nsv_domain::time::iso_string;
 use nsv_gateway::Gateway;
 use nsv_shell::{HostEvent, ShellHost, TrayStatus};
-use nsv_store::layout::cores_directory;
 use nsv_store::{AuthSnapshot, ProfileNames, ServerLock, Store, StoreError, Vault, VaultError};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, OnceCell, broadcast, watch};
 
-use crate::features::{FeatureContext, FeatureHost, Features};
 use crate::http::{GatewayHost, Phase, valid_allow_host};
 use crate::session::Session;
 
@@ -58,10 +56,19 @@ pub struct Options<F> {
     pub client: PathBuf,
     pub core: CoreOptions,
     pub agents: AgentDirectories,
-    /// The outside requests: models.dev, the euro rate and what the features need.
+    /// Launches a data directory's cores: [`processes`] outside tests.
+    pub backends: Backends,
+    /// The outside requests: models.dev, the euro rate, provider APIs, the core feed and
+    /// release downloads.
     pub fetch: F,
     /// Milliseconds since the epoch, for usage periods, pricing and retention.
     pub clock: fn() -> i64,
+}
+
+/// Each data directory's cores run as processes of the core binary.
+#[must_use]
+pub fn processes() -> Backends {
+    Arc::new(|directory: &Path| -> Arc<dyn Backend> { Arc::new(Processes::new(directory)) })
 }
 
 /// Which core profiles start from.
@@ -202,35 +209,6 @@ impl Shared {
     }
 }
 
-/// The scheduler's view of the daemon. The features exist only once the scheduler's pool does.
-struct SchedulerHost {
-    shared: Arc<Shared>,
-    features: OnceLock<Arc<dyn Features>>,
-}
-
-impl scheduler::Host for SchedulerHost {
-    fn report(&self, message: String) {
-        self.shared.errors.report(message);
-    }
-
-    fn signing_in(&self, profile: &ProfileId) -> bool {
-        self.features
-            .get()
-            .is_some_and(|features| features.signing_in(profile))
-    }
-
-    fn refresh_quotas(
-        &self,
-        pool: Pool,
-        profile: ProfileId,
-    ) -> BoxFuture<'static, Result<(), AppError>> {
-        match self.features.get() {
-            Some(features) => features.refresh_quotas(pool, profile),
-            None => Box::pin(async { Ok(()) }),
-        }
-    }
-}
-
 /// Everything a request may reach.
 pub(crate) struct App<F> {
     pub(crate) shared: Arc<Shared>,
@@ -238,7 +216,6 @@ pub(crate) struct App<F> {
     pub(crate) allow_hosts: Vec<String>,
     pub(crate) development: bool,
     pub(crate) client: PathBuf,
-    core: CoreOptions,
     pub(crate) clock: fn() -> i64,
     pub(crate) port: u16,
     pub(crate) origin: Origin,
@@ -248,15 +225,14 @@ pub(crate) struct App<F> {
     /// files revalidate after each launch.
     pub(crate) asset_version: String,
     pub(crate) store: Store,
-    pub(crate) scheduler: Scheduler,
+    /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
+    /// and core updates.
+    pub(crate) cores: Cores<F, F>,
     pub(crate) gateway: Gateway<GatewayHost<F>>,
     pub(crate) agents: AgentSetup,
     pub(crate) catalog: Arc<ModelCatalog<F>>,
     pub(crate) prices: Arc<UsagePrices<F>>,
     pub(crate) imports: Arc<Mutex<ImportCatalog>>,
-    pub(crate) features: Arc<dyn Features>,
-    /// The version of the core profiles start from.
-    pub(crate) core_version: Mutex<String>,
     pub(crate) phase: watch::Sender<Phase>,
     lock: Mutex<Option<ServerLock>>,
     started_at: Mutex<Option<String>>,
@@ -264,9 +240,9 @@ pub(crate) struct App<F> {
 }
 
 /// The running daemon. Clones share it.
-pub struct Daemon<F: Fetch + Clone + 'static>(Arc<App<F>>);
+pub struct Daemon<F: Fetch + Releases + Clone + 'static>(Arc<App<F>>);
 
-impl<F: Fetch + Clone + 'static> Clone for Daemon<F> {
+impl<F: Fetch + Releases + Clone + 'static> Clone for Daemon<F> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
@@ -298,17 +274,13 @@ fn random_uuid() -> io::Result<String> {
         .join("-"))
 }
 
-impl<F: Fetch + Clone + 'static> Daemon<F> {
+impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
     /// Opens the store, prunes old usage and starts accepting on the loopback port; requests
     /// are served from here on. Then [`Daemon::restore`] starts the profiles.
     ///
     /// # Errors
     /// An invalid allowed host, a port in use, or a store that does not open.
-    pub async fn start(
-        options: Options<F>,
-        lock: ServerLock,
-        features: impl FnOnce(FeatureContext<F>) -> Arc<dyn Features>,
-    ) -> Result<Self, StartError> {
+    pub async fn start(options: Options<F>, lock: ServerLock) -> Result<Self, StartError> {
         if let Some(host) = options
             .allow_hosts
             .iter()
@@ -320,7 +292,7 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
         }
         let vault = Vault::open(&options.directory)?;
         let store = Store::open(&options.directory, vault).await?;
-        match Self::assemble(options, lock, store.clone(), features).await {
+        match Self::assemble(options, lock, store.clone()).await {
             Ok(daemon) => Ok(daemon),
             Err(error) => {
                 store.close().await;
@@ -333,7 +305,6 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
         options: Options<F>,
         lock: ServerLock,
         store: Store,
-        features: impl FnOnce(FeatureContext<F>) -> Arc<dyn Features>,
     ) -> Result<Self, StartError> {
         let now = UNIX_EPOCH + Duration::from_millis(u64::try_from((options.clock)()).unwrap_or(0));
         store.call(move |db| db.prune_usage(now)).await?;
@@ -352,45 +323,35 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
             closing: AtomicBool::new(false),
             stop: Notify::new(),
         });
-        let accounts = Arc::new(Accounts::new(store.clone()));
-        let scheduler_host = Arc::new(SchedulerHost {
-            shared: Arc::clone(&shared),
-            features: OnceLock::new(),
-        });
-        let host: Arc<dyn scheduler::Host> = Arc::<SchedulerHost>::clone(&scheduler_host);
-        let scheduler = Scheduler::new(
-            store.clone(),
-            options.core.binary.clone(),
-            Arc::new(Processes::new(&options.directory)),
-            READY,
-            Arc::clone(&accounts),
-            host,
-            TIMING,
-        );
-        let features = features(FeatureContext {
+        let (reported, accepted) = (Arc::clone(&shared), Arc::clone(&shared));
+        let cores = Cores::new(CoresOptions {
             store: store.clone(),
-            pool: scheduler.pool().clone(),
-            accounts,
-            directory: options.directory.clone(),
-            core: options.core.clone(),
+            binary: options.core.binary,
+            backends: options.backends,
+            ready: READY,
+            timing: TIMING,
             fetch: options.fetch.clone(),
-            host: FeatureHost(Arc::clone(&shared)),
-        });
-        // Set once, here, before anything is scheduled.
-        let _ = scheduler_host.features.set(Arc::clone(&features));
+            releases: options.fetch.clone(),
+            feed: options.core.feed,
+            require_pinned_core: options.core.pinned,
+            allow_missing_core: options.core.allow_missing,
+            clock: options.clock,
+            report: Arc::new(move |message| reported.errors.report(message)),
+            sign_in_accepted: Arc::new(move || accepted.sign_in_accepted()),
+        })?;
         let catalog = Arc::new(ModelCatalog::new(options.fetch.clone(), options.clock));
         let prices = Arc::new(UsagePrices::new(options.fetch, options.clock));
         let gateway = Gateway::new(GatewayHost {
             shared: Arc::clone(&shared),
             auth: store.auth(),
-            scheduler: scheduler.clone(),
+            scheduler: cores.scheduler.clone(),
             catalog: Arc::clone(&catalog),
             store: store.clone(),
         })
         .map_err(|error| StartError::Other(error.to_string()))?;
         let agents = AgentSetup::new(
             &options.directory,
-            connection_source(&shared, &store, &scheduler, port),
+            connection_source(&shared, &store, &cores.scheduler, port),
             options.agents.clone(),
         )
         .map_err(|error| StartError::Other(error.to_string()))?;
@@ -402,7 +363,6 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
             allow_hosts: options.allow_hosts,
             development: options.development,
             client: options.client,
-            core: options.core,
             clock: options.clock,
             port,
             origin,
@@ -410,13 +370,11 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
             token,
             asset_version: random_uuid()?,
             store,
-            scheduler,
+            cores,
             gateway,
             agents,
             catalog,
             prices,
-            features,
-            core_version: Mutex::new(String::new()),
             phase: watch::Sender::new(Phase::Serving),
             lock: Mutex::new(Some(lock)),
             started_at: Mutex::new(None),
@@ -430,9 +388,10 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
         Ok(Self(app))
     }
 
-    /// Selects and checks the core, reaps cores an earlier run left, starts the profiles that
-    /// are kept running (the others start on their first request), restores agent connections,
-    /// and writes `server.json`. Dropping it part-way is safe: [`Daemon::close`] stops whatever
+    /// Selects and checks the core, reaps cores and pending sign-ins an earlier run left,
+    /// starts the profiles that are kept running (the others start on their first request),
+    /// checks for a core update in the background, restores agent connections, and writes
+    /// `server.json`. Dropping it part-way is safe: [`Daemon::close`] stops whatever
     /// it started.
     ///
     /// # Errors
@@ -440,12 +399,7 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
     /// read, or shutdown beginning meanwhile.
     pub async fn restore(&self) -> Result<(), StartError> {
         let app = &self.0;
-        let version = app.select_core().await?;
-        *locked(&app.core_version) = version;
-        app.scheduler.pool().reap_orphans().await?;
-        app.features.restore().await?;
-        app.scheduler.launch().await?;
-        app.features.launched();
+        app.cores.launch().await?;
         let profiles = app.store.call(|db| db.profiles()).await?;
         match app.agents.restore(&profiles, app.port).await {
             Ok(failures) => {
@@ -521,39 +475,7 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
     }
 }
 
-impl<F: Fetch + Clone + 'static> App<F> {
-    async fn select_core(&self) -> Result<String, StartError> {
-        let pin = bundled_pin().map_err(|error| StartError::Other(error.to_string()))?;
-        if self.core.feed.is_some() {
-            let cores = cores_directory(&self.directory);
-            let target = CoreTarget::current()?;
-            let selected = tokio::task::spawn_blocking(move || {
-                select_installed_core(&cores, pin.version, target)
-            })
-            .await
-            .map_err(|error| StartError::Other(error.to_string()))?
-            .map_err(|error| StartError::Other(error.to_string()))?;
-            if let Some(active) = selected {
-                self.scheduler.pool().use_binary(active.binary).await?;
-                return Ok(active.version.to_string());
-            }
-        }
-        let binary = self.core.binary.clone();
-        if !self.core.allow_missing || binary.exists() {
-            let pinned = self.core.pinned.then_some(pin);
-            tokio::task::spawn_blocking(move || verify_core(&binary, pinned))
-                .await
-                .map_err(|error| StartError::Other(error.to_string()))?
-                .map_err(|error| StartError::Other(error.to_string()))?;
-        }
-        Ok(pin.version.to_string())
-    }
-
-    /// An installed build, which may run a core update.
-    pub(crate) const fn updates(&self) -> bool {
-        self.core.feed.is_some()
-    }
-
+impl<F: Fetch + Releases + Clone + 'static> App<F> {
     /// Reads the profile names again after a profile was created or renamed.
     pub(crate) async fn refresh_names(&self) -> Result<(), StoreError> {
         if self.shared.desktop {
@@ -568,7 +490,7 @@ impl<F: Fetch + Clone + 'static> App<F> {
         if self.shared.desktop {
             self.shared
                 .tray
-                .update(&self.scheduler.pool().state(), &self.scheduler);
+                .update(&self.cores.pool().state(), &self.cores.scheduler);
         }
     }
 
@@ -579,10 +501,7 @@ impl<F: Fetch + Clone + 'static> App<F> {
         if let Err(error) = self.agents.close().await {
             failures.push(error.to_string());
         }
-        self.scheduler.begin_shutdown().await;
-        self.features.shutdown().await;
-        self.scheduler.settled().await;
-        if let Err(error) = self.scheduler.pool().stop_all().await {
+        if let Err(error) = self.cores.shutdown().await {
             failures.push(error.message);
         }
         self.prices.close().await;
@@ -613,9 +532,9 @@ fn bind(port: u16) -> Result<TcpListener, StartError> {
 }
 
 /// The desktop tray follows each change the pool publishes.
-fn follow_pool<F: Fetch + Clone + 'static>(app: &Arc<App<F>>) {
+fn follow_pool<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>) {
     let weak = Arc::downgrade(app);
-    let mut changes = app.scheduler.pool().subscribe();
+    let mut changes = app.cores.pool().subscribe();
     tokio::spawn(async move {
         while changes.changed().await.is_ok() {
             let Some(app) = weak.upgrade() else { return };
@@ -655,7 +574,7 @@ fn connection_source(
     })
 }
 
-impl<F: Fetch + Clone + 'static> ShellHost for Daemon<F> {
+impl<F: Fetch + Releases + Clone + 'static> ShellHost for Daemon<F> {
     fn origin(&self) -> &Origin {
         &self.0.origin
     }

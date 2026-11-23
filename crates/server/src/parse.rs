@@ -7,7 +7,7 @@
 
 use std::fmt::Display;
 
-use nsv_domain::id::is_uuid;
+use nsv_domain::id::{AccountId, is_uuid};
 use nsv_domain::registry::{
     Agent, OAuthProvider, Protocol, Provider, Registry, RetentionDays, Strategy,
 };
@@ -470,7 +470,7 @@ pub(crate) fn callback(value: &Value) -> Result<String, Invalid> {
 pub(crate) fn oauth_start(
     registry: &Registry,
     value: &Value,
-) -> Result<(OAuthProvider, Option<String>), Invalid> {
+) -> Result<(OAuthProvider, Option<AccountId>), Invalid> {
     let offered: Vec<OAuthProvider> = OAuthProvider::ALL
         .iter()
         .copied()
@@ -494,7 +494,7 @@ pub(crate) fn oauth_start(
         let reconnect = optional(map, "reconnectAccountId", |value| {
             let text = string(&mut issues, Some(value), "reconnectAccountId")?;
             length(&mut issues, text, "reconnectAccountId", 1, 255);
-            Some(text.to_owned())
+            AccountId::parse(text).ok()
         });
         strict(&mut issues, map, "", &["provider", "reconnectAccountId"]);
         Some((provider?, reconnect?))

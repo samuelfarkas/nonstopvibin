@@ -42,6 +42,9 @@ pub struct CoresOptions<F, R> {
     pub feed: Option<String>,
     /// Whether the bundled core must also match the pin compiled in (headless releases).
     pub require_pinned_core: bool,
+    /// A development run starts without its bundled core; each profile start then reports it
+    /// missing.
+    pub allow_missing_core: bool,
     /// Milliseconds since the epoch: quota check times and sign-in expiry.
     pub clock: fn() -> i64,
     pub report: Report,
@@ -63,6 +66,7 @@ pub struct Cores<F, R> {
     binary: PathBuf,
     backends: Backends,
     require_pinned_core: bool,
+    allow_missing_core: bool,
 }
 
 /// What the scheduler asks of the features. It holds no handle to the scheduler, so nothing
@@ -126,6 +130,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             releases,
             feed,
             require_pinned_core,
+            allow_missing_core,
             clock,
             report,
             sign_in_accepted,
@@ -201,6 +206,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
             binary,
             backends,
             require_pinned_core,
+            allow_missing_core,
         })
     }
 
@@ -210,7 +216,7 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
     }
 
     /// At startup: profiles start from the selected installed core, or the bundled one once it
-    /// passes its integrity check. Cores a dead earlier instance left are stopped (the
+    /// passes its integrity check (a development run may lack it). Cores a dead earlier instance left are stopped (the
     /// profiles' and the pending sign-ins'), pending sign-ins and core checks are deleted, the
     /// profiles start and scheduling begins. An installed build then checks for a core update
     /// in the background; offline stays quiet, as Settings checks again.
@@ -219,7 +225,8 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
     /// A bundled core that is missing or fails its check, a ledger or file-system error, or
     /// the scheduler's.
     pub async fn launch(&self) -> Result<(), AppError> {
-        if !self.updates.select().await? {
+        let missing = self.allow_missing_core && !self.binary.exists();
+        if !self.updates.select().await? && !missing {
             let pinned = if self.require_pinned_core {
                 Some(bundled_pin().map_err(|error| AppError::new(error.to_string(), 500))?)
             } else {

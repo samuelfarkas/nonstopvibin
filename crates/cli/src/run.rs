@@ -3,12 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_net::Https;
-use nsv_server::{CoreOptions, Daemon, Options, Session, Unwired, panic};
+use nsv_server::{CoreOptions, Daemon, Options, Session, panic, processes};
 use nsv_store::{LockError, ServerLock};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -106,7 +105,7 @@ async fn start(
     lock: ServerLock,
 ) -> Result<Option<Daemon<Https>>, CliError> {
     let daemon = tokio::select! {
-        started = Daemon::start(options, lock, |_| Arc::new(Unwired)) => {
+        started = Daemon::start(options, lock) => {
             started.map_err(CliError::from_display)?
         }
         () = signals.received() => return Ok(None),
@@ -195,6 +194,7 @@ pub(crate) async fn serve(
             allow_missing: false,
         },
         agents: agents()?,
+        backends: processes(),
         fetch: https()?,
         clock: now,
     };
@@ -280,6 +280,7 @@ async fn desktop_daemon(
             allow_missing: !layout.packaged,
         },
         agents: agents()?,
+        backends: processes(),
         fetch: https()?,
         clock: now,
     };

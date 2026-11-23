@@ -7,6 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nsv_accounts::fetch::{Fetch, Request};
+use nsv_core::binary::Sha256Digest;
+use nsv_core::install::Releases;
+use nsv_domain::error::AppError;
 use nsv_net::{HeaderMap, Loopback, NetError, Response, StatusCode};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,7 +57,8 @@ pub(crate) fn golden(area: &str) -> Vec<Value> {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
-/// models.dev answers with the recorder's fixed catalog; every other outside request fails.
+/// models.dev answers with the recorder's fixed catalog; every other outside request, the core
+/// feed and release downloads included, fails.
 #[derive(Clone)]
 pub(crate) struct ModelsDev(Arc<Vec<u8>>);
 
@@ -90,6 +94,20 @@ impl Fetch for ModelsDev {
         _: Request,
     ) -> impl Future<Output = Result<Response, NetError>> + Send {
         std::future::ready(Err(NetError::Invalid("offline")))
+    }
+}
+
+impl Releases for ModelsDev {
+    fn feed(&self, _: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
+        std::future::ready(Err(NetError::Invalid("offline")))
+    }
+
+    fn download(
+        &self,
+        _: &str,
+        _: &Path,
+    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send {
+        std::future::ready(Err(AppError::new("offline", 502)))
     }
 }
 

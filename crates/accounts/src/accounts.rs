@@ -17,8 +17,8 @@ use nsv_domain::registry::{Provider, Registry, registry};
 use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
 use nsv_net::Method;
-use nsv_store::Store;
 use nsv_store::layout::credential_directory;
+use nsv_store::{Db, Store, StoreError};
 use serde_json::{Map, Value};
 
 use crate::identity::{SeatIdentity, claude_identity};
@@ -213,21 +213,7 @@ impl Accounts {
     /// A store failure.
     pub async fn list(&self, profile: &ProfileId) -> Result<Vec<Account>, AppError> {
         let profile = profile.clone();
-        Ok(self
-            .store
-            .call(move |db| {
-                let oauth = db.account_metadata(&profile)?;
-                let api = db.api_accounts(&profile)?.into_iter().map(api_listing);
-                oauth
-                    .into_iter()
-                    .chain(api)
-                    .map(|mut account| {
-                        account.quota = db.quota(&profile, &account.id)?;
-                        Ok(account)
-                    })
-                    .collect()
-            })
-            .await?)
+        Ok(self.store.call(move |db| listed(db, &profile)).await?)
     }
 
     /// A credential file was replaced without the core: its account shows the file's seat and
@@ -320,6 +306,23 @@ fn has_json_extension(name: &str) -> bool {
 }
 
 /// An API-key account as `list` shows it.
+/// [`Accounts::list`] inside a store call, for a caller that reads more in the same call.
+///
+/// # Errors
+/// A store failure.
+pub fn listed(db: &Db, profile: &ProfileId) -> Result<Vec<Account>, StoreError> {
+    let oauth = db.account_metadata(profile)?;
+    let api = db.api_accounts(profile)?.into_iter().map(api_listing);
+    oauth
+        .into_iter()
+        .chain(api)
+        .map(|mut account| {
+            account.quota = db.quota(profile, &account.id)?;
+            Ok(account)
+        })
+        .collect()
+}
+
 fn api_listing(account: ApiAccount) -> Account {
     Account {
         id: account.id,

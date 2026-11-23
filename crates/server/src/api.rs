@@ -1,6 +1,6 @@
 //! The management API under `/api`: `src/shared/api.ts`'s routes in `server.ts`'s order, with its
 //! path, body and query rules. Sign-in, credential, reset, API-account and core-update routes
-//! are parsed here and answered by [`crate::Features`].
+//! are parsed here and answered by the account features ([`nsv_accounts::cores::Cores`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,15 +8,14 @@ use std::time::Duration;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response, StatusCode};
+use nsv_accounts::accounts::listed;
 use nsv_accounts::fetch::Fetch;
 use nsv_agents::{offered_models, profile_endpoint};
-use nsv_domain::id::ProfileId;
+use nsv_core::install::Releases;
+use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
 use nsv_domain::time::iso_string;
-use nsv_domain::wire::{
-    Account, AccountKind, AccountStatus, AppState, ClientKeyResponse, CoreState, Profile,
-    ProfileState, Runtime,
-};
+use nsv_domain::wire::{AppState, ClientKeyResponse, Profile, ProfileState, Runtime};
 use nsv_gateway::Body;
 use nsv_net::{Loopback, LoopbackRequest, loopback};
 use serde_json::{Value, json};
@@ -204,6 +203,12 @@ impl Call<'_> {
             .clone()
             .ok_or_else(|| Failure::Internal("the route has no profile".to_owned()))
     }
+
+    /// The account parameter; no profile lists an id longer than an account id may be.
+    fn account(&self) -> Result<AccountId, Failure> {
+        AccountId::parse(&self.account)
+            .map_err(|_| Failure::status(404, "Account not found in this profile."))
+    }
 }
 
 /// `jsonBody`: a JSON content type, at most 2 MB, parsed.
@@ -237,7 +242,7 @@ fn ok() -> Value {
     json!({ "ok": true })
 }
 
-impl<F: Fetch + Clone + 'static> App<F> {
+impl<F: Fetch + Releases + Clone + 'static> App<F> {
     pub(crate) async fn api(
         &self,
         request: Request<Incoming>,
@@ -299,12 +304,12 @@ impl<F: Fetch + Clone + 'static> App<F> {
         call: &Call<'_>,
     ) -> Result<Response<Body>, Failure> {
         let registry = registry()?;
-        let features = &self.features;
+        let cores = &self.cores;
         match route {
             Route::State => {
                 // A UI polls with `watch` while open; the CLI's reads have no side effects.
                 if call.query("watch").as_deref() == Some("1") {
-                    self.scheduler.watch().await;
+                    self.cores.scheduler.watch().await;
                 }
                 self.state_reply().await
             }
@@ -316,18 +321,16 @@ impl<F: Fetch + Clone + 'static> App<F> {
                 self.state_reply().await
             }
             Route::CoreCheck => {
-                features.check_core().await?;
+                cores.updates.check().await?;
                 self.state_reply().await
             }
             Route::CoreInstall => {
                 let version = parse::core_version(&body(request).await?)?;
-                let active = features.install_core(version).await?;
-                *locked(&self.core_version) = active;
+                cores.updates.install(&version).await?;
                 self.state_reply().await
             }
             Route::CoreBundled => {
-                let active = features.use_bundled_core().await?;
-                *locked(&self.core_version) = active;
+                cores.updates.use_bundled().await?;
                 self.state_reply().await
             }
             Route::ImportSources => {
@@ -363,14 +366,21 @@ impl<F: Fetch + Clone + 'static> App<F> {
                     })
                     .await?;
                 self.profiles_changed().await?;
-                self.scheduler.pool().configure(&id).await?;
+                self.cores.scheduler.pool().configure(&id).await?;
                 self.state_reply().await
             }
             Route::Start => {
-                self.scheduler.pool().start(&call.profile()?, false).await?;
+                self.cores
+                    .scheduler
+                    .pool()
+                    .start(&call.profile()?, false)
+                    .await?;
                 self.state_reply().await
             }
-            Route::Refresh => self.refresh(call.profile()?).await,
+            Route::Refresh => {
+                cores.refresh(&call.profile()?).await?;
+                self.state_reply().await
+            }
             Route::Key => {
                 let id = call.profile()?;
                 let key = self.store.call(move |db| db.client_key(&id)).await?;
@@ -385,8 +395,8 @@ impl<F: Fetch + Clone + 'static> App<F> {
                 let metadata = call.query("metadata").as_deref() == Some("1");
                 let id = call.profile()?;
                 // The catalog comes from the core: a dormant one starts for it.
-                self.scheduler.wake(&id).await?;
-                let models = self.scheduler.pool().models(&id).await?;
+                self.cores.scheduler.wake(&id).await?;
+                let models = self.cores.scheduler.pool().models(&id).await?;
                 if metadata {
                     json(
                         StatusCode::OK,
@@ -434,8 +444,8 @@ impl<F: Fetch + Clone + 'static> App<F> {
             Route::AgentInstall => {
                 let input = parse::agent_setup(registry, &body(request).await?)?;
                 let id = call.profile()?;
-                self.scheduler.wake(&id).await?;
-                let models = self.scheduler.pool().models(&id).await?;
+                self.cores.scheduler.wake(&id).await?;
+                let models = self.cores.scheduler.pool().models(&id).await?;
                 if models.is_empty() {
                     return Err(Failure::status(
                         400,
@@ -491,37 +501,36 @@ impl<F: Fetch + Clone + 'static> App<F> {
             }
             Route::SignIn => {
                 let (provider, reconnect) = parse::oauth_start(registry, &body(request).await?)?;
-                let session = features
-                    .begin_sign_in(call.profile()?, provider, reconnect)
+                let session = cores
+                    .sign_in
+                    .begin(&call.profile()?, provider, reconnect)
                     .await?;
                 json(StatusCode::OK, &session)
             }
             Route::SignInStatus => {
                 let state = parse::state_query(call.query("state").as_deref())?;
-                let session = features.sign_in_status(call.profile()?, state).await?;
-                json(StatusCode::OK, &session)
+                let status = cores.sign_in.status(&call.profile()?, &state).await?;
+                json(StatusCode::OK, &status)
             }
             Route::SignInCancel => {
                 let state = parse::state_query(call.query("state").as_deref())?;
-                features.cancel_sign_in(call.profile()?, state).await?;
+                cores.sign_in.cancel(&call.profile()?, &state).await?;
                 json(StatusCode::OK, &ok())
             }
             Route::SignInConfirm => {
                 let state = parse::single(&body(request).await?, "state", 500)?;
-                let session = features.confirm_sign_in(call.profile()?, state).await?;
-                json(StatusCode::OK, &session)
+                let status = cores.sign_in.confirm(&call.profile()?, &state).await?;
+                json(StatusCode::OK, &status)
             }
-            Route::SignInSession => {
-                json(StatusCode::OK, &features.sign_in_session(&call.profile()?))
-            }
+            Route::SignInSession => json(StatusCode::OK, &cores.sign_in.session(&call.profile()?)),
             Route::Callback => {
                 let url = parse::callback(&body(request).await?)?;
-                features.callback(call.profile()?, url).await?;
+                cores.sign_in.callback(&call.profile()?, &url).await?;
                 json(StatusCode::OK, &ok())
             }
             Route::Import => {
                 let contents = parse::import(&body(request).await?)?;
-                features.import(call.profile()?, contents).await?;
+                cores.credentials.import(&call.profile()?, contents).await?;
                 self.state_reply().await
             }
             Route::ImportSource => {
@@ -530,38 +539,52 @@ impl<F: Fetch + Clone + 'static> App<F> {
                 let contents = tokio::task::spawn_blocking(move || locked(&imports).contents(&id))
                     .await
                     .map_err(|error| Failure::Internal(error.to_string()))??;
-                features.import(call.profile()?, contents).await?;
+                cores.credentials.import(&call.profile()?, contents).await?;
                 self.state_reply().await
             }
             Route::SetAccount => {
                 let patch = parse::account_patch(registry, &body(request).await?)?;
-                features
-                    .set_account(call.profile()?, call.account.clone(), patch)
+                cores
+                    .credentials
+                    .set_account(&call.profile()?, &call.account()?, patch)
                     .await?;
                 self.state_reply().await
             }
             Route::RemoveAccount => {
-                features
-                    .remove_account(call.profile()?, call.account.clone())
+                cores
+                    .credentials
+                    .remove_account(&call.profile()?, &call.account()?)
                     .await?;
                 self.state_reply().await
             }
             Route::ResetCredits => {
-                let credits = features
-                    .reset_credits(call.profile()?, call.account.clone())
+                let source = cores.quotas.source();
+                let credits = cores
+                    .resets
+                    .credits(source, &call.profile()?, &call.account()?)
                     .await?;
                 json(StatusCode::OK, &credits)
             }
             Route::ConsumeReset => {
                 let credit = parse::single(&body(request).await?, "creditId", 500)?;
-                let result = features
-                    .consume_reset(call.profile()?, call.account.clone(), credit)
+                let result = cores
+                    .resets
+                    .consume(
+                        cores.quotas.source(),
+                        cores.quotas.as_ref(),
+                        &call.profile()?,
+                        &call.account()?,
+                        &credit,
+                    )
                     .await?;
                 json(StatusCode::OK, &result)
             }
             Route::ApiAccount => {
                 let input = parse::api_account(registry, &body(request).await?)?;
-                features.add_api_account(call.profile()?, input).await?;
+                cores
+                    .credentials
+                    .add_api_account(&call.profile()?, input)
+                    .await?;
                 self.profiles_changed().await?;
                 let state = self.state().await?;
                 json(StatusCode::CREATED, &state)
@@ -580,36 +603,9 @@ impl<F: Fetch + Clone + 'static> App<F> {
 
     /// The scheduler and the tray read profiles again.
     async fn profiles_changed(&self) -> Result<(), Failure> {
-        self.scheduler.changed().await?;
+        self.cores.scheduler.changed().await?;
         self.refresh_names().await?;
         Ok(())
-    }
-
-    /// Signed-in quota is asked through the core, so a profile the app keeps running starts
-    /// first; the caller still learns why it is not running.
-    async fn refresh(&self, id: ProfileId) -> Result<Response<Body>, Failure> {
-        let counted = id.clone();
-        let subscriptions = self
-            .store
-            .call(move |db| {
-                Ok(db.account_metadata(&counted)?.len() + db.api_accounts(&counted)?.len())
-            })
-            .await?;
-        let pool = self.scheduler.pool();
-        let failure = if subscriptions > 0 {
-            pool.start(&id, false).await.err()
-        } else {
-            None
-        };
-        // Once shutdown began nothing new may begin.
-        if let Some(failure) = failure.clone().filter(|_| pool.closing()) {
-            return Err(failure.into());
-        }
-        self.features.refresh_accounts(id).await?;
-        if let Some(failure) = failure {
-            return Err(failure.into());
-        }
-        self.state_reply().await
     }
 
     /// Asks the profile's own gateway endpoint for its models, as an agent would.
@@ -662,45 +658,18 @@ impl<F: Fetch + Clone + 'static> App<F> {
 
     /// `Application.state()`.
     pub(crate) async fn state(&self) -> Result<AppState, Failure> {
-        let (stored, retention) =
-            self.store
-                .call(|db| {
-                    let mut stored = Vec::new();
-                    for profile in db.profiles()? {
-                        let mut accounts = db.account_metadata(&profile.id)?;
-                        accounts.extend(db.api_accounts(&profile.id)?.into_iter().map(|api| {
-                            Account {
-                                id: api.id,
-                                name: api.name,
-                                account_uuid: None,
-                                organization_uuid: None,
-                                organization_name: None,
-                                provider: api.provider.as_str().to_owned(),
-                                kind: AccountKind::ApiKey,
-                                email: None,
-                                disabled: api.disabled,
-                                status: if api.disabled {
-                                    AccountStatus::Paused
-                                } else {
-                                    AccountStatus::Configured
-                                },
-                                priority: 0,
-                                auth_index: None,
-                                quota: None,
-                                prefix: Some(api.prefix),
-                                model_count: u32::try_from(api.models.len()).ok(),
-                                extra: serde_json::Map::new(),
-                            }
-                        }));
-                        for account in &mut accounts {
-                            account.quota = db.quota(&profile.id, &account.id)?;
-                        }
-                        stored.push((profile, accounts));
-                    }
-                    Ok((stored, db.usage_retention_days()?))
-                })
-                .await?;
-        let pool = self.scheduler.pool().state();
+        let (stored, retention) = self
+            .store
+            .call(|db| {
+                let mut stored = Vec::new();
+                for profile in db.profiles()? {
+                    let accounts = listed(db, &profile.id)?;
+                    stored.push((profile, accounts));
+                }
+                Ok((stored, db.usage_retention_days()?))
+            })
+            .await?;
+        let pool = self.cores.scheduler.pool().state();
         let profiles = stored
             .into_iter()
             .map(|(profile, accounts)| {
@@ -708,7 +677,7 @@ impl<F: Fetch + Clone + 'static> App<F> {
                 // Once the scheduler stopped restarting it, the profile says so instead of its
                 // last failure.
                 let gave_up = (runtime != Runtime::Running)
-                    .then(|| self.scheduler.gave_up(&profile.id))
+                    .then(|| self.cores.scheduler.gave_up(&profile.id))
                     .flatten();
                 ProfileState {
                     error: gave_up.or_else(|| error.map(str::to_owned)),
@@ -719,20 +688,10 @@ impl<F: Fetch + Clone + 'static> App<F> {
                 }
             })
             .collect();
-        let (available, phase) = self.features.core_progress();
-        let bundled = nsv_core::binary::bundled_pin()
-            .map_err(|error| Failure::Internal(error.to_string()))?
-            .version
-            .to_string();
         Ok(AppState {
             profiles,
-            core_version: locked(&self.core_version).clone(),
-            core: CoreState {
-                bundled,
-                updates: self.updates(),
-                available,
-                phase,
-            },
+            core_version: self.cores.updates.version(),
+            core: self.cores.updates.state(),
             gateway: self.origin.as_str().to_owned(),
             usage_retention_days: retention,
             version: VERSION.to_owned(),

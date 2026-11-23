@@ -10,13 +10,11 @@
 mod api;
 mod assets;
 mod daemon;
-mod features;
 mod http;
 pub mod panic;
 mod parse;
 mod session;
 
-pub use daemon::{CloseError, CoreOptions, Daemon, Options, StartError, VERSION};
-pub use features::{FeatureContext, FeatureHost, Features, Unwired};
+pub use daemon::{CloseError, CoreOptions, Daemon, Options, StartError, VERSION, processes};
 pub use http::valid_allow_host;
 pub use session::{ServerState, Session, SessionError};

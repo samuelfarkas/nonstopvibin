@@ -3,7 +3,7 @@
 //! runs the same way here: port 24318, the fixture copied with its modes, a tiny client
 //! directory, the recorder's clock and models.dev payload.
 //!
-//! Every case must match, or be listed in [`DIFFERENCES`] with its reason and still differ.
+//! Every case must match.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,25 +13,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use nsv_agents::{AgentDirectories, AgentSetup};
-use nsv_server::{CoreOptions, Daemon, Options, Unwired};
+use nsv_server::{CoreOptions, Daemon, Options, processes};
 use nsv_store::ServerLock;
 use serde_json::{Value, json};
 
 use crate::common::{ModelsDev, Placeholders, REPOSITORY, TempDir, golden, now, send};
 
 const PORT: u16 = 24318;
-
-/// Cases that differ from the TypeScript server on purpose.
-const DIFFERENCES: &[(&str, &str)] = &[
-    (
-        "GET oauth unknown state",
-        "sign-in is wired after rust/signin merges; the unwired seam answers 501",
-    ),
-    (
-        "GET reset-credits unknown account",
-        "reset credits are wired after rust/signin merges; the unwired seam answers 501",
-    ),
-];
 
 /// Text files under `root`, path to content and mode; SQLite files and the vault key by type.
 fn tree(root: &Path, label: &str, files: &mut BTreeMap<String, Value>) {
@@ -257,13 +245,12 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
             allow_missing: true,
         },
         agents: agents.clone(),
+        backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,
     };
     let lock = ServerLock::acquire(&data).unwrap();
-    let daemon = Daemon::start(options, lock, |_| Arc::new(Unwired))
-        .await
-        .unwrap();
+    let daemon = Daemon::start(options, lock).await.unwrap();
     daemon.restore().await.unwrap();
     let refuse = |_: &_| Err(nsv_domain::error::AppError::new("unused", 500));
     let socket = AgentSetup::new(&data, Arc::new(refuse), agents)
@@ -397,36 +384,15 @@ async fn the_daemon_answers_as_the_typescript_application_did() {
     check(passed, cases.len(), &differing);
 }
 
-/// Every difference is listed, and every listed one still differs.
+/// Every case matches.
 fn check(passed: usize, total: usize, differing: &[String]) {
-    let listed: Vec<&str> = DIFFERENCES.iter().map(|(name, _)| *name).collect();
-    let unexpected: Vec<&str> = differing
-        .iter()
-        .filter(|line| {
-            !listed
-                .iter()
-                .any(|name| line.starts_with(&format!("{name}: ")))
-        })
-        .map(String::as_str)
-        .collect();
-    let stale: Vec<&&str> = listed
-        .iter()
-        .filter(|name| {
-            !differing
-                .iter()
-                .any(|line| line.starts_with(&format!("{name}: ")))
-        })
-        .collect();
     #[expect(clippy::print_stderr, reason = "the replay's tally is its report")]
     {
-        eprintln!(
-            "api.json: {passed}/{total} match, {} listed differences",
-            listed.len()
-        );
+        eprintln!("api.json: {passed}/{total} match");
     }
     assert!(
-        unexpected.is_empty() && stale.is_empty(),
-        "unexpected differences:\n{}\nlisted but matching: {stale:?}",
-        unexpected.join("\n")
+        differing.is_empty(),
+        "unexpected differences:\n{}",
+        differing.join("\n")
     );
 }

@@ -16,8 +16,10 @@ use nsv_accounts::catalog::{CatalogError, ModelCatalog, profile_models};
 use nsv_accounts::fetch::Fetch;
 use nsv_accounts::imports::ImportError;
 use nsv_accounts::pricing::PricingError;
+use nsv_accounts::quota::QuotaError;
 use nsv_accounts::scheduler::Scheduler;
 use nsv_agents::{AgentError, catalog_entries, offered_models};
+use nsv_core::install::Releases;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::{Agent, RegistryError, registry};
@@ -150,6 +152,12 @@ impl From<ImportError> for Failure {
     }
 }
 
+impl From<QuotaError> for Failure {
+    fn from(error: QuotaError) -> Self {
+        Self::App(error.into())
+    }
+}
+
 impl From<RegistryError> for Failure {
     fn from(error: RegistryError) -> Self {
         Self::Internal(error.to_string())
@@ -204,7 +212,7 @@ fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
     Some(String::from_utf8_lossy(value.as_bytes()))
 }
 
-impl<F: Fetch + Clone + 'static> App<F> {
+impl<F: Fetch + Releases + Clone + 'static> App<F> {
     fn valid_host(&self, host: Option<&str>) -> bool {
         let Some(host) = host else { return false };
         host.strip_prefix("127.0.0.1:")
@@ -338,7 +346,10 @@ fn refused(refusal: &Refusal) -> Response<Body> {
 }
 
 /// Accepts until shutdown begins; each connection serves its requests in a task of its own.
-pub(crate) fn serve<F: Fetch + Clone + 'static>(app: &Arc<App<F>>, listener: TcpListener) {
+pub(crate) fn serve<F: Fetch + Releases + Clone + 'static>(
+    app: &Arc<App<F>>,
+    listener: TcpListener,
+) {
     let app = Arc::clone(app);
     tokio::spawn(async move {
         let mut phase = app.phase.subscribe();
@@ -364,7 +375,7 @@ async fn draining(phase: &mut watch::Receiver<Phase>) {
     let _ = phase.wait_for(|phase| *phase != Phase::Serving).await;
 }
 
-fn connection<F: Fetch + Clone + 'static>(app: &Arc<App<F>>, stream: TcpStream) {
+fn connection<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>, stream: TcpStream) {
     let served = Arc::clone(app);
     let service = service_fn(move |request| {
         let app = Arc::clone(&served);
