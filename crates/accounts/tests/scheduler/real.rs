@@ -228,13 +228,18 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
 
     // Embedded models only, and the pinned core's own Claude fingerprint is left alone.
     let running = ledger(&data);
-    let arguments = std::fs::read(format!("/proc/{}/cmdline", running[0])).unwrap();
+    // ps, not /proc: macOS has no /proc. No argument the core gets holds a space.
+    let arguments = std::process::Command::new("ps")
+        .args(["-ww", "-o", "command=", "-p", &running[0].to_string()])
+        .output()
+        .unwrap();
+    let arguments = String::from_utf8_lossy(&arguments.stdout).into_owned();
+    assert!(arguments.contains("cli-proxy-api"), "{arguments}");
     assert!(
         !arguments
-            .split(|byte| *byte == 0)
-            .any(|argument| argument == b"--local-model"),
-        "{}",
-        String::from_utf8_lossy(&arguments)
+            .split_whitespace()
+            .any(|argument| argument == "--local-model"),
+        "{arguments}"
     );
     let reported = pool
         .management(
