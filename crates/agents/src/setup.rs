@@ -806,6 +806,7 @@ impl Inner {
     /// Writes a planned connection; the configuration is put back if a later write fails.
     fn commit(&self, plan: &Plan) -> Result<wire::AgentSetup, AgentError> {
         if let Some(content) = &plan.manifest.helper_content {
+            // Refuses symbolic links and files of others before replacing.
             read_config(&plan.helper)?;
             write_atomic(&plan.helper, content.as_bytes(), 0o700)?;
         }
