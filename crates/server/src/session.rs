@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nsv_domain::secret::SessionToken;
 use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
-use nsv_store::files::{read_own_file, write_atomic};
+use nsv_store::files::{read_own_file, write_atomic_unsynced};
 use nsv_store::layout::session_path;
 use serde::Deserialize;
 use serde_json::json;
@@ -108,7 +108,7 @@ impl Session {
             "startedAt": self.started_at,
         })
         .to_string();
-        write_atomic(&session_path(directory), text.as_bytes(), 0o600)
+        write_atomic_unsynced(&session_path(directory), text.as_bytes(), 0o600)
     }
 
     /// Removes `server.json` if it still names `pid`: a newer instance may have replaced it.
