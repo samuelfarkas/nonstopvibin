@@ -406,7 +406,12 @@ impl App {
             .with_background_color(BACKGROUND)
             .build(target)
             .map_err(|error| error.to_string())?;
-        let script = bridge::script(&self.origin, &self.nonce, pane == Pane::Quota);
+        let script = bridge::script(
+            &self.origin,
+            &self.nonce,
+            pane == Pane::Quota,
+            cfg!(target_os = "macos") && pane == Pane::Main,
+        );
         let (ipc, loads, popup) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         let origin = self.origin.clone();
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
@@ -653,6 +658,13 @@ impl App {
             Call::Escape => {
                 if ticket.pane == Pane::Quota {
                     self.close_quota();
+                }
+            }
+            Call::DragWindow => {
+                if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main)
+                    && let Err(error) = main.window.drag_window()
+                {
+                    log(format_args!("could not move the window: {error}"));
                 }
             }
         }

@@ -65,20 +65,36 @@ mod imp {
 
     pub(crate) struct Desktop;
 
-    fn system_events(script: &str) -> String {
-        let output = Command::new("osascript")
-            .args([
-                "-e",
-                &format!("tell application \"System Events\" to {script}"),
-            ])
-            .output()
-            .unwrap();
+    fn osascript(args: &[&str]) -> String {
+        let output = Command::new("osascript").args(args).output().unwrap();
         assert!(
             output.status.success(),
             "osascript: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn system_events(script: &str) -> String {
+        osascript(&[
+            "-e",
+            &format!("tell application \"System Events\" to {script}"),
+        ])
+    }
+
+    fn jxa(script: &str) -> String {
+        osascript(&["-l", "JavaScript", "-e", script])
+    }
+
+    /// The main window's top-left corner on screen, in points.
+    fn window_position() -> Value {
+        let position = system_events(&format!(
+            "get position of window \"NonstopVibin\" of process \"{PROCESS}\""
+        ));
+        position
+            .split(", ")
+            .map(|number| number.parse::<f64>().unwrap())
+            .collect()
     }
 
     #[expect(
@@ -126,15 +142,7 @@ mod imp {
                  for (const type of [$.kCGEventMouseMoved, $.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) \
                  $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), type, point, $.kCGMouseButtonLeft));"
             );
-            let output = Command::new("osascript")
-                .args(["-l", "JavaScript", "-e", &script])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "osascript: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            jxa(&script);
         }
 
         pub(crate) fn close_main(&self) {
@@ -144,7 +152,8 @@ mod imp {
         }
 
         /// What only macOS has: typing and ⌘ shortcuts, which the application menu handles,
-        /// the pasteboard, and the menu bar's titles. `None` for any other action.
+        /// dragging the window, the pasteboard, and the menu bar's titles. `None` for any
+        /// other action.
         pub(crate) fn mac_action(&self, action: &Value) -> Option<Value> {
             if let Some(text) = action["type"].as_str() {
                 system_events(&format!("keystroke {}", Value::from(text)));
@@ -155,6 +164,26 @@ mod imp {
                     "{command down}"
                 };
                 system_events(&format!("keystroke {} using {modifiers}", Value::from(key)));
+            } else if let Some(&[x1, y1, x2, y2]) = action["drag"]
+                .as_array()
+                .and_then(|points| points.iter().map(Value::as_f64).collect::<Option<Vec<_>>>())
+                .as_deref()
+            {
+                let before = window_position();
+                // A press held briefly, then ten steps, as a hand drags.
+                jxa(&format!(
+                    "ObjC.import('CoreGraphics'); \
+                     const window = Application('System Events').processes.byName('{PROCESS}').windows.byName('NonstopVibin'); \
+                     const [left, top] = window.position(); \
+                     const post = (type, x, y) => $.CGEventPost($.kCGHIDEventTap, \
+                       $.CGEventCreateMouseEvent($(), type, $.CGPointMake(left + x, top + y), $.kCGMouseButtonLeft)); \
+                     post($.kCGEventMouseMoved, {x1}, {y1}); post($.kCGEventLeftMouseDown, {x1}, {y1}); delay(0.15); \
+                     for (let i = 1; i <= 10; i++) {{ \
+                       post($.kCGEventLeftMouseDragged, {x1} + ({x2} - {x1}) * i / 10, {y1} + ({y2} - {y1}) * i / 10); delay(0.02); \
+                     }} \
+                     post($.kCGEventLeftMouseUp, {x2}, {y2});"
+                ));
+                return Some(json!({ "before": before, "after": window_position() }));
             } else if action["clipboard"] == true {
                 let output = Command::new("pbpaste").output().unwrap();
                 return Some(json!({ "clipboard": String::from_utf8_lossy(&output.stdout) }));

@@ -64,10 +64,23 @@ const pidOf = (path) =>
   appProcesses().find(
     ({ command }) => command === path || command.startsWith(`${path} `),
   )?.pid;
-const webKitProcesses = () =>
-  run("ps", ["-ax", "-ww", "-o", "command="])
+/** WebKit's processes, each with the process launchd holds responsible for it. */
+function webKitProcesses() {
+  return run("ps", ["-ax", "-ww", "-o", "pid=,command="])
     .split("\n")
-    .filter((line) => line.includes("com.apple.WebKit.")).length;
+    .map((line) => line.trim().match(/^(\d+) (.*)$/))
+    .filter((match) => match && match[2].includes("com.apple.WebKit."))
+    .map(([, pid, command]) => {
+      const info = run("sudo", ["-n", "launchctl", "procinfo", pid], {
+        allowFailure: true,
+      });
+      return {
+        pid: Number(pid),
+        service: command.match(/com\.apple\.WebKit\.[A-Za-z]+/)?.[0],
+        responsible: Number(info.match(/responsible pid = (\d+)/)?.[1]),
+      };
+    });
+}
 
 const SE = "const se = Application('System Events');";
 const byPid = (pid) => `se.processes.whose({ unixId: ${pid} })[0]`;
@@ -146,6 +159,7 @@ function drag(fromX, fromY, toX, toY) {
     };
     post($.kCGEventMouseMoved, ${fromX}, ${fromY});
     post($.kCGEventLeftMouseDown, ${fromX}, ${fromY});
+    delay(0.15);
     for (let i = 1; i <= 10; i++)
       post($.kCGEventLeftMouseDragged, ${fromX} + (${toX - fromX} * i) / 10, ${fromY} + (${toY - fromY} * i) / 10);
     post($.kCGEventLeftMouseUp, ${toX}, ${toY});`);
@@ -388,7 +402,6 @@ async function frontTrials(label, how) {
   return { passed, trials };
 }
 
-const webKitBefore = webKitProcesses();
 await new Promise((done) => upstream.listen(0, "127.0.0.1", done));
 rmSync(app, { recursive: true, force: true });
 mkdirSync(apps, { recursive: true });
@@ -589,7 +602,19 @@ try {
         await fromTrayMenu("Open NonstopVibin");
         await waitFor("the main window", () => windowNamed(MAIN), 10_000);
       }
-      pressWeb("AXButton", "Settings");
+      // The window shows "Opening your workspace…" until the app has loaded.
+      await waitFor(
+        "the Settings button",
+        () => {
+          try {
+            pressWeb("AXButton", "Settings");
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        30_000,
+      );
       const before = await waitFor("the Start at login switch", () => {
         try {
           return { value: webValue("AXCheckBox", "Start at login") };
@@ -648,19 +673,28 @@ try {
     "Quit NonstopVibin leaves no daemon, helper, core or WebKit process",
     async () => {
       const running = appProcesses();
+      const helper = pidOf(helperPath);
+      ok(helper, "the helper runs before quitting");
+      const before = webKitProcesses();
+      const helpers = before.filter((p) => p.responsible === helper);
+      ok(helpers.length > 0, "the helper's WebKit processes are known", before);
       await fromTrayMenu("Quit NonstopVibin");
       await poll(() => appProcesses().length === 0, 20_000);
       const left = appProcesses();
-      await poll(() => webKitProcesses() <= webKitBefore, 10_000);
-      const webKit = webKitProcesses();
+      const alive = () => {
+        const now = webKitProcesses().map((p) => p.pid);
+        return helpers.filter((p) => now.includes(p.pid));
+      };
+      await poll(() => alive().length === 0, 10_000);
       ok(left.length === 0, "app processes left", left);
-      ok(webKit <= webKitBefore, "WebKit processes left", {
-        before: webKitBefore,
-        after: webKit,
+      ok(alive().length === 0, "the helper's WebKit processes outlived it", {
+        helpers,
+        after: webKitProcesses(),
       });
       return {
         running: running.map(({ command }) => command.slice(app.length)),
-        webKit,
+        helpers,
+        others: before.filter((p) => p.responsible !== helper),
       };
     },
   );

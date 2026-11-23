@@ -61,6 +61,14 @@ const SCRIPT: &str = r#"(() => {
       event.stopImmediatePropagation();
       send({ nonce, id: 0, method: "escape" });
     }, true);
+  // The macOS main window has no title bar: a press in a drag region (styles.css,
+  // `--app-region: drag`, inherited) moves the window, as Electron's `-webkit-app-region` did.
+  if (DRAGS)
+    window.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      if (getComputedStyle(event.target).getPropertyValue("--app-region").trim() !== "drag") return;
+      send({ nonce, id: 0, method: "dragWindow" });
+    }, true);
   // Electron showed no context menu; WebKit's offers Reload, Back and Inspect.
   window.addEventListener("contextmenu", (event) => event.preventDefault(), true);
 })();"#;
@@ -74,16 +82,14 @@ pub(crate) const BEFORE_UNLOAD: &str = r#"(() => {
 })()"#;
 
 /// The bridge script for one window. Escape closes the quota popup, as Electron's
-/// `before-input-event` handler did.
-pub(crate) fn script(origin: &Origin, nonce: &str, escape_closes: bool) -> String {
+/// `before-input-event` handler did; a press in a drag region moves a window that `drags`.
+pub(crate) fn script(origin: &Origin, nonce: &str, escape_closes: bool, drags: bool) -> String {
+    let flag = |on: bool| if on { "true" } else { "false" };
     SCRIPT
         .replacen("ORIGIN", &Value::from(origin.as_str()).to_string(), 1)
         .replacen("NONCE", &Value::from(nonce).to_string(), 1)
-        .replacen(
-            "ESCAPE_CLOSES",
-            if escape_closes { "true" } else { "false" },
-            1,
-        )
+        .replacen("ESCAPE_CLOSES", flag(escape_closes), 1)
+        .replacen("DRAGS", flag(drags), 1)
 }
 
 /// The script that settles page call `id`.
@@ -110,6 +116,8 @@ pub(crate) enum Call {
     Daemon(DaemonCall),
     /// Escape in the quota popup; not a bridge method.
     Escape,
+    /// A press in a drag region of the macOS main window; not a bridge method.
+    DragWindow,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -183,6 +191,7 @@ pub(crate) fn parse(
         }
         ("revealData", None) => Call::Daemon(DaemonCall::RevealData),
         ("escape", None) => Call::Escape,
+        ("dragWindow", None) => Call::DragWindow,
         _ if METHODS.contains(&method.as_str()) => return Err(invalid(id, &method)),
         _ => {
             return Err(Rejected::Invalid {
@@ -265,6 +274,7 @@ mod tests {
             ),
             ("revealData", None, Call::Daemon(DaemonCall::RevealData)),
             ("escape", None, Call::Escape),
+            ("dragWindow", None, Call::DragWindow),
         ];
         for (method, arg, expected) in cases {
             assert_eq!(call(method, arg), Ok((9, expected)), "{method}");
@@ -357,11 +367,16 @@ mod tests {
 
     #[test]
     fn script_embeds_its_parameters_as_literals() {
-        let script = script(&origin(), NONCE, true);
+        let script = script(&origin(), NONCE, true, false);
         assert!(script.contains(r#"if (location.origin !== "http://127.0.0.1:4100") return;"#));
         assert!(script.contains(&format!("const nonce = \"{NONCE}\";")));
-        assert!(script.contains("if (true)"));
-        assert!(!script.contains("ORIGIN") && !script.contains("ESCAPE_CLOSES"));
+        assert!(script.contains("if (true)\n    window.addEventListener(\"keydown\""));
+        assert!(script.contains("if (false)\n    window.addEventListener(\"mousedown\""));
+        assert!(
+            !["ORIGIN", "ESCAPE_CLOSES", "DRAGS"]
+                .iter()
+                .any(|name| script.contains(name))
+        );
         assert_eq!(
             reply(3, &Outcome::Error("No \"quotes\" </script>".to_owned())),
             r#"window.__nonstopvibinReply(3,"No \"quotes\" </script>",undefined)"#

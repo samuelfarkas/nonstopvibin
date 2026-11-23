@@ -243,6 +243,16 @@ fn the_app_menu_edits_text_and_reaches_the_daemon() {
     check_once("app-menu", &site, View::Main { profile: None }, TOKEN);
 }
 
+/// The macOS main window moves when a drag starts in a drag region, not on a button in one.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
+fn drag_regions_move_the_main_window() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let site = Site::start(fixtures("logo.html"), "drag-region");
+    check_once("drag-region", &site, View::Main { profile: None }, TOKEN);
+}
+
 #[test]
 #[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn the_logo_replays_once_and_rests() {
