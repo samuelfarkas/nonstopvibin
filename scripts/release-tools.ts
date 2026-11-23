@@ -104,7 +104,9 @@ export async function releaseTool(
     const temp = await mkdtemp(join(tmpdir(), "nonstopvibin-tool-"));
     try {
       await writeFile(join(temp, "download.tar.gz"), bytes);
+      // The upstream tarball carries macOS xattr headers GNU tar warns about.
       execFileSync("tar", [
+        "--warning=no-unknown-keyword",
         "-xzf",
         join(temp, "download.tar.gz"),
         "-C",

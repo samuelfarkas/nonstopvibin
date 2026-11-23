@@ -27,6 +27,10 @@ Remaining owner steps:
    into the shared [checks workflow](../.github/workflows/checks.yml).
 2. Run an actual upgrade between two released versions on a Mac before advertising
    updates. The first chance is 0.2.0 to the next release.
+3. Create the `release` environment, limited to `v*` tags, with the update-signing key
+   ([release signing](release-signing.md#sign-updates-for-the-rust-updater)). The
+   publishing job uses it; GitHub creates it without that limit on the first release
+   otherwise.
 
 The workflow checks that the configured update repository equals the repository
 publishing the release. It uses Actions' built-in `GITHUB_TOKEN` only in the publish
@@ -130,7 +134,8 @@ section. Work through these steps in order.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
    release with the DMG, macOS ZIP, AppImage, deb, blockmaps, `latest-mac.yml`,
    `latest-linux.yml`, `nonstopvibin-server-0.2.0-linux-x64.tar.gz`,
-   `nonstopvibin-server-0.2.0-linux-arm64.tar.gz` and `SHA256SUMS`. In a folder
+   `nonstopvibin-server-0.2.0-linux-arm64.tar.gz` and `SHA256SUMS` (with
+   `SHA256SUMS.minisig` once the update-signing key exists). In a folder
    with the downloaded assets, `shasum -a 256 -c SHA256SUMS` passes and
    `gh attestation verify <file> -R samuelfarkas/nonstopvibin` passes for an
    installer. On a clean Mac, drag the app from the DMG to Applications and open it

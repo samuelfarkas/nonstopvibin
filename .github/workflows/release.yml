@@ -26,6 +26,8 @@ jobs:
   release:
     needs: [build, security]
     runs-on: ubuntu-24.04
+    # Holds MINISIGN_SECRET_KEY (and the signing secrets); restrict it to v* tags.
+    environment: release
     timeout-minutes: 15
     permissions:
       contents: write
@@ -45,6 +47,11 @@ jobs:
           merge-multiple: true
       - run: bun scripts/verify-release.mjs "$GITHUB_REF_NAME" release
       - run: cd release && sha256sum * > SHA256SUMS
+      - name: Sign SHA256SUMS for the Rust updater
+        run: bun scripts/sign-release.ts release
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/*

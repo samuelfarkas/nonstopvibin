@@ -275,6 +275,8 @@ test("tag publication requires dependency and secret checks for the release revi
     "bun run security:tooling",
     "bun run security:secrets",
     "bun run security:history",
+    "cargo deny --locked check",
+    "cargo audit",
   ])
     assert.ok(
       steps.some((step) => step.run === command && !step["continue-on-error"]),
@@ -291,4 +293,37 @@ test("a release publishes only after the pull-request checks pass for its revisi
   assert.equal(release.jobs.build.uses, checks);
   assert.deepEqual(release.jobs.build.with, { release: true });
   assert.ok(release.jobs.release.needs.includes("build"));
+});
+
+test("signing secrets reach only release packaging, and releases sign SHA256SUMS before publishing", async () => {
+  const [rust, release, build] = await Promise.all(
+    ["rust.yml", "release.yml", "build.yml"].map(workflow),
+  );
+  assert.equal(build.jobs.rust.uses, "./.github/workflows/rust.yml");
+  assert.equal(build.jobs.rust.with, undefined);
+  const desktop = rust.jobs.desktop;
+  assert.equal(desktop.environment, "${{ inputs.release && 'release' || '' }}");
+  const secretSteps = Object.values(rust.jobs)
+    .flatMap((job) => job.steps)
+    .filter((step) => JSON.stringify(step).includes("secrets."));
+  assert.ok(secretSteps.length);
+  for (const step of secretSteps)
+    for (const [name, value] of Object.entries(step.env ?? {}))
+      assert.equal(
+        value,
+        `\${{ inputs.release && secrets.${name} || '' }}`,
+        `${name} must be empty outside releases`,
+      );
+  const steps = release.jobs.release.steps;
+  const index = (predicate) => steps.findIndex(predicate);
+  const sums = index((step) => step.run?.includes("> SHA256SUMS"));
+  const sign = index(
+    (step) => step.run === "bun scripts/sign-release.ts release",
+  );
+  const attest = index((step) =>
+    step.uses?.startsWith("actions/attest-build-provenance@"),
+  );
+  const publish = index((step) => step.run?.includes("gh release create"));
+  assert.ok(sums >= 0 && sums < sign && sign < attest && attest < publish);
+  assert.equal(release.jobs.release.environment, "release");
 });

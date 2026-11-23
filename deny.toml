@@ -21,6 +21,10 @@ ignore = [
   { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6, which ksni does not support yet" },
   { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6, which ksni does not support yet" },
   { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6, which ksni does not support yet" },
+  # The window helper's Linux webview: wry needs webkit2gtk 2.0, whose GTK 3 bindings end at
+  # gtk-rs 0.18. No release of either fixes these.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: build-time macro dependency of glib-macros 0.18 (GTK 3 bindings)" },
+  { id = "RUSTSEC-2024-0429", reason = "glib 0.18: fixed in 0.20, which has no GTK 3 bindings; no crate in the helper (wry, webkit2gtk, tao, muda, gtk, ours) uses VariantStrIter" },
 ]
 
 [licenses]
@@ -39,7 +43,12 @@ allow = [
 ]
 confidence-threshold = 0.93
 # The Linux tray: a public-domain dedication, more permissive than MIT.
-exceptions = [{ crate = "ksni", allow = ["Unlicense"] }]
+# option-ext: file-level copyleft, reached only through wry's optional `dirs` (all-features);
+# shipping it unmodified needs only its notice.
+exceptions = [
+  { crate = "ksni", allow = ["Unlicense"] },
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+]
 
 [bans]
 multiple-versions = "warn"
