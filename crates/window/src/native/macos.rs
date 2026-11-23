@@ -3,13 +3,13 @@
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use nsv_domain::helper::DialogKind;
+use nsv_domain::helper::{DialogKind, Rect};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSModalResponseOK, NSOpenPanel,
-    NSPasteboard,
+    NSPasteboard, NSScreen,
 };
-use objc2_foundation::NSString;
+use objc2_foundation::{NSRect, NSString};
 use tao::window::Window;
 
 use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
@@ -234,4 +234,36 @@ pub(crate) fn install_menu(proxy: &Proxy) -> muda::Result<Menu> {
         post(&proxy, UserEvent::Menu(event.id));
     }));
     Ok(menu)
+}
+
+/// The visible frame (without the menu bar and the Dock) of the screen that holds `anchor`, or
+/// of the main screen.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "screen frames are whole points well inside i32"
+)]
+pub(crate) fn work_area(anchor: Rect) -> Option<Rect> {
+    let screens = NSScreen::screens(MainThreadMarker::new()?).to_vec();
+    // Cocoa's origin is the bottom left of the first screen; tao's, the anchor's, the top left.
+    let top = screens.first()?.frame().size.height;
+    let flip = |frame: NSRect| {
+        let y = top - frame.origin.y - frame.size.height;
+        (frame.origin.x, y, frame.size.width, frame.size.height)
+    };
+    let (x, y) = (f64::from(anchor.x), f64::from(anchor.y));
+    let screen = screens
+        .iter()
+        .find(|screen| {
+            let (left, upper, width, height) = flip(screen.frame());
+            (left..left + width).contains(&x) && (upper..upper + height).contains(&y)
+        })
+        .or_else(|| screens.first())?;
+    let (x, y, width, height) = flip(screen.visibleFrame());
+    Some(Rect {
+        x: x.round() as i32,
+        y: y.round() as i32,
+        width: width.round() as u32,
+        height: height.round() as u32,
+    })
 }

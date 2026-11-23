@@ -225,6 +225,7 @@ fn bridge_works_under_the_production_csp_and_the_draft_guard_defers_closing() {
     ];
     assert_eq!(loaded["methods"], json!(methods));
     assert_eq!(loaded["frozen"], true);
+    assert_eq!(loaded["contextMenuCancelled"], true);
     let ran = tree(helper.pid());
     assert!(
         webkit_processes(&ran) >= 1,
@@ -281,12 +282,6 @@ fn quota_view() -> View {
             y: 0,
             width: 24,
             height: 24,
-        },
-        work_area: Rect {
-            x: 0,
-            y: 0,
-            width: 1280,
-            height: 800,
         },
     }
 }
@@ -443,6 +438,11 @@ fn main_window_restores_its_bounds_and_exits_when_the_daemon_closes_the_pipe() {
     server.result("loaded");
     let main = shown_window(&x, "NonstopVibin");
     assert_eq!(x.geometry(main), (40, 30, 900, 700));
+    // public/icon.png, which GTK hands the window manager as the window's icon.
+    assert!(
+        x.icon_size(main)
+            .is_some_and(|(width, height)| width > 0 && width == height)
+    );
     let webview_data = fs::symlink_metadata(data.join("webview")).unwrap();
     assert_eq!(webview_data.permissions().mode() & 0o777, 0o700);
     let ran = tree(helper.pid());

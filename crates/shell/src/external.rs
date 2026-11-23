@@ -1,0 +1,150 @@
+//! What leaves the app: provider pages in the system browser, and the data folder in the file
+//! manager.
+
+use std::path::Path;
+use std::process::Stdio;
+
+use nsv_domain::registry::registry;
+use tokio::process::Command;
+use url::Url;
+
+const NOT_APPROVED: &str = "This external URL is not an approved provider sign-in page.";
+
+/// main.ts's `safeExternal`: `https:` with no user name or password on a host some provider
+/// lists in `hosts`. Returns the normalized URL to open.
+pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
+    // Node's message for a string `new URL` cannot parse.
+    let url = Url::parse(raw).map_err(|_| "Invalid URL".to_owned())?;
+    let providers = registry().map_err(|error| error.to_string())?;
+    let approved = url.host_str().is_some_and(|host| {
+        providers
+            .providers
+            .iter()
+            .any(|(_, entry)| entry.hosts.iter().any(|allowed| allowed == host))
+    });
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !approved
+    {
+        return Err(NOT_APPROVED.to_owned());
+    }
+    Ok(url.into())
+}
+
+/// Opens `url`, which [`safe_external`] approved or which is the daemon's own session link.
+pub(crate) fn open(url: &str) -> Result<(), String> {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    launch(Command::new(opener).arg(url))
+}
+
+/// Shows `file` selected in the file manager, as Electron's `showItemInFolder`.
+#[cfg(target_os = "macos")]
+#[expect(
+    clippy::unused_async,
+    reason = "the Linux twin asks the file manager over D-Bus"
+)]
+pub(crate) async fn reveal(file: &Path) -> Result<(), String> {
+    launch(Command::new("open").arg("-R").arg(file))
+}
+
+/// Shows `file` selected in the file manager, as Electron's `showItemInFolder`: the
+/// `FileManager1` D-Bus interface, else the folder in the default file manager.
+#[cfg(target_os = "linux")]
+pub(crate) async fn reveal(file: &Path) -> Result<(), String> {
+    let Ok(uri) = Url::from_file_path(file) else {
+        return Err("The data folder's path is not absolute.".to_owned());
+    };
+    match show_items(uri.as_str()).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            crate::log(format_args!(
+                "no FileManager1 ({error}); opening the folder"
+            ));
+            let folder = file.parent().unwrap_or(file);
+            launch(Command::new("xdg-open").arg(folder))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn show_items(uri: &str) -> zbus::Result<()> {
+    let bus = zbus::Connection::session().await?;
+    bus.call_method(
+        Some("org.freedesktop.FileManager1"),
+        "/org/freedesktop/FileManager1",
+        Some("org.freedesktop.FileManager1"),
+        "ShowItems",
+        &(vec![uri], ""),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Starts a program that hands its argument to the desktop. Tokio reaps it once it exits.
+fn launch(command: &mut Command) -> Result<(), String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|error| format!("Could not open it: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// Every `external url` case main.ts answered in `tests/golden/cli.json`.
+    #[test]
+    fn approves_exactly_what_main_ts_approved() {
+        let golden: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/golden/cli.json")).unwrap();
+        let mut checked = 0;
+        for case in &golden {
+            if !case["name"].as_str().unwrap().starts_with("external url ") {
+                continue;
+            }
+            let input = case["input"].as_str().unwrap();
+            let actual = safe_external(input);
+            if let Some(error) = case.get("error") {
+                assert_eq!(actual, Err(error["message"].as_str().unwrap().to_owned()));
+            } else if case["output"]["allowed"] == Value::Bool(true) {
+                assert_eq!(
+                    actual.as_deref(),
+                    Ok(case["output"]["href"].as_str().unwrap())
+                );
+            } else {
+                assert_eq!(actual, Err(NOT_APPROVED.to_owned()), "{input}");
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 12);
+    }
+
+    #[test]
+    fn every_provider_host_is_approved() {
+        let golden: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/golden/cli.json")).unwrap();
+        let hosts = golden
+            .iter()
+            .find(|case| case["name"] == "external hosts")
+            .unwrap()["output"]
+            .as_array()
+            .unwrap();
+        assert_eq!(hosts.len(), 14);
+        for host in hosts {
+            let url = format!("https://{}/", host.as_str().unwrap());
+            assert_eq!(safe_external(&url), Ok(url.clone()));
+        }
+        assert_eq!(
+            safe_external("https://claude.ai:pass@claude.ai/"),
+            Err(NOT_APPROVED.to_owned())
+        );
+    }
+}

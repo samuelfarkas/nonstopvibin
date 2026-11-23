@@ -300,7 +300,7 @@ impl App {
     fn show(&mut self, target: &Target, view: View) {
         match view {
             View::Main { profile } => self.show_main(target, profile.as_ref()),
-            View::Quota { anchor, work_area } => self.show_quota(target, anchor, work_area),
+            View::Quota { anchor } => self.show_quota(target, anchor),
             View::Dialog { kind } => {
                 if !self.dialogs.contains(&kind) {
                     self.dialogs.push(kind);
@@ -349,16 +349,23 @@ impl App {
         };
         let url = main_url(&self.origin, profile);
         match self.open(target, Pane::Main, builder, &url) {
-            Ok(surface) => self.main = Some(surface),
+            Ok(surface) => {
+                #[cfg(target_os = "linux")]
+                native::set_icon(&surface.window);
+                self.main = Some(surface);
+            }
             Err(error) => self.failed("main window", &error),
         }
     }
 
-    fn show_quota(&mut self, target: &Target, anchor: Rect, work_area: Rect) {
+    fn show_quota(&mut self, target: &Target, anchor: Rect) {
         if let Some(quota) = &self.quota {
             native::present(&quota.window);
             return;
         }
+        let Some(work_area) = native::work_area(anchor) else {
+            return self.failed("quota popup", &"no display holds the tray icon");
+        };
         let bounds = layout::quota_bounds(anchor, work_area, cfg!(target_os = "macos"));
         let builder = WindowBuilder::new()
             .with_title("NonstopVibin quotas")
@@ -501,6 +508,7 @@ impl App {
                     self.answer(ticket, &outcome);
                 }
             }
+            UserEvent::Daemon(ToHelper::CloseQuota) => self.close_quota(),
             UserEvent::Daemon(ToHelper::Quit) | UserEvent::DaemonGone => self.quit(),
             UserEvent::Daemon(ToHelper::Start { .. }) => {
                 log(format_args!("ignored a second Start"));

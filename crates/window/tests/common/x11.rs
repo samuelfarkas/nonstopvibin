@@ -5,7 +5,7 @@
     reason = "Xlib is a C API; each call is one documented unsafe block"
 )]
 
-use std::ffi::{CStr, CString, c_char, c_uint, c_ulong};
+use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_uint, c_ulong};
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -119,6 +119,48 @@ impl X {
         };
         let size = |value: i32| u32::try_from(value).unwrap();
         (x, y, size(attributes.width), size(attributes.height))
+    }
+
+    /// The size of the first image in the window's `_NET_WM_ICON`, if it has one.
+    pub(crate) fn icon_size(&self, window: Window) -> Option<(c_ulong, c_ulong)> {
+        let (mut kind, mut format, mut count, mut after): (xlib::Atom, c_int, c_ulong, c_ulong) =
+            (0, 0, 0, 0);
+        let mut data: *mut c_uchar = ptr::null_mut();
+        // SAFETY: every out-pointer points at a live local; Xlib allocates `data`.
+        let status = unsafe {
+            (self.xlib.XGetWindowProperty)(
+                self.display,
+                window,
+                self.atom("_NET_WM_ICON"),
+                0,
+                2,
+                xlib::False,
+                xlib::XA_CARDINAL,
+                &raw mut kind,
+                &raw mut format,
+                &raw mut count,
+                &raw mut after,
+                &raw mut data,
+            )
+        };
+        if status != 0 || data.is_null() {
+            return None;
+        }
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "Xlib allocates format-32 data as an array of C longs"
+        )]
+        // SAFETY: format-32 data arrives as `count` C longs at `data`.
+        let values = unsafe {
+            std::slice::from_raw_parts(data.cast::<c_ulong>(), usize::try_from(count).unwrap())
+        }
+        .to_vec();
+        // SAFETY: `data` came from Xlib and is freed once.
+        unsafe { (self.xlib.XFree)(data.cast()) };
+        match values.as_slice() {
+            [width, height] if format == 32 => Some((*width, *height)),
+            _ => None,
+        }
     }
 
     fn atom(&self, name: &str) -> xlib::Atom {

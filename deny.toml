@@ -15,6 +15,13 @@ targets = [
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
+ignore = [
+  # zbus 6 absorbed these crates; ksni 0.3.7, the Linux tray, still needs zbus 5. Notices that
+  # they moved, not vulnerabilities.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6, which ksni does not support yet" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6, which ksni does not support yet" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6, which ksni does not support yet" },
+]
 
 [licenses]
 # Permissive licenses compatible with shipping an MIT application binary.
@@ -31,6 +38,8 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.93
+# The Linux tray: a public-domain dedication, more permissive than MIT.
+exceptions = [{ crate = "ksni", allow = ["Unlicense"] }]
 
 [bans]
 multiple-versions = "warn"

@@ -42,12 +42,20 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 proptest = "1.12.0"
+# The desktop shell (crates/shell): the Linux tray over D-Bus, without GTK.
+ksni = "0.3.7"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+png = "0.18.1"
+url = "2.5.9"
+# The desktop shell on macOS: the menu bar item and the login item.
+tray-icon = { version = "0.26.1", default-features = false }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 # The window helper only (crates/window): webview, windows, native dialogs, clipboard, menus.
 gtk = "0.18.2"
 muda = { version = "0.21.2", default-features = false }
 objc2 = "0.6.3"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSArray", "NSString", "NSURL", "objc2-core-services"] }
 tao = { version = "0.37.3", default-features = false, features = ["rwh_06", "x11"] }
 wry = "0.57.3"
 x11-dl = "2.21.0"

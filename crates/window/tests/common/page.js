@@ -30,6 +30,10 @@ async function main() {
     bridge: typeof bridge,
     methods: Object.keys(bridge).sort(),
     frozen: Object.isFrozen(bridge),
+    // Cancelled, WebKit shows no context menu.
+    contextMenuCancelled: !document.body.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+    ),
   });
   const calls = {
     bootstrap: await settle(bridge.bootstrap()),

@@ -2,14 +2,19 @@
 
 use std::cell::Cell;
 
+use gtk::gdk::prelude::*;
+use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
-use nsv_domain::helper::DialogKind;
+use nsv_domain::helper::{DialogKind, Rect};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::Window;
 
 use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
-use crate::app::{Proxy, Ticket, UserEvent, post};
+use crate::app::{Proxy, Ticket, UserEvent, log, post};
+
+/// The app icon Electron gave the main window (`dist/client/icon.png`).
+const ICON: &[u8] = include_bytes!("../../../../public/icon.png");
 
 const NON_UTF8_FOLDER: &str = "The project folder's path is not valid UTF-8.";
 
@@ -103,4 +108,35 @@ pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
     });
     dialog.show_all();
     dialog.present();
+}
+
+/// The window manager's icon for the main window; Wayland compositors take it from the desktop
+/// entry instead. Scaled down: GDK silently drops an X11 icon list over 262,144 pixels, and
+/// the 512-pixel image alone is just over.
+pub(crate) fn set_icon(window: &Window) {
+    let loader = PixbufLoader::new();
+    let decoded = loader.write(ICON).and_then(|()| loader.close());
+    match decoded.map(|()| loader.pixbuf()) {
+        Ok(Some(icon)) => {
+            let sizes = [256, 64, 32]
+                .into_iter()
+                .filter_map(|size| icon.scale_simple(size, size, InterpType::Bilinear))
+                .collect::<Vec<_>>();
+            window.gtk_window().set_icon_list(&sizes);
+        }
+        Ok(None) => log(format_args!("the app icon decoded to nothing")),
+        Err(error) => log(format_args!("could not decode the app icon: {error}")),
+    }
+}
+
+/// The work area of the monitor that holds `anchor`, or of the monitor nearest to it.
+pub(crate) fn work_area(anchor: Rect) -> Option<Rect> {
+    let monitor = gtk::gdk::Display::default()?.monitor_at_point(anchor.x, anchor.y)?;
+    let area = monitor.workarea();
+    Some(Rect {
+        x: area.x(),
+        y: area.y(),
+        width: u32::try_from(area.width()).ok()?,
+        height: u32::try_from(area.height()).ok()?,
+    })
 }
