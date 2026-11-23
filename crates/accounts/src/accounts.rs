@@ -14,7 +14,7 @@ use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{nullish, number, or, record, string, text, truthy};
-use nsv_domain::registry::{Provider, Registry, registry};
+use nsv_domain::registry::{Provider, ProviderEntry, registry};
 use nsv_domain::sync::locked;
 use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
@@ -142,7 +142,6 @@ impl Accounts {
             return Ok(None);
         }
         let core = before.core(profile).map(|core| core.id);
-        let registry = registry().map_err(|error| AppError::new(error.to_string(), 500))?;
         let response = pool
             .management(
                 profile,
@@ -162,14 +161,13 @@ impl Accounts {
                 let file = record(Some(value));
                 let provider = provider(file, "undefined");
                 let name = text(file.get("name")).filter(|name| !name.is_empty())?;
-                let organizations =
-                    entry(registry, &provider).is_some_and(|entry| entry.organizations);
+                let organizations = entry(&provider).is_some_and(|entry| entry.organizations);
                 (organizations && !truthy(file.get("runtime_only"))).then(|| name.to_owned())
             })
             .collect();
         let directory = credential_directory(self.store.directory(), profile);
         let known = self.with(profile, |state| std::mem::take(&mut state.claude));
-        let limit = registry.limits.credential_file_bytes;
+        let limit = registry().limits.credential_file_bytes;
         let (identities, parsed, repaired) =
             tokio::task::spawn_blocking(move || scan(&directory, &named, &known, limit))
                 .await
@@ -181,7 +179,7 @@ impl Accounts {
             .iter()
             .filter_map(|value| {
                 let file = record(Some(value));
-                let account = oauth_account(registry, file, &identities)?;
+                let account = oauth_account(file, &identities)?;
                 let id_token = record(file.get("id_token"));
                 if let Some(id) =
                     text(id_token.get("chatgpt_account_id")).filter(|id| !id.is_empty())
@@ -268,10 +266,7 @@ impl Accounts {
         let id = profile.clone();
         self.store.call(move |db| db.profile(&id)).await?;
         let directory = credential_directory(self.store.directory(), profile);
-        let limit = registry()
-            .map_err(|error| AppError::new(error.to_string(), 500))?
-            .limits
-            .credential_file_bytes;
+        let limit = registry().limits.credential_file_bytes;
         tokio::task::spawn_blocking(move || {
             let listing = match fs::read_dir(&directory) {
                 Ok(listing) => listing,
@@ -382,11 +377,8 @@ impl QuotaSource for PoolSource {
     }
 }
 
-fn entry<'a>(
-    registry: &'a Registry,
-    provider: &str,
-) -> Option<&'a nsv_domain::registry::ProviderEntry> {
-    Provider::from_id(provider).map(|provider| registry.providers.get(provider))
+fn entry(provider: &str) -> Option<&'static ProviderEntry> {
+    Provider::from_id(provider).map(|provider| registry().providers.get(provider))
 }
 
 /// `String(file.provider ?? file.type ?? fallback)`.
@@ -399,24 +391,9 @@ fn provider(file: &Map<String, Value>, fallback: &str) -> String {
         )
 }
 
-/// `providerLabel`: the registry's label, else a compatible provider's, else the id.
-fn label(registry: &Registry, provider: &str) -> String {
-    entry(registry, provider).map_or_else(
-        || {
-            if provider.starts_with("openai-compatible-") {
-                "Compatible API".to_owned()
-            } else {
-                provider.to_owned()
-            }
-        },
-        |entry| entry.label.clone(),
-    )
-}
-
 /// One entry of the listing as a stored OAuth account, or nothing for a runtime-only file, an
 /// API key or an entry without a name.
 fn oauth_account(
-    registry: &Registry,
     file: &Map<String, Value>,
     identities: &HashMap<String, SeatIdentity>,
 ) -> Option<Account> {
@@ -455,7 +432,7 @@ fn oauth_account(
     Some(Account {
         id,
         name: or(file.get("note"), None).map_or_else(
-            || label(registry, &provider),
+            || registry().label(&provider),
             |value| string(Some(value)).into_owned(),
         ),
         account_uuid: identity.account_uuid,

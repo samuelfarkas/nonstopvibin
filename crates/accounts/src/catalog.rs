@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::js;
-use nsv_domain::registry::{Provider, RegistryError, registry};
+use nsv_domain::registry::{Provider, registry};
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
@@ -36,8 +36,6 @@ pub enum CatalogError {
     App(#[from] AppError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
 }
 
 /// A model definition as the catalog keeps it: only what agents and pricing read, and only
@@ -201,26 +199,23 @@ fn tier(value: &Value) -> Option<CostTier> {
 }
 
 /// The catalog id of a routing provider: the registry's mapping, else the id itself.
-fn catalog_provider(provider: &str) -> Result<String, RegistryError> {
-    let registry = registry()?;
-    Ok(Provider::from_id(provider)
-        .and_then(|known| registry.providers.get(known).catalog.clone())
-        .unwrap_or_else(|| provider.to_owned()))
+fn catalog_provider(provider: &str) -> String {
+    Provider::from_id(provider)
+        .and_then(|known| registry().providers.get(known).catalog.clone())
+        .unwrap_or_else(|| provider.to_owned())
 }
 
 /// Matches each model to exactly one catalog entry through the routing provider and exact
 /// upstream id: an enabled API account's (prefixed) model, else the model's owner. Two routes
 /// that disagree, or none, leave the model plain; a same-named model of another vendor is
 /// never borrowed and versions are never guessed from a prefix.
-///
-/// # Errors
-/// Only when the embedded registry is broken.
+#[must_use]
 pub fn enrich_models(
     models: &[Model],
     accounts: &[ApiAccount],
     catalog: &Catalog,
     fetched_at: &str,
-) -> Result<Vec<CatalogModel>, RegistryError> {
+) -> Vec<CatalogModel> {
     models
         .iter()
         .map(|model| {
@@ -238,14 +233,14 @@ pub fn enrich_models(
                     };
                     if matches {
                         routes.insert((
-                            catalog_provider(account.provider.as_str())?,
+                            catalog_provider(account.provider.as_str()),
                             upstream.id.as_str(),
                         ));
                     }
                 }
             }
             if let (true, Some(owner)) = (routes.is_empty(), &model.owned_by) {
-                routes.insert((catalog_provider(owner)?, model.id.as_str()));
+                routes.insert((catalog_provider(owner), model.id.as_str()));
             }
             let plain = CatalogModel {
                 id: model.id.clone(),
@@ -254,12 +249,12 @@ pub fn enrich_models(
             };
             let mut routes = routes.into_iter();
             let (Some((provider, id)), None) = (routes.next(), routes.next()) else {
-                return Ok(plain);
+                return plain;
             };
             let Some(data) = catalog.get(&provider, id) else {
-                return Ok(plain);
+                return plain;
             };
-            Ok(CatalogModel {
+            CatalogModel {
                 metadata: Some(ModelMetadata {
                     name: data.name.clone(),
                     context: data.context,
@@ -277,7 +272,7 @@ pub fn enrich_models(
                     fetched_at: fetched_at.to_owned(),
                 }),
                 ..plain
-            })
+            }
         })
         .collect()
 }
@@ -316,36 +311,31 @@ impl Snapshot {
     }
 
     /// The models with metadata; unchanged before the first fetch.
-    ///
-    /// # Errors
-    /// Only when the embedded registry is broken.
-    pub fn enrich(&self, models: &[Model]) -> Result<Vec<CatalogModel>, RegistryError> {
+    #[must_use]
+    pub fn enrich(&self, models: &[Model]) -> Vec<CatalogModel> {
         match &self.cached {
             Some(cached) => enrich_models(models, &[], &cached.catalog, &cached.fetched_at),
-            None => Ok(models
+            None => models
                 .iter()
                 .map(|model| CatalogModel {
                     id: model.id.clone(),
                     owned_by: model.owned_by.clone(),
                     metadata: None,
                 })
-                .collect()),
+                .collect(),
         }
     }
 
     /// The prices of `id` routed through `provider`.
-    ///
-    /// # Errors
-    /// Only when the embedded registry is broken.
-    pub fn cost(&self, provider: &str, id: &str) -> Result<Option<Cost>, RegistryError> {
+    #[must_use]
+    pub fn cost(&self, provider: &str, id: &str) -> Option<Cost> {
         let model = Model {
             id: id.to_owned(),
             owned_by: Some(provider.to_owned()),
         };
-        Ok(self
-            .enrich(&[model])?
+        self.enrich(&[model])
             .pop()
-            .and_then(|model| model.metadata?.cost))
+            .and_then(|model| model.metadata?.cost)
     }
 }
 
@@ -442,7 +432,7 @@ impl<F: Fetch + 'static> ModelCatalog<F> {
             accounts,
             &cached.catalog,
             &cached.fetched_at,
-        )?)
+        ))
     }
 
     /// The catalog now, never waiting for the network: a missing or stale catalog starts a

@@ -181,7 +181,7 @@ async fn real_world(
         },
         activity: Duration::from_millis(500),
         idle,
-        ..TIMING
+        ..*TIMING
     };
     let reports = Arc::new(Reports::default());
     let host: Arc<dyn Host> = Arc::<Reports>::clone(&reports);

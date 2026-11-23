@@ -24,8 +24,10 @@ export const usagePageSize = 500;
  */
 export const keepsRunning = (subscriptions: number): boolean =>
   subscriptions > 0;
-/** How often the server refreshes every account's quota. */
+/** How often the server refreshes every account's quota while the UI polls. */
 export const quotaRefreshMs = 120_000;
+/** How often the UI polls the state; the server keeps polling cores for three missed polls. */
+export const pollMs = 4000;
 export const quotaStaleMs = 2 * quotaRefreshMs + 60_000;
 export const resetResultCodes = [
   "reset",

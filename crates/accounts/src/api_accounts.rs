@@ -8,7 +8,7 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, InvalidId};
 use nsv_domain::js;
 use nsv_domain::random;
-use nsv_domain::registry::{Protocol, Provider, RegistryError, Upstream, registry};
+use nsv_domain::registry::{Protocol, Provider, registry};
 use nsv_domain::wire::{ApiAccount, ApiAccountInput, ApiModel, Extra};
 use nsv_net::{Loopback, NetError, USER_AGENT};
 use serde_json::Value;
@@ -31,8 +31,6 @@ pub enum ApiAccountError {
     Net(#[from] NetError),
     #[error("model discovery answered invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
     #[error("no random account id: {0}")]
     Random(#[from] std::io::Error),
     #[error(transparent)]
@@ -86,11 +84,10 @@ pub fn go_model_protocol(id: &str, endpoint: Option<&str>) -> Protocol {
     }
 }
 
-/// How each model of a preset with an upstream picks its protocol.
-fn model_protocol(upstream: Upstream, id: &str, endpoint: Option<&str>) -> Protocol {
-    match upstream {
-        Upstream::OpencodeGo => go_model_protocol(id, endpoint),
-    }
+/// How each model of a preset with an upstream picks its protocol; `None` where the upstream
+/// sets no rule.
+fn model_protocol(upstream: Provider, id: &str, endpoint: Option<&str>) -> Option<Protocol> {
+    (upstream == Provider::OpencodeGo).then(|| go_model_protocol(id, endpoint))
 }
 
 /// Validates `input` and answers the account it describes with a new id. A preset with an
@@ -115,7 +112,7 @@ pub async fn api_account(
         .into());
     }
     let base_url = input.base_url.strip_suffix('/').unwrap_or(&input.base_url);
-    let preset = registry()?.providers.get(input.provider).preset.as_ref();
+    let preset = registry().providers.get(input.provider).preset.as_ref();
     if let Some(preset) =
         preset.filter(|preset| preset.fixed_endpoint && base_url != preset.base_url)
     {
@@ -132,7 +129,7 @@ pub async fn api_account(
         .map(|model| ApiModel {
             id: model.id.clone(),
             protocol: upstream.map_or(model.protocol, |upstream| {
-                model_protocol(upstream, &model.id, None)
+                model_protocol(upstream, &model.id, None).unwrap_or(model.protocol)
             }),
             extra: Extra::new(),
         })
@@ -162,7 +159,7 @@ pub async fn api_account(
 async fn discover_models(
     input: &ApiAccountInput,
     base_url: &str,
-    upstream: Option<Upstream>,
+    upstream: Option<Provider>,
     fetch: &impl Fetch,
 ) -> Result<Vec<ApiModel>, ApiAccountError> {
     let key = input.api_key.expose_secret();
@@ -207,13 +204,13 @@ async fn discover_models(
         .iter()
         .filter_map(|raw| {
             let id = js::text(js::field(Some(raw), "id"))?;
-            let protocol = match upstream {
-                Some(upstream) => {
-                    model_protocol(upstream, id, js::text(js::field(Some(raw), "endpoint")))
-                }
-                None if input.provider == Provider::Anthropic => Protocol::Anthropic,
-                None => input.protocol,
-            };
+            let endpoint = js::text(js::field(Some(raw), "endpoint"));
+            let protocol =
+                match upstream.and_then(|upstream| model_protocol(upstream, id, endpoint)) {
+                    Some(protocol) => protocol,
+                    None if input.provider == Provider::Anthropic => Protocol::Anthropic,
+                    None => input.protocol,
+                };
             Some(ApiModel {
                 id: id.to_owned(),
                 protocol,

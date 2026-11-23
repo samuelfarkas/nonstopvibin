@@ -1,53 +1,89 @@
 //! The provider, agent and vocabulary data the server shares with the renderer.
 //!
 //! `src/shared/providers.ts`, `agents.ts` and `vocabulary.ts` stay the source.
-//! `scripts/export-registry.ts` writes them to `data/registry.json`, which this module embeds
-//! and parses once. Every registry type denies unknown fields, so a field added in TypeScript
-//! fails the parse test until Rust models it. The closed enums below are hand-written; the
-//! tests prove they equal the JSON keys and lists in both directions.
+//! `scripts/export-registry.ts` writes the fields Rust reads to `data/registry.json`, which this
+//! module embeds and parses once, and fails when relations it cannot type disagree. Every
+//! registry type denies unknown fields, so an exported field Rust does not model fails the parse
+//! test. The closed enums below are hand-written; the provider and agent tables must list
+//! exactly their keys, in their order, and the generated TypeScript twins tie their values.
 
-use std::sync::{Arc, OnceLock};
+use std::fmt;
+use std::marker::PhantomData;
+use std::sync::LazyLock;
 
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
+
+use crate::sha256_hex;
 
 const SOURCE: &str = include_str!("../data/registry.json");
 
-/// The embedded `registry.json` does not match the registry types.
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("the embedded registry.json does not match the registry types: {0}")]
-pub struct RegistryError(Arc<serde_json::Error>);
+#[expect(
+    clippy::expect_used,
+    reason = "registry.json is embedded at build time: a mismatch is a build defect that the unit test the_embedded_registry_parses fails on, never input"
+)]
+static REGISTRY: LazyLock<Registry> = LazyLock::new(|| {
+    serde_json::from_str(SOURCE).expect("the embedded registry.json matches the registry types")
+});
 
 /// The registry, parsed on first use.
-///
-/// # Errors
-/// When the embedded JSON does not match the types; the same error on every call.
-pub fn registry() -> Result<&'static Registry, RegistryError> {
-    static REGISTRY: OnceLock<Result<Registry, RegistryError>> = OnceLock::new();
-    REGISTRY
-        .get_or_init(|| {
-            serde_json::from_str(SOURCE).map_err(|error| RegistryError(Arc::new(error)))
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+#[must_use]
+pub fn registry() -> &'static Registry {
+    &REGISTRY
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Registry {
-    pub providers: Providers,
-    pub agents: Agents,
-    /// Equal to [`Protocol::ALL`].
-    pub protocols: Vec<Protocol>,
-    /// Equal to [`Strategy::ALL`].
-    pub strategies: Vec<Strategy>,
-    /// Equal to [`RetentionDays::ALL`].
-    pub retention_days: Vec<RetentionDays>,
+    pub providers: Table<Provider, ProviderEntry>,
+    pub agents: Table<Agent, AgentEntry>,
     pub limits: Limits,
     /// Usage records per page: the core's drain, history pages and the Activity sample.
     pub usage_page_size: u32,
-    pub quota: QuotaTiming,
-    /// Equal to [`ResetResultCode::ALL`].
-    pub reset_result_codes: Vec<ResetResultCode>,
+    /// How often the server refreshes every account's quota while a UI watches.
+    pub quota_refresh_ms: u64,
+    /// How often the UI polls the state.
+    pub poll_ms: u64,
+}
+
+/// What the core calls the providers it generates for compatible endpoints.
+const COMPATIBLE: &str = "openai-compatible-";
+
+impl Registry {
+    /// `providerLabel`: a known provider's label, `Compatible API` for a provider the core
+    /// generated for a compatible endpoint, else the id itself.
+    #[must_use]
+    pub fn label(&self, provider: &str) -> String {
+        match Provider::from_id(provider) {
+            Some(known) => self.providers.get(known).label.clone(),
+            None if provider.starts_with(COMPATIBLE) => "Compatible API".to_owned(),
+            None => provider.to_owned(),
+        }
+    }
+
+    /// The agent whose vendor's models these are: `owned_by` is the vendor for OAuth models
+    /// and [`Provider::compatible`] for API-key accounts registered as compatible providers.
+    #[must_use]
+    pub fn native_agent(&self, owner: Option<&str>) -> Option<Agent> {
+        let owner = owner?;
+        self.providers
+            .iter()
+            .find(|(provider, _)| {
+                let id = provider.as_str();
+                owner == id
+                    || owner
+                        .strip_prefix(id)
+                        .is_some_and(|rest| rest.starts_with('-'))
+            })
+            .and_then(|(_, entry)| entry.native_agent)
+    }
+
+    /// Whether `agent` is offered its vendor's curated catalog: it has a native vendor.
+    /// Without one, it gets every model with models.dev pricing.
+    #[must_use]
+    pub fn curated(&self, agent: Agent) -> bool {
+        self.agents.get(agent).native.is_some()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,12 +101,76 @@ pub struct Limits {
     pub all_history_days: u32,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct QuotaTiming {
-    /// How often the server refreshes every account's quota.
-    pub refresh_ms: u64,
-    pub stale_ms: u64,
+/// One entry per key of `K`, in `K::ALL` order: a missing, extra or misplaced key fails the
+/// parse, and [`Self::get`] is total.
+#[derive(Debug)]
+pub struct Table<K, V> {
+    entries: Box<[V]>,
+    key: PhantomData<K>,
+}
+
+impl<K: Key, V> Table<K, V> {
+    #[must_use]
+    pub fn get(&self, key: K) -> &V {
+        #[expect(
+            clippy::indexing_slicing,
+            reason = "the parse holds one entry per key, at the key's index in K::ALL"
+        )]
+        &self.entries[key.index()]
+    }
+
+    /// Every entry in `K::ALL` order.
+    pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
+        K::ALL.iter().copied().zip(self.entries.iter())
+    }
+}
+
+impl<'de, K: Key, V: Deserialize<'de>> Deserialize<'de> for Table<K, V> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Entries<K, V>(PhantomData<(K, V)>);
+
+        impl<'de, K: Key, V: Deserialize<'de>> Visitor<'de> for Entries<K, V> {
+            type Value = Table<K, V>;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an object with one entry per key, in order")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = Vec::with_capacity(K::ALL.len());
+                while let Some(key) = map.next_key::<String>()? {
+                    let expected = K::ALL.get(entries.len()).map(|expected| expected.as_str());
+                    if expected != Some(key.as_str()) {
+                        return Err(de::Error::custom(format_args!(
+                            "expected {expected:?} at position {}, found {key:?}",
+                            entries.len()
+                        )));
+                    }
+                    entries.push(map.next_value()?);
+                }
+                if let Some(missing) = K::ALL.get(entries.len()) {
+                    return Err(de::Error::custom(format_args!(
+                        "missing {:?}",
+                        missing.as_str()
+                    )));
+                }
+                Ok(Table {
+                    entries: entries.into_boxed_slice(),
+                    key: PhantomData,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(Entries(PhantomData))
+    }
+}
+
+/// A closed enum: its values in order, each with its wire string.
+pub trait Key: Copy + 'static {
+    const ALL: &'static [Self];
+    fn as_str(self) -> &'static str;
+    /// The position in [`Key::ALL`].
+    fn index(self) -> usize;
 }
 
 /// Defines a closed string enum with `ALL` in source order and `as_str`/`from_id`.
@@ -97,6 +197,18 @@ macro_rules! closed_enum {
             #[must_use]
             pub fn from_id(id: &str) -> Option<Self> {
                 Self::ALL.iter().copied().find(|variant| variant.as_str() == id)
+            }
+        }
+
+        impl Key for $name {
+            const ALL: &'static [Self] = $name::ALL;
+
+            fn as_str(self) -> &'static str {
+                $name::as_str(self)
+            }
+
+            fn index(self) -> usize {
+                self as usize
             }
         }
     };
@@ -160,10 +272,6 @@ closed_enum!(
     }
 );
 closed_enum!(
-    /// Server rules an API-key preset can name.
-    Upstream { OpencodeGo = "opencode-go" }
-);
-closed_enum!(
     /// How an agent asks the gateway for its model list.
     AgentCatalog {
         Header = "header",
@@ -180,6 +288,15 @@ impl From<OAuthProvider> for Provider {
             OAuthProvider::Kimi => Self::Kimi,
             OAuthProvider::Xai => Self::Xai,
         }
+    }
+}
+
+impl Provider {
+    /// The core's name for an API-key account's compatible endpoint: the provider and the
+    /// SHA-256 of what identifies the endpoint, which [`Registry::native_agent`] reads back.
+    #[must_use]
+    pub fn compatible(self, identity: &str) -> String {
+        format!("{}-{}", self.as_str(), sha256_hex(identity.as_bytes()))
     }
 }
 
@@ -240,10 +357,6 @@ impl From<RetentionDays> for u16 {
 pub struct ProviderEntry {
     /// Short name in account lists, quotas and history.
     pub label: String,
-    /// The first release shows it; the server supports every entry.
-    pub visible: bool,
-    /// `public/providers/<icon>.svg`.
-    pub icon: Option<String>,
     /// models.dev provider ID, where it differs.
     pub catalog: Option<String>,
     /// Its models are this agent's vendor's own and offered to it by default.
@@ -270,164 +383,50 @@ pub struct ProviderEntry {
     pub reconnect: bool,
 }
 
+/// Browser sign-in through the core.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignIn {
-    pub name: String,
-    pub detail: String,
     /// The core's name for the provider, where it differs.
     pub core: Option<String>,
-    /// Quota windows it reports, shown before anything is connected.
-    pub limits: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Preset {
     pub name: String,
-    pub detail: String,
     pub base_url: String,
-    pub prefix: String,
-    pub protocol: Protocol,
     /// Only the official endpoint is accepted.
     #[serde(default)]
     pub fixed_endpoint: bool,
-    pub upstream: Option<Upstream>,
+    /// The provider whose own server rules (headers, model protocols) its accounts follow.
+    pub upstream: Option<Provider>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentEntry {
     pub title: String,
-    /// Offered in the app; the server keeps supporting the others for existing connections.
-    pub offered: bool,
     /// Connects one project at a time instead of the user's whole agent configuration.
     pub project: bool,
-    /// The vendor whose models the agent gets by default.
+    /// The vendor whose models the agent gets by default; the export checks that exactly
+    /// the providers whose `native_agent` is this agent name one.
     pub native: Option<String>,
     pub catalog: Option<AgentCatalog>,
 }
 
-/// One entry per [`Provider`]: a missing or extra key fails the parse, and [`Self::get`]
-/// is total.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Providers {
-    claude: ProviderEntry,
-    codex: ProviderEntry,
-    antigravity: ProviderEntry,
-    kimi: ProviderEntry,
-    xai: ProviderEntry,
-    #[serde(rename = "opencode-go")]
-    opencode_go: ProviderEntry,
-    openai: ProviderEntry,
-    anthropic: ProviderEntry,
-    gemini: ProviderEntry,
-    custom: ProviderEntry,
-}
-
-impl Providers {
-    #[must_use]
-    pub const fn get(&self, provider: Provider) -> &ProviderEntry {
-        match provider {
-            Provider::Claude => &self.claude,
-            Provider::Codex => &self.codex,
-            Provider::Antigravity => &self.antigravity,
-            Provider::Kimi => &self.kimi,
-            Provider::Xai => &self.xai,
-            Provider::OpencodeGo => &self.opencode_go,
-            Provider::Openai => &self.openai,
-            Provider::Anthropic => &self.anthropic,
-            Provider::Gemini => &self.gemini,
-            Provider::Custom => &self.custom,
-        }
-    }
-
-    /// Every provider in picker order.
-    pub fn iter(&self) -> impl Iterator<Item = (Provider, &ProviderEntry)> {
-        Provider::ALL
-            .iter()
-            .map(|&provider| (provider, self.get(provider)))
-    }
-}
-
-/// One entry per [`Agent`], like [`Providers`].
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Agents {
-    claude: AgentEntry,
-    codex: AgentEntry,
-    pi: AgentEntry,
-    opencode: AgentEntry,
-}
-
-impl Agents {
-    #[must_use]
-    pub const fn get(&self, agent: Agent) -> &AgentEntry {
-        match agent {
-            Agent::Claude => &self.claude,
-            Agent::Codex => &self.codex,
-            Agent::Pi => &self.pi,
-            Agent::Opencode => &self.opencode,
-        }
-    }
-
-    /// Every agent in tab order.
-    pub fn iter(&self) -> impl Iterator<Item = (Agent, &AgentEntry)> {
-        Agent::ALL.iter().map(|&agent| (agent, self.get(agent)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::fmt;
-
-    use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
-
     use super::*;
-
-    /// An object's keys in source order (`serde_json::Map` sorts them).
-    struct Keys(Vec<String>);
-
-    impl<'de> Deserialize<'de> for Keys {
-        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            struct KeysVisitor;
-            impl<'de> Visitor<'de> for KeysVisitor {
-                type Value = Keys;
-                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    f.write_str("an object")
-                }
-                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Keys, A::Error> {
-                    let mut keys = Vec::new();
-                    while let Some(key) = map.next_key::<String>()? {
-                        map.next_value::<IgnoredAny>()?;
-                        keys.push(key);
-                    }
-                    Ok(Keys(keys))
-                }
-            }
-            deserializer.deserialize_map(KeysVisitor)
-        }
-    }
-
-    #[derive(Deserialize)]
-    struct KeyOrder {
-        providers: Keys,
-        agents: Keys,
-    }
-
-    fn ids<T: Copy>(all: &[T], as_str: fn(T) -> &'static str) -> Vec<&'static str> {
-        all.iter().map(|&value| as_str(value)).collect()
-    }
 
     #[test]
     fn the_embedded_registry_parses() {
-        let registry = registry().unwrap();
+        let registry = registry();
         assert_eq!(registry.limits.name_length, 60);
         assert_eq!(registry.limits.prefix_length, 30);
         assert_eq!(registry.usage_page_size, 500);
-        assert_eq!(registry.quota.refresh_ms, 120_000);
-        assert_eq!(registry.quota.stale_ms, 300_000);
+        assert_eq!(registry.quota_refresh_ms, 120_000);
+        assert_eq!(registry.poll_ms, 4000);
         let claude = registry.providers.get(Provider::Claude);
         assert!(claude.organizations && claude.reconnect);
         assert_eq!(
@@ -440,24 +439,12 @@ mod tests {
             .preset
             .as_ref()
             .unwrap();
-        assert_eq!(go.upstream, Some(Upstream::OpencodeGo));
+        assert_eq!(go.upstream, Some(Provider::OpencodeGo));
         assert!(go.fixed_endpoint);
         assert_eq!(
             registry.agents.get(Agent::Codex).catalog,
             Some(AgentCatalog::Header)
         );
-    }
-
-    #[test]
-    fn enums_match_the_json_both_ways() {
-        let registry = registry().unwrap();
-        let order: KeyOrder = serde_json::from_str(SOURCE).unwrap();
-        assert_eq!(order.providers.0, ids(Provider::ALL, Provider::as_str));
-        assert_eq!(order.agents.0, ids(Agent::ALL, Agent::as_str));
-        assert_eq!(registry.protocols, Protocol::ALL);
-        assert_eq!(registry.strategies, Strategy::ALL);
-        assert_eq!(registry.retention_days, RetentionDays::ALL);
-        assert_eq!(registry.reset_result_codes, ResetResultCode::ALL);
         let signs_in: Vec<Provider> = registry
             .providers
             .iter()
@@ -472,21 +459,41 @@ mod tests {
     }
 
     #[test]
-    fn enum_strings_are_the_serde_strings() {
-        for &provider in Provider::ALL {
-            let json = serde_json::to_value(provider).unwrap();
-            assert_eq!(json, provider.as_str());
-            assert_eq!(Provider::from_id(provider.as_str()), Some(provider));
+    fn tables_hold_every_key_in_order() {
+        let table: Table<Strategy, u8> =
+            serde_json::from_str(r#"{"round-robin":1,"fill-first":2}"#).unwrap();
+        assert_eq!(*table.get(Strategy::FillFirst), 2);
+        for wrong in [
+            r#"{"fill-first":2,"round-robin":1}"#,
+            r#"{"round-robin":1}"#,
+            r#"{"round-robin":1,"fill-first":2,"extra":3}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<Table<Strategy, u8>>(wrong).is_err(),
+                "{wrong}"
+            );
         }
-        assert_eq!(Provider::from_id("openai-compatible-abc"), None);
+    }
+
+    #[test]
+    fn labels_and_native_agents_follow_provider_names() {
+        let registry = registry();
+        assert_eq!(registry.label("codex"), "Codex");
+        assert_eq!(registry.label("openai-compatible-abc"), "Compatible API");
+        assert_eq!(registry.label("unknown"), "unknown");
+        let compatible = Provider::Anthropic.compatible("x");
         assert_eq!(
-            serde_json::to_value(Strategy::RoundRobin).unwrap(),
-            "round-robin"
+            compatible,
+            "anthropic-2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
         );
         assert_eq!(
-            serde_json::to_value(ResetResultCode::AlreadyRedeemed).unwrap(),
-            "already_redeemed"
+            registry.native_agent(Some(&compatible)),
+            Some(Agent::Claude)
         );
+        assert_eq!(registry.native_agent(Some("openai")), Some(Agent::Codex));
+        assert_eq!(registry.native_agent(Some("openaix")), None);
+        assert!(registry.curated(Agent::Claude) && registry.curated(Agent::Codex));
+        assert!(!registry.curated(Agent::Pi) && !registry.curated(Agent::Opencode));
     }
 
     #[test]

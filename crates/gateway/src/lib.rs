@@ -34,7 +34,7 @@ use hyper::service::Service;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use nsv_domain::id::{ProfileId, ProfileSlug};
-use nsv_domain::registry::{Agent, AgentCatalog, RegistryError, registry};
+use nsv_domain::registry::{Agent, AgentCatalog, registry};
 use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
 use tokio::net::TcpStream;
 
@@ -201,21 +201,20 @@ struct Lease {
 }
 
 impl<H: Host> Gateway<H> {
-    /// # Errors
-    /// When the embedded agent registry does not parse.
-    pub fn new(host: H) -> Result<Self, RegistryError> {
-        let catalogs = registry()?
+    #[must_use]
+    pub fn new(host: H) -> Self {
+        let catalogs = registry()
             .agents
             .iter()
             .filter_map(|(agent, entry)| entry.catalog.map(|by| (agent, by)))
             .collect();
-        Ok(Self {
+        Self {
             inner: Arc::new(Inner {
                 host,
                 counts: Counts::default(),
                 catalogs,
             }),
-        })
+        }
     }
 
     /// The profile's requests and `WebSocket` relays open now.

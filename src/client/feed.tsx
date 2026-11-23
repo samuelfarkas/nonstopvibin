@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import type { AppState } from "../shared/types.ts";
+import { pollMs } from "../shared/vocabulary.ts";
 import { api, initializeSession, refusedSession } from "./api.ts";
 import { messageOf } from "./action.ts";
 import { Logo } from "./components.tsx";
@@ -86,7 +87,7 @@ export function useAppState() {
       } else setPollError(message);
     }
   }, [refresh]);
-  usePolling(ready ? poll : undefined, 4000);
+  usePolling(ready ? poll : undefined, pollMs);
   return { state, refresh, pollError, setPollError, failure, sessionRefused };
 }
 

@@ -3,7 +3,6 @@
 use std::io;
 
 use nsv_domain::error::AppError;
-use nsv_domain::registry::RegistryError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
@@ -15,8 +14,6 @@ pub enum AgentError {
     Invalid(String),
     #[error(transparent)]
     Io(#[from] io::Error),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
 }
 
 impl AgentError {
@@ -26,7 +23,7 @@ impl AgentError {
         match self {
             Self::App(error) => error.status,
             Self::Invalid(_) => 400,
-            Self::Io(_) | Self::Registry(_) => 500,
+            Self::Io(_) => 500,
         }
     }
 

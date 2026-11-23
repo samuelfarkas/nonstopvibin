@@ -98,7 +98,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
         &root,
         &root.path().join("strict"),
         core(missing.clone(), false, false),
-        TIMING,
+        *TIMING,
     ))
     .await;
     assert_eq!(
@@ -123,7 +123,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
         &root,
         &root.path().join("pinned"),
         core(swapped.join("cli-proxy-api"), true, false),
-        TIMING,
+        *TIMING,
     ))
     .await;
     assert_eq!(
@@ -137,7 +137,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
         &root,
         &root.path().join("bind"),
         core(pinned_core(), true, false),
-        TIMING,
+        *TIMING,
     );
     busy.port = port;
     let message = refused(busy).await;
@@ -148,7 +148,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
         &root,
         &root.path().join("lenient"),
         core(missing, false, true),
-        TIMING,
+        *TIMING,
     ))
     .await;
     // Two closes at once both finish, and leave the directory free.
@@ -171,7 +171,7 @@ async fn unhashed_assets_revalidate_across_launches_and_edits_but_management_is_
             &root,
             &root.path().join(name),
             core(root.path().join("no-core"), false, true),
-            TIMING,
+            *TIMING,
         )
     };
     let served = start(launch("served")).await;
@@ -258,7 +258,7 @@ async fn an_idle_core_stops_after_its_last_request_keeps_its_usage_and_starts_ag
     let data = root.path().join("data");
     let timing = Timing {
         idle: Duration::from_millis(400),
-        ..TIMING
+        ..*TIMING
     };
     let options = options(&root, &data, core(pinned_core(), true, false), timing);
     let upstream = provider().await;

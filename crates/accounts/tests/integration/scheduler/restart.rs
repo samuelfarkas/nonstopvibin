@@ -21,7 +21,7 @@ fn timing(coalesce: i64, backoff: i64, limit: u32) -> Timing {
             restart_backoff: backoff,
             restart_limit: limit,
         },
-        ..TIMING
+        ..*TIMING
     }
 }
 

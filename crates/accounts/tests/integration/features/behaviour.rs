@@ -145,7 +145,7 @@ async fn activity_snapshots_never_wait_and_back_off_after_a_failure() {
     settle().await;
     let snapshot = catalog.snapshot();
     assert_eq!(snapshot.fetched_at(), Some("2026-11-22T12:01:00.000Z"));
-    assert_eq!(snapshot.cost("claude", "m").unwrap().unwrap().input.0, 1.0);
+    assert_eq!(snapshot.cost("claude", "m").unwrap().input.0, 1.0);
     assert_eq!(fetch.count(), 2);
 }
 
@@ -304,7 +304,7 @@ fn fixture_records(profile: &ProfileId, prefix: &str, count: u32) -> Vec<UsageRe
 }
 
 fn page_size() -> u32 {
-    nsv_domain::registry::registry().unwrap().usage_page_size
+    nsv_domain::registry::registry().usage_page_size
 }
 
 fn unavailable() -> Arc<StubFetch> {
@@ -857,14 +857,10 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
     let prices = Arc::new(UsagePrices::new(Arc::clone(&rates), fixed));
     let profile = fixture_profile();
     let record = fixture_record(&profile, "fixture");
-    let first = prices
-        .snapshot(std::slice::from_ref(&record), &catalog)
-        .unwrap();
+    let first = prices.snapshot(std::slice::from_ref(&record), &catalog);
     assert_eq!(first.usd["fixture"], None);
     assert_eq!(first.eur, None);
-    let _again = prices
-        .snapshot(std::slice::from_ref(&record), &catalog)
-        .unwrap();
+    let _again = prices.snapshot(std::slice::from_ref(&record), &catalog);
     settle().await;
     assert_eq!((models.count(), rates.count()), (1, 1));
     let asked = rates.seen.lock().unwrap()[0].request.clone();
@@ -884,7 +880,7 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
     settle().await;
     let mut unknown = fixture_record(&profile, "unknown");
     unknown.provider = "custom".to_owned();
-    let both = prices.snapshot(&[record, unknown], &catalog).unwrap();
+    let both = prices.snapshot(&[record, unknown], &catalog);
     assert_eq!(both.usd["fixture"].map(|usd| usd.0), Some(0.000_665));
     assert_eq!(both.usd["unknown"], None);
     assert_eq!(
@@ -893,9 +889,7 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
     );
     assert!(both.fetched_at.is_some());
     assert_eq!((models.count(), rates.count()), (1, 1));
-    let personal = prices
-        .snapshot(&[fixture_record(&profile, "personal")], &catalog)
-        .unwrap();
+    let personal = prices.snapshot(&[fixture_record(&profile, "personal")], &catalog);
     assert_eq!(
         personal.usd.keys().collect::<Vec<_>>(),
         ["personal"],
@@ -909,11 +903,9 @@ async fn an_outage_backs_off_instead_of_retrying_on_every_poll() {
     let catalog = Arc::new(ModelCatalog::new(Arc::clone(&fetch), fixed));
     let prices = Arc::new(UsagePrices::new(Arc::clone(&fetch), fixed));
     let record = fixture_record(&fixture_profile(), "fixture");
-    let _first = prices
-        .snapshot(std::slice::from_ref(&record), &catalog)
-        .unwrap();
+    let _first = prices.snapshot(std::slice::from_ref(&record), &catalog);
     settle().await;
-    let result = prices.snapshot(&[record], &catalog).unwrap();
+    let result = prices.snapshot(&[record], &catalog);
     settle().await;
     assert_eq!(fetch.count(), 2, "one catalog and one rate request");
     assert_eq!(result.usd["fixture"], None);

@@ -9,9 +9,8 @@ use std::path::Path;
 
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
-use nsv_domain::registry::{Protocol, Strategy, Upstream, registry};
+use nsv_domain::registry::{Protocol, Provider, Strategy, registry};
 use nsv_domain::secret::{ApiKey, CoreKey, ManagementKey};
-use nsv_domain::sha256_hex;
 use nsv_domain::wire::{ApiAccount, Profile};
 use nsv_store::files::owner_only_directory;
 use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
@@ -65,15 +64,16 @@ pub struct CoreConfiguration {
 }
 
 /// Headers requests to a preset with `upstream` carry.
-fn upstream_headers(upstream: Upstream) -> BTreeMap<&'static str, String> {
+fn upstream_headers(upstream: Provider) -> BTreeMap<&'static str, String> {
     match upstream {
-        Upstream::OpencodeGo => BTreeMap::from([
+        Provider::OpencodeGo => BTreeMap::from([
             (
                 "User-Agent",
                 format!("{} (coding-agent-gateway)", nsv_net::USER_AGENT),
             ),
             ("x-opencode-session", "$x-opencode-session".to_owned()),
         ]),
+        _ => BTreeMap::new(),
     }
 }
 
@@ -91,7 +91,7 @@ impl CoreConfiguration {
         accounts: &[ApiAccount],
         mut api_key: impl FnMut(&AccountId) -> Result<ApiKey, StoreError>,
     ) -> Result<Self, StoreError> {
-        let providers = &registry()?.providers;
+        let providers = &registry().providers;
         let mut compatible: Vec<CompatibleEntry> = Vec::new();
         let mut claude = Vec::new();
         let mut responses = Vec::new();
@@ -124,11 +124,7 @@ impl CoreConfiguration {
                     Protocol::Openai => {
                         let identity: String =
                             serde_json::to_string(&(&account.base_url, &account.prefix, &models))?;
-                        let name = format!(
-                            "{}-{}",
-                            account.provider.as_str(),
-                            sha256_hex(identity.as_bytes())
-                        );
+                        let name = account.provider.compatible(&identity);
                         if let Some(existing) = compatible.iter_mut().find(|p| p.name == name) {
                             existing.api_keys.push(key);
                         } else {

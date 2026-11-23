@@ -134,7 +134,7 @@ impl CodexResets {
             .find(|account| account.kind == AccountKind::OAuth && &account.id == account_id)
             .ok_or_else(|| AppError::new("Account not found in this profile.", 404))?;
         let banked = match Provider::from_id(&account.provider) {
-            Some(provider) => registry()?.providers.get(provider).banked_resets,
+            Some(provider) => registry().providers.get(provider).banked_resets,
             None => false,
         };
         if !banked {

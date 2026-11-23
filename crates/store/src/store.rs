@@ -8,7 +8,6 @@ use std::thread;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::InvalidId;
-use nsv_domain::registry::RegistryError;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::db::{AuthSnapshot, Db};
@@ -30,8 +29,6 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Id(#[from] InvalidId),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
     #[error(transparent)]
     Io(#[from] io::Error),
     /// A symbolic link, a hard link or another user's entry at the database path.

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::js;
-use nsv_domain::registry::{RegistryError, registry};
+use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time;
 use nsv_domain::wire::{
@@ -37,8 +37,6 @@ const END: &str = "\u{ffff}";
 pub enum PricingError {
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
     #[error("Activity pricing is shutting down")]
     Closed,
 }
@@ -226,20 +224,20 @@ impl<'a> Costs<'a> {
         }
     }
 
-    fn of(&mut self, record: &UsageRecord) -> Result<Option<&Cost>, RegistryError> {
+    fn of(&mut self, record: &UsageRecord) -> Option<&Cost> {
         let key = (record.provider.clone(), priced_model(record).to_owned());
         let cost = match self.cache.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
                 let (provider, model) = entry.key();
                 let cost = match self.snapshot {
-                    Some(snapshot) => snapshot.cost(provider, model)?,
+                    Some(snapshot) => snapshot.cost(provider, model),
                     None => None,
                 };
                 entry.insert(cost)
             }
         };
-        Ok(cost.as_ref())
+        cost.as_ref()
     }
 }
 
@@ -251,9 +249,9 @@ struct Tally<'a> {
 }
 
 impl Tally<'_> {
-    fn include(&mut self, record: &UsageRecord, direction: Direction) -> Result<(), RegistryError> {
+    fn include(&mut self, record: &UsageRecord, direction: Direction) {
         let tokens = normalized_tokens(record);
-        let usd = estimate_usd(self.costs.of(record)?, tokens.as_ref());
+        let usd = estimate_usd(self.costs.of(record), tokens.as_ref());
         let summary = &mut self.summary;
         direction.apply(&mut summary.requests, 1);
         direction.apply(&mut summary.failed, u64::from(record.failed));
@@ -280,7 +278,6 @@ impl Tally<'_> {
             direction.apply(&mut total.tokens.output, tokens.output);
             direction.apply(&mut total.tokens.reasoning, tokens.reasoning);
         }
-        Ok(())
     }
 }
 
@@ -320,14 +317,11 @@ impl<F: Fetch + 'static> UsagePrices<F> {
     /// Each record's price against the catalog now, without waiting for the network: the
     /// catalog and the euro rate refresh in the background (the rate at most once a minute
     /// after a failure, once a day after a success).
-    ///
-    /// # Errors
-    /// Only when the embedded registry is broken.
     pub fn snapshot<C: Fetch + 'static>(
         self: &Arc<Self>,
         records: &[UsageRecord],
         catalog: &Arc<ModelCatalog<C>>,
-    ) -> Result<UsagePricing, RegistryError> {
+    ) -> UsagePricing {
         let snapshot = (!records.is_empty()).then(|| catalog.snapshot());
         self.pricing(records, snapshot.as_ref())
     }
@@ -336,7 +330,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
         self: &Arc<Self>,
         records: &[UsageRecord],
         snapshot: Option<&Snapshot>,
-    ) -> Result<UsagePricing, RegistryError> {
+    ) -> UsagePricing {
         let eur = {
             let mut euro = locked(&self.euro);
             let now = (self.clock)();
@@ -351,16 +345,16 @@ impl<F: Fetch + 'static> UsagePrices<F> {
         let mut costs = Costs::new(snapshot);
         let mut usd = BTreeMap::new();
         for record in records {
-            let price = estimate_usd(costs.of(record)?, normalized_tokens(record).as_ref());
+            let price = estimate_usd(costs.of(record), normalized_tokens(record).as_ref());
             usd.insert(record.id.clone(), price.map(JsNumber));
         }
-        Ok(UsagePricing {
+        UsagePricing {
             totals: None,
             usd,
             fetched_at: snapshot.and_then(Snapshot::fetched_at).map(str::to_owned),
             refreshing: snapshot.is_some_and(|snapshot| snapshot.refreshing),
             eur,
-        })
+        }
     }
 
     async fn refresh_euro(&self) {
@@ -448,7 +442,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
                 let since = since.to_owned();
                 store
                     .call(move |db| {
-                        let page = registry()?.usage_page_size;
+                        let page = registry().usage_page_size;
                         Ok((
                             db.usage(&profile, &since, page)?,
                             db.usage_generation(),
@@ -459,7 +453,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
             };
             // Rates stay frozen for the whole calculation, even if a refresh lands meanwhile.
             let snapshot = (!records.is_empty()).then(|| catalog.snapshot());
-            let pricing = self.pricing(&records, snapshot.as_ref())?;
+            let pricing = self.pricing(&records, snapshot.as_ref());
             let fetched_at = snapshot
                 .as_ref()
                 .and_then(Snapshot::fetched_at)
@@ -489,7 +483,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
                     from: None,
                 };
                 self.walk(store, profile, left_out, |record| {
-                    tally.include(record, Direction::Subtract)
+                    tally.include(record, Direction::Subtract);
                 })
                 .await?;
             }
@@ -508,9 +502,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
             let last_generation = self
                 .walk(store, profile, added, |record| {
                     if record.timestamp.as_str() >= since {
-                        tally.include(record, Direction::Add)
-                    } else {
-                        Ok(())
+                        tally.include(record, Direction::Add);
                     }
                 })
                 .await?;
@@ -551,13 +543,13 @@ impl<F: Fetch + 'static> UsagePrices<F> {
         store: &Store,
         profile: &ProfileId,
         read: Read,
-        mut each: impl FnMut(&UsageRecord) -> Result<(), RegistryError> + Send,
+        mut each: impl FnMut(&UsageRecord) + Send,
     ) -> Result<u64, PricingError> {
         let mut read = read;
         loop {
             let (records, next, generation) = self.page(store, profile, read).await?;
             for record in &records {
-                each(record)?;
+                each(record);
             }
             let Some(next) = next else {
                 return Ok(generation);

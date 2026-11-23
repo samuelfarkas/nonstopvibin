@@ -110,7 +110,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
         }),
         fetch: outside.clone(),
         clock: now,
-        timing: TIMING,
+        timing: *TIMING,
     };
     let lock = ServerLock::acquire(&data).unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();

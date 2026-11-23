@@ -2,30 +2,12 @@
 
 use std::future::Future;
 
-use nsv_domain::registry::{Agent, Registry};
+use nsv_domain::registry::{Agent, registry};
 use nsv_domain::wire::{CatalogModel, Model, ModelMetadata};
 use serde_json::{Value, json};
 
 use crate::error::{AgentError, refused};
 use crate::json;
-
-/// The agent whose vendor's models these are: `owned_by` is the vendor for OAuth models and
-/// `<provider>-<hash>` for API-key accounts registered as compatible providers.
-#[must_use]
-pub fn native_agent(registry: &Registry, owner: Option<&str>) -> Option<Agent> {
-    let owner = owner?;
-    registry
-        .providers
-        .iter()
-        .find(|(provider, _)| {
-            let id = provider.as_str();
-            owner == id
-                || owner
-                    .strip_prefix(id)
-                    .is_some_and(|rest| rest.starts_with('-'))
-        })
-        .and_then(|(_, entry)| entry.native_agent)
-}
 
 /// The models an agent is offered: its vendor's own unless the user adds other providers, or,
 /// for an agent without a vendor, every model models.dev lists with tool support and prices.
@@ -34,7 +16,6 @@ pub fn native_agent(registry: &Registry, owner: Option<&str>) -> Option<Agent> {
 /// # Errors
 /// A 400 when an agent without a vendor would get no model.
 pub async fn offered_models<F, Enriched>(
-    registry: &Registry,
     agent: Agent,
     models: Vec<Model>,
     other_providers: bool,
@@ -44,11 +25,11 @@ where
     F: FnOnce(Vec<Model>) -> Enriched,
     Enriched: Future<Output = Vec<CatalogModel>>,
 {
-    if registry.agents.get(agent).native.is_some() {
+    if registry().curated(agent) {
         return Ok(models
             .into_iter()
             .filter(|model| {
-                other_providers || native_agent(registry, model.owned_by.as_deref()) == Some(agent)
+                other_providers || registry().native_agent(model.owned_by.as_deref()) == Some(agent)
             })
             .map(|Model { id, owned_by }| CatalogModel {
                 id,
@@ -88,20 +69,15 @@ where
 /// # Errors
 /// A 400 when a model lacks models.dev metadata.
 pub fn catalog_entries(
-    registry: &Registry,
     agent: Agent,
     models: &[CatalogModel],
 ) -> Result<Option<Vec<Value>>, AgentError> {
-    let entry: fn(&Registry, &CatalogModel) -> Result<Value, AgentError> = match agent {
+    let entry: fn(&CatalogModel) -> Result<Value, AgentError> = match agent {
         Agent::Pi => pi_model,
-        Agent::Opencode => |_, model| open_code_model(model),
+        Agent::Opencode => open_code_model,
         Agent::Claude | Agent::Codex => return Ok(None),
     };
-    models
-        .iter()
-        .map(|model| entry(registry, model))
-        .collect::<Result<_, _>>()
-        .map(Some)
+    models.iter().map(entry).collect::<Result<_, _>>().map(Some)
 }
 
 /// A model's metadata and the name pi and `OpenCode` list it under. `tiers_note` says a tiered
@@ -151,9 +127,9 @@ fn open_code_model(model: &CatalogModel) -> Result<Value, AgentError> {
 
 /// pi's model entry. pi speaks each vendor's native protocol through the gateway so thinking
 /// levels and tool calls are not translated twice.
-fn pi_model(registry: &Registry, model: &CatalogModel) -> Result<Value, AgentError> {
+fn pi_model(model: &CatalogModel) -> Result<Value, AgentError> {
     let (m, name) = listed_model(model, false)?;
-    let api = match native_agent(registry, model.owned_by.as_deref()) {
+    let api = match registry().native_agent(model.owned_by.as_deref()) {
         Some(Agent::Claude) => "anthropic-messages",
         Some(Agent::Codex) => "openai-responses",
         _ => "openai-completions",

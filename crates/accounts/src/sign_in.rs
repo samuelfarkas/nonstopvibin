@@ -171,25 +171,15 @@ enum Authorization {
     Wait,
 }
 
-fn provider_label(provider: OAuthProvider) -> Result<String, AppError> {
-    Ok(registry()
-        .map_err(|error| AppError::new(error.to_string(), 500))?
-        .providers
-        .get(Provider::from(provider))
-        .label
-        .clone())
-}
-
 /// What the provider's core calls it in its management paths.
-fn core_name(provider: OAuthProvider) -> Result<String, AppError> {
-    Ok(registry()
-        .map_err(|error| AppError::new(error.to_string(), 500))?
+fn core_name(provider: OAuthProvider) -> String {
+    registry()
         .providers
         .get(Provider::from(provider))
         .sign_in
         .as_ref()
         .and_then(|sign_in| sign_in.core.clone())
-        .unwrap_or_else(|| provider.as_str().to_owned()))
+        .unwrap_or_else(|| provider.as_str().to_owned())
 }
 
 fn state_of(url: &Url) -> Option<String> {
@@ -493,10 +483,7 @@ impl<F: Fetch + 'static> Inner<F> {
             ));
         }
         self.clear(state).await?;
-        let entry = registry()
-            .map_err(|error| AppError::new(error.to_string(), 500))?
-            .providers
-            .get(Provider::from(provider));
+        let entry = registry().providers.get(Provider::from(provider));
         if let Some(account) = &reconnect {
             let listed = self
                 .accounts
@@ -512,7 +499,7 @@ impl<F: Fetch + 'static> Inner<F> {
                 return Err(AppError::new(
                     format!(
                         "Choose a {} subscription in this profile to reconnect.",
-                        provider_label(provider)?
+                        registry().label(provider.as_str())
                     ),
                     404,
                 ));
@@ -637,7 +624,7 @@ impl<F: Fetch + 'static> Inner<F> {
         profile: &ProfileId,
     ) -> Result<OAuthSession, AppError> {
         pool.start(core, false).await?;
-        let path = format!("/{}-auth-url", core_name(provider)?);
+        let path = format!("/{}-auth-url", core_name(provider));
         let response = pool
             .management(core, &Method::GET, &path, None, MANAGEMENT_TIMEOUT)
             .await?;
@@ -903,7 +890,7 @@ impl<F: Fetch + 'static> Inner<F> {
                             return Err(AppError::new(
                                 format!(
                                     "{} did not return one subscription. Sign in again.",
-                                    provider_label(sandbox.provider)?
+                                    registry().label(sandbox.provider.as_str())
                                 ),
                                 502,
                             ));
@@ -914,10 +901,7 @@ impl<F: Fetch + 'static> Inner<F> {
                     // Its core stops first, so no refresh replaces the token being moved.
                     sandbox.pool.stop(&sandbox.profile).await?;
                     let path = credential_path(&sandbox.directory, &sandbox.profile, id)?;
-                    let limit = registry()
-                        .map_err(|error| AppError::new(error.to_string(), 500))?
-                        .limits
-                        .credential_file_bytes;
+                    let limit = registry().limits.credential_file_bytes;
                     Some(Progress::Read(
                         tokio::task::spawn_blocking(move || read_credential(&path, limit))
                             .await
@@ -961,7 +945,7 @@ impl<F: Fetch + 'static> Inner<F> {
         let account = Account {
             id: AccountId::parse("pending")
                 .map_err(|error| AppError::new(error.to_string(), 500))?,
-            name: provider_label(provider)?,
+            name: registry().label(provider.as_str()),
             account_uuid: identity.account_uuid,
             organization_uuid: identity.organization_uuid,
             organization_name: identity.organization_name,
@@ -1006,7 +990,7 @@ impl<F: Fetch + 'static> Inner<F> {
             return Err(AppError::new(
                 format!(
                     "Wait for {} to verify the organization before connecting.",
-                    provider_label(session.provider)?
+                    registry().label(session.provider.as_str())
                 ),
                 409,
             ));
@@ -1059,7 +1043,7 @@ impl<F: Fetch + 'static> Inner<F> {
             Some(sandbox) => (&sandbox.pool, &sandbox.profile),
             None => (self.pool(), profile),
         };
-        let body = json!({ "provider": core_name(session.provider)?, "redirect_url": redirect });
+        let body = json!({ "provider": core_name(session.provider), "redirect_url": redirect });
         pool.management(
             core,
             &Method::POST,

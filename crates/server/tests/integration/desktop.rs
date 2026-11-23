@@ -62,7 +62,7 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
         backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,
-        timing: TIMING,
+        timing: *TIMING,
     };
     let lock = ServerLock::acquire(&data).unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();

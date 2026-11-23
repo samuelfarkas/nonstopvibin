@@ -20,7 +20,7 @@ fn bundled_version() -> String {
 }
 
 async fn installed_world(name: &str) -> World {
-    let world = World::with(name, Some(FEED), TIMING).await;
+    let world = World::with(name, Some(FEED), *TIMING).await;
     let (archive, pin) = release(world.directory.path(), b"update core");
     *world.releases.feed.lock().unwrap() = pin;
     *world.releases.archive.lock().unwrap() = archive;
@@ -88,7 +88,7 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     } = world;
     let data = store.directory().to_owned();
     store.close().await;
-    let world = World::open(directory, &data, bundled.clone(), Some(FEED), TIMING, fake).await;
+    let world = World::open(directory, &data, bundled.clone(), Some(FEED), *TIMING, fake).await;
     world.cores.launch().await.unwrap();
     assert_eq!(world.cores.updates.version(), UPDATE);
     world.cores.pool().start(&profile, false).await.unwrap();

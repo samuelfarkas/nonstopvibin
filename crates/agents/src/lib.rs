@@ -20,7 +20,7 @@ mod pi_controls;
 mod setup;
 mod socket;
 
-pub use catalog::{catalog_entries, native_agent, offered_models};
+pub use catalog::{catalog_entries, offered_models};
 pub use connection::{AGENT_ENVIRONMENT, native_provider};
 pub use error::AgentError;
 pub use manifest::{validate_selection, validate_setup};

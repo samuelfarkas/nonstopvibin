@@ -14,7 +14,7 @@ use nsv_agents::{
     validate_setup,
 };
 use nsv_domain::error::AppError;
-use nsv_domain::registry::{Agent, registry};
+use nsv_domain::registry::Agent;
 use nsv_domain::secret::ClientKey;
 use nsv_domain::wire::{AgentSetupInput, CatalogModel, Model, Profile};
 use serde_json::{Map, Value, json};
@@ -446,7 +446,6 @@ async fn catalog(
     case: &Value,
     priced: &[CatalogModel],
 ) -> Result<Value, AgentError> {
-    let registry = registry().unwrap();
     let name = case["name"].as_str().unwrap();
     if let Some(agent) = name.strip_prefix("entries ") {
         // Made from what `offeredModels <agent> otherProviders false` gave.
@@ -457,7 +456,6 @@ async fn catalog(
             .unwrap();
         let models: Vec<CatalogModel> = serde_json::from_value(offered["output"].clone()).unwrap();
         return Ok(json!(catalog_entries(
-            registry,
             Agent::from_id(agent).unwrap(),
             &models
         )?));
@@ -466,7 +464,7 @@ async fn catalog(
     let agent = Agent::from_id(input["agent"].as_str().unwrap()).unwrap();
     let models: Vec<Model> = serde_json::from_value(input["models"].clone()).unwrap();
     let other = input["otherProviders"].as_bool().unwrap_or(false);
-    let offered = offered_models(registry, agent, models, other, |models| async move {
+    let offered = offered_models(agent, models, other, |models| async move {
         models
             .into_iter()
             .map(|model| {
@@ -489,7 +487,7 @@ async fn catalog(
 fn schema(case: &Value) -> Result<Value, AgentError> {
     let input: AgentSetupInput = serde_json::from_value(case["input"].clone())
         .map_err(|_| AgentError::Invalid("body".to_owned()))?;
-    validate_setup(registry().unwrap(), &input)?;
+    validate_setup(&input)?;
     Ok(json!(input))
 }
 

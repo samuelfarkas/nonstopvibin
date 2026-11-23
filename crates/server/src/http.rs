@@ -24,7 +24,7 @@ use nsv_core::install::Releases;
 use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_domain::registry::{Agent, RegistryError, registry};
+use nsv_domain::registry::{Agent, registry};
 use nsv_domain::secret::KeyDigest;
 use nsv_domain::sync::locked;
 use nsv_domain::wire::{CatalogModel, Model};
@@ -122,7 +122,7 @@ impl From<AgentError> for Failure {
         match error {
             AgentError::App(error) => Self::App(error),
             AgentError::Invalid(message) => Self::Invalid(message),
-            other => Self::Internal(other.to_string()),
+            AgentError::Io(error) => Self::Internal(error.to_string()),
         }
     }
 }
@@ -132,7 +132,6 @@ impl From<CatalogError> for Failure {
         match error {
             CatalogError::App(error) => Self::App(error),
             CatalogError::Store(error) => error.into(),
-            CatalogError::Registry(error) => error.into(),
         }
     }
 }
@@ -141,7 +140,7 @@ impl From<PricingError> for Failure {
     fn from(error: PricingError) -> Self {
         match error {
             PricingError::Store(error) => error.into(),
-            other => Self::Internal(other.to_string()),
+            PricingError::Closed => Self::Internal(PricingError::Closed.to_string()),
         }
     }
 }
@@ -158,12 +157,6 @@ impl From<ImportError> for Failure {
 impl From<QuotaError> for Failure {
     fn from(error: QuotaError) -> Self {
         Self::App(error.into())
-    }
-}
-
-impl From<RegistryError> for Failure {
-    fn from(error: RegistryError) -> Self {
-        Self::Internal(error.to_string())
     }
 }
 
@@ -493,19 +486,18 @@ impl<F> GatewayHost<F> {
 
 impl<F: Fetch + Clone + 'static> GatewayHost<F> {
     async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, Failure> {
-        let registry = registry()?;
         let models = self.scheduler.pool().models(profile).await?;
-        let enriched = if registry.agents.get(agent).native.is_none() {
-            Some(enrich(&self.catalog, &self.store, profile, &models).await?)
-        } else {
+        let enriched = if registry().curated(agent) {
             None
+        } else {
+            Some(enrich(&self.catalog, &self.store, profile, &models).await?)
         };
-        let offered = offered_models(registry, agent, models, false, |_| async {
+        let offered = offered_models(agent, models, false, |_| async {
             enriched.unwrap_or_default()
         })
         .await?;
         // The agent's own request gets the OpenAI list; generated code gets its entries.
-        if let Some(entries) = catalog_entries(registry, agent, &offered)? {
+        if let Some(entries) = catalog_entries(agent, &offered)? {
             return Ok(Catalog::Entries(
                 json!({ "models": entries }).to_string().into(),
             ));

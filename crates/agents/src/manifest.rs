@@ -2,7 +2,7 @@
 //! connection records under `<data>/agent-connections/<slug>/`.
 
 use nsv_domain::js;
-use nsv_domain::registry::{Agent, Registry};
+use nsv_domain::registry::{Agent, registry};
 use nsv_domain::wire::{AgentSelection, AgentSetupInput};
 use serde_json::{Map, Value};
 
@@ -47,10 +47,7 @@ impl Manifest {
     }
 
     /// Parses a manifest a release wrote; a version 1 manifest becomes the current shape.
-    pub(crate) fn parse(
-        registry: &Registry,
-        mut object: Map<String, Value>,
-    ) -> Result<Self, AgentError> {
+    pub(crate) fn parse(mut object: Map<String, Value>) -> Result<Self, AgentError> {
         let version = match object.get("version").and_then(Value::as_u64) {
             Some(version) => u8::try_from(version).ok().filter(|v| VERSIONS.contains(v)),
             None => None,
@@ -80,10 +77,10 @@ impl Manifest {
         strict(&object, "", allowed)?;
         let input = object.remove("input").unwrap_or(Value::Null);
         let (input, models) = if legacy {
-            legacy_input(registry, input)?
+            legacy_input(input)?
         } else {
             let input = setup_input(input)?;
-            validate_setup(registry, &input)?;
+            validate_setup(&input)?;
             (input, manifest_models(object.remove("models"))?)
         };
         let port = object
@@ -170,10 +167,7 @@ fn setup_input(value: Value) -> Result<AgentSetupInput, AgentError> {
 }
 
 /// A version 1 manifest's single-model input, with its one model as the catalog.
-fn legacy_input(
-    registry: &Registry,
-    value: Value,
-) -> Result<(AgentSetupInput, Vec<String>), AgentError> {
+fn legacy_input(value: Value) -> Result<(AgentSetupInput, Vec<String>), AgentError> {
     let Value::Object(object) = value else {
         return Err(invalid("input", "Invalid input"));
     };
@@ -213,12 +207,7 @@ fn legacy_input(
         other_providers: None,
     };
     validate_project(input.project_directory.as_deref())?;
-    if !takes_project(
-        registry,
-        input.agent,
-        input.project_directory.as_deref(),
-        true,
-    ) {
+    if !takes_project(input.agent, input.project_directory.as_deref(), true) {
         return Err(invalid("", PROJECT_MESSAGE));
     }
     Ok((input, vec![model]))
@@ -293,8 +282,8 @@ fn validate_project(project: Option<&str>) -> Result<(), AgentError> {
 
 /// Claude Code connects one project at a time; the other agents take none. Connecting
 /// `requires` the project; looking a connection up may leave it out.
-fn takes_project(registry: &Registry, agent: Agent, project: Option<&str>, requires: bool) -> bool {
-    if registry.agents.get(agent).project {
+fn takes_project(agent: Agent, project: Option<&str>, requires: bool) -> bool {
+    if registry().agents.get(agent).project {
         !requires || project.is_some_and(|project| !project.is_empty())
     } else {
         project.is_none()
@@ -305,17 +294,12 @@ fn takes_project(registry: &Registry, agent: Agent, project: Option<&str>, requi
 ///
 /// # Errors
 /// [`AgentError::Invalid`] (400) when the input breaks one.
-pub fn validate_setup(registry: &Registry, input: &AgentSetupInput) -> Result<(), AgentError> {
+pub fn validate_setup(input: &AgentSetupInput) -> Result<(), AgentError> {
     validate_project(input.project_directory.as_deref())?;
-    if !takes_project(
-        registry,
-        input.agent,
-        input.project_directory.as_deref(),
-        true,
-    ) {
+    if !takes_project(input.agent, input.project_directory.as_deref(), true) {
         return Err(invalid("", PROJECT_MESSAGE));
     }
-    if registry.agents.get(input.agent).native.is_none() && input.other_providers.is_some() {
+    if !registry().curated(input.agent) && input.other_providers.is_some() {
         return Err(invalid(
             "",
             "Only Claude Code and Codex choose whether to offer other providers.",
@@ -328,13 +312,9 @@ pub fn validate_setup(registry: &Registry, input: &AgentSetupInput) -> Result<()
 ///
 /// # Errors
 /// [`AgentError::Invalid`] (400) when the selection breaks one.
-pub fn validate_selection(
-    registry: &Registry,
-    selection: &AgentSelection,
-) -> Result<(), AgentError> {
+pub fn validate_selection(selection: &AgentSelection) -> Result<(), AgentError> {
     validate_project(selection.project_directory.as_deref())?;
     if takes_project(
-        registry,
         selection.agent,
         selection.project_directory.as_deref(),
         false,

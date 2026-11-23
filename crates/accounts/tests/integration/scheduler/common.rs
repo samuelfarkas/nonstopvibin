@@ -77,7 +77,7 @@ pub(crate) fn short(idle: Duration) -> Timing {
         },
         activity: Duration::from_secs(1),
         idle,
-        ..TIMING
+        ..*TIMING
     }
 }
 

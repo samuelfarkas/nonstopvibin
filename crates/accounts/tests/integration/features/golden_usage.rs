@@ -47,7 +47,6 @@ fn each_record_prices_as_typescript_did() {
             owned_by: Some(record.provider.clone()),
         };
         let cost = enrich_models(&[model], &[], &catalog, NOW_ISO)
-            .unwrap()
             .pop()
             .unwrap()
             .metadata
@@ -131,8 +130,7 @@ fn models_match_one_catalog_entry_as_typescript_did() {
         let accounts: Vec<ApiAccount> =
             serde_json::from_value(case["input"]["accounts"].clone()).unwrap();
         let actual =
-            serde_json::to_value(enrich_models(&models, &accounts, &catalog, NOW_ISO).unwrap())
-                .unwrap();
+            serde_json::to_value(enrich_models(&models, &accounts, &catalog, NOW_ISO)).unwrap();
         assert_eq!(
             actual,
             replaced(&case["output"], &[("<fetched-at>", NOW_ISO)]),

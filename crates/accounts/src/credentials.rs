@@ -216,9 +216,8 @@ impl<F: Fetch + 'static> Credentials<F> {
         raw: Map<String, Value>,
         reconnect: Option<AccountId>,
     ) -> Result<Account, AppError> {
-        let registry = registry().map_err(|error| AppError::new(error.to_string(), 500))?;
         let provider = text(raw.get("type")).unwrap_or_default().to_owned();
-        let entry = Provider::from_id(&provider).map(|known| registry.providers.get(known));
+        let entry = Provider::from_id(&provider).map(|known| registry().providers.get(known));
         let access = text(raw.get("access_token"));
         let token = raw
             .get("token")

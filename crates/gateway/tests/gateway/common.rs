@@ -129,7 +129,7 @@ async fn dispatch(gateway: Gateway<TestHost>, request: Request<Incoming>) -> Res
 
 /// The gateway on a loopback port, served as the server will serve it.
 pub(crate) async fn spawn_gateway(host: TestHost) -> (SocketAddr, Gateway<TestHost>) {
-    let gateway = Gateway::new(host).unwrap();
+    let gateway = Gateway::new(host);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let served = gateway.clone();

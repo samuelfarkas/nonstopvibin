@@ -149,8 +149,10 @@ The interface's wire types in `src/shared` have Rust twins in `nsv-domain`.
 `bun run check` asserts that each pair is mutually assignable, and `bun run quality`
 (`bun run wire:check`) fails while the committed files differ from the export.
 Commit the generated files. Provider, agent and vocabulary data stays in TypeScript. After
-changing it, run `bun run registry:export`, which rewrites
-`crates/domain/data/registry.json`; `bun run quality` fails while the two differ.
+changing it, run `bun run registry:export`, which writes the fields Rust reads to
+`crates/domain/data/registry.json` and fails when relations Rust cannot type disagree (an
+agent's native vendor and the providers' `nativeAgent`); `bun run quality` fails while the
+two differ. A field only the UI reads needs no Rust change.
 
 ## Linux desktop
 

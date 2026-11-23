@@ -321,8 +321,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             scheduler: cores.scheduler.clone(),
             catalog: Arc::clone(&catalog),
             store: store.clone(),
-        })
-        .map_err(|error| StartError::Other(error.to_string()))?;
+        });
         let agents = AgentSetup::new(
             &options.directory,
             connection_source(&shared, &store, &cores.scheduler, port),

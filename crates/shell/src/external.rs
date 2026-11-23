@@ -15,7 +15,7 @@ const NOT_APPROVED: &str = "This external URL is not an approved provider sign-i
 pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
     // Node's message for a string `new URL` cannot parse.
     let url = Url::parse(raw).map_err(|_| "Invalid URL".to_owned())?;
-    let providers = registry().map_err(|error| error.to_string())?;
+    let providers = registry();
     let approved = url.host_str().is_some_and(|host| {
         providers
             .providers

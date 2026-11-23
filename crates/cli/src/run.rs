@@ -214,7 +214,7 @@ pub(crate) async fn serve(
         backends: processes(),
         fetch: https()?,
         clock: now,
-        timing: TIMING,
+        timing: *TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
@@ -312,7 +312,7 @@ async fn desktop_daemon(
         backends: processes(),
         fetch: https()?,
         clock: now,
-        timing: TIMING,
+        timing: *TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);

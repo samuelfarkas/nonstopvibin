@@ -382,7 +382,7 @@ async fn a_pending_sign_in_keeps_an_idle_core_running() {
         nsv_accounts::scheduler::Timing {
             idle,
             restart,
-            ..TIMING
+            ..*TIMING
         },
     )
     .await;

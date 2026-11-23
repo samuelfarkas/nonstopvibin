@@ -17,7 +17,7 @@ use std::{env, io};
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_domain::registry::{Agent, AgentEntry, Registry, registry};
+use nsv_domain::registry::{Agent, registry};
 use nsv_domain::secret::ClientKey;
 use nsv_domain::sha256_hex;
 use nsv_domain::wire::{self, AgentSetupInput, Profile};
@@ -103,7 +103,6 @@ pub struct AgentSetup {
 }
 
 struct Inner {
-    registry: &'static Registry,
     directory: PathBuf,
     socket_directory: PathBuf,
     socket_path: PathBuf,
@@ -119,7 +118,7 @@ impl AgentSetup {
     /// it). Nothing is created until a connection is made or restored.
     ///
     /// # Errors
-    /// When the registry cannot load or a relative data directory cannot be resolved.
+    /// When a relative data directory cannot be resolved.
     pub fn new(
         data_directory: &Path,
         connection: ConnectionSource,
@@ -136,7 +135,6 @@ impl AgentSetup {
         ));
         Ok(Self {
             inner: Arc::new(Inner {
-                registry: registry()?,
                 pi_preferences: directory.join("pi-preferences"),
                 directory,
                 socket_path: socket_directory.join("agents.sock"),
@@ -217,7 +215,7 @@ impl AgentSetup {
         input: AgentSetupInput,
         models: Vec<String>,
     ) -> Result<wire::AgentSetup, AgentError> {
-        validate_setup(self.inner.registry, &input)?;
+        validate_setup(&input)?;
         validate_models(&models)?;
         let _busy = Busy::acquire(&self.inner.busy)?;
         let profile = profile.clone();
@@ -356,11 +354,22 @@ fn locale_order(left: &str, right: &str) -> Ordering {
         .then_with(|| right.cmp(left))
 }
 
-impl Inner {
-    fn entry(&self, agent: Agent) -> &AgentEntry {
-        self.registry.agents.get(agent)
+fn manifest_name(agent: Agent, project: Option<&str>) -> String {
+    match project {
+        Some(project) if !project.is_empty() && registry().agents.get(agent).project => {
+            format!("{}-{}.json", agent.as_str(), short_hash(project.as_bytes()))
+        }
+        _ => format!("{}.json", agent.as_str()),
     }
+}
 
+fn launch_settings_path(folder: &Path, input: &AgentSetupInput) -> PathBuf {
+    let name = manifest_name(input.agent, input.project_directory.as_deref());
+    let stem = name.strip_suffix(".json").unwrap_or(&name);
+    folder.join(format!("{stem}.settings.json"))
+}
+
+impl Inner {
     fn folder(&self, profile: &Profile, create: bool) -> Result<Option<PathBuf>, AgentError> {
         // Older profile names could leave trailing or doubled separators after truncation; a
         // slug still starts with a letter or digit.
@@ -378,26 +387,11 @@ impl Inner {
         Ok(private_directory(&path, create)?.then_some(path))
     }
 
-    fn manifest_name(&self, agent: Agent, project: Option<&str>) -> String {
-        match project {
-            Some(project) if !project.is_empty() && self.entry(agent).project => {
-                format!("{}-{}.json", agent.as_str(), short_hash(project.as_bytes()))
-            }
-            _ => format!("{}.json", agent.as_str()),
-        }
-    }
-
-    fn launch_settings_path(&self, folder: &Path, input: &AgentSetupInput) -> PathBuf {
-        let name = self.manifest_name(input.agent, input.project_directory.as_deref());
-        let stem = name.strip_suffix(".json").unwrap_or(&name);
-        folder.join(format!("{stem}.settings.json"))
-    }
-
     fn manifests(&self, profile: &Profile, agent: Agent) -> Result<Vec<Manifest>, AgentError> {
         let Some(folder) = self.folder(profile, false)? else {
             return Ok(Vec::new());
         };
-        let names = if self.entry(agent).project {
+        let names = if registry().agents.get(agent).project {
             let prefix = format!("{}-", agent.as_str());
             let mut names = Vec::new();
             for entry in fs::read_dir(&folder)? {
@@ -424,9 +418,9 @@ impl Inner {
             let Some(content) = read_config(&folder.join(&name))? else {
                 continue;
             };
-            let manifest = Manifest::parse(self.registry, json_object(&content)?)?;
+            let manifest = Manifest::parse(json_object(&content)?)?;
             if manifest.input.agent != agent
-                || self.manifest_name(agent, manifest.input.project_directory.as_deref()) != name
+                || manifest_name(agent, manifest.input.project_directory.as_deref()) != name
             {
                 return Err(refused("Agent setup metadata is invalid."));
             }
@@ -491,7 +485,7 @@ impl Inner {
             else {
                 return Err(refused(format!(
                     "Choose a project for {}.",
-                    self.entry(input.agent).title
+                    registry().agents.get(input.agent).title
                 )));
             };
             return match project_root(Path::new(project))
@@ -523,10 +517,13 @@ impl Inner {
         let input = &manifest.input;
         let definition = definition(input.agent);
         let folder = self.directory.join(profile.slug.as_str());
-        let launch = self.launch_settings_path(&folder, input);
+        let launch = launch_settings_path(&folder, input);
         let mut files = vec![
             self.target(profile, input, false, manifest.version)?,
-            folder.join(self.manifest_name(input.agent, input.project_directory.as_deref())),
+            folder.join(manifest_name(
+                input.agent,
+                input.project_directory.as_deref(),
+            )),
         ];
         if definition.helper {
             files.push(helper_path(&folder, input.agent, manifest.port));
@@ -534,7 +531,7 @@ impl Inner {
         if launch_settings(Some(manifest))?.is_some_and(|settings| !settings.is_empty()) {
             files.push(launch.clone());
         }
-        let projects = if self.entry(input.agent).project {
+        let projects = if registry().agents.get(input.agent).project {
             let mut projects: Vec<String> = self
                 .manifests(profile, input.agent)?
                 .into_iter()
@@ -566,7 +563,7 @@ impl Inner {
         let folder = self.directory.join(profile.slug.as_str());
         let launch_settings = launch_settings(Some(manifest))?;
         let launch_file = match launch_settings {
-            Some(_) => read_config(&self.launch_settings_path(&folder, input))?,
+            Some(_) => read_config(&launch_settings_path(&folder, input))?,
             None => None,
         };
         let config = read_config(&self.target(profile, input, false, manifest.version)?)?;
@@ -691,7 +688,7 @@ impl Inner {
             || installed.helper != helper_content
             || installed.launch_file != installed.launch_settings
         {
-            validate_setup(self.registry, &manifest.input)?;
+            validate_setup(&manifest.input)?;
             validate_models(&manifest.models)?;
             let _busy = Busy::acquire(&self.busy)?;
             let plan = self.prepare(
@@ -768,7 +765,7 @@ impl Inner {
                 None => retain(before.as_deref(), &manifest.content)?,
             };
         }
-        let launch_path = self.launch_settings_path(&folder, &manifest.input);
+        let launch_path = launch_settings_path(&folder, &manifest.input);
         let launch_after = launch_settings(Some(&manifest))?;
         let launch_before = match launch_after {
             Some(_) => read_config(&launch_path)?,
@@ -791,7 +788,7 @@ impl Inner {
             ));
         }
         Ok(Plan {
-            manifest_path: folder.join(self.manifest_name(
+            manifest_path: folder.join(manifest_name(
                 manifest.input.agent,
                 manifest.input.project_directory.as_deref(),
             )),
@@ -866,7 +863,7 @@ impl Inner {
         project: Option<&str>,
     ) -> Result<(), AgentError> {
         let definition = definition(agent);
-        if self.entry(agent).project
+        if registry().agents.get(agent).project
             && project.is_none()
             && self.manifests(profile, agent)?.len() > 1
         {
@@ -878,7 +875,7 @@ impl Inner {
         let target = self.target(profile, &manifest.input, false, manifest.version)?;
         let before = read_config(&target)?;
         let folder = self.directory.join(profile.slug.as_str());
-        let launch_path = self.launch_settings_path(&folder, &manifest.input);
+        let launch_path = launch_settings_path(&folder, &manifest.input);
         let launch = launch_settings(Some(&manifest))?;
         let launch_before = match launch {
             Some(_) => read_config(&launch_path)?,
@@ -898,9 +895,10 @@ impl Inner {
             replace_config(&target, after.as_deref(), before.as_deref())?;
             return Err(error);
         }
-        remove_file(
-            &folder.join(self.manifest_name(agent, manifest.input.project_directory.as_deref())),
-        )?;
+        remove_file(&folder.join(manifest_name(
+            agent,
+            manifest.input.project_directory.as_deref(),
+        )))?;
         if definition.helper && self.manifests(profile, agent)?.is_empty() {
             let prefix = format!("{}-key-", agent.as_str());
             for entry in fs::read_dir(&folder)? {

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use nsv_domain::error::AppError;
 use nsv_domain::js;
-use nsv_domain::registry::{Provider, RegistryError, registry};
+use nsv_domain::registry::{Provider, registry};
 use nsv_domain::sha256_hex;
 use nsv_domain::wire::ImportSource;
 use serde_json::{Map, Value};
@@ -24,8 +24,6 @@ pub enum ImportError {
     Io(#[from] io::Error),
     #[error("the account file is not JSON: {0}")]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
 }
 
 impl ImportError {
@@ -34,7 +32,7 @@ impl ImportError {
     pub fn status(&self) -> u16 {
         match self {
             Self::App(error) => error.status,
-            Self::Io(_) | Self::Json(_) | Self::Registry(_) => 500,
+            Self::Io(_) | Self::Json(_) => 500,
         }
     }
 }
@@ -64,11 +62,7 @@ impl ImportCatalog {
     /// Lists each directory's regular `*.json` files whose `type` is a provider with credential
     /// files. Missing directories and unrelated, unreadable or malformed files are skipped
     /// without exposing their contents. Ids are the SHA-256 of the path, in hexadecimal.
-    ///
-    /// # Errors
-    /// Only when the embedded registry is broken.
-    pub fn scan(&mut self) -> Result<Vec<ImportSource>, ImportError> {
-        let registry = registry()?;
+    pub fn scan(&mut self) -> Vec<ImportSource> {
         let mut found = Vec::new();
         self.files.clear();
         for directory in &self.directories {
@@ -97,7 +91,7 @@ impl ImportCatalog {
                 let raw = Value::Object(raw);
                 let kind = js::string(js::field(Some(&raw), "type")).into_owned();
                 let entry =
-                    Provider::from_id(&kind).map(|provider| registry.providers.get(provider));
+                    Provider::from_id(&kind).map(|provider| registry().providers.get(provider));
                 if !entry.is_some_and(|entry| entry.credential_file) {
                     continue;
                 }
@@ -118,7 +112,7 @@ impl ImportCatalog {
                 });
             }
         }
-        Ok(found)
+        found
     }
 
     /// The JSON object of a file the last scan found (any other JSON reads as `{}`).
@@ -139,7 +133,7 @@ impl ImportCatalog {
 
 fn read(path: &Path) -> Result<Map<String, Value>, ImportError> {
     let file = fs::symlink_metadata(path)?;
-    if !file.is_file() || file.len() > registry()?.limits.credential_file_bytes {
+    if !file.is_file() || file.len() > registry().limits.credential_file_bytes {
         return Err(AppError::new(
             "The selected account file is not a supported regular file.",
             400,

@@ -17,7 +17,7 @@ use std::time::Duration;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
-use nsv_domain::registry::{Provider, RegistryError, registry};
+use nsv_domain::registry::{Provider, registry};
 use nsv_domain::sync::locked;
 use nsv_domain::time::{self, iso_string};
 use nsv_domain::wire::{Account, AccountKind, JsNumber, Quota, QuotaStatus, QuotaWindow, True};
@@ -625,23 +625,12 @@ pub fn parse_quota(provider: &str, payload: &Value, now: i64) -> Result<Quota, P
     })
 }
 
-/// A provider's name as messages show it.
-fn provider_label(provider: &str) -> Result<String, RegistryError> {
-    Ok(match Provider::from_id(provider) {
-        Some(known) => registry()?.providers.get(known).label.clone(),
-        None if provider.starts_with("openai-compatible-") => "Compatible API".to_owned(),
-        None => provider.to_owned(),
-    })
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum QuotaError {
     #[error(transparent)]
     App(#[from] AppError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
 }
 
 impl QuotaError {
@@ -650,7 +639,7 @@ impl QuotaError {
     pub fn status(&self) -> u16 {
         match self {
             Self::App(error) | Self::Store(StoreError::App(error)) => error.status,
-            Self::Store(_) | Self::Registry(_) => 500,
+            Self::Store(_) => 500,
         }
     }
 }
@@ -658,11 +647,9 @@ impl QuotaError {
 /// What the API answers for a failed check.
 impl From<QuotaError> for AppError {
     fn from(error: QuotaError) -> Self {
-        let status = error.status();
         match error {
             QuotaError::App(error) => error,
             QuotaError::Store(error) => error.into(),
-            QuotaError::Registry(error) => Self::new(error.to_string(), status),
         }
     }
 }
@@ -816,7 +803,7 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
                 } else {
                     "Try again later."
                 };
-                let label = provider_label(&account.provider).map_err(|error| error.to_string())?;
+                let label = registry().label(&account.provider);
                 Err(format!(
                     "{label} returned HTTP {}. {advice}",
                     status_text(answer.status)
@@ -891,7 +878,6 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
                 .map_err(|error| error.to_string())?
         };
         let preset = registry()
-            .map_err(|error| error.to_string())?
             .providers
             .get(Provider::OpencodeGo)
             .preset

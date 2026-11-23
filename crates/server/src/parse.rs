@@ -10,7 +10,7 @@ use std::fmt::Display;
 use nsv_domain::id::{AccountId, is_uuid};
 use nsv_domain::js;
 use nsv_domain::registry::{
-    Agent, OAuthProvider, Protocol, Provider, Registry, RetentionDays, Strategy,
+    Agent, OAuthProvider, Protocol, Provider, RetentionDays, Strategy, registry,
 };
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{
@@ -249,7 +249,7 @@ pub(crate) fn retention(value: &Value) -> Result<RetentionDays, Invalid> {
 }
 
 /// `POST /profiles`: the trimmed name.
-pub(crate) fn profile_name(registry: &Registry, value: &Value) -> Result<String, Invalid> {
+pub(crate) fn profile_name(value: &Value) -> Result<String, Invalid> {
     let mut issues = Issues::default();
     let name = object(&mut issues, Some(value), "").and_then(|map| {
         let name = trimmed(
@@ -257,7 +257,7 @@ pub(crate) fn profile_name(registry: &Registry, value: &Value) -> Result<String,
             map.get("name"),
             "name",
             1,
-            registry.limits.name_length,
+            registry().limits.name_length,
         );
         strict(&mut issues, map, "", &["name"]);
         name
@@ -266,10 +266,10 @@ pub(crate) fn profile_name(registry: &Registry, value: &Value) -> Result<String,
 }
 
 /// `PATCH /profiles/:profileId`.
-pub(crate) fn profile_patch(registry: &Registry, value: &Value) -> Result<ProfilePatch, Invalid> {
+pub(crate) fn profile_patch(value: &Value) -> Result<ProfilePatch, Invalid> {
     let mut issues = Issues::default();
     let patch = object(&mut issues, Some(value), "").and_then(|map| {
-        let limit = registry.limits.name_length;
+        let limit = registry().limits.name_length;
         let name = optional(map, "name", |value| {
             trimmed(&mut issues, Some(value), "name", 1, limit)
         });
@@ -312,8 +312,8 @@ fn project(issues: &mut Issues, value: &Value) -> Option<String> {
 }
 
 /// `takesProject(requires)`: Claude Code connects one project; the others take none.
-fn takes_project(registry: &Registry, agent: Agent, project: Option<&str>, requires: bool) -> bool {
-    if registry.agents.get(agent).project {
+fn takes_project(agent: Agent, project: Option<&str>, requires: bool) -> bool {
+    if registry().agents.get(agent).project {
         !requires || project.is_some_and(|project| !project.is_empty())
     } else {
         project.is_none()
@@ -323,7 +323,7 @@ fn takes_project(registry: &Registry, agent: Agent, project: Option<&str>, requi
 const PROJECT_MESSAGE: &str = "Choose a project for Claude Code only.";
 
 /// `agentSetupSchema`: `POST /profiles/:profileId/agent-setup`.
-pub(crate) fn agent_setup(registry: &Registry, value: &Value) -> Result<AgentSetupInput, Invalid> {
+pub(crate) fn agent_setup(value: &Value) -> Result<AgentSetupInput, Invalid> {
     let mut issues = Issues::default();
     let input = object(&mut issues, Some(value), "").and_then(|map| {
         let agent = option(
@@ -349,16 +349,10 @@ pub(crate) fn agent_setup(registry: &Registry, value: &Value) -> Result<AgentSet
             other_providers: other?,
         };
         if !issues.aborted {
-            if !takes_project(
-                registry,
-                input.agent,
-                input.project_directory.as_deref(),
-                true,
-            ) {
+            if !takes_project(input.agent, input.project_directory.as_deref(), true) {
                 issues.check("", PROJECT_MESSAGE);
             }
-            if registry.agents.get(input.agent).native.is_none() && input.other_providers.is_some()
-            {
+            if !registry().curated(input.agent) && input.other_providers.is_some() {
                 issues.check(
                     "",
                     "Only Claude Code and Codex choose whether to offer other providers.",
@@ -371,10 +365,7 @@ pub(crate) fn agent_setup(registry: &Registry, value: &Value) -> Result<AgentSet
 }
 
 /// `agentSelectionSchema`: the agent-setup query and `DELETE` body.
-pub(crate) fn agent_selection(
-    registry: &Registry,
-    value: &Value,
-) -> Result<AgentSelection, Invalid> {
+pub(crate) fn agent_selection(value: &Value) -> Result<AgentSelection, Invalid> {
     let mut issues = Issues::default();
     let selection = object(&mut issues, Some(value), "").and_then(|map| {
         let agent = option(
@@ -392,7 +383,6 @@ pub(crate) fn agent_selection(
         };
         if !issues.aborted
             && !takes_project(
-                registry,
                 selection.agent,
                 selection.project_directory.as_deref(),
                 false,
@@ -452,15 +442,12 @@ pub(crate) fn callback(value: &Value) -> Result<String, Invalid> {
 }
 
 /// `POST /profiles/:profileId/oauth`.
-pub(crate) fn oauth_start(
-    registry: &Registry,
-    value: &Value,
-) -> Result<(OAuthProvider, Option<AccountId>), Invalid> {
+pub(crate) fn oauth_start(value: &Value) -> Result<(OAuthProvider, Option<AccountId>), Invalid> {
     let offered: Vec<OAuthProvider> = OAuthProvider::ALL
         .iter()
         .copied()
         .filter(|provider| {
-            registry
+            registry()
                 .providers
                 .get(Provider::from(*provider))
                 .sign_in
@@ -539,13 +526,13 @@ pub(crate) fn core_version(value: &Value) -> Result<String, Invalid> {
 }
 
 /// `PATCH /profiles/:profileId/accounts/:accountId`.
-pub(crate) fn account_patch(registry: &Registry, value: &Value) -> Result<AccountPatch, Invalid> {
+pub(crate) fn account_patch(value: &Value) -> Result<AccountPatch, Invalid> {
     let mut issues = Issues::default();
     let patch = object(&mut issues, Some(value), "").and_then(|map| {
         let disabled = optional(map, "disabled", |value| {
             boolean(&mut issues, Some(value), "disabled")
         });
-        let limit = registry.limits.priority_limit;
+        let limit = registry().limits.priority_limit;
         let priority = optional(map, "priority", |value| {
             let Some(number) = value.as_f64() else {
                 wrong_type(&mut issues, "priority", "number", Some(value));
@@ -563,7 +550,7 @@ pub(crate) fn account_patch(registry: &Registry, value: &Value) -> Result<Accoun
             )]
             Some(number as i64)
         });
-        let name_limit = registry.limits.name_length;
+        let name_limit = registry().limits.name_length;
         let name = optional(map, "name", |value| {
             trimmed(&mut issues, Some(value), "name", 1, name_limit)
         });
@@ -578,11 +565,11 @@ pub(crate) fn account_patch(registry: &Registry, value: &Value) -> Result<Accoun
 }
 
 /// `POST /profiles/:profileId/api-account`.
-pub(crate) fn api_account(registry: &Registry, value: &Value) -> Result<ApiAccountInput, Invalid> {
+pub(crate) fn api_account(value: &Value) -> Result<ApiAccountInput, Invalid> {
     let providers: Vec<Provider> = Provider::ALL
         .iter()
         .copied()
-        .filter(|provider| registry.providers.get(*provider).api_key)
+        .filter(|provider| registry().providers.get(*provider).api_key)
         .collect();
     let mut issues = Issues::default();
     let input = object(&mut issues, Some(value), "").and_then(|map| {
@@ -591,7 +578,7 @@ pub(crate) fn api_account(registry: &Registry, value: &Value) -> Result<ApiAccou
             map.get("name"),
             "name",
             1,
-            registry.limits.name_length,
+            registry().limits.name_length,
         );
         let provider = option(
             &mut issues,
@@ -626,7 +613,7 @@ pub(crate) fn api_account(registry: &Registry, value: &Value) -> Result<ApiAccou
                 text,
                 "prefix",
                 0,
-                registry.limits.prefix_length,
+                registry().limits.prefix_length,
             );
             text.to_owned()
         });
@@ -741,7 +728,6 @@ pub(crate) fn uuid(segment: &str) -> Result<(), Invalid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nsv_domain::registry::registry;
     use serde_json::json;
 
     fn message<T: std::fmt::Debug>(result: Result<T, Invalid>) -> String {
@@ -750,63 +736,56 @@ mod tests {
 
     #[test]
     fn names_are_trimmed_and_counted_in_utf16() {
-        let registry = registry().unwrap();
         assert_eq!(
-            profile_name(registry, &json!({ "name": "  Work  " })).unwrap(),
+            profile_name(&json!({ "name": "  Work  " })).unwrap(),
             "Work"
         );
         assert_eq!(
-            message(profile_name(registry, &json!({ "name": " \u{feff} " }))),
+            message(profile_name(&json!({ "name": " \u{feff} " }))),
             "name: Too small: expected string to have >=1 characters"
         );
         // 30 astral characters are 60 UTF-16 units; one more is too long.
-        assert!(profile_name(registry, &json!({ "name": "😀".repeat(30) })).is_ok());
+        assert!(profile_name(&json!({ "name": "😀".repeat(30) })).is_ok());
         assert_eq!(
-            message(profile_name(registry, &json!({ "name": "😀".repeat(31) }))),
+            message(profile_name(&json!({ "name": "😀".repeat(31) }))),
             "name: Too big: expected string to have <=60 characters"
         );
         // U+0085 is not JavaScript whitespace.
         assert_eq!(
-            profile_name(registry, &json!({ "name": "\u{85}" })).unwrap(),
+            profile_name(&json!({ "name": "\u{85}" })).unwrap(),
             "\u{85}"
         );
     }
 
     #[test]
     fn shape_issues_come_in_zod_order_and_stop_refinements() {
-        let registry = registry().unwrap();
         assert_eq!(
-            message(profile_name(
-                registry,
-                &json!({ "name": 1, "b": 1, "a": 2 })
-            )),
+            message(profile_name(&json!({ "name": 1, "b": 1, "a": 2 }))),
             "name: Invalid input: expected string, received number; : Unrecognized keys: \"b\", \"a\""
         );
         assert_eq!(
-            message(profile_name(registry, &json!([]))),
+            message(profile_name(&json!([]))),
             ": Invalid input: expected object, received array"
         );
         // An unknown key skips the project refinement; a bad project directory does not.
         assert_eq!(
             message(agent_setup(
-                registry,
                 &json!({ "agent": "pi", "projectDirectory": "/x", "extra": 1 })
             )),
             ": Unrecognized key: \"extra\""
         );
         assert_eq!(
             message(agent_setup(
-                registry,
                 &json!({ "agent": "pi", "projectDirectory": "", "otherProviders": true })
             )),
             "projectDirectory: Too small: expected string to have >=1 characters; projectDirectory: Choose an absolute project directory.; : Choose a project for Claude Code only.; : Only Claude Code and Codex choose whether to offer other providers."
         );
         assert_eq!(
-            message(agent_setup(registry, &json!({ "agent": "claude" }))),
+            message(agent_setup(&json!({ "agent": "claude" }))),
             ": Choose a project for Claude Code only."
         );
         assert_eq!(
-            message(agent_selection(registry, &json!({ "agent": null }))),
+            message(agent_selection(&json!({ "agent": null }))),
             "agent: Invalid option: expected one of \"claude\"|\"codex\"|\"pi\"|\"opencode\""
         );
     }
@@ -845,9 +824,7 @@ mod tests {
 
     #[test]
     fn api_accounts_report_nested_paths_and_keep_the_trimmed_key() {
-        let registry = registry().unwrap();
         let input = api_account(
-            registry,
             &json!({
                 "name": " Local ", "provider": "custom", "baseUrl": "http://127.0.0.1:1/v1",
                 "apiKey": " sk ", "prefix": "", "models": [{ "id": " m ", "protocol": "openai", "x": 1 }],
@@ -859,13 +836,10 @@ mod tests {
         assert_eq!(input.protocol, Protocol::Openai);
         assert_eq!(input.models[0].id, "m");
         assert_eq!(
-            message(api_account(
-                registry,
-                &json!({
-                    "name": "x", "provider": "claude", "baseUrl": "nope", "apiKey": "k",
-                    "prefix": "A", "models": [{ "id": "", "protocol": "x" }],
-                })
-            )),
+            message(api_account(&json!({
+                "name": "x", "provider": "claude", "baseUrl": "nope", "apiKey": "k",
+                "prefix": "A", "models": [{ "id": "", "protocol": "x" }],
+            }))),
             "provider: Invalid option: expected one of \"opencode-go\"|\"openai\"|\"anthropic\"|\"gemini\"|\"custom\"; baseUrl: Invalid URL; prefix: Invalid string: must match pattern /^[a-z0-9-]*$/; models.0.id: Too small: expected string to have >=1 characters; models.0.protocol: Invalid option: expected one of \"openai\"|\"anthropic\"|\"responses\""
         );
     }

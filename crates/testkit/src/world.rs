@@ -235,7 +235,7 @@ pub fn bundled_core(directory: &Path) -> PathBuf {
 
 impl World {
     pub async fn new(name: &str) -> Self {
-        Self::with(name, None, TIMING).await
+        Self::with(name, None, *TIMING).await
     }
 
     /// An installed build reading `feed`, or a development run without one.

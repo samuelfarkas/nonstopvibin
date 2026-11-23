@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime};
 
 use nsv_core::pool::{
@@ -22,6 +22,7 @@ use nsv_core::restart::{
 };
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time::epoch_ms;
 use nsv_net::Method;
@@ -58,21 +59,24 @@ pub struct Timing {
     pub fresh: Duration,
 }
 
-/// The daemon's periods.
-pub const TIMING: Timing = Timing {
-    restart: RESTART_TIMING,
-    accounts: Duration::from_secs(20),
-    // Three of the UI's 4 s polls: a hidden or closed UI stops polling the cores.
-    watch: Duration::from_secs(12),
-    quotas: Duration::from_secs(120),
-    usage_backoff: Duration::from_secs(60),
-    activity: Duration::from_secs(10),
-    // Agents pause for minutes between bursts; a start takes about 0.35 s.
-    idle: Duration::from_secs(600),
-    open: Duration::from_secs(30),
-    prune: Duration::from_hours(24),
-    fresh: Duration::from_secs(2),
-};
+/// The daemon's periods. The quota refresh and the UI's poll come from the registry.
+pub static TIMING: LazyLock<Timing> = LazyLock::new(|| {
+    let registry = registry();
+    Timing {
+        restart: RESTART_TIMING,
+        accounts: Duration::from_secs(20),
+        // Three of the UI's polls: a hidden or closed UI stops polling the cores.
+        watch: Duration::from_millis(registry.poll_ms) * 3,
+        quotas: Duration::from_millis(registry.quota_refresh_ms),
+        usage_backoff: Duration::from_secs(60),
+        activity: Duration::from_secs(10),
+        // Agents pause for minutes between bursts; a start takes about 0.35 s.
+        idle: Duration::from_secs(600),
+        open: Duration::from_secs(30),
+        prune: Duration::from_hours(24),
+        fresh: Duration::from_secs(2),
+    }
+});
 
 /// What the scheduler needs from the rest of the daemon. Called with the scheduler's state
 /// locked: an implementation must not call back into the scheduler.
@@ -1183,5 +1187,17 @@ impl Hooks for PoolHooks {
                     .report(format!("Usage before stop: {}", error.message));
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_periods_keep_their_values() {
+        // Three of the UI's 4 s polls, and the quota refresh of `quotaRefreshMs`.
+        assert_eq!(TIMING.watch, Duration::from_secs(12));
+        assert_eq!(TIMING.quotas, Duration::from_secs(120));
     }
 }

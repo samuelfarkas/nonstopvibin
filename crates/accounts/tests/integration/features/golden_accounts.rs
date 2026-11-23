@@ -430,7 +430,7 @@ fn imports_scan_known_folders_as_typescript_did() {
     std::os::unix::fs::symlink(cli.join("codex-one.json"), cli.join("link.json")).unwrap();
 
     let mut catalog = ImportCatalog::new(home.path());
-    let found = catalog.scan().unwrap();
+    let found = catalog.scan();
     // Each id is the SHA-256 of the file's path; the recorder's temporary home differs.
     let without_ids = |sources: Vec<Value>| -> Vec<Value> {
         let mut sources: Vec<Value> = sources

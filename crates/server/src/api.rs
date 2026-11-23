@@ -305,7 +305,6 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         request: Request<Incoming>,
         call: &Call<'_>,
     ) -> Result<Response<Body>, Failure> {
-        let registry = registry()?;
         let cores = &self.cores;
         match route {
             Route::State => {
@@ -339,17 +338,17 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 let imports = Arc::clone(&self.imports);
                 let sources = tokio::task::spawn_blocking(move || locked(&imports).scan())
                     .await
-                    .map_err(|error| Failure::Internal(error.to_string()))??;
+                    .map_err(|error| Failure::Internal(error.to_string()))?;
                 json(StatusCode::OK, &sources)
             }
             Route::CreateProfile => {
-                let name = parse::profile_name(registry, &body(request).await?)?;
+                let name = parse::profile_name(&body(request).await?)?;
                 let profile = self.store.call(move |db| db.create_profile(&name)).await?;
                 self.profiles_changed().await?;
                 json(StatusCode::CREATED, &profile)
             }
             Route::PatchProfile => {
-                let patch = parse::profile_patch(registry, &body(request).await?)?;
+                let patch = parse::profile_patch(&body(request).await?)?;
                 let id = call.profile()?;
                 let saved = id.clone();
                 self.store
@@ -409,7 +408,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 }
             }
             Route::Usage => {
-                let all = registry.limits.all_history_days;
+                let all = registry().limits.all_history_days;
                 let days = parse::days(call.query("days").as_deref(), all)?.unwrap_or(7);
                 let since = if days == all {
                     String::new()
@@ -431,7 +430,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 if let Some(project) = call.query("projectDirectory") {
                     query.insert("projectDirectory".to_owned(), Value::String(project));
                 }
-                let selection = parse::agent_selection(registry, &Value::Object(query))?;
+                let selection = parse::agent_selection(&Value::Object(query))?;
                 let profile = self.profile(call).await?;
                 let status = self
                     .agents
@@ -444,7 +443,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 json(StatusCode::OK, &status)
             }
             Route::AgentInstall => {
-                let input = parse::agent_setup(registry, &body(request).await?)?;
+                let input = parse::agent_setup(&body(request).await?)?;
                 let id = call.profile()?;
                 self.cores.scheduler.wake(&id).await?;
                 let models = self.cores.scheduler.pool().models(&id).await?;
@@ -454,14 +453,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                         "This profile has no available models.",
                     ));
                 }
-                let agent = registry.agents.get(input.agent);
-                let enriched = if agent.native.is_none() {
-                    Some(enrich(&self.catalog, &self.store, &id, &models).await?)
-                } else {
+                let enriched = if registry().curated(input.agent) {
                     None
+                } else {
+                    Some(enrich(&self.catalog, &self.store, &id, &models).await?)
                 };
                 let offered = offered_models(
-                    registry,
                     input.agent,
                     models,
                     input.other_providers.unwrap_or(true),
@@ -474,7 +471,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                         400,
                         format!(
                             "This profile has no {} models. Add one, or offer models from other providers.",
-                            agent.native.as_deref().unwrap_or("")
+                            registry()
+                                .agents
+                                .get(input.agent)
+                                .native
+                                .as_deref()
+                                .unwrap_or("")
                         ),
                     ));
                 }
@@ -486,7 +488,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 )
             }
             Route::AgentRemove => {
-                let selection = parse::agent_selection(registry, &body(request).await?)?;
+                let selection = parse::agent_selection(&body(request).await?)?;
                 let profile = self.profile(call).await?;
                 self.agents
                     .remove(
@@ -502,7 +504,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 self.agent_check(call).await
             }
             Route::SignIn => {
-                let (provider, reconnect) = parse::oauth_start(registry, &body(request).await?)?;
+                let (provider, reconnect) = parse::oauth_start(&body(request).await?)?;
                 let session = cores
                     .sign_in
                     .begin(&call.profile()?, provider, reconnect)
@@ -545,7 +547,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 self.state_reply().await
             }
             Route::SetAccount => {
-                let patch = parse::account_patch(registry, &body(request).await?)?;
+                let patch = parse::account_patch(&body(request).await?)?;
                 cores
                     .credentials
                     .set_account(&call.profile()?, &call.account()?, patch)
@@ -582,7 +584,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 json(StatusCode::OK, &result)
             }
             Route::ApiAccount => {
-                let input = parse::api_account(registry, &body(request).await?)?;
+                let input = parse::api_account(&body(request).await?)?;
                 cores
                     .credentials
                     .add_api_account(&call.profile()?, input)
