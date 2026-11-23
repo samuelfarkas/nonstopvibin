@@ -2,6 +2,8 @@
 // `cfg(test)` is always set here; it marks the modules as test code for clippy.
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod common;
 #[cfg(test)]
 mod golden;
