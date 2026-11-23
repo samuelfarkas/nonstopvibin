@@ -253,7 +253,7 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
         core: CoreOptions {
             binary: root.join("no-core"),
             pinned: false,
-            updates: false,
+            feed: None,
             allow_missing: true,
         },
         agents: agents.clone(),

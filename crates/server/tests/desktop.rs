@@ -60,7 +60,7 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
         core: CoreOptions {
             binary: root.path().join("no-core"),
             pinned: false,
-            updates: false,
+            feed: None,
             allow_missing: true,
         },
         agents: AgentDirectories {

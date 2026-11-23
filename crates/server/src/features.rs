@@ -20,7 +20,7 @@ use nsv_domain::wire::{
 use nsv_store::Store;
 use serde_json::{Map, Value};
 
-use crate::daemon::Shared;
+use crate::daemon::{CoreOptions, Shared};
 
 /// What the daemon gives the features when it assembles them, before anything starts.
 pub struct FeatureContext<F> {
@@ -28,6 +28,8 @@ pub struct FeatureContext<F> {
     pub pool: Pool,
     pub accounts: Arc<Accounts>,
     pub directory: PathBuf,
+    /// The bundled core, its pin rule and the feed of reviewed updates.
+    pub core: CoreOptions,
     /// The outside requests: models.dev, provider APIs, the core feed and downloads.
     pub fetch: F,
     /// `Application.report` and the sign-in event the desktop shell shows.

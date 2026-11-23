@@ -18,6 +18,18 @@ use crate::{CliError, NOT_RUNNING, complain, epoch_ms, say, url_text};
 /// Where the desktop app listens unless `NONSTOPVIBIN_PORT` says otherwise.
 const DESKTOP_PORT: u16 = 4318;
 
+/// The reviewed core pin installed builds offer; `NONSTOPVIBIN_CORE_FEED` tries another, such
+/// as a pull request's.
+fn core_feed() -> String {
+    std::env::var("NONSTOPVIBIN_CORE_FEED")
+        .ok()
+        .filter(|feed| !feed.is_empty())
+        .unwrap_or_else(|| {
+            "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/src/server/core-release.json"
+                .to_owned()
+        })
+}
+
 /// Where the core and the interface are: beside the real executable in a package (in
 /// `Contents/Resources` of a macOS bundle), or in the source checkout this was built from.
 pub(crate) struct Layout {
@@ -178,7 +190,8 @@ pub(crate) async fn serve(
         core: CoreOptions {
             binary: layout.core,
             pinned: true,
-            updates: layout.packaged,
+            // A source checkout shares the data folder: an installed core would shadow its pin.
+            feed: layout.packaged.then(core_feed),
             allow_missing: false,
         },
         agents: agents()?,
@@ -262,7 +275,7 @@ async fn desktop_daemon(
             binary: layout.core,
             // Desktop signing rewrites the core and refreshes its manifest.
             pinned: false,
-            updates: layout.packaged,
+            feed: layout.packaged.then(core_feed),
             // A development run without its core still opens.
             allow_missing: !layout.packaged,
         },

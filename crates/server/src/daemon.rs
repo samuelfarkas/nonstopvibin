@@ -71,8 +71,10 @@ pub struct CoreOptions {
     pub binary: PathBuf,
     /// Its hash must also match the pin compiled into this build: headless releases.
     pub pinned: bool,
-    /// An installed build: a reviewed core update installed over the bundled one runs instead.
-    pub updates: bool,
+    /// Where an installed build reads the reviewed core pin (`NONSTOPVIBIN_CORE_FEED`). With
+    /// one, a core update installed over the bundled one runs instead; a development run has
+    /// none, and never selects or deletes installed cores.
+    pub feed: Option<String>,
     /// A development run starts without it; each profile start then reports it missing.
     pub allow_missing: bool,
 }
@@ -370,6 +372,7 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
             pool: scheduler.pool().clone(),
             accounts,
             directory: options.directory.clone(),
+            core: options.core.clone(),
             fetch: options.fetch.clone(),
             host: FeatureHost(Arc::clone(&shared)),
         });
@@ -521,7 +524,7 @@ impl<F: Fetch + Clone + 'static> Daemon<F> {
 impl<F: Fetch + Clone + 'static> App<F> {
     async fn select_core(&self) -> Result<String, StartError> {
         let pin = bundled_pin().map_err(|error| StartError::Other(error.to_string()))?;
-        if self.core.updates {
+        if self.core.feed.is_some() {
             let cores = cores_directory(&self.directory);
             let target = CoreTarget::current()?;
             let selected = tokio::task::spawn_blocking(move || {
@@ -548,7 +551,7 @@ impl<F: Fetch + Clone + 'static> App<F> {
 
     /// An installed build, which may run a core update.
     pub(crate) const fn updates(&self) -> bool {
-        self.core.updates
+        self.core.feed.is_some()
     }
 
     /// Reads the profile names again after a profile was created or renamed.
