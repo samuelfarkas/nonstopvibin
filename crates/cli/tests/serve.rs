@@ -756,6 +756,38 @@ async fn profile_keys_never_manage_or_cross_profiles() {
         own.header("x-nonstopvibin-profile"),
         Some(first.slug.as_str())
     );
+    // A key created after the gateway served a request is known at once.
+    let authorization = format!("Bearer {}", daemon.token);
+    let created = send(
+        daemon.port,
+        "POST",
+        "/api/profiles",
+        &[
+            ("Authorization", &authorization),
+            ("Content-Type", "application/json"),
+        ],
+        r#"{"name":"Later"}"#,
+    )
+    .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let later = created.json()["id"].as_str().unwrap().to_owned();
+    let later_key = daemon
+        .api("GET", &format!("/api/profiles/{later}/key"))
+        .await
+        .json()["key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let later_bearer = format!("Bearer {later_key}");
+    let mismatched = send(
+        daemon.port,
+        "POST",
+        &format!("/p/{}/v1/chat/completions", first.slug),
+        &[("Authorization", &later_bearer)],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(mismatched.status, 403, "{}", mismatched.body);
     let state = daemon.api("GET", "/api/state").await.json();
     assert_eq!(runtime(&state, &first.slug), "running");
     assert_eq!(runtime(&state, &second.slug), "stopped");

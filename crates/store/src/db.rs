@@ -110,13 +110,13 @@ impl AuthSnapshot {
             .filter(|entry| entry.client_key.matches(presented)))
     }
 
-    /// The entry the index files under `digest`. Its live key still has to be compared with
+    /// Every entry by its client-key digest. An entry's live key still has to be compared with
     /// the presented one.
     ///
     /// # Errors
     /// The error that kept the store from reading the keys.
-    pub fn get(&self, digest: &KeyDigest) -> Result<Option<&AuthEntry>, &StoreError> {
-        Ok(self.0.as_ref().map_err(|error| &**error)?.get(digest))
+    pub fn entries(&self) -> Result<&HashMap<KeyDigest, AuthEntry>, &StoreError> {
+        self.0.as_ref().map_err(|error| &**error)
     }
 
     /// The profile's entry: its live client key.

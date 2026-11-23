@@ -3,9 +3,10 @@
 //! the error JSON every refusal is rendered as.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hyper::body::{Bytes, Incoming};
@@ -32,7 +33,7 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use crate::daemon::{App, Shared};
+use crate::daemon::{App, Shared, locked};
 use crate::panic;
 use crate::parse::Invalid;
 
@@ -393,11 +394,40 @@ fn connection<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>, stream: 
     }));
 }
 
+/// One auth snapshot as the gateway takes it, shared per request instead of copied.
+pub(crate) struct GatewayProfiles {
+    source: Arc<AuthSnapshot>,
+    entries: HashMap<KeyDigest, Arc<ProfileAuth>>,
+}
+
+impl GatewayProfiles {
+    /// A store that could not read the keys has no entries: every key fails closed.
+    fn of(source: Arc<AuthSnapshot>) -> Self {
+        let entries = source
+            .entries()
+            .into_iter()
+            .flatten()
+            .filter_map(|(digest, entry)| {
+                let auth = ProfileAuth::new(
+                    entry.profile.clone(),
+                    entry.slug.clone(),
+                    entry.client_key.clone(),
+                    &entry.core_key,
+                )?;
+                Some((*digest, Arc::new(auth)))
+            })
+            .collect();
+        Self { source, entries }
+    }
+}
+
 /// The gateway's view of the daemon: the store's key snapshot, the scheduler's wake and the
 /// agents' curated catalogs. It holds no management key.
 pub(crate) struct GatewayHost<F> {
     pub(crate) shared: Arc<Shared>,
     pub(crate) auth: watch::Receiver<Arc<AuthSnapshot>>,
+    /// The gateway's entries for the store's latest snapshot, built when it changes.
+    pub(crate) profiles: Mutex<Option<GatewayProfiles>>,
     pub(crate) scheduler: Scheduler,
     pub(crate) catalog: Arc<ModelCatalog<F>>,
     pub(crate) store: Store,
@@ -470,16 +500,17 @@ pub(crate) async fn enrich<F: Fetch + 'static>(
 }
 
 impl<F: Fetch + Clone + 'static> Host for GatewayHost<F> {
-    fn profile(&self, digest: &KeyDigest) -> Option<ProfileAuth> {
-        let snapshot = self.auth.borrow();
-        // A store that could not read the keys fails every key closed.
-        let entry = snapshot.get(digest).ok().flatten()?;
-        Some(ProfileAuth {
-            id: entry.profile.clone(),
-            slug: entry.slug.clone(),
-            client_key: entry.client_key.clone(),
-            core_key: entry.core_key.clone(),
-        })
+    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
+        // The current snapshot on every request, so a deleted or rotated key fails at once.
+        let snapshot = Arc::clone(&self.auth.borrow());
+        let mut profiles = locked(&self.profiles);
+        if !profiles
+            .as_ref()
+            .is_some_and(|profiles| Arc::ptr_eq(&profiles.source, &snapshot))
+        {
+            *profiles = Some(GatewayProfiles::of(snapshot));
+        }
+        profiles.as_ref()?.entries.get(digest).cloned()
     }
 
     async fn wake(&self, profile: &ProfileId) -> Result<SocketAddr, Refusal> {

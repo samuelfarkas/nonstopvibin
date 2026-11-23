@@ -349,6 +349,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
         let gateway = Gateway::new(GatewayHost {
             shared: Arc::clone(&shared),
             auth: store.auth(),
+            profiles: Mutex::default(),
             scheduler: cores.scheduler.clone(),
             catalog: Arc::clone(&catalog),
             store: store.clone(),
