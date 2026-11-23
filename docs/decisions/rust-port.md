@@ -20,7 +20,8 @@ option below. Only the host changes.
   React UI, runs the CLI, and hosts the tray in desktop mode. On Linux it links no GUI
   library, so the same binary runs on a headless server. With no command it is the desktop
   app; on Linux without `DISPLAY` or `WAYLAND_DISPLAY` it prints the headless help instead,
-  as the TypeScript CLI did.
+  as the TypeScript CLI did. `--background`, which Electron's autostart entries pass, always
+  starts the desktop app, without a window.
 - **The UI is a directory beside the daemon, not embedded.** A package puts the built
   interface in `client/` next to the real executable (`Contents/Resources/client` in the macOS
   bundle), as the server archive already did; a source checkout serves `dist/client`.

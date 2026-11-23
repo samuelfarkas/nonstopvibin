@@ -262,6 +262,12 @@ fn runtime() -> Result<tokio::runtime::Runtime, CliError> {
         .map_err(CliError::from_display)
 }
 
+/// Whether this invocation is the desktop app: bare in a graphical session, or with the
+/// `--background` that Electron's autostart entries and login items pass, wherever they run.
+fn opens_desktop(args: &Args, graphical: bool) -> bool {
+    args.positionals.is_empty() && !args.help && (args.background || graphical)
+}
+
 /// A graphical session the desktop app can show its tray in.
 fn desktop_session() -> bool {
     cfg!(target_os = "macos")
@@ -346,7 +352,7 @@ fn main() -> ExitCode {
         ));
         return ExitCode::SUCCESS;
     }
-    if args.positionals.is_empty() && !args.help && desktop_session() {
+    if opens_desktop(&args, desktop_session()) {
         return run::desktop(args.background);
     }
     let result = if args.help || args.positionals.is_empty() {
@@ -380,6 +386,23 @@ mod tests {
             );
         }
         assert_eq!(parse_iso("2026-11-22T11:00:00Z"), None);
+    }
+
+    #[test]
+    fn the_legacy_background_flag_starts_the_desktop_app_without_a_display() {
+        let opens = |line: &str, graphical| {
+            let arguments: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
+            opens_desktop(&Args::parse(&arguments).unwrap(), graphical)
+        };
+        assert!(opens("--background", false));
+        assert!(opens("--background", true));
+        assert!(opens("", true));
+        assert!(
+            !opens("", false),
+            "a bare command without a display prints help"
+        );
+        assert!(!opens("--background --help", true));
+        assert!(!opens("serve", true));
     }
 
     #[test]
