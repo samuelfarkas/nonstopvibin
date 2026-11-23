@@ -186,6 +186,46 @@
       "env": {
         "browser": true
       }
+    },
+    {
+      "files": ["crates/window/tests/ui/checks/*.js"],
+      "env": {
+        "browser": true
+      },
+      "globals": {
+        "config": "readonly",
+        "act": "readonly",
+        "sleep": "readonly",
+        "equal": "readonly",
+        "ok": "readonly",
+        "match": "readonly",
+        "until": "readonly",
+        "$": "readonly",
+        "outline": "readonly",
+        "key": "readonly",
+        "click": "readonly",
+        "present": "readonly",
+        "press": "readonly",
+        "emulateMedia": "readonly",
+        "guards": "readonly",
+        "uncaught": "readonly",
+        "run": "readonly",
+        "api": "readonly",
+        "bootstrap": "readonly",
+        "progress": "readonly",
+        "closeGuarded": "readonly",
+        "released": "readonly",
+        "choose": "readonly",
+        "retention": "readonly",
+        "logoRests": "readonly"
+      }
+    },
+    {
+      "files": ["crates/window/tests/ui/checks/prelude.js"],
+      "rules": {
+        "no-unused-vars": "off",
+        "no-redeclare": "off"
+      }
     }
   ]
 }

@@ -54,7 +54,8 @@ jobs:
       - if: runner.os == 'Linux'
         name: Shell tests that drive a real window helper
         run: sh crates/shell/tests/gui.sh --locked
-      - run: bun run build:client
+      # Builds the interface, its fixture pages, the daemon and the helper; on Linux it starts
+      # its own Xvfb and D-Bus session.
       - name: UI checks in the window helper
         run: bun run test:ui
       - name: Generated TypeScript types match the Rust wire types
