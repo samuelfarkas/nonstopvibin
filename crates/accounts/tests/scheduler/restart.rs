@@ -517,3 +517,176 @@ async fn a_failed_quota_check_after_an_automatic_start_is_reported() {
         ["Quota fixture: Claude returned HTTP 401."]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_automatic_start_waiting_for_its_core_does_not_hold_up_another_profiles_maintenance() {
+    let world = World::new(timing(100, 300_000, 10)).await;
+    let healthy = world.profile("Healthy", false, true, false).await;
+    world
+        .run(world.pool().start(&healthy, false))
+        .await
+        .unwrap();
+    let unready = subscribed(&world, "Unready").await;
+    // Its core never answers, so its automatic start waits out the readiness window.
+    world.fake.script(
+        &unready,
+        [Script {
+            answers: None,
+            ..Script::default()
+        }],
+    );
+    world.scheduler.launch().await.unwrap();
+    world
+        .until("the automatic start", Duration::from_secs(2), |world| {
+            world.launches(&unready) == 1
+        })
+        .await;
+    let before = world.fake.calls(&healthy, "/auth-files").len();
+    let watching = tokio::spawn({
+        let scheduler = world.scheduler.clone();
+        async move { scheduler.watch().await }
+    });
+    world
+        .until(
+            "the healthy profile's sync",
+            Duration::from_secs(2),
+            |world| world.fake.calls(&healthy, "/auth-files").len() > before,
+        )
+        .await;
+    assert!(
+        world.pool().state().starting(&unready),
+        "the unready start is still pending"
+    );
+    world.run(world.scheduler.shutdown()).await.unwrap();
+    watching.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_joined_to_an_automatic_one_ends_with_shutdowns_503_in_its_retry_wait() {
+    let world = World::new(timing(100, 300_000, 10)).await;
+    let profile = subscribed(&world, "Joined").await;
+    // Readiness fails at once, so the start waits before it checks again.
+    world.fake.knobs(|knobs| {
+        knobs.failing_listing.insert(profile.clone());
+    });
+    world.scheduler.launch().await.unwrap();
+    world
+        .until("the failed readiness", Duration::from_secs(2), |world| {
+            !world.fake.calls(&profile, "/auth-files").is_empty()
+        })
+        .await;
+    assert!(world.pool().state().starting(&profile));
+    let (joined, shut) = world
+        .run(async {
+            tokio::join!(
+                world.pool().start(&profile, false),
+                world.scheduler.shutdown()
+            )
+        })
+        .await;
+    shut.unwrap();
+    assert_eq!(joined.unwrap_err().status, 503);
+    assert!(world.reports().is_empty(), "{:?}", world.reports());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_profile_the_launch_started_that_exited_before_scheduling_is_reported_on_its_first_failed_restart()
+ {
+    let world = World::new(timing(100, 300_000, 10)).await;
+    let early = world.profile("Early", true, true, true).await;
+    let late = world.profile("Late", true, true, true).await;
+    // Early starts, then exits while the launch still waits for Late; its restart never answers.
+    world.fake.script(
+        &early,
+        [
+            Script {
+                exits_after: Some(Duration::from_millis(100)),
+                ..Script::default()
+            },
+            Script {
+                answers: None,
+                ..Script::default()
+            },
+        ],
+    );
+    world.fake.script(
+        &late,
+        [Script {
+            answers: Some(Duration::from_secs(1)),
+            ..Script::default()
+        }],
+    );
+    world.run(world.scheduler.launch()).await.unwrap();
+    assert!(
+        !world.fake.latest(&early).unwrap().alive(),
+        "Early exited during the launch"
+    );
+    assert!(
+        world.reports().is_empty(),
+        "the launch reports nothing: {:?}",
+        world.reports()
+    );
+    world
+        .until("the failed restart", Duration::from_secs(30), |world| {
+            !world.reports().is_empty()
+        })
+        .await;
+    let reports = world.reports();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(
+        reports[0].starts_with("Early: Proxy did not become ready."),
+        "{reports:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_that_succeeds_while_the_last_automatic_starts_quota_check_is_pending_gives_a_fresh_run()
+ {
+    let (open, gate) = watch::channel(true);
+    let (world, profile) = giving_up("Pending check", vec![crashing(); 3]).await;
+    *world.host.quota_gate.lock().unwrap() = Some(gate);
+    world
+        .until("the third core", Duration::from_secs(60), |world| {
+            world.launches(&profile) == 3
+        })
+        .await;
+    // From here on quota checks wait: the limit's fourth core's stays pending.
+    open.send_replace(false);
+    world
+        .until(
+            "the fourth core's check",
+            Duration::from_secs(60),
+            |world| {
+                world.launches(&profile) == 4
+                    && world.pool().usable(&profile)
+                    && world.host.quota_checks.lock().unwrap().len() >= 4
+            },
+        )
+        .await;
+    let fourth = world.fake.latest(&profile).unwrap();
+    world.fake.kill(&profile);
+    world.settle().await;
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    let started = world.fake.latest(&profile).unwrap();
+    assert_ne!(started.index, fourth.index);
+    assert!(world.pool().running(&profile));
+    world.fake.kill(&profile);
+    open.send_replace(true);
+    world
+        .until("the restart", Duration::from_secs(10), |world| {
+            world.launches(&profile) == 6 && world.pool().usable(&profile)
+        })
+        .await;
+    assert!(world.scheduler.gave_up(&profile).is_none());
+    assert!(
+        !world
+            .reports()
+            .iter()
+            .any(|report| report.contains("Stopped restarting")),
+        "{:?}",
+        world.reports()
+    );
+}

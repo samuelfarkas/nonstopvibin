@@ -27,6 +27,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 url.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
 
 [lints]

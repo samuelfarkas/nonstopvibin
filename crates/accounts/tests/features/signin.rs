@@ -422,6 +422,101 @@ async fn launch_reaps_and_deletes_sign_ins_an_earlier_run_left_pending() {
 }
 
 #[tokio::test]
+async fn an_undeletable_pending_sign_in_does_not_keep_launch_from_reaping_orphans() {
+    use std::os::unix::fs::PermissionsExt;
+    let world = World::new("oauth-undeletable").await;
+    let pending = world.data().join("oauth-pending");
+    std::fs::create_dir_all(pending.join("claude-AbCdEf")).unwrap();
+    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if std::fs::create_dir(pending.join("probe")).is_ok() {
+        // Root ignores directory permissions, so nothing is undeletable.
+        std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    let launched = world.cores.launch().await;
+    std::fs::set_permissions(&pending, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        launched.is_err(),
+        "the pending sign-in could not be deleted"
+    );
+    assert!(
+        world.fake.reaped().contains(&world.data().to_path_buf()),
+        "the data directory's orphans were reaped first"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_it_queues() {
+    let world = World::new("oauth-shutdown-action").await;
+    let profile = world.profile("Sign-in order").await;
+    world.cores.pool().start(&profile, false).await.unwrap();
+    let (entered, (release, released)) = (Arc::new(Notify::new()), watch::channel(false));
+    let (queued, change) = tokio::sync::oneshot::channel();
+    let queued = Arc::new(std::sync::Mutex::new(Some(queued)));
+    world.fake.knobs(|knobs| {
+        let (credentials, fake, entered) = (
+            world.cores.credentials.clone(),
+            world.fake.clone(),
+            Arc::clone(&entered),
+        );
+        knobs.auth_url_hook = Some(Arc::new(move |session| {
+            let (credentials, fake, entered, queued) = (
+                credentials.clone(),
+                fake.clone(),
+                Arc::clone(&entered),
+                Arc::clone(&queued),
+            );
+            let mut released = released.clone();
+            Box::pin(async move {
+                entered.notify_one();
+                drop(released.wait_for(|released| *released).await);
+                // The action queues a credential change as it ends, after shutdown began.
+                let mut change = Box::pin(async move {
+                    credentials
+                        .queue(async move {
+                            tokio::task::yield_now().await;
+                            Ok(!fake.calls(&session, "/oauth-session").is_empty())
+                        })
+                        .await
+                });
+                // One poll takes the change's turn in the queue before the action answers.
+                tokio::select! {
+                    biased;
+                    _ = &mut change => panic!("the change waits for its turn"),
+                    () = std::future::ready(()) => {}
+                }
+                let sender = queued.lock().unwrap().take().unwrap();
+                let _sent = sender.send(tokio::spawn(change));
+            })
+        }));
+    });
+    let action = tokio::spawn({
+        let (cores, profile) = (Arc::clone(&world.cores), profile.clone());
+        async move {
+            cores
+                .sign_in
+                .begin(&profile, OAuthProvider::Codex, None)
+                .await
+        }
+    });
+    entered.notified().await;
+    let shutdown = tokio::spawn({
+        let cores = Arc::clone(&world.cores);
+        async move { cores.shutdown().await }
+    });
+    tokio::task::yield_now().await;
+    release.send_replace(true);
+    let _began = action.await.unwrap();
+    let cleared = change.await.unwrap().await.unwrap().unwrap();
+    assert!(
+        !cleared,
+        "the change ran before shutdown dropped the sign-in"
+    );
+    shutdown.await.unwrap().unwrap();
+    assert!(!world.cores.pool().alive(&profile));
+}
+
+#[tokio::test]
 async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_core() {
     let world = World::new("oauth-shutdown-order").await;
     let profile = world.profile("Order").await;

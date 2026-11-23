@@ -226,6 +226,31 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
     assert!(response.ok(), "{} {text}", response.status);
     assert!(text.contains("hello from the stub"), "{text}");
 
+    // Embedded models only, and the pinned core's own Claude fingerprint is left alone.
+    let running = ledger(&data);
+    let arguments = std::fs::read(format!("/proc/{}/cmdline", running[0])).unwrap();
+    assert!(
+        !arguments
+            .split(|byte| *byte == 0)
+            .any(|argument| argument == b"--local-model"),
+        "{}",
+        String::from_utf8_lossy(&arguments)
+    );
+    let reported = pool
+        .management(
+            &profile,
+            &Method::GET,
+            "/config",
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reported["claude-header-defaults"]["user-agent"], "",
+        "{reported}"
+    );
+
     let rows = async || {
         let id = profile.clone();
         store.call(move |db| db.usage(&id, "", 100)).await.unwrap()

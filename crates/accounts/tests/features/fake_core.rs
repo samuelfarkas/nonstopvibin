@@ -21,6 +21,10 @@ use tokio::sync::{Notify, watch};
 use url::Url;
 
 /// What the fake cores do, changed by the test as it goes.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches a test flips one at a time"
+)]
 pub(crate) struct Knobs {
     /// The `redirect_uri` of each sign-in link; `None` makes links without one.
     pub(crate) redirect: Option<String>,
@@ -38,6 +42,13 @@ pub(crate) struct Knobs {
     pub(crate) upstream: Arc<dyn Fn(&Value) -> Value + Send + Sync>,
     /// Holds each `/api-call` until the receiver turns true; the notify tells that one arrived.
     pub(crate) upstream_gate: Option<(Arc<Notify>, watch::Receiver<bool>)>,
+    /// Each core exits with code 1 as soon as it is launched, before it answers.
+    pub(crate) exits_on_launch: bool,
+    /// Cores run but answer no call, as one that never becomes ready.
+    pub(crate) silent: bool,
+    /// Runs before each sign-in link is answered, given the profile of the core asked.
+    pub(crate) auth_url_hook:
+        Option<Arc<dyn Fn(ProfileId) -> BoxFuture<'static, ()> + Send + Sync>>,
 }
 
 impl Default for Knobs {
@@ -53,6 +64,9 @@ impl Default for Knobs {
                 |_| json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } }),
             ),
             upstream_gate: None,
+            exits_on_launch: false,
+            silent: false,
+            auth_url_hook: None,
         }
     }
 }
@@ -167,6 +181,9 @@ impl FakeCores {
             pending: Mutex::new(HashMap::new()),
         });
         cores.launched.push(Arc::clone(&core));
+        if cores.knobs.exits_on_launch {
+            core.exit(1 << 8);
+        }
         Ok(core)
     }
 
@@ -175,6 +192,7 @@ impl FakeCores {
         reason = "one arm per management route, as the core's router"
     )]
     async fn answer(&self, call: Call) -> Result<Response, NetError> {
+        let silent = self.knobs(|knobs| knobs.silent);
         let core = self
             .0
             .lock()
@@ -183,6 +201,7 @@ impl FakeCores {
             .iter()
             .find(|core| core.port == call.port && core.alive())
             .cloned()
+            .filter(|_| !silent)
             .ok_or_else(|| NetError::Connect(io::ErrorKind::ConnectionRefused.into()))?;
         if call.target == "/v1/models" {
             return Ok(
@@ -250,6 +269,10 @@ impl FakeCores {
                 respond(200, &json!({ "status": "ok" }))
             }
             (Method::GET, auth) if auth.ends_with("-auth-url") => {
+                let hook = self.knobs(|knobs| knobs.auth_url_hook.clone());
+                if let Some(hook) = hook {
+                    hook(core.profile.clone()).await;
+                }
                 let (state, redirect, expires) = {
                     let mut cores = self.0.lock().unwrap();
                     cores.states += 1;

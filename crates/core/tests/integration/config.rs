@@ -307,6 +307,59 @@ fn replays_the_golden_applied_comparisons() {
     assert_eq!(passed, 13);
 }
 
+#[test]
+fn credentials_never_cross_endpoints_whose_urls_share_a_suffix() {
+    let custom = |id: &str, name: &str, base_url: &str, model: &str| {
+        let stored = json!({
+            "id": id, "name": name, "provider": "custom", "baseUrl": base_url, "prefix": "",
+            "models": [{ "id": model, "protocol": "openai" }], "disabled": false,
+        });
+        (
+            serde_json::from_value::<ApiAccount>(stored).unwrap(),
+            ApiKey::new(format!("test-{id}")),
+        )
+    };
+    let first = "https://first.example/openai/v1";
+    let other = "https://other.example/openai/v1";
+    let accounts = [
+        custom("first", "first", first, "model-a"),
+        custom("other", "other", other, "model-a"),
+        custom("same-endpoint", "second account", first, "model-a"),
+        custom("other-model", "first", first, "model-b"),
+    ];
+    let config = configuration(
+        &profile("round-robin", false),
+        1,
+        ("fixture", "fixture"),
+        &accounts,
+        "/tmp/fixture",
+    )
+    .to_json();
+    let entries = config["openai-compatibility"].as_array().unwrap();
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    let names: std::collections::HashSet<&Value> = entries.iter().map(|e| &e["name"]).collect();
+    assert_eq!(names.len(), 3, "{entries:?}");
+    for (id, base_url) in [
+        ("first", first),
+        ("other", other),
+        ("same-endpoint", first),
+        ("other-model", first),
+    ] {
+        let key = format!("test-{id}");
+        let entry = entries
+            .iter()
+            .find(|entry| {
+                entry["api-key-entries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|k| k["api-key"] == key.as_str())
+            })
+            .unwrap_or_else(|| panic!("an entry holds {key}"));
+        assert_eq!(entry["base-url"], base_url, "{id}");
+    }
+}
+
 async fn open(directory: &std::path::Path) -> Store {
     nsv_store::files::owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
     Store::open(directory, Vault::open(directory).unwrap())
@@ -386,6 +439,11 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     assert_eq!(written, Value::Object(config.to_json()));
     assert_eq!(written["port"], 8317);
     assert_eq!(
+        written["routing"]["strategy"], "fill-first",
+        "a new profile's default"
+    );
+    assert_eq!(written["routing"]["session-affinity"], true);
+    assert_eq!(
         written["openai-compatibility"][0]["api-key-entries"][0]["api-key"],
         "synthetic key local"
     );
@@ -398,6 +456,39 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
     assert_eq!(mode(&path), 0o600);
     assert_eq!(read_yaml(&fs::read_to_string(&path).unwrap())["port"], 8318);
+    // Concurrent writes serialize: the file holds the last one, with the saved settings.
+    let mut saved = profile.clone();
+    saved.strategy = serde_json::from_value(json!("round-robin")).unwrap();
+    saved.session_affinity = false;
+    store.call(move |db| db.save_profile(&saved)).await.unwrap();
+    let (first, second) = tokio::join!(
+        write_config(&store, profile.id.clone(), 1235),
+        write_config(&store, profile.id.clone(), 1236),
+    );
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_eq!([first.port, second.port], [1235, 1236]);
+    let written = read_yaml(&fs::read_to_string(&path).unwrap());
+    assert_eq!(written, Value::Object(second.to_json()));
+    assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+    assert_eq!(written["routing"]["strategy"], "round-robin");
+    assert_eq!(written["routing"]["session-affinity"], false);
+    // A failed write leaves the next one free to succeed.
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    assert!(
+        write_config(&store, profile.id.clone(), 1237)
+            .await
+            .is_err()
+    );
+    fs::remove_dir(&path).unwrap();
+    let recovered = write_config(&store, profile.id.clone(), 1238)
+        .await
+        .unwrap();
+    assert_eq!(recovered.port, 1238);
+    assert_eq!(
+        read_yaml(&fs::read_to_string(&path).unwrap()),
+        Value::Object(recovered.to_json())
+    );
     // A symbolic link there is refused, and its target never receives the secrets.
     let target = root.path().join("elsewhere");
     fs::write(&target, "untouched").unwrap();

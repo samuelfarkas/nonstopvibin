@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::processes::KILL_GRACE;
+use nsv_core::restart::RestartTiming;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::Strategy;
 use nsv_domain::wire::Runtime;
@@ -551,25 +552,57 @@ async fn settings_a_core_never_applies_are_reported() {
     );
 }
 
+/// Holds the first core's first readiness answer. The counter counts `/config` calls to that
+/// core once the flag is set: after it answered, only a settings confirmation would ask.
+fn held_readiness(
+    world: &World,
+) -> (
+    watch::Sender<bool>,
+    Arc<AtomicUsize>,
+    Arc<AtomicBool>,
+    Arc<AtomicUsize>,
+) {
+    let first = Arc::new(AtomicBool::new(true));
+    let (release, holding) = hold(world, "/config", move |_| {
+        first.swap(false, Ordering::SeqCst)
+    });
+    let (answered, confirmations) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let (seen, counted) = (Arc::clone(&answered), Arc::clone(&confirmations));
+    world.fake.knobs(|knobs| {
+        knobs.intercept = Some(Arc::new(move |core, path| {
+            if core.index == 0 && path == "/config" && seen.load(Ordering::SeqCst) {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }
+            None
+        }));
+    });
+    (release, holding, answered, confirmations)
+}
+
+async fn until_held(world: &World, holding: &AtomicUsize) {
+    world
+        .until("the held readiness", Duration::from_secs(1), |_| {
+            holding.load(Ordering::SeqCst) > 0
+        })
+        .await;
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_a_swap_then_stops() {
     let world = World::new(timing()).await;
     let profile = world.profile("Swapped settings", false, false, false).await;
-    let first = Arc::new(AtomicBool::new(true));
-    let (release, holding) = hold(&world, "/config", move |_| {
-        first.swap(false, Ordering::SeqCst)
-    });
+    let (release, holding, answered, confirmations) = held_readiness(&world);
     let test = async {
         let start = world.pool().start(&profile, false);
         let rest = async {
-            world
-                .until("the held readiness", Duration::from_secs(1), |_| {
-                    holding.load(Ordering::SeqCst) > 0
-                })
-                .await;
+            until_held(&world, &holding).await;
             save_strategy(&world, &profile, Strategy::RoundRobin).await;
             let configure = world.pool().configure(&profile);
             let swap = world.pool().while_stopped(&profile, async { Ok(()) });
+            answered.store(true, Ordering::SeqCst);
             release.send_replace(true);
             tokio::join!(configure, swap)
         };
@@ -579,9 +612,438 @@ async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_a_sw
     started.unwrap();
     configured.unwrap();
     swapped.unwrap();
+    assert_eq!(
+        confirmations.load(Ordering::SeqCst),
+        0,
+        "no request to the stopped core"
+    );
     let cores = world.fake.launches(&profile);
     assert_eq!(cores.len(), 2);
     assert!(!cores[0].alive());
     // The successor wrote its own config from the saved settings.
     assert_eq!(strategy(&world, &profile).await, "round-robin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_shutdown_then_stops() {
+    let world = World::new(timing()).await;
+    let profile = world
+        .profile("Shutdown settings", false, false, false)
+        .await;
+    let (release, holding, answered, confirmations) = held_readiness(&world);
+    let test = async {
+        let start = world.pool().start(&profile, false);
+        let rest = async {
+            until_held(&world, &holding).await;
+            save_strategy(&world, &profile, Strategy::RoundRobin).await;
+            let configure = world.pool().configure(&profile);
+            let shutdown = world.pool().shutdown();
+            answered.store(true, Ordering::SeqCst);
+            release.send_replace(true);
+            tokio::join!(configure, shutdown)
+        };
+        tokio::join!(start, rest)
+    };
+    let (started, (configured, shut)) = world.run(test).await;
+    // Shutdown ends the start that was still waiting for its core.
+    assert_eq!(started.unwrap_err().status, 503);
+    configured.unwrap();
+    shut.unwrap();
+    assert_eq!(
+        confirmations.load(Ordering::SeqCst),
+        0,
+        "no request to the stopped core"
+    );
+    assert!(!world.fake.launches(&profile)[0].alive());
+    assert!(!world.pool().alive(&profile));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_a_plain_stop_then_stops()
+ {
+    for change_first in [true, false] {
+        let world = World::new(timing()).await;
+        let profile = world.profile("Stopped settings", false, false, false).await;
+        let (release, holding, answered, confirmations) = held_readiness(&world);
+        let test = async {
+            let start = world.pool().start(&profile, false);
+            let rest = async {
+                until_held(&world, &holding).await;
+                save_strategy(&world, &profile, Strategy::RoundRobin).await;
+                // As sign-in cleanup does for a core it cannot reach: neither a swap nor shutdown.
+                let (configure, stop) = (
+                    world.pool().configure(&profile),
+                    world.pool().stop(&profile),
+                );
+                answered.store(true, Ordering::SeqCst);
+                release.send_replace(true);
+                if change_first {
+                    let (configured, stopped) = tokio::join!(configure, stop);
+                    (configured, stopped)
+                } else {
+                    let (stopped, configured) = tokio::join!(stop, configure);
+                    (configured, stopped)
+                }
+            };
+            tokio::join!(start, rest)
+        };
+        let (started, (configured, stopped)) = world.run(test).await;
+        started.unwrap();
+        configured.unwrap();
+        stopped.unwrap();
+        assert_eq!(
+            confirmations.load(Ordering::SeqCst),
+            0,
+            "change first {change_first}: no request to the stopping core"
+        );
+        assert!(!world.fake.launches(&profile)[0].alive());
+        world.fake.knobs(|knobs| knobs.intercept = None);
+        world
+            .run(world.pool().start(&profile, false))
+            .await
+            .unwrap();
+        assert_eq!(
+            strategy(&world, &profile).await,
+            "round-robin",
+            "change first {change_first}: the next start runs with the saved setting"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_confirmation_outstanding_while_a_swap_replaces_the_core_leaves_the_successors_config_alone()
+ {
+    let world = World::new(timing()).await;
+    let profile = world
+        .profile("Replaced confirmation", false, false, false)
+        .await;
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    let first = world.fake.latest(&profile).unwrap();
+    let (answer, answered) = watch::channel(false);
+    let (polls, held) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    {
+        let (polls, held, first) = (Arc::clone(&polls), Arc::clone(&held), first.index);
+        world.fake.knobs(|knobs| {
+            // The first core's confirmations report the old settings; the tenth waits for `answer`.
+            knobs.intercept = Some(Arc::new(move |core, path| {
+                if core.index != first || path != "/config" {
+                    return None;
+                }
+                if polls.fetch_add(1, Ordering::SeqCst) < 9 {
+                    return Some(Box::pin(async { Some(serde_json::json!({})) }));
+                }
+                held.store(true, Ordering::SeqCst);
+                let mut answered = answered.clone();
+                Some(Box::pin(async move {
+                    let _answered = answered.wait_for(|answered| *answered).await;
+                    Some(serde_json::json!({}))
+                }))
+            }));
+        });
+    }
+    save_strategy(&world, &profile, Strategy::RoundRobin).await;
+    let test = async {
+        let configure = world.pool().configure(&profile);
+        let rest = async {
+            world
+                .until("the held confirmation", Duration::from_secs(15), |_| {
+                    held.load(Ordering::SeqCst)
+                })
+                .await;
+            world
+                .pool()
+                .while_stopped(&profile, async { Ok(()) })
+                .await
+                .unwrap();
+            let successor = world.fake.latest(&profile).unwrap();
+            assert_ne!(successor.index, first.index);
+            assert_ne!(successor.port, first.port);
+            answer.send_replace(true);
+            successor
+        };
+        tokio::join!(configure, rest)
+    };
+    let (configured, successor) = world.run(test).await;
+    configured.unwrap();
+    let config =
+        std::fs::read_to_string(nsv_store::layout::core_config_path(&world.data, &profile))
+            .unwrap();
+    assert!(
+        config
+            .lines()
+            .any(|line| line == format!("\"port\": {}", successor.port)),
+        "the successor's config keeps its own port: {} in {config}",
+        successor.port
+    );
+    assert_eq!(strategy(&world, &profile).await, "round-robin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_readiness_retry_of_one_core_keeps_its_activity_window() {
+    let world = World::new(timing()).await;
+    let profile = world.profile("Retry", false, true, false).await;
+    world.scheduler.launch().await.unwrap();
+    let failed = Arc::new(AtomicBool::new(false));
+    {
+        let (scheduler, failed, id) = (
+            world.scheduler.clone(),
+            Arc::clone(&failed),
+            profile.clone(),
+        );
+        // The first account sync fails right after a request marked activity, so readiness retries.
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if path != "/auth-files" || failed.swap(true, Ordering::SeqCst) {
+                    return None;
+                }
+                scheduler.activity(&id, false);
+                Some(Box::pin(async {
+                    Some(serde_json::json!({ "files": "unreadable" }))
+                }))
+            }));
+        });
+    }
+    let before = world.fake.calls(&profile, "/usage-queue").len();
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    assert!(failed.load(Ordering::SeqCst));
+    assert!(
+        world.fake.calls(&profile, "/auth-files").len() >= 2,
+        "readiness retried"
+    );
+    world.pass(Duration::from_secs(3)).await;
+    let drains = world.fake.calls(&profile, "/usage-queue").len() - before;
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    assert_eq!(
+        drains, 2,
+        "a prompt drain and one after the activity window"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_quotas() {
+    let timing = Timing {
+        restart: RestartTiming {
+            coalesce: 20,
+            ..timing().restart
+        },
+        accounts: Duration::from_millis(50),
+        watch: Duration::from_millis(200),
+        quotas: Duration::from_millis(100),
+        ..timing()
+    };
+    let world = World::new(timing).await;
+    let profile = world.profile("Status", false, false, false).await;
+    // The core's own listing for one signed-in Codex account.
+    let list = |cooling: bool| {
+        serde_json::json!({ "files": [{
+            "name": "codex-watch.json", "type": "codex", "provider": "codex",
+            "auth_index": "a1", "status": "active", "unavailable": cooling,
+        }] })
+    };
+    let listing = |cooling| {
+        world
+            .fake
+            .knobs(|knobs| knobs.listings.insert(profile.clone(), list(cooling)))
+    };
+    let status = async || {
+        let accounts = world.accounts.list(&profile).await.unwrap();
+        let account = accounts
+            .iter()
+            .find(|account| account.id.as_str() == "codex-watch.json")
+            .unwrap();
+        serde_json::to_value(account).unwrap()["status"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let checks = || world.host.quota_checks.lock().unwrap().len();
+    listing(false);
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    world.scheduler.launch().await.unwrap();
+    world.settle().await;
+    assert_eq!(status().await, "Ready");
+    listing(true);
+    let before = checks();
+    world.pass(Duration::from_millis(300)).await;
+    assert_eq!(status().await, "Ready", "nobody watched: not polled");
+    assert_eq!(checks(), before, "nobody watched: no quota check");
+
+    world.scheduler.watch().await;
+    assert_eq!(
+        status().await,
+        "Cooling down",
+        "the read that resumes polling already shows the cooldown"
+    );
+    world.pass(Duration::from_secs(1)).await;
+    assert!(
+        checks() > before,
+        "a stale quota refreshes once a UI watches"
+    );
+
+    listing(false);
+    for _ in 0..10 {
+        world.scheduler.watch().await;
+        world.pass(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        status().await,
+        "Ready",
+        "polling continues while the UI reads"
+    );
+}
+
+/// Queues `count` gateway requests on the profile's running core.
+fn queue_requests(world: &World, profile: &ProfileId, count: usize) {
+    let port = world.pool().port(profile).unwrap();
+    for _ in 0..count {
+        assert_eq!(world.fake.request(port, "fixture-model"), 200);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_drains_of_one_profile_share_one_queue_read() {
+    let (world, profiles) = launched(timing(), &["Shared drain"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    queue_requests(&world, profile, 3);
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    let (release, holding) = hold(&world, "/usage-queue", |_| true);
+    let test = async {
+        // A finished request's drain, held at the core.
+        world.scheduler.activity(profile, false);
+        world
+            .until("the held drain", Duration::from_secs(1), |_| {
+                holding.load(Ordering::SeqCst) > 0
+            })
+            .await;
+        // A stop's final drain while the first is still reading.
+        let stop = world.pool().stop(profile);
+        let rest = async {
+            world.settle().await;
+            release.send_replace(true);
+        };
+        tokio::join!(stop, rest).0
+    };
+    world.run(test).await.unwrap();
+    assert_eq!(
+        world.fake.calls(profile, "/usage-queue").len() - before,
+        1,
+        "the overlapping drains read the queue once"
+    );
+    assert_eq!(
+        world.usage(profile).await.len(),
+        3,
+        "every queued row is stored"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_account_maintenance_does_not_hold_up_usage_collection() {
+    let timing = Timing {
+        accounts: Duration::from_millis(500),
+        watch: Duration::from_secs(10),
+        ..timing()
+    };
+    let (world, profiles) = launched(timing, &["Slow maintenance"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    // The read that resumes polling syncs at once; the maintenance pass after it is held.
+    let syncs = Arc::new(AtomicUsize::new(0));
+    let (release, holding) = hold(&world, "/auth-files", move |_| {
+        syncs.fetch_add(1, Ordering::SeqCst) > 0
+    });
+    world.scheduler.watch().await;
+    world
+        .until("the held maintenance", Duration::from_secs(5), |_| {
+            holding.load(Ordering::SeqCst) > 0
+        })
+        .await;
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    queue_requests(&world, profile, 1);
+    world.scheduler.activity(profile, false);
+    world.pass(Duration::from_secs(1)).await;
+    assert!(
+        world.fake.calls(profile, "/usage-queue").len() > before,
+        "a finished request is drained while maintenance waits"
+    );
+    assert_eq!(world.usage(profile).await.len(), 1);
+    release.send_replace(true);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_completes_when_the_core_exits_during_its_final_drain() {
+    let (world, profiles) = launched(timing(), &["Exit in drain"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    {
+        let (fake, id) = (world.fake.clone(), profile.clone());
+        // The next queue read is the stop's: the core exits as it arrives.
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if !path.starts_with("/usage-queue") {
+                    return None;
+                }
+                fake.kill(&id);
+                Some(Box::pin(async { None }))
+            }));
+        });
+    }
+    let started = Instant::now();
+    world.run(world.pool().stop(profile)).await.unwrap();
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    assert!(
+        started.elapsed() <= KILL_GRACE,
+        "stopped after {:?}",
+        started.elapsed()
+    );
+    assert!(!world.pool().alive(profile));
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
+    let (world, profiles) = launched(timing(), &["Drain pages"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    // Two full pages and a short one.
+    queue_requests(&world, profile, 2 * 500 + 3);
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    let refused = Arc::new(AtomicUsize::new(0));
+    {
+        let (pool, id, refused) = (world.pool().clone(), profile.clone(), Arc::clone(&refused));
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if path.starts_with("/usage-queue") && pool.port(&id).is_err() {
+                    refused.fetch_add(1, Ordering::SeqCst);
+                }
+                None
+            }));
+        });
+    }
+    let (first, second) = world
+        .run(async { tokio::join!(world.pool().stop(profile), world.pool().stop(profile)) })
+        .await;
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    first.unwrap();
+    second.unwrap();
+    let reads = world.fake.calls(profile, "/usage-queue").len() - before;
+    assert_eq!(reads, 3, "only the stop reads a stopping core's queue");
+    assert_eq!(
+        refused.load(Ordering::SeqCst),
+        3,
+        "the gateway is refused during the stop"
+    );
+    assert_eq!(world.usage(profile).await.len(), 2 * 500 + 3);
+    assert!(!world.pool().alive(profile));
 }
