@@ -1,15 +1,6 @@
 //! The desktop app, `nonstopvibin` beside the helper, under an X server: the error box a
 //! desktop user sees when it cannot start or stop, and that a signal leaves no window helper
 //! behind. Run by tests/ui.sh, which builds both binaries.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(target_os = "linux")]
-
-#[expect(
-    dead_code,
-    reason = "this binary drives the app, not the helper's pipe"
-)]
-mod common;
 
 use std::collections::HashSet;
 use std::io::Read as _;
@@ -20,8 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs, thread};
 
-use common::x11::{self, Window, X};
-use common::{pause, processes, tree, wait_until};
+use crate::common::x11::{self, Window, X};
+use crate::common::{pause, processes, tree, wait_until};
 
 /// `nonstopvibin` beside the helper, where `cargo build -p nsv-cli` puts it.
 fn app_binary() -> PathBuf {

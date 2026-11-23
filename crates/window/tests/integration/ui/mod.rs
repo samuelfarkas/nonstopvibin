@@ -4,16 +4,11 @@
 //! as the debug `nonstopvibin serve` daemon serves it. The script reports its result, and asks
 //! the test for what only a user can do: keys, clicks, the close button.
 //!
-//! Needs `bun run build` (or `vite build`), `bun crates/window/tests/ui/fixtures/build.mjs`,
+//! Needs `bun run build` (or `vite build`),
+//! `bun crates/window/tests/integration/ui/fixtures/build.mjs`,
 //! `cargo build -p nsv-cli -p nsv-window`, `.vendor/core` and a display; run through
 //! crates/window/tests/ui.sh.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(any(target_os = "linux", target_os = "macos"))]
 
-#[path = "../common/mod.rs"]
-#[expect(dead_code, reason = "the checks use part of the harness")]
-mod common;
 mod daemon;
 mod desktop;
 mod ipc;
@@ -24,12 +19,13 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
-use common::{Helper, TOKEN, wait_until};
 use daemon::Daemon;
 use desktop::Desktop;
 use nsv_domain::helper::{FromHelper, Rect, ToHelper, View, ViewKind};
 use serde_json::{Value, json};
 use site::{CHECK_TIMEOUT, Content, Event, Site};
+
+use crate::common::{Helper, TOKEN, wait_until};
 
 /// One helper at a time: they share the display's focus and pointer.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -180,11 +176,11 @@ impl Bridge {
 fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Value) -> Value {
     if action["bridge"] == true {
         // Long enough for the helper to have answered or dropped what the page posted.
-        common::pause(Duration::from_millis(300));
+        crate::common::pause(Duration::from_millis(300));
         return bridge.since(helper);
     }
     if action["sent"] == true {
-        common::pause(Duration::from_millis(300));
+        crate::common::pause(Duration::from_millis(300));
         bridge.watch(helper);
         return json!({ "sent": std::mem::take(&mut bridge.sent) });
     }
@@ -205,7 +201,7 @@ fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Val
         });
         wait_until("the window shows again", || desktop.main_visible());
     } else if let Some(ms) = action["settle"].as_u64() {
-        common::pause(Duration::from_millis(ms));
+        crate::common::pause(Duration::from_millis(ms));
     } else {
         panic!("unknown action {action}");
     }

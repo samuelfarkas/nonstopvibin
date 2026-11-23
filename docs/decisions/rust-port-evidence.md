@@ -39,8 +39,9 @@ States: (a) started, no window ever opened; (b) after three open/close cycles an
 ## The window helper (Linux, Docker with Xvfb)
 
 `nonstopvibin-window` at its first commit, release build, WebKitGTK 2.54.3, measured by
-`crates/window/tests/measure.rs` (`cargo test --release -p nsv-window --test measure -- --ignored
---nocapture`) at load 1.5–2.2. The page is the test harness page, not the React UI.
+`crates/window/tests/integration/measure.rs` (`cargo test --release -p nsv-window --test
+integration -- --ignored --nocapture measure::`) at load 1.5–2.2. The page is the test harness
+page, not the React UI.
 
 | Measure                                                   | Median    | Range           | Runs |
 | --------------------------------------------------------- | --------- | --------------- | ---- |

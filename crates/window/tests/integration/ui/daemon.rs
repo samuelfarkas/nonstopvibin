@@ -1,6 +1,7 @@
 //! The debug `nonstopvibin serve` on a temporary data directory and HOME, with the built
 //! interface (`dist/client`) and the pinned core (`.vendor/core`) of this checkout, as
-//! crates/cli/tests/serve.rs runs it. Its management API takes the place of the store.
+//! crates/cli/tests/integration/serve.rs runs it. Its management API takes the place of the
+//! store.
 
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};

@@ -8,9 +8,9 @@ use std::fs;
 use nsv_domain::helper::View;
 use serde_json::json;
 
+use super::site::{Content, Site};
+use super::{SERIAL, check_once, data_directory};
 use crate::common::TOKEN;
-use crate::site::{Content, Site};
-use crate::{SERIAL, check_once, data_directory};
 
 const PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>ipc</title><body></body>"#;
 

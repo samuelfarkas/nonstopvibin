@@ -1,25 +1,22 @@
 //! Measurements behind docs/decisions/rust-port.md, run on demand under an X server:
 //!
 //! ```sh
-//! cargo test --release -p nsv-window --test measure -- --ignored --nocapture
+//! cargo test --release -p nsv-window --test integration -- --ignored --nocapture measure::
 //! ```
+//!
+//! The filter keeps it alone in its process: its in-process window starts GTK on its test
+//! thread, and GTK stays bound to the first thread that starts it (`helper.rs`'s clipboard
+//! check starts it on another).
 //!
 //! Latency: from asking for a window to its page having loaded and the window showing, for
 //! the helper (spawn to `Ready`) and for wry inside an already running process, interleaved.
 //! Memory: the helper's process tree PSS with the main window and with the quota popup open.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(target_os = "linux")]
-
-#[expect(dead_code, reason = "the measurement uses part of the harness")]
-mod common;
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{Helper, Server, pause, tree};
 use nsv_domain::helper::{FromHelper, Origin, Rect, ToHelper, View};
 use nsv_domain::id::ProfileId;
 use tao::event::Event;
@@ -28,6 +25,8 @@ use tao::platform::run_return::EventLoopExtRunReturn;
 use tao::platform::unix::{EventLoopBuilderExtUnix, WindowExtUnix};
 use tao::window::WindowBuilder;
 use wry::{PageLoadEvent, WebViewBuilder, WebViewBuilderExtUnix};
+
+use crate::common::{Helper, Server, pause, tree};
 
 const PAIRS: usize = 12;
 /// Lets each window's WebKit processes exit before the next one starts.

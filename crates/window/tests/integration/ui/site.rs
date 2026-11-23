@@ -94,7 +94,8 @@ impl Site {
 
     /// The check later page loads run, which reads `config`.
     pub(crate) fn check_with(&self, name: &str, config: &Value) {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/ui/checks/{name}.js"));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/integration/ui/checks/{name}.js"));
         let check = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
         *self.shared.script.lock().unwrap() =
             format!("const config = {config};\n{PRELUDE}\n{check}");

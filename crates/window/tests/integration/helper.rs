@@ -1,12 +1,6 @@
 //! The helper end to end under an X server (Xvfb in CI and Docker): a harness plays the
 //! daemon, a page under the production CSP drives the bridge, and Xlib plays the user.
 //! Linux only; the macOS paths run on the macOS CI runner.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(target_os = "linux")]
-
-#[expect(dead_code, reason = "the pointer is the UI checks'")]
-mod common;
 
 use std::collections::HashSet;
 use std::fs;
@@ -15,13 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use common::x11::{self, Window, X};
-use common::{Helper, Server, TOKEN, pause, processes, tree, wait_until};
 use nsv_domain::helper::{
     DaemonCall, DialogKind, Failure, FromHelper, Reason, Rect, ToHelper, View, ViewKind,
 };
 use nsv_domain::id::ProfileId;
 use serde_json::{Value, json};
+
+use crate::common::x11::{self, Window, X};
+use crate::common::{Helper, Server, TOKEN, pause, processes, tree, wait_until};
 
 /// One helper at a time: they share the X server's focus, and the exit checks look at every
 /// WebKit process on the machine.

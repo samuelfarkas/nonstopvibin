@@ -177,13 +177,13 @@
       }
     },
     {
-      "files": ["crates/window/tests/common/page.js"],
+      "files": ["crates/window/tests/integration/common/page.js"],
       "env": {
         "browser": true
       }
     },
     {
-      "files": ["crates/window/tests/ui/checks/*.js"],
+      "files": ["crates/window/tests/integration/ui/checks/*.js"],
       "env": {
         "browser": true
       },
@@ -216,7 +216,7 @@
       }
     },
     {
-      "files": ["crates/window/tests/ui/checks/prelude.js"],
+      "files": ["crates/window/tests/integration/ui/checks/prelude.js"],
       "rules": {
         "no-unused-vars": "off",
         "no-redeclare": "off"
