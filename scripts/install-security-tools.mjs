@@ -1,15 +1,7 @@
-import { createHash } from "node:crypto";
-import {
-  mkdir,
-  mkdtemp,
-  writeFile,
-  copyFile,
-  chmod,
-  rm,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+// `bun run security:install`: the pinned Gitleaks in .vendor/security.
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
+import { pinnedDownload } from "./pinned-download.ts";
 
 // Official v8.30.1 release checksums, reviewed and pinned with this script.
 const version = "8.30.1";
@@ -26,21 +18,17 @@ const target = `${process.platform}_${process.arch}`;
 if (!hashes[target])
   throw new Error(`Unsupported security tools target: ${target}`);
 const archive = `gitleaks_${version}_${target}.tar.gz`;
-const url = `https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}`;
-const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-if (!response.ok) throw new Error(`Gitleaks download: HTTP ${response.status}`);
-const bytes = Buffer.from(await response.arrayBuffer());
-if (createHash("sha256").update(bytes).digest("hex") !== hashes[target])
-  throw new Error("Gitleaks checksum mismatch; refusing to install.");
-const temp = await mkdtemp(join(tmpdir(), "nonstopvibin-gitleaks-"));
-try {
-  await writeFile(join(temp, archive), bytes);
-  execFileSync("tar", ["-xzf", join(temp, archive), "-C", temp, "gitleaks"]);
-  const destination = resolve(".vendor/security");
-  await mkdir(destination, { recursive: true });
-  await copyFile(join(temp, "gitleaks"), join(destination, "gitleaks"));
-  await chmod(join(destination, "gitleaks"), 0o755);
-  console.log(`Verified Gitleaks ${version} (${target}).`);
-} finally {
-  await rm(temp, { recursive: true, force: true });
-}
+const gitleaks = await pinnedDownload(
+  "Gitleaks",
+  {
+    url: `https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}`,
+    sha256: hashes[target],
+    member: { path: "gitleaks" },
+  },
+  60_000,
+);
+const destination = resolve(".vendor/security");
+await mkdir(destination, { recursive: true });
+await writeFile(join(destination, "gitleaks"), gitleaks);
+await chmod(join(destination, "gitleaks"), 0o755);
+console.log(`Verified Gitleaks ${version} (${target}).`);

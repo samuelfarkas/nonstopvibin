@@ -36,6 +36,7 @@ import { promisify } from "node:util";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
 import { product } from "../scripts/distribution.ts";
+import { trustedComment, writeSums } from "../scripts/sign-release.ts";
 
 assert.equal(process.platform, "darwin", "Run the update test on macOS.");
 assert.equal(
@@ -102,7 +103,8 @@ async function pidOf(path) {
   return line && Number(line.slice(0, line.indexOf(" ")));
 }
 
-// minisign's prehashed Ed25519 format, which scripts/sign-release.ts produces with minisign.
+// minisign's prehashed Ed25519 format, which scripts/sign-release.ts produces with minisign
+// (no minisign binary is pinned for macOS).
 const keyId = randomBytes(8);
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const rawPublic = Buffer.from(
@@ -114,7 +116,7 @@ const foreign = { keyId: randomBytes(8), ...generateKeyPairSync("ed25519") };
 function minisign(file, key = { keyId, privateKey }) {
   const message = createHash("blake2b512").update(readFileSync(file)).digest();
   const signature = sign(null, message, key.privateKey);
-  const trusted = `NonstopVibin ${version} SHA256SUMS`;
+  const trusted = trustedComment(version);
   const global = sign(
     null,
     Buffer.concat([signature, Buffer.from(trusted)]),
@@ -154,15 +156,9 @@ function publish(directory, names) {
   for (const name of [...names, "SHA256SUMS", "SHA256SUMS.minisig"])
     files.set(`releases/download/v${version}/${name}`, join(directory, name));
 }
-/** SHA256SUMS as release.yml writes it, signed with the test key or `key`. */
-function sums(directory, names, key) {
-  const lines = names.map(
-    (name) =>
-      `${createHash("sha256")
-        .update(readFileSync(join(directory, name)))
-        .digest("hex")}  ${name}`,
-  );
-  writeFileSync(join(directory, "SHA256SUMS"), `${lines.join("\n")}\n`);
+/** SHA256SUMS as the release writes it, signed with the test key or `key`. */
+async function sums(directory, names, key) {
+  await writeSums(directory, names);
   minisign(join(directory, "SHA256SUMS"), key);
 }
 
@@ -277,7 +273,7 @@ try {
       { version: "1.1" },
     ),
   );
-  sums(forged, [zip, "latest-mac.yml"]);
+  await sums(forged, [zip, "latest-mac.yml"]);
   publish(forged, [zip, "latest-mac.yml"]);
   let exited = launch();
   await waitFor("the forged bundle to be refused", 90_000, () =>
@@ -294,7 +290,7 @@ try {
   mkdirSync(real);
   for (const name of [zip, "latest-mac.yml"])
     copyFileSync(join(release, name), join(real, name));
-  sums(real, [zip, "latest-mac.yml"], foreign);
+  await sums(real, [zip, "latest-mac.yml"], foreign);
   publish(real, [zip, "latest-mac.yml"]);
   exited = launch();
   await waitFor("the foreign signature to be refused", 90_000, () =>
@@ -306,7 +302,7 @@ try {
     "SHA256SUMS signed by another key is refused; the app is unchanged.",
   );
 
-  sums(real, [zip, "latest-mac.yml"]);
+  await sums(real, [zip, "latest-mac.yml"]);
   exited = launch();
   const helper = join(installed, "Contents/MacOS/nonstopvibin-window");
   // UI scripting needs Accessibility access, which GitHub's macOS runners grant osascript.

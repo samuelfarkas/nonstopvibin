@@ -38,20 +38,20 @@ import {
   repo,
   report,
   run,
-  sha256,
   stageClient,
   stageCore,
   stageLicences,
   version,
   writeFeed,
 } from "./package-common.ts";
+import { sha256 } from "./pinned-download.ts";
 import {
   bundle,
   squirrel,
   verifyArtifact,
   verifyMacBundle,
   verifyMacSignature,
-} from "./verify-rust-package.ts";
+} from "./package-layout.ts";
 
 if (process.platform !== "darwin")
   throw new Error("Package the macOS app on macOS.");

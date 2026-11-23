@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import YAML from "yaml";
 import {
+  verifyManifests,
   verifyReleaseTag,
   verifyReleaseAssets,
 } from "../scripts/verify-release.mjs";
@@ -15,11 +16,43 @@ import {
   serverArchitectures,
 } from "../scripts/distribution.ts";
 
+const cargo = {
+  version: "0.1.2",
+  repository: "https://github.com/fixture/app",
+};
+const manifest = {
+  version: "0.1.2",
+  updatesEnabled: true,
+  homepage: "https://github.com/fixture/app",
+  repository: { type: "git", url: "git+https://github.com/fixture/app.git" },
+  bugs: { url: "https://github.com/fixture/app/issues" },
+};
+
+test("package.json must name Cargo.toml's version and repository", () => {
+  verifyManifests(manifest, cargo);
+  assert.throws(
+    () => verifyManifests({ ...manifest, version: "0.1.3" }, cargo),
+    /versions differ/,
+  );
+  for (const changed of [
+    { homepage: "https://github.com/fixture/other" },
+    { repository: { url: "git+https://github.com/fixture/other.git" } },
+    { bugs: { url: "https://github.com/fixture/other/issues" } },
+  ])
+    assert.throws(
+      () => verifyManifests({ ...manifest, ...changed }, cargo),
+      /repositories differ/,
+    );
+});
+
 test("release tags reject disabled updates, wrong versions and wrong destinations", () => {
-  const manifest = { version: "0.1.2", updatesEnabled: true };
-  const feed = { owner: "fixture", repo: "app" };
   const verify = (tag, value, repository = "fixture/app") =>
-    verifyReleaseTag(tag, value, repository, feed);
+    verifyReleaseTag(
+      tag,
+      value,
+      { ...cargo, version: value.version },
+      repository,
+    );
   assert.equal(verify("v0.1.2", manifest), "release");
   assert.throws(() => verify("v0.1.3", manifest), /version/);
   assert.throws(

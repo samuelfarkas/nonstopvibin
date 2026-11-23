@@ -185,7 +185,6 @@ test("signing secrets reach only release packaging, and releases sign SHA256SUMS
       );
   const steps = release.jobs.release.steps;
   const index = (predicate) => steps.findIndex(predicate);
-  const sums = index((step) => step.run?.includes("> SHA256SUMS"));
   const sign = index(
     (step) => step.run === "bun scripts/sign-release.ts release",
   );
@@ -193,6 +192,6 @@ test("signing secrets reach only release packaging, and releases sign SHA256SUMS
     step.uses?.startsWith("actions/attest-build-provenance@"),
   );
   const publish = index((step) => step.run?.includes("gh release create"));
-  assert.ok(sums >= 0 && sums < sign && sign < attest && attest < publish);
+  assert.ok(sign >= 0 && sign < attest && attest < publish);
   assert.equal(release.jobs.release.environment, "release");
 });

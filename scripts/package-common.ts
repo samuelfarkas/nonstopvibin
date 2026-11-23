@@ -1,7 +1,6 @@
 // What the Rust packaging scripts (package-mac.ts, package-linux.ts, package-server.ts) share:
 // the cargo build, the verified core, the licences and the electron-updater feed.
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   copyFile,
   cp,
@@ -14,7 +13,8 @@ import { join, resolve } from "node:path";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
 import { checkCoreDirectory, coreFiles, coreLayout } from "./core-binary.ts";
-import { clientDirectory } from "./distribution.ts";
+import { clientDirectory, rustLicenses, uiLicences } from "./distribution.ts";
+import { sha256, sha512 } from "./pinned-download.ts";
 import {
   rustLicenseText,
   rustStdNotices,
@@ -95,31 +95,22 @@ export async function stageLicences(
   destination: string,
   builds: RustBuild[],
 ): Promise<void> {
-  const ui = join(repo, "dist/licenses/THIRD-PARTY.txt");
-  await stat(ui).catch(() => {
-    throw new Error(
-      "Missing dist/licenses/THIRD-PARTY.txt; run bun run build:client first.",
-    );
+  await stat(join(repo, uiLicences)).catch(() => {
+    throw new Error(`Missing ${uiLicences}; run bun run build:client first.`);
   });
   await mkdir(destination, { recursive: true });
-  for (const [from, to] of [
-    ["LICENSE", "LICENSE"],
-    ["licenses/NOTICE.md", "NOTICE.md"],
-    ["licenses/CLIProxyAPI.txt", "CLIProxyAPI.txt"],
-    ["dist/licenses/THIRD-PARTY.txt", "THIRD-PARTY.txt"],
-  ])
-    await copyFile(join(repo, from), join(destination, to));
-  await writeFile(
-    join(destination, "THIRD-PARTY-RUST.txt"),
-    rustLicenseText(builds),
-  );
-  await writeFile(join(destination, "Rust-std.html"), rustStdNotices());
+  const generated = new Map([
+    ["THIRD-PARTY-RUST.txt", rustLicenseText(builds)],
+    ["Rust-std.html", rustStdNotices()],
+  ]);
+  for (const [name, source] of Object.entries(rustLicenses)) {
+    const target = join(destination, name);
+    const text = generated.get(name);
+    if (source) await copyFile(join(repo, source), target);
+    else if (text !== undefined) await writeFile(target, text);
+    else throw new Error(`No source for the licence file ${name}`);
+  }
 }
-
-export const sha512 = (bytes: Uint8Array): string =>
-  createHash("sha512").update(bytes).digest("base64");
-export const sha256 = (bytes: Uint8Array): string =>
-  createHash("sha256").update(bytes).digest("hex");
 
 /**
  * latest-mac.yml or latest-linux.yml in electron-builder's shape, which installed Electron

@@ -21,7 +21,7 @@ import {
   providers,
   type ProviderEntry,
 } from "../../../src/shared/providers.ts";
-import { releaseChannel } from "../../../src/shared/release-channel.ts";
+import { releaseChannel } from "../../../scripts/release-channel.ts";
 import {
   type Case,
   outcome,
