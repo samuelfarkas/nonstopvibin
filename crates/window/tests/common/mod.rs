@@ -1,6 +1,7 @@
 //! The harness that plays the daemon: an HTTP server for the page and its reports, and a
 //! driver for the helper's pipe. Shared by the end-to-end tests and the latency example.
 
+#[cfg(target_os = "linux")]
 pub(crate) mod x11;
 
 use std::collections::{HashMap, HashSet};
@@ -229,6 +230,18 @@ impl Helper {
         bounds: Option<Rect>,
         directory: &Path,
     ) -> Self {
+        Self::launch(binary, origin, view, bounds, directory, TOKEN)
+    }
+
+    /// Starts the helper with the daemon's session `token`.
+    pub(crate) fn launch(
+        binary: &Path,
+        origin: &Origin,
+        view: View,
+        bounds: Option<Rect>,
+        directory: &Path,
+        token: &str,
+    ) -> Self {
         let home = directory.join("home");
         fs::create_dir_all(home.join("Downloads")).unwrap();
         let mut child = Command::new(binary)
@@ -247,7 +260,7 @@ impl Helper {
             data_directory: directory.to_owned(),
         };
         helper::write(&mut input, &start).unwrap();
-        writeln!(input, "{TOKEN}").unwrap();
+        writeln!(input, "{token}").unwrap();
         let stdin = Arc::new(Mutex::new(Some(input)));
         let (sender, events) = mpsc::channel();
         let mut output = BufReader::new(child.stdout.take().unwrap());

@@ -1,5 +1,5 @@
 //! What a user does to a window, through Xlib and `XTest` on the test's X server: find it by
-//! title, read its geometry and map state, close it, take its focus away, press a key.
+//! title, read its geometry and map state, close it, take its focus away, press a key, click.
 #![expect(
     unsafe_code,
     reason = "Xlib is a C API; each call is one documented unsafe block"
@@ -257,6 +257,17 @@ impl X {
         for pressed in [xlib::True, xlib::False] {
             // SAFETY: a synthetic key event for a keycode of this display.
             unsafe { (self.xtest.XTestFakeKeyEvent)(self.display, c_uint::from(code), pressed, 0) };
+        }
+        self.sync();
+    }
+
+    /// Moves the pointer to `(x, y)` on the root window and clicks the left button there.
+    pub(crate) fn click(&self, x: i32, y: i32) {
+        // SAFETY: a synthetic pointer motion on this display's default screen.
+        unsafe { (self.xtest.XTestFakeMotionEvent)(self.display, -1, x, y, 0) };
+        for pressed in [xlib::True, xlib::False] {
+            // SAFETY: a synthetic press or release of button 1.
+            unsafe { (self.xtest.XTestFakeButtonEvent)(self.display, 1, pressed, 0) };
         }
         self.sync();
     }
