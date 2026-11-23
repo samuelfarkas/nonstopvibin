@@ -120,3 +120,42 @@ Cells show median and range.
   set only at run time, through the environment or unsafe code.
 - Memory stays bounded for every variant. The interleaved stream also shows that the earlier
   musl stream figure (9.8–14.3 ms) came from host load, not the allocator.
+
+## Before and after on the same harness
+
+The Rust daemon at 941fcdd, release build, in the packaged layout (`nonstopvibin`, `core/`,
+`client/`), run as `nonstopvibin serve` with the protocol of the main table above: three
+API-key profiles, events paced 5 ms apart, and a burst of eight concurrent 1 MB requests. Two
+runs per build; ranges cover both runs and both request rounds. The static musl build is the
+one the Linux packages and the server archive ship. The glibc build cannot ship (see the
+decision record) and is shown for comparison.
+
+| Metric                                 | Bun 1.4.2 server   | Electron 44, no window | Rust, glibc              | Rust, static musl       |
+| -------------------------------------- | ------------------ | ---------------------- | ------------------------ | ----------------------- |
+| Startup to TCP accept                  | 48–101 ms          | 164–995 ms             | 2.9 ms                   | 2.2–2.9 ms              |
+| Idle host PSS                          | 43.5–43.7 MiB      | 178.6–185.1 MiB        | 7.5–7.7 MiB              | 8.8–10.8 MiB            |
+| Idle host wakeups/s                    | 2.1–3.2            | 2.0–2.6                | 0.0                      | 0.0                     |
+| Host wakeups/s 30–90 s after a burst   | 8.9–31.2           | 1.9–2.0                | 0.0                      | 0.0                     |
+| Host wakeups/s 120–180 s after a burst | 21.9–51.6          | 1.9–2.0                | 0.0                      | 0.0                     |
+| Host RSS / PSS right after 1 MB × 8    | 90–101 / 88–99 MiB | 125 / 82–84 MiB (main) | 11.8–12.1 / 9.7–10.0 MiB | 9.4–11.4 / 9.4–11.4 MiB |
+| Host PSS 90 s after the burst          | 65.3–65.9 MiB      | 191–194 MiB (tree)     | 9.8–10.1 MiB             | not recorded            |
+| Host CPU, 290 KB request               | 1.7–6.0 ms         | 1.3–2.8 ms             | 0.32–0.65 ms             | 0.53–0.85 ms            |
+| Host CPU, 1 MB request                 | 4.3–6.0 ms         | 3.3–5.7 ms             | 0.81–1.26 ms             | 1.03–1.54 ms            |
+| Host CPU, 200-event stream             | 18.5–47.5 ms       | 23–35 ms               | 7.5–8.5 ms               | 9.8–14.3 ms             |
+| Per event (stream ÷ 200, with request) | 93–238 µs          | 115–175 µs             | 38–42 µs                 | not recorded            |
+| First request on a lazy profile        | 277–317 ms         | 261–307 ms             | 274–509 ms               | not recorded            |
+| Shutdown with cores running            | 0.28–0.31 s        | 0.28 s                 | 0.29 s                   | not recorded            |
+
+- The Rust daemon's CPU comes from schedstat nanoseconds of its live threads; main's comes from
+  `/proc/<pid>/stat` ticks, which are ±0.2–0.5 ms per request.
+- The musl runs had higher core CPU too (stream 34–51 ms against 25–27 ms), so the host was
+  busier. The interleaved allocator A/B above puts musl's stream at 7.48 ms, level with glibc;
+  its 0.2–0.26 ms extra per large request is page faults.
+- The first request on a lazy profile is dominated by the core's own start, which did not
+  change (core 8.1.0 in every run). Core CPU and memory are the same in every column.
+- The per-event figure includes the request's setup and teardown. `nsv-gateway`'s
+  microbenchmark measured 35 µs per event against a 30 µs raw byte-relay floor on this host.
+- Electron ran headless (`--ozone-platform=headless`, software GPU). A desktop session adds a
+  GPU process, so its PSS here is a floor.
+- Not measured: macOS, the desktop app with its tray and the daemon in one process, and install
+  size of the Rust packages.
