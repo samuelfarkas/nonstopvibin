@@ -6,3 +6,4 @@
 mod binary;
 mod common;
 mod install;
+mod restart;

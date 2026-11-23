@@ -3,6 +3,7 @@
 
 pub mod binary;
 pub mod install;
+pub mod restart;
 
 use std::io;
 
