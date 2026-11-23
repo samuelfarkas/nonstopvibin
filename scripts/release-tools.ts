@@ -2,25 +2,12 @@
 // into .vendor/release-tools, each checked against the SHA-256 reviewed here, and prints their
 // paths. Tools: appimagetool, appimage-runtime (the AppImage type 2 runtime), minisign.
 // Like scripts/install-security-tools.mjs, a new version means a new reviewed hash.
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { type Pin, pinnedDownload, sha256 } from "./pinned-download.ts";
 
-interface Download {
-  url: string;
-  sha256: string;
-  /** The tool inside a .tar.gz download, and its SHA-256; a plain download is the tool. */
-  member?: { path: string; sha256: string };
-}
+/** A plain download is the tool; from a .tar.gz the tool is the member. */
+type Download = Pin & { member?: { path: string; sha256: string } };
 type Machine = "x86_64" | "aarch64";
 
 // appimagetool 1.9.1 and type2-runtime 20251108: GitHub's asset digests. minisign 0.12: its
@@ -85,42 +72,13 @@ export async function releaseTool(
     "../.vendor/release-tools",
     `${name}-${machine}`,
   );
-  const sha256 = (bytes: Uint8Array) =>
-    createHash("sha256").update(bytes).digest("hex");
   // A cached copy is trusted only while it is the reviewed file.
   const cached = await readFile(destination).catch(() => undefined);
   const expected = download.member?.sha256 ?? download.sha256;
   if (cached && sha256(cached) === expected) return destination;
-  const response = await fetch(download.url, {
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!response.ok)
-    throw new Error(`${name} download: HTTP ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (sha256(bytes) !== download.sha256)
-    throw new Error(`${name} checksum mismatch; refusing to install.`);
+  const tool = await pinnedDownload(name, download, 120_000);
   await mkdir(join(destination, ".."), { recursive: true });
-  if (download.member) {
-    const temp = await mkdtemp(join(tmpdir(), "nonstopvibin-tool-"));
-    try {
-      await writeFile(join(temp, "download.tar.gz"), bytes);
-      // The upstream tarball carries macOS xattr headers GNU tar warns about.
-      execFileSync("tar", [
-        "--warning=no-unknown-keyword",
-        "-xzf",
-        join(temp, "download.tar.gz"),
-        "-C",
-        temp,
-        download.member.path,
-      ]);
-      const tool = await readFile(join(temp, download.member.path));
-      if (sha256(tool) !== download.member.sha256)
-        throw new Error(`${name} checksum mismatch; refusing to install.`);
-      await writeFile(destination, tool);
-    } finally {
-      await rm(temp, { recursive: true, force: true });
-    }
-  } else await writeFile(destination, bytes);
+  await writeFile(destination, tool);
   await chmod(destination, 0o755);
   return destination;
 }

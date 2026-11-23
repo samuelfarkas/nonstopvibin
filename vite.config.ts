@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { clientDirectory } from "./scripts/distribution.ts";
 
 export default defineConfig({
   plugins: [react()],
@@ -16,7 +15,7 @@ export default defineConfig({
   build: {
     // macOS 13 runs the window in Safari 16's WebKit; browsers reach the headless server.
     target: ["chrome152", "safari16"],
-    outDir: clientDirectory,
+    outDir: "dist/client",
     sourcemap: false,
   },
 });

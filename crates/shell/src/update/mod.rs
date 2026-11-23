@@ -43,21 +43,12 @@ const EVERY: Duration = Duration::from_hours(6);
 const SMALL_FILE: u64 = 64 * 1024;
 const ATOM: u64 = 4 * 1024 * 1024;
 
-/// package.json's switch, which the release preflight requires to be on.
-fn updates_enabled() -> bool {
-    let manifest: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../package.json")).unwrap_or_default();
-    manifest.get("updatesEnabled") == Some(&serde_json::Value::Bool(true))
-}
-
 /// This build's release key, `build/update-signing.pub` when it was committed at build time.
-fn release_key() -> Result<Option<PublicKey>, Rejected> {
-    option_env!("NONSTOPVIBIN_UPDATE_KEY")
-        .map(|key| {
-            PublicKey::from_base64(key)
-                .map_err(|_| Rejected("the build's release key is malformed"))
-        })
-        .transpose()
+fn release_key() -> Option<PublicKey> {
+    option_env!("NONSTOPVIBIN_UPDATE_KEY").map(|key| {
+        #[expect(clippy::expect_used, reason = "build.rs parsed the same key")]
+        PublicKey::from_base64(key).expect("a minisign public key")
+    })
 }
 
 pub(crate) struct Updates(Mode);
@@ -100,7 +91,7 @@ impl Updates {
             reason = "the workspace version is X.Y.Z, which a version test parses"
         )]
         let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("an X.Y.Z version");
-        if !packaged || !updates_enabled() {
+        if !packaged || !cfg!(updates_enabled) {
             return Self(Mode::Off);
         }
         match platform::Target::detect() {
@@ -216,7 +207,7 @@ enum Failure {
 
 /// Finds the newest release this build takes, then downloads, verifies and stages it.
 async fn find(target: &platform::Target, current: Version) -> Result<Option<Staged>, Failure> {
-    let key = release_key()?;
+    let key = release_key();
     let source = Source::new().map_err(Failure::Local)?;
     let atom = source
         .get("releases.atom", "application/atom+xml", ATOM)

@@ -1,26 +1,46 @@
-// `bun scripts/verify-release.mjs <tag> [assets]`: checks the tag against package.json, then
-// the assets when a directory is given, and prints the tag's channel (release or prerelease).
-// Tag mode needs no installed dependencies; the release preflight runs it before `bun ci`.
+// `bun scripts/verify-release.mjs [<tag> [assets]]`: checks that package.json and Cargo.toml
+// state the same version and repository (all `bun run quality` asks), then the tag against them
+// and the assets when a directory is given, and prints the tag's channel (release or
+// prerelease). Tag mode needs no installed dependencies; the release preflight runs it before
+// `bun ci`.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { TOML } from "bun";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { releaseChannel } from "../src/shared/release-channel.ts";
 import {
   desktopTargets,
-  product,
   serverArchiveName,
   serverArchitectures,
   updatePayload,
 } from "./distribution.ts";
+import { sha512 } from "./pinned-download.ts";
+import { releaseChannel } from "./release-channel.ts";
 
-export function verifyReleaseTag(
-  tag,
-  manifest,
-  repository,
-  feed = product.feed,
+/** Cargo.toml's `[workspace.package]`: the version and repository the binaries are built with. */
+export async function cargoPackage(
+  path = join(import.meta.dirname, "../Cargo.toml"),
 ) {
+  return TOML.parse(await readFile(path, "utf8")).workspace.package;
+}
+
+/** package.json names the version and repository Cargo.toml builds the updater with. */
+export function verifyManifests(manifest, cargo) {
+  assert.equal(
+    manifest.version,
+    cargo.version,
+    "package.json and Cargo.toml versions differ",
+  );
+  const repository = cargo.repository;
+  assert.deepEqual(
+    [manifest.repository?.url, manifest.homepage, manifest.bugs?.url],
+    [`git+${repository}.git`, repository, `${repository}/issues`],
+    "package.json and Cargo.toml repositories differ",
+  );
+}
+
+export function verifyReleaseTag(tag, manifest, cargo, repository) {
+  verifyManifests(manifest, cargo);
   const channel = tag.startsWith("v") && releaseChannel(tag.slice(1));
   assert.ok(channel, "Use vX.Y.Z or vX.Y.Z-beta.N");
   assert.equal(
@@ -34,8 +54,8 @@ export function verifyReleaseTag(
     "Configure the release repository and enable updatesEnabled first",
   );
   assert.equal(
-    `${feed.owner}/${feed.repo}`,
-    repository,
+    cargo.repository,
+    `https://github.com/${repository}`,
     "Update feed must match the publishing repository",
   );
   return channel;
@@ -86,7 +106,7 @@ export async function verifyReleaseAssets(
       const bytes = await readFile(join(directory, file.url));
       assert.equal(bytes.length, file.size, `Size mismatch: ${file.url}`);
       assert.equal(
-        createHash("sha512").update(bytes).digest("base64"),
+        sha512(bytes),
         file.sha512,
         `Checksum mismatch: ${file.url}`,
       );
@@ -95,11 +115,17 @@ export async function verifyReleaseAssets(
 }
 
 if (import.meta.main) {
-  const channel = verifyReleaseTag(
-    process.argv[2],
-    pkg,
-    process.env.GITHUB_REPOSITORY,
-  );
-  if (process.argv[3]) await verifyReleaseAssets(process.argv[3], pkg.version);
-  console.log(channel);
+  const [tag, assets] = process.argv.slice(2);
+  const cargo = await cargoPackage();
+  if (!tag) verifyManifests(pkg, cargo);
+  else {
+    const channel = verifyReleaseTag(
+      tag,
+      pkg,
+      cargo,
+      process.env.GITHUB_REPOSITORY,
+    );
+    if (assets) await verifyReleaseAssets(assets, pkg.version);
+    console.log(channel);
+  }
 }

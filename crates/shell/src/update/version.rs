@@ -1,4 +1,4 @@
-//! The versions this project releases (`src/shared/release-channel.ts`): `X.Y.Z`, or
+//! The versions this project releases (`scripts/release-channel.ts`): `X.Y.Z`, or
 //! `X.Y.Z-beta.N` for a prerelease, with no leading zeros. A prerelease sorts below its release.
 
 use std::cmp::Ordering;

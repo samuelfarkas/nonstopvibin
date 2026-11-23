@@ -15,25 +15,7 @@ import { api } from "./api.ts";
 import { messageOf } from "./action.ts";
 import { usePolling } from "./feed.tsx";
 import { Empty } from "./components.tsx";
-import { accountLabel } from "./format.ts";
-
-const standardCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
-const compactCount = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-export function count(n: number): string {
-  return (n >= 100_000 ? compactCount : standardCount).format(n);
-}
-export function dateLabel(value: string, format: Intl.DateTimeFormat): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Invalid Date" : format.format(date);
-}
-export function csvCell(value: string): string {
-  return `"${value
-    .replace(/^(\s*)([=+@\t\r-])/, "$1'$2")
-    .replaceAll('"', '""')}"`;
-}
+import { accountLabel, count, csvCell, dateLabel } from "./format.ts";
 
 const ranges = [
   { days: 1, label: "24h" },

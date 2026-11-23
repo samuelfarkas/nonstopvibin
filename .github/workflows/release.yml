@@ -46,8 +46,7 @@ jobs:
           pattern: nonstopvibin-*
           merge-multiple: true
       - run: bun scripts/verify-release.mjs "$GITHUB_REF_NAME" release
-      - run: cd release && sha256sum * > SHA256SUMS
-      - name: Sign SHA256SUMS for the Rust updater
+      - name: Write and sign SHA256SUMS for the Rust updater
         run: bun scripts/sign-release.ts release
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}

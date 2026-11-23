@@ -57,7 +57,7 @@ verification.
 
 The `nonstopvibin` daemon is a statically linked musl executable (Rust targets
 `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`). It needs no loader
-or system libraries, and `scripts/verify-rust-package.ts` rejects an archive whose
+or system libraries, and `scripts/package-layout.ts` rejects an archive whose
 daemon is not static. A glibc build of the daemon would need GLIBC_2.34 and
 refused to start on Rocky 8 (glibc 2.28); the static build passed the same tests
 there and on Alpine ([decision record](decisions/rust-port.md#updates-and-packaging)).

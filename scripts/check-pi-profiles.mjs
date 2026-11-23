@@ -16,14 +16,17 @@ import http from "node:http";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { createRequire } from "node:module";
-import cases from "../tests/golden/agents.json" with { type: "json" };
+import {
+  fill,
+  firstWrite,
+  goldenText,
+} from "../tests/support/agents-golden.ts";
 
-// The daemon's generated sources, recorded byte for byte in the agents golden.
-const golden = (name) => cases.find((entry) => entry.name === name).output;
-const piProfileControls = golden("pi profile controls source");
-const goldenExtension = golden("scenario pi lifecycle")[0].changes[
-  "<home>/.pi/agent/extensions/nonstopvibin-work.js"
-].content;
+const piProfileControls = goldenText("pi profile controls source");
+const goldenExtension = firstWrite(
+  "scenario pi lifecycle",
+  "<home>/.pi/agent/extensions/nonstopvibin-work.js",
+);
 
 /** The golden extension (profile "work", port 4318) rewritten for another profile. */
 function piExtension(profile, helper, port, preferences) {
@@ -43,9 +46,7 @@ function piExtension(profile, helper, port, preferences) {
     ["nonstopvibin-work", `nonstopvibin-${profile.slug}`],
     ['"slug":"work"', JSON.stringify({ slug: profile.slug }).slice(1, -1)],
   ];
-  const [start, end] = [head, tail].map((part) =>
-    substitutions.reduce((text, [from, to]) => text.replaceAll(from, to), part),
-  );
+  const [start, end] = [head, tail].map((part) => fill(part, substitutions));
   for (const [from] of substitutions)
     assert.ok(
       head.includes(from) || tail.includes(from),

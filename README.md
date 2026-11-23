@@ -140,23 +140,14 @@ profile. The daemon serves the agent gateway, the management API, and the
 interface. A separate `nonstopvibin-window` process shows the window and exits
 when you close it, so no web engine runs while the app sits in the menu bar.
 
-These figures compare the daemon with the Bun server and the Electron app it
-replaced, on the same synthetic workload with three profiles. They cover the host process only, not the cores.
-
-| Measured on Linux x64                         | Bun server    | Electron, no window          | Rust daemon  |
-| --------------------------------------------- | ------------- | ---------------------------- | ------------ |
-| Startup to first accepted connection          | 48–101 ms     | 164–995 ms                   | 2.8–3.0 ms   |
-| Memory (PSS) while idle                       | 43.5–43.7 MiB | 178.6–185.1 MiB              | 9.4–11.4 MiB |
-| Wakeups per second, 2–3 minutes after a burst | 21.9–51.6     | 1.9–2.0                      | 0.0          |
-| Memory (PSS) right after eight 1 MB requests  | 88–99 MiB     | 82–84 MiB, main process only | 10.0 MiB     |
-
-The Rust column is the static musl build that the Linux packages ship, run as the
-headless server. As the desktop app with its tray registered and no window open, the
-daemon measured 10.6–10.8 MiB and no wakeups, and 12.8–13.8 MiB after the same burst.
-Opening the window starts the window process in 277–282 ms; it uses about 350–410 MiB
-while open and exits within about 34 ms of the last close. See
-[the measurements](docs/decisions/rust-port-evidence.md) for the method, CPU per
-request, and macOS gaps.
+On the same synthetic workload with three profiles, the daemon starts in
+milliseconds where the Bun server and the Electron app it replaced took tens to
+hundreds, uses a fraction of their memory while idle and after a burst of large
+requests, and does not wake up while idle, as the headless server and as the
+desktop app with its tray. Opening the window starts the window process, which
+exits soon after the last close. [The measurements](docs/decisions/rust-port-evidence.md)
+hold the figures for the host process (not the cores), the method, CPU per request,
+and macOS gaps.
 
 ## Data and privacy
 

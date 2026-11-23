@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resetIn } from "../src/client/format.ts";
-import { csvCell } from "../src/client/Activity.tsx";
+import { csvCell, resetIn } from "../src/client/format.ts";
 import { isQuotaStale } from "../src/client/quota.ts";
 import type { Quota } from "../src/shared/types.ts";
 

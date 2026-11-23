@@ -1,6 +1,5 @@
-// What the build ships and for which targets: plain data for the build scripts, tests and
-// vite.config.ts, so it must not import build tooling. The pinned core is
-// scripts/core-binary.ts.
+// What the build ships and for which targets: plain data for the build scripts and tests, so it
+// must not import build tooling. The pinned core is scripts/core-binary.ts.
 
 interface Architecture {
   /** What `uname -m` prints on a Linux server. */
@@ -64,7 +63,6 @@ export const product = {
   executable: "nonstopvibin",
   /** The WebKit window helper, beside the daemon. */
   helper: "nonstopvibin-window",
-  feed: { owner: "samuelfarkas", repo: "nonstopvibin" },
   macCategory: "public.app-category.developer-tools",
   linuxCategory: "Development",
   maintainer: "nonstopvibin",
@@ -128,20 +126,22 @@ export function rustTarget(
   return target;
 }
 
+/** The UI's npm licence texts, which scripts/third-party.mjs writes. */
+export const uiLicences = "dist/licenses/THIRD-PARTY.txt";
 /**
- * Licence files every Rust package ships in its `licenses/` folder. THIRD-PARTY.txt covers the
- * UI's npm packages (`bun run build`), THIRD-PARTY-RUST.txt the crates compiled into the
- * binaries and Rust-std.html the standard library with musl (scripts/rust-licenses.ts),
- * CLIProxyAPI.txt the core (core:install).
+ * Licence files every Rust package ships in its `licenses/` folder, each with the checkout file
+ * it copies. THIRD-PARTY.txt covers the UI's npm packages, THIRD-PARTY-RUST.txt the crates
+ * compiled into the binaries and Rust-std.html the standard library with musl: these two have no
+ * source, scripts/rust-licenses.ts writes them. CLIProxyAPI.txt covers the core.
  */
-export const rustLicenses = [
-  "LICENSE",
-  "NOTICE.md",
-  "THIRD-PARTY.txt",
-  "THIRD-PARTY-RUST.txt",
-  "Rust-std.html",
-  "CLIProxyAPI.txt",
-] as const;
+export const rustLicenses = {
+  LICENSE: "LICENSE",
+  "NOTICE.md": "licenses/NOTICE.md",
+  "THIRD-PARTY.txt": uiLicences,
+  "THIRD-PARTY-RUST.txt": undefined,
+  "Rust-std.html": undefined,
+  "CLIProxyAPI.txt": "licenses/CLIProxyAPI.txt",
+} as const;
 
 /**
  * The server archive's top-level entries. The daemon finds `core/` and the UI's `client/`

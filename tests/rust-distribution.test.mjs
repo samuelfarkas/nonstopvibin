@@ -20,23 +20,25 @@ import {
   rustLicenses,
 } from "../scripts/distribution.ts";
 import { writeFeed } from "../scripts/package-common.ts";
+import { cargoPackage } from "../scripts/verify-release.mjs";
 import {
   checkMacExecutable,
   verifyServerTree,
-} from "../scripts/verify-rust-package.ts";
+} from "../scripts/package-layout.ts";
 
 const project = resolve(import.meta.dirname, "..");
 
-test("Rust packages keep the identity and file names installed Electron builds update from", () => {
+test("Rust packages keep the identity and file names installed Electron builds update from", async () => {
   // package.json `build` of the last Electron release (main 4ea188a).
   assert.equal(product.id, "app.nonstopvibin.desktop");
   assert.equal(product.name, "NonstopVibin");
   // electron-builder's default Linux executable: the package name, lowercased.
   assert.equal(product.executable, "nonstopvibin");
-  assert.deepEqual(product.feed, {
-    owner: "samuelfarkas",
-    repo: "nonstopvibin",
-  });
+  // The feed: a release must come from this repository (verify-release.mjs).
+  assert.equal(
+    (await cargoPackage()).repository,
+    "https://github.com/samuelfarkas/nonstopvibin",
+  );
   assert.equal(product.macCategory, "public.app-category.developer-tools");
   assert.equal(product.linuxCategory, "Development");
   assert.equal(product.maintainer, "nonstopvibin");
@@ -135,15 +137,9 @@ test(
         filter: (path) => !path.endsWith("LICENSE"),
       });
       await mkdir(join(root, "licenses"));
-      const sources = {
-        LICENSE: "LICENSE",
-        "NOTICE.md": "licenses/NOTICE.md",
-        "CLIProxyAPI.txt": "licenses/CLIProxyAPI.txt",
-        "THIRD-PARTY.txt": "dist/licenses/THIRD-PARTY.txt",
-      };
-      for (const name of rustLicenses)
-        if (sources[name])
-          await cp(join(project, sources[name]), join(root, "licenses", name));
+      for (const [name, source] of Object.entries(rustLicenses))
+        if (source)
+          await cp(join(project, source), join(root, "licenses", name));
         else await writeFile(join(root, "licenses", name), "notices");
       await writeFile(join(root, "nonstopvibin"), elf(machine));
       await writeFile(join(root, "install.sh"), "#!/bin/sh\n");

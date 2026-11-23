@@ -96,7 +96,6 @@ package "$old" "$work/old"
 package "$new" "$work/new"
 payload=NonstopVibin-$new-linux-x86_64.AppImage
 [ -f "$work/new/$payload" ] || fail "no $payload"
-(cd "$work/new" && sha256sum -- * >SHA256SUMS)
 MINISIGN_SECRET_KEY=$(cat "$work/release.key") bun scripts/sign-release.ts "$work/new" >/dev/null
 
 release=$work/feed/releases/download/v$new

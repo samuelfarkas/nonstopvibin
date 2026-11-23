@@ -1,9 +1,10 @@
-// `bun run build`: writes dist/licenses/THIRD-PARTY.txt, the full license texts of the npm
-// packages the interface bundles (package.json `dependencies` and theirs), which every package
-// ships in licenses/.
+// `bun run build:client`: writes `uiLicences`, the full license texts of the npm packages the
+// interface bundles (package.json `dependencies` and theirs), which every package ships in
+// licenses/.
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
+import { uiLicences } from "./distribution.ts";
 
 const seen = new Set();
 const notices = [];
@@ -32,8 +33,8 @@ async function licenses(manifest) {
     await licenses(require.resolve(`${name}/package.json`));
 }
 await licenses(resolve("package.json"));
-await mkdir("dist/licenses", { recursive: true });
+await mkdir(dirname(uiLicences), { recursive: true });
 await writeFile(
-  "dist/licenses/THIRD-PARTY.txt",
+  uiLicences,
   notices.join("\n\n----------------------------------------\n\n"),
 );

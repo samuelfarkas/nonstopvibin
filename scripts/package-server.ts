@@ -33,7 +33,7 @@ import {
   stageLicences,
   version,
 } from "./package-common.ts";
-import { verifyServerTree } from "./verify-rust-package.ts";
+import { verifyServerTree } from "./package-layout.ts";
 
 const arches = process.argv.slice(2).length
   ? process.argv.slice(2)

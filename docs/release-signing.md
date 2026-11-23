@@ -32,7 +32,7 @@ Every executable (the daemon, the window helper, the core and the relaunch helpe
 gets the hardened runtime and the empty `build/entitlements.mac.minimal.plist`: no JIT,
 executable-memory or library-validation exceptions. WebKit's JIT runs in Apple's
 WebContent process, and both Rust executables link only system libraries, which
-library validation accepts. `scripts/verify-rust-package.ts` fails the package if an
+library validation accepts. `scripts/package-layout.ts` fails the package if an
 executable links anything outside `/System/Library` or `/usr/lib`.
 
 macOS blocks the first launch of a downloaded app that Apple has not notarized. Users

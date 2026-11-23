@@ -64,7 +64,7 @@ plaintext generated configuration and OAuth files in 0700/0600 storage.
 - `ImportCatalog` accepting page-provided paths, following links, or letting
   token-bearing content reach error messages, logs, activity records, or exports.
 - Bypasses of `install-core.mjs` checksums, the core pin checks in
-  `crates/core/src/binary.rs`, or `scripts/verify-rust-package.ts`; credentials,
+  `crates/core/src/binary.rs`, or `scripts/package-layout.ts`; credentials,
   local runtimes, scanner reports, or keys entering packaged resources.
 - Changes in `crates/shell/src/update` that install an update without its
   minisign signature, SHA-512 or, on macOS, the designated-requirement check.

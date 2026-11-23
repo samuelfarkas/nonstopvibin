@@ -39,7 +39,7 @@ import {
   verifyAppDir,
   verifyArtifact,
   verifyDebTree,
-} from "./verify-rust-package.ts";
+} from "./package-layout.ts";
 
 const arch = process.argv[2] ?? process.arch;
 const daemon = {

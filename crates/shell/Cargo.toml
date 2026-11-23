@@ -39,6 +39,10 @@ objc2-service-management.workspace = true
 tao.workspace = true
 tray-icon.workspace = true
 
+[build-dependencies]
+minisign-verify.workspace = true
+serde_json.workspace = true
+
 [dev-dependencies]
 nsv-testkit = { workspace = true, features = ["shell"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }

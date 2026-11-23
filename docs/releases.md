@@ -11,10 +11,10 @@ Development builds and Linux deb installations do not auto-update.
 
 Done in the repository:
 
-- `updatesEnabled` is `true` in `package.json`, and `product.feed` in
-  `scripts/distribution.ts` names this repository. The flag is compiled into the
-  app; changing it on GitHub cannot
-  enable an already-installed build.
+- `updatesEnabled` is `true` in `package.json`, and `repository` in `Cargo.toml`
+  names this repository, which `package.json` repeats (`scripts/verify-release.mjs`
+  checks that they agree). `crates/shell/build.rs` compiles both into the app;
+  changing them on GitHub cannot enable an already-installed build.
 - The "Protect release tags" ruleset is active for `v*` tags. It blocks deleting
   and force-moving a release tag; it does not restrict who can create one.
 
@@ -53,7 +53,7 @@ git push origin vX.Y.Z
 The tag must equal `v` plus the package version. Normal versions, including `0.x`,
 are regular releases. `0.2.0-beta.1` / `v0.2.0-beta.1` creates a prerelease; only
 installed beta builds opt into prerelease discovery. Other prerelease names are
-not supported. The workflow applies `src/shared/release-channel.ts`, and the
+not supported. The workflow applies `scripts/release-channel.ts`, and the
 updater's `crates/shell/src/update/version.rs` follows the same rule.
 
 Releases publish `latest-mac.yml` and `latest-linux.yml` even on GitHub
@@ -67,8 +67,8 @@ pull request ([checks.yml](../.github/workflows/checks.yml) and
 and not notarized; [macOS release signing](release-signing.md) explains how they
 update.
 After all checks pass, the final job verifies the assets `scripts/verify-release.mjs`
-expects from `scripts/distribution.ts`, metadata versions, payload sizes and SHA-512 hashes, generates
-SHA256SUMS, signs it as `SHA256SUMS.minisig` (`scripts/sign-release.ts`), creates
+expects from `scripts/distribution.ts`, metadata versions, payload sizes and SHA-512 hashes, writes
+SHA256SUMS and signs it as `SHA256SUMS.minisig` (`scripts/sign-release.ts`), creates
 provenance attestations, uploads a draft release, then publishes it.
 Only the final job can publish. A failed upload leaves a draft, not a partial public
 update. Remove the failed draft before retrying the publish job; never overwrite
@@ -133,9 +133,8 @@ section. Work through these steps in order.
    no source change, such as a runner outage, re-run the failed jobs. If the source
    must change, release 0.2.1 instead; the tag cannot be moved.
 6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
-   release with the DMG, macOS ZIP, AppImage, deb, `latest-mac.yml`,
-   `latest-linux.yml`, `nonstopvibin-server-0.2.0-linux-x64.tar.gz`,
-   `nonstopvibin-server-0.2.0-linux-arm64.tar.gz` and `SHA256SUMS` (with
+   release with every asset `scripts/verify-release.mjs` requires (the installers,
+   both update feeds and both server archives) and `SHA256SUMS` (with
    `SHA256SUMS.minisig` once the update-signing key exists). In a folder
    with the downloaded assets, `shasum -a 256 -c SHA256SUMS` passes and
    `gh attestation verify <file> -R samuelfarkas/nonstopvibin` passes for an
@@ -148,9 +147,9 @@ section. Work through these steps in order.
 
 ## Updating the CLIProxyAPI core
 
-CLIProxyAPI ships inside every installer as a separate native executable at
-`core/cli-proxy-api` beside the daemon (`Contents/Resources/core` on macOS),
-alongside `manifest.json`. The daemon launches it as a child process for each
+CLIProxyAPI ships inside every installer as a separate native executable in
+`core/` beside the daemon (`scripts/package-layout.ts` has each layout), with its
+`manifest.json`. The daemon launches it as a child process for each
 running profile;
 [storage and profile boundaries](architecture.md) describes how a core is tied to
 the app's lifetime.
@@ -181,9 +180,9 @@ release. To publish one:
    core at their next check: at launch, and whenever Settings opens. The next app
    release bundles it.
 
-The [Core pin workflow](../.github/workflows/core-pin.yml) does step 2 every 12
-hours, and on demand from the Actions tab. When upstream's latest stable release is
-newer than the pin and at least two hours old, it opens a pull request titled
+The [Core pin workflow](../.github/workflows/core-pin.yml) does step 2 on its
+schedule, and on demand from the Actions tab. When upstream's latest stable release is
+newer than the pin and old enough (the workflow's `age` check), it opens a pull request titled
 `build(deps): update CLIProxyAPI to <version>` with the rest of this list as a
 checklist. Pull requests opened with the workflow's own token start no workflows,
 so it starts the build and security checks on its branch. Closing the pull request
@@ -227,7 +226,7 @@ builds older than 0.2.0 install that manually. Development checkouts rerun
 ## Installed behavior
 
 Enabled packaged macOS and AppImage builds check shortly after startup and then
-periodically: 30 seconds after start, then every 6 hours (`crates/shell/src/update`).
+periodically (`FIRST_CHECK` and `EVERY` in `crates/shell/src/update/mod.rs`).
 **Check for updates…** is available in the macOS app menu and the tray's menu; it is disabled on unsupported or unconfigured builds.
 
 Downloads happen in the background. A native dialog offers **Restart to update**

@@ -75,3 +75,21 @@ export function age(value?: string): string {
     ? "checked just now"
     : `checked ${mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`} ago`;
 }
+
+const standardCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
+const compactCount = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function count(n: number): string {
+  return (n >= 100_000 ? compactCount : standardCount).format(n);
+}
+export function dateLabel(value: string, format: Intl.DateTimeFormat): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Invalid Date" : format.format(date);
+}
+export function csvCell(value: string): string {
+  return `"${value
+    .replace(/^(\s*)([=+@\t\r-])/, "$1'$2")
+    .replaceAll('"', '""')}"`;
+}

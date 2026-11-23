@@ -1,4 +1,5 @@
-// Read by scripts/verify-release.mjs (which the release workflow asks) and the desktop updater.
+// The release tag grammar, which scripts/verify-release.mjs applies; the Rust updater reads the
+// same versions in crates/shell/src/update/version.rs.
 const releaseVersion =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(-beta\.(?:0|[1-9]\d*))?$/;
 
