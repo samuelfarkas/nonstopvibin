@@ -36,6 +36,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("--config") => fake_core(Path::new(&args[2])),
+        Some("spawn") => spawn_one(
+            Path::new(&args[2]),
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+        ),
         Some("owner") => owner(
             Path::new(&args[2]),
             args[3].parse().unwrap(),
@@ -48,10 +53,16 @@ fn main() -> ExitCode {
 // ---- The fake core and the owner instance ----
 
 fn fake_core(config: &Path) -> ! {
-    if fs::read_to_string(config)
-        .unwrap_or_default()
-        .contains("stubborn")
-    {
+    let text = fs::read_to_string(config).unwrap_or_default();
+    if let Some(out) = text.strip_prefix("environment ") {
+        let mut variables: Vec<String> = std::env::vars_os()
+            .map(|(name, value)| format!("{}={}", name.display(), value.display()))
+            .collect();
+        variables.sort();
+        fs::write(format!("{out}.part"), variables.join("\n")).unwrap();
+        fs::rename(format!("{out}.part"), out).unwrap();
+    }
+    if text.contains("stubborn") {
         let runtime = runtime();
         runtime.block_on(async {
             let _ignored =
@@ -101,6 +112,21 @@ fn owner(data: &Path, count: usize, binary: &Path) -> ExitCode {
         );
         io::stdout().flush().unwrap();
         std::future::pending::<()>().await;
+    });
+    ExitCode::SUCCESS
+}
+
+/// Starts one fake core whose config names `out`, waits until it wrote its environment
+/// there, and stops it.
+fn spawn_one(data: &Path, binary: &Path, out: &Path) -> ExitCode {
+    runtime().block_on(async {
+        let mut core = spawn_core(binary, data, &profile(0)).unwrap();
+        let started = Instant::now();
+        while !out.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5), "no environment");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        core.terminate().await.unwrap();
     });
     ExitCode::SUCCESS
 }
@@ -656,6 +682,46 @@ fn dropping_a_core_closes_the_watchdog_pipe_and_the_watchdog_stops_it() {
     });
 }
 
+fn a_core_inherits_only_the_allowed_environment() {
+    let fixture = Fixture::new("environment");
+    let out = fixture.root.join("environment");
+    prepare(
+        &fixture.data,
+        &profile(0),
+        &format!("environment {}", out.display()),
+    );
+    // An instance whose own environment holds keys, proxies and provider settings.
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("spawn")
+        .arg(&fixture.data)
+        .arg(&fixture.binary)
+        .arg(&out)
+        .env_clear()
+        .envs([
+            ("PATH", "/usr/bin:/bin"),
+            ("HOME", "/home/fixture"),
+            ("TMPDIR", "/tmp/fixture"),
+            ("LANG", "C.UTF-8"),
+            ("LC_ALL", ""),
+            ("SystemRoot", "C:\\Windows"),
+            ("OPENAI_API_KEY", "sk-fixture"),
+            ("ANTHROPIC_BASE_URL", "https://proxy.example"),
+            ("HTTPS_PROXY", "http://proxy.example:8080"),
+            ("http_proxy", "http://proxy.example:8080"),
+            ("REDIS_URL", "redis://cache.example"),
+            ("NONSTOPVIBIN_DATA_DIR", "/elsewhere"),
+            ("TZ", "UTC"),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // An empty variable is not passed on.
+    assert_eq!(
+        fs::read_to_string(&out).unwrap(),
+        "HOME=/home/fixture\nLANG=C.UTF-8\nPATH=/usr/bin:/bin\nSystemRoot=C:\\Windows\nTMPDIR=/tmp/fixture"
+    );
+}
+
 /// Context switches of `pid` so far, from /proc.
 #[cfg(target_os = "linux")]
 fn switches(pid: u32) -> String {
@@ -687,7 +753,11 @@ fn the_watchdog_never_wakes_while_its_core_runs() {
 }
 
 fn run_tests(arguments: &[String]) -> ExitCode {
-    let tests: [(&str, fn()); 11] = [
+    let tests: [(&str, fn()); 12] = [
+        (
+            "a_core_inherits_only_the_allowed_environment",
+            a_core_inherits_only_the_allowed_environment,
+        ),
         (
             "cores_exit_on_their_own_when_the_process_that_started_them_is_sigkilled",
             cores_exit_on_their_own_when_the_process_that_started_them_is_sigkilled,

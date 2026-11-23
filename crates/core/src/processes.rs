@@ -23,8 +23,9 @@ use tokio::sync::OnceCell;
 /// How long a core gets to exit after SIGTERM before SIGKILL, wherever it is stopped.
 pub const KILL_GRACE: Duration = Duration::from_secs(5);
 const PS_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
-/// What a core inherits: no API keys, proxy settings, storage backends or provider variables.
-const CORE_ENVIRONMENT: [&str; 5] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+/// What a core inherits, each only when set and not empty, as core.ts listed it: no API keys,
+/// proxy settings, storage backends or provider variables.
+const CORE_ENVIRONMENT: [&str; 6] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SystemRoot"];
 
 /// `$1` core PID, `$2` its exact command line. Captures the core's identity, then sleeps in
 /// `read` until EOF: the write end lives only in the owning process (pipes are close-on-exec).

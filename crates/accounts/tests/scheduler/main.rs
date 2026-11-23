@@ -8,5 +8,6 @@ mod fake;
 mod golden;
 mod lazy;
 mod lifecycle;
+mod real;
 mod restart;
 mod status;
