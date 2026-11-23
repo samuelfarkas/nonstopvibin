@@ -662,13 +662,15 @@ impl App {
             }
             // Only the macOS main window's bridge script sends it.
             #[cfg(target_os = "macos")]
-            Call::DragWindow => {
+            Call::DragWindow { x, y } => {
                 if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main) {
-                    native::drag(&main.window);
+                    // Page points are window points scaled by the page zoom (`menu`).
+                    let zoom = 1.2_f64.powf(self.zoom_level);
+                    native::drag(&main.window, f64::from(x) * zoom, f64::from(y) * zoom);
                 }
             }
             #[cfg(not(target_os = "macos"))]
-            Call::DragWindow => {}
+            Call::DragWindow { .. } => {}
         }
     }
 

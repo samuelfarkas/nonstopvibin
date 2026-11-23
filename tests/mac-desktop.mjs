@@ -150,12 +150,12 @@ function click(x, y, button = "left") {
       delay(0.05);
     }`);
 }
-/** Presses at one point, holds, moves in steps, and releases at another. */
+/** Presses at one point, holds, moves in steps over half a second, and releases at another. */
 function drag(fromX, fromY, toX, toY) {
   jxa(`ObjC.import('CoreGraphics');
     const post = (type, x, y) => {
       $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), type, $.CGPointMake(x, y), $.kCGMouseButtonLeft));
-      delay(0.02);
+      delay(0.05);
     };
     post($.kCGEventMouseMoved, ${fromX}, ${fromY});
     post($.kCGEventLeftMouseDown, ${fromX}, ${fromY});
@@ -561,7 +561,13 @@ try {
         await fromTrayMenu("Open NonstopVibin");
         await waitFor("the main window", () => windowNamed(MAIN), 10_000);
       }
-      await delay(500);
+      // A press in an inactive window only activates it: WebKit takes no first mouse.
+      const state = await frontWithin(10_000);
+      ok(
+        mainInFront(state),
+        "the main window is in front with key focus",
+        state,
+      );
       const before = windowNamed(MAIN);
       const [x, y] = [
         before.position[0] + before.size[0] - 200,

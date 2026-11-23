@@ -67,7 +67,8 @@ const SCRIPT: &str = r#"(() => {
     window.addEventListener("mousedown", (event) => {
       if (event.button !== 0) return;
       if (getComputedStyle(event.target).getPropertyValue("--app-region").trim() !== "drag") return;
-      send({ nonce, id: 0, method: "dragWindow" });
+      send({ nonce, id: 0, method: "dragWindow",
+        arg: [Math.round(event.clientX), Math.round(event.clientY)] });
     }, true);
   // Electron showed no context menu; WebKit's offers Reload, Back and Inspect.
   window.addEventListener("contextmenu", (event) => event.preventDefault(), true);
@@ -116,8 +117,12 @@ pub(crate) enum Call {
     Daemon(DaemonCall),
     /// Escape in the quota popup; not a bridge method.
     Escape,
-    /// A press in a drag region of the macOS main window; not a bridge method.
-    DragWindow,
+    /// A press at page point (`x`, `y`) in a drag region of the macOS main window; not a
+    /// bridge method.
+    DragWindow {
+        x: i32,
+        y: i32,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -191,7 +196,13 @@ pub(crate) fn parse(
         }
         ("revealData", None) => Call::Daemon(DaemonCall::RevealData),
         ("escape", None) => Call::Escape,
-        ("dragWindow", None) => Call::DragWindow,
+        ("dragWindow", Some(Value::Array(point))) => match point.as_slice() {
+            [x, y] => match (page_coordinate(x), page_coordinate(y)) {
+                (Some(x), Some(y)) => Call::DragWindow { x, y },
+                _ => return Err(invalid(id, &method)),
+            },
+            _ => return Err(invalid(id, &method)),
+        },
         _ if METHODS.contains(&method.as_str()) => return Err(invalid(id, &method)),
         _ => {
             return Err(Rejected::Invalid {
@@ -201,6 +212,11 @@ pub(crate) fn parse(
         }
     };
     Ok((id, call))
+}
+
+/// A whole page coordinate; a window is far smaller than `i32`.
+fn page_coordinate(value: &Value) -> Option<i32> {
+    value.as_i64().and_then(|value| i32::try_from(value).ok())
 }
 
 fn invalid(id: u64, method: &str) -> Rejected {
@@ -274,7 +290,11 @@ mod tests {
             ),
             ("revealData", None, Call::Daemon(DaemonCall::RevealData)),
             ("escape", None, Call::Escape),
-            ("dragWindow", None, Call::DragWindow),
+            (
+                "dragWindow",
+                Some(json!([12, -3])),
+                Call::DragWindow { x: 12, y: -3 },
+            ),
         ];
         for (method, arg, expected) in cases {
             assert_eq!(call(method, arg), Ok((9, expected)), "{method}");
@@ -295,6 +315,9 @@ mod tests {
             ("getLoginItem", json!(true)),
             ("revealData", json!([])),
             ("chooseProject", json!("/tmp")),
+            ("dragWindow", json!([1])),
+            ("dragWindow", json!([1.5, 2])),
+            ("dragWindow", json!(["1", 2])),
         ];
         for (method, arg) in cases {
             assert_eq!(call(method, Some(arg)), rejected(method), "{method}");

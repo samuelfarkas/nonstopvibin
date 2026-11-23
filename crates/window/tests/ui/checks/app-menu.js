@@ -28,9 +28,9 @@ run(async () => {
     "⌘A selects the field's text",
   );
   await act({ shortcut: "c" });
-  equal(
-    (await act({ clipboard: true })).clipboard,
-    "copy me",
+  // WebKit writes the pasteboard after the menu action returns.
+  await until(
+    async () => (await act({ clipboard: true })).clipboard === "copy me",
     "⌘C copies the selection to the pasteboard",
   );
   await act({ shortcut: "x" });

@@ -29,11 +29,12 @@ pub(crate) fn present(window: &Window) {
     window.set_focus();
 }
 
-/// Moves `window` with the pointer until the primary button is released: a press in a drag
-/// region. The page reports the press after `mouseDown:` has returned, when the window server
-/// no longer starts a drag for it (`performWindowDragWithEvent:`, which tao's `drag_window`
-/// calls, leaves the window in place), so the helper tracks the drag itself.
-pub(crate) fn drag(window: &Window) {
+/// Moves `window` with the pointer until the primary button is released: a press at (`x`, `y`),
+/// in points from the window's top left, in a drag region. The page reports the press after
+/// `mouseDown:` has returned, when the window server no longer starts a drag for it
+/// (`performWindowDragWithEvent:`, which tao's `drag_window` calls, leaves the window in place),
+/// so the helper tracks the drag itself, from the press, however late the report arrives.
+pub(crate) fn drag(window: &Window, x: f64, y: f64) {
     let Some(main_thread) = MainThreadMarker::new() else {
         return;
     };
@@ -49,20 +50,26 @@ pub(crate) fn drag(window: &Window) {
     else {
         return;
     };
-    let (start, origin) = (NSEvent::mouseLocation(), key.frame().origin);
+    let frame = key.frame();
+    let start = key.convertPointToScreen(NSPoint::new(x, frame.size.height - y));
     let until = NSDate::distantFuture();
     let tracking = NSString::from_str(EVENT_TRACKING);
+    let follow = || {
+        let pointer = NSEvent::mouseLocation();
+        key.setFrameOrigin(NSPoint::new(
+            frame.origin.x + pointer.x - start.x,
+            frame.origin.y + pointer.y - start.y,
+        ));
+    };
+    // What the pointer did before the report arrived.
+    follow();
     while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
         NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseUp,
         Some(&until),
         &tracking,
         true,
     ) {
-        let pointer = NSEvent::mouseLocation();
-        key.setFrameOrigin(NSPoint::new(
-            origin.x + pointer.x - start.x,
-            origin.y + pointer.y - start.y,
-        ));
+        follow();
         if event.r#type() == NSEventType::LeftMouseUp {
             // The page saw the press; it sees the release too.
             key.sendEvent(&event);

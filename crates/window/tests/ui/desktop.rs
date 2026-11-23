@@ -170,7 +170,7 @@ mod imp {
                 .as_deref()
             {
                 let before = window_position();
-                // A press held briefly, then ten steps, as a hand drags.
+                // A press held briefly, then ten steps over half a second, as a hand drags.
                 jxa(&format!(
                     "ObjC.import('CoreGraphics'); \
                      const window = Application('System Events').processes.byName('{PROCESS}').windows.byName('NonstopVibin'); \
@@ -179,7 +179,7 @@ mod imp {
                        $.CGEventCreateMouseEvent($(), type, $.CGPointMake(left + x, top + y), $.kCGMouseButtonLeft)); \
                      post($.kCGEventMouseMoved, {x1}, {y1}); post($.kCGEventLeftMouseDown, {x1}, {y1}); delay(0.15); \
                      for (let i = 1; i <= 10; i++) {{ \
-                       post($.kCGEventLeftMouseDragged, {x1} + ({x2} - {x1}) * i / 10, {y1} + ({y2} - {y1}) * i / 10); delay(0.02); \
+                       post($.kCGEventLeftMouseDragged, {x1} + ({x2} - {x1}) * i / 10, {y1} + ({y2} - {y1}) * i / 10); delay(0.05); \
                      }} \
                      post($.kCGEventLeftMouseUp, {x2}, {y2});"
                 ));
