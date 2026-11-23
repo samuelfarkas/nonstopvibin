@@ -136,6 +136,20 @@ jobs:
           name: nonstopvibin-${{ runner.os }}
           # Installers and update feeds; release/mac-*/ holds the unpacked bundle.
           path: release/*.*
+      # The packaged app as a user drives it: the menu bar item, the quota popup, the tray menu,
+      # the main window in front (20 of 20), the Dock icon, the login item and quitting.
+      - if: runner.os == 'macOS'
+        name: Desktop behaviour of the packaged app
+        timeout-minutes: 20
+        run: bun tests/mac-desktop.mjs
+      - if: runner.os == 'macOS' && !cancelled()
+        name: Upload the desktop behaviour results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          retention-days: 7
+          if-no-files-found: error
+          name: mac-desktop
+          path: test-results/mac-desktop/
       # The hop every installed copy takes: the last Electron release's source, built as 0.0.1,
       # downloads the packaged zip through electron-updater and Squirrel.Mac swaps the bundle.
       - if: runner.os == 'macOS'
