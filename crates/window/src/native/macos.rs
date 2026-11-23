@@ -7,10 +7,10 @@ use nsv_domain::helper::{DialogKind, Rect};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSEvent, NSEventModifierFlags,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSEvent, NSEventMask,
     NSEventType, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSScreen,
 };
-use objc2_foundation::{NSRect, NSString};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSString};
 use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
 
@@ -20,6 +20,8 @@ use crate::app::{Proxy, Ticket, UserEvent, log, post};
 /// `NSPasteboardTypeString`'s value: the static itself is an extern symbol only unsafe code
 /// can read.
 const PLAIN_TEXT: &str = "public.utf8-plain-text";
+/// `NSEventTrackingRunLoopMode`'s value, for the same reason.
+const EVENT_TRACKING: &str = "NSEventTrackingRunLoopMode";
 
 /// Shows `window`, brings the helper to the front and gives the window the focus.
 pub(crate) fn present(window: &Window) {
@@ -27,9 +29,10 @@ pub(crate) fn present(window: &Window) {
     window.set_focus();
 }
 
-/// Moves `window` with the pointer while the primary button stays down: a press in a drag
-/// region. The page reports the press after AppKit has dispatched it, so the press is
-/// recreated at the pointer instead of read from `currentEvent` as tao's `drag_window` does.
+/// Moves `window` with the pointer until the primary button is released: a press in a drag
+/// region. The page reports the press after `mouseDown:` has returned, when the window server
+/// no longer starts a drag for it (`performWindowDragWithEvent:`, which tao's `drag_window`
+/// calls, leaves the window in place), so the helper tracks the drag itself.
 pub(crate) fn drag(window: &Window) {
     let Some(main_thread) = MainThreadMarker::new() else {
         return;
@@ -38,27 +41,33 @@ pub(crate) fn drag(window: &Window) {
     if NSEvent::pressedMouseButtons() & 1 == 0 {
         return;
     }
+    let app = NSApplication::sharedApplication(main_thread);
     // The press made the window key; any other key window means the pointer left it.
-    let Some(key) = NSApplication::sharedApplication(main_thread)
+    let Some(key) = app
         .keyWindow()
         .filter(|key| Retained::as_ptr(key).cast_mut().cast() == window.ns_window())
     else {
         return;
     };
-    let press = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-        NSEventType::LeftMouseDown,
-        key.mouseLocationOutsideOfEventStream(),
-        NSEventModifierFlags::empty(),
-        0.0,
-        key.windowNumber(),
-        None,
-        0,
-        1,
-        1.0,
-    );
-    match press {
-        Some(press) => key.performWindowDragWithEvent(&press),
-        None => log(format_args!("could not move the window: no press event")),
+    let (start, origin) = (NSEvent::mouseLocation(), key.frame().origin);
+    let until = NSDate::distantFuture();
+    let tracking = NSString::from_str(EVENT_TRACKING);
+    while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseUp,
+        Some(&until),
+        &tracking,
+        true,
+    ) {
+        let pointer = NSEvent::mouseLocation();
+        key.setFrameOrigin(NSPoint::new(
+            origin.x + pointer.x - start.x,
+            origin.y + pointer.y - start.y,
+        ));
+        if event.r#type() == NSEventType::LeftMouseUp {
+            // The page saw the press; it sees the release too.
+            key.sendEvent(&event);
+            break;
+        }
     }
 }
 

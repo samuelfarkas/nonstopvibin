@@ -150,7 +150,7 @@ function click(x, y, button = "left") {
       delay(0.05);
     }`);
 }
-/** Presses at one point, moves in steps, and releases at another. */
+/** Presses at one point, holds, moves in steps, and releases at another. */
 function drag(fromX, fromY, toX, toY) {
   jxa(`ObjC.import('CoreGraphics');
     const post = (type, x, y) => {
