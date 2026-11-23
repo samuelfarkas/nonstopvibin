@@ -10,7 +10,7 @@ interface Architecture {
   elf: number;
   /** Mach-O `cputype`. */
   machO: number;
-  /** swiftc's target triple prefix. */
+  /** The Apple target triple prefix (swiftc, clang). */
   swift: string;
 }
 /** Each supported architecture by Node's name, with the names other tools give it. */

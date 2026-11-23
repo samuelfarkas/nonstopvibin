@@ -308,6 +308,11 @@ export function verifyDebTree(root: string, arch: string): void {
 }
 
 export const bundle = `${product.name}.app`;
+/** The relaunch shim installed Electron builds run after updating to this app (package-mac.ts). */
+export const squirrel = {
+  framework: "Contents/Frameworks/Squirrel.framework",
+  shipIt: "Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt",
+} as const;
 /** Where stapler puts the notarization ticket. */
 const ticket = "Contents/CodeResources";
 /** The .app bundle; `signed` after codesign, which adds the seal and rewrites the core. */
@@ -326,6 +331,15 @@ export function verifyMacBundle(
       `Contents/MacOS/${product.name}`,
       `Contents/MacOS/${product.helper}`,
       `${resources}/icon.icns`,
+      `${squirrel.framework}/Squirrel`,
+      `${squirrel.framework}/Resources`,
+      `${squirrel.framework}/Versions/Current`,
+      `${squirrel.framework}/Versions/A/Squirrel`,
+      `${squirrel.framework}/Versions/A/Resources/Info.plist`,
+      squirrel.shipIt,
+      ...(signed
+        ? [`${squirrel.framework}/Versions/A/_CodeSignature/CodeResources`]
+        : []),
       ...coreEntries(`${resources}/${coreLayout.packaged}`),
       ...licenceEntries(`${resources}/licenses`),
       ...(signed ? ["Contents/_CodeSignature/CodeResources"] : []),
@@ -333,8 +347,13 @@ export function verifyMacBundle(
     ],
     "app bundle contents",
   );
-  for (const executable of [product.name, product.helper])
-    checkMacExecutable(join(app, "Contents/MacOS", executable), arch);
+  for (const executable of [
+    `Contents/MacOS/${product.name}`,
+    `Contents/MacOS/${product.helper}`,
+    squirrel.shipIt,
+    `${squirrel.framework}/Versions/A/Squirrel`,
+  ])
+    checkMacExecutable(join(app, executable), arch);
   const core = join(app, resources, coreLayout.packaged);
   assert.equal(
     machO(join(core, coreLayout.binary)).cputype,
@@ -390,6 +409,7 @@ export function verifyMacSignature(app: string): void {
   for (const file of [
     `Contents/MacOS/${product.name}`,
     `Contents/MacOS/${product.helper}`,
+    squirrel.shipIt,
     `Contents/Resources/${coreLayout.packaged}/${coreLayout.binary}`,
   ]) {
     const path = join(app, file);

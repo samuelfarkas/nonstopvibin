@@ -145,6 +145,12 @@ Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
   Alpine. The archive's floor is then the core's glibc 2.17. The window helper links the
   system WebKitGTK, stays glibc and needs 2.34, below every distribution with WebKitGTK 4.1.
   The allocator measurement still decides whether musl gets mimalloc.
+- Squirrel.Mac, which installs the update in an Electron build, relaunches the app by running
+  ShipIt from the new bundle: `Contents/Frameworks/Squirrel.framework/Resources/ShipIt
+  ___launch___ <bundle>`. The bundle ships a minimal framework whose ShipIt
+  (`scripts/squirrel-relaunch.c`) only opens the bundle. Without it, the CI update from an
+  Electron build installed the Rust app and left it stopped (`posix_spawn: No such file or
+  directory`).
 - No blockmaps. An Electron build that finds none for the new version downloads the whole
   zip or AppImage, and the Rust updater downloads whole payloads.
 - Release CI signs `SHA256SUMS` with minisign (`SHA256SUMS.minisig`). The Rust updater checks
@@ -179,7 +185,7 @@ Electron and Bun paths until the switch commits, which:
 - Switch 2: delete package.json `build`, `start`, `package`, `dist:mac`, `dist:linux`,
   `dist:built` and the Electron dependencies; `scripts/build-desktop.mjs` (keep its
   `THIRD-PARTY.txt` generation, which `stageLicences` needs, in `bun run build`),
-  `sign-mac.cjs`, `validate-core.cjs`, `verify-package.cjs`, the `swift` field of `architectures` and
+  `sign-mac.cjs`, `validate-core.cjs`, `verify-package.cjs` and
   `build/entitlements.mac.plist`. Move the build-side core code (`core-binary.ts`,
   `core-install.ts`) to `scripts/`, which `install-core.mjs`, `pin-core.mjs` and the
   packaging scripts import. `verify-release.mjs` reads `product.feed` and `desktopTargets`

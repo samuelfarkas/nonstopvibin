@@ -26,7 +26,12 @@ import {
   readCoreManifest,
   writeCoreManifest,
 } from "../src/server/core-binary.ts";
-import { desktopArtifact, product, rustTarget } from "./distribution.ts";
+import {
+  architecture,
+  desktopArtifact,
+  product,
+  rustTarget,
+} from "./distribution.ts";
 import {
   cargoBuild,
   releaseDir,
@@ -41,6 +46,7 @@ import {
 } from "./package-common.ts";
 import {
   bundle,
+  squirrel,
   verifyArtifact,
   verifyMacBundle,
   verifyMacSignature,
@@ -57,39 +63,100 @@ const binaries = cargoBuild(build, {
   MACOSX_DEPLOYMENT_TARGET: product.minimumMacOS,
 });
 
-const plist = `<?xml version="1.0" encoding="UTF-8"?>
+/** An Info.plist with string values, then `raw` lines inside the dict. */
+const plist = (
+  strings: Record<string, string>,
+  raw: string[] = [],
+) => `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-${Object.entries({
-  CFBundleDevelopmentRegion: "en",
-  CFBundleDisplayName: product.name,
-  CFBundleExecutable: product.name,
-  CFBundleIconFile: "icon.icns",
-  CFBundleIdentifier: product.id,
-  CFBundleInfoDictionaryVersion: "6.0",
-  CFBundleName: product.name,
-  CFBundlePackageType: "APPL",
-  CFBundleShortVersionString: version,
-  CFBundleVersion: version,
-  LSApplicationCategoryType: product.macCategory,
-  LSMinimumSystemVersion: product.minimumMacOS,
-  NSPrincipalClass: "NSApplication",
-})
-  .map(([key, value]) => `\t<key>${key}</key>\n\t<string>${value}</string>`)
-  .join("\n")}
-\t<key>LSUIElement</key>
-\t<true/>
-\t<key>NSHighResolutionCapable</key>
-\t<true/>
-\t<key>NSAppTransportSecurity</key>
-\t<dict>
-\t\t<key>NSAllowsLocalNetworking</key>
-\t\t<true/>
-\t</dict>
+${[
+  ...Object.entries(strings).map(
+    ([key, value]) => `\t<key>${key}</key>\n\t<string>${value}</string>`,
+  ),
+  ...raw,
+].join("\n")}
 </dict>
 </plist>
 `;
+const appPlist = plist(
+  {
+    CFBundleDevelopmentRegion: "en",
+    CFBundleDisplayName: product.name,
+    CFBundleExecutable: product.name,
+    CFBundleIconFile: "icon.icns",
+    CFBundleIdentifier: product.id,
+    CFBundleInfoDictionaryVersion: "6.0",
+    CFBundleName: product.name,
+    CFBundlePackageType: "APPL",
+    CFBundleShortVersionString: version,
+    CFBundleVersion: version,
+    LSApplicationCategoryType: product.macCategory,
+    LSMinimumSystemVersion: product.minimumMacOS,
+    NSPrincipalClass: "NSApplication",
+  },
+  [
+    "\t<key>LSUIElement</key>",
+    "\t<true/>",
+    "\t<key>NSHighResolutionCapable</key>",
+    "\t<true/>",
+    "\t<key>NSAppTransportSecurity</key>",
+    "\t<dict>",
+    "\t\t<key>NSAllowsLocalNetworking</key>",
+    "\t\t<true/>",
+    "\t</dict>",
+  ],
+);
+
+/**
+ * Squirrel.framework with only scripts/squirrel-relaunch.c as its ShipIt, and an empty
+ * library as the framework binary, so codesign seals it like any framework.
+ */
+async function stageRelaunch(app: string): Promise<void> {
+  const framework = join(app, squirrel.framework);
+  const current = join(framework, "Versions/A");
+  await mkdir(join(current, "Resources"), { recursive: true });
+  const target = [
+    "-target",
+    `${architecture(arch).swift}-apple-macos${product.minimumMacOS}`,
+  ];
+  run("xcrun", [
+    "clang",
+    ...target,
+    "-O2",
+    "-o",
+    join(app, squirrel.shipIt),
+    join(repo, "scripts/squirrel-relaunch.c"),
+  ]);
+  run("xcrun", [
+    "clang",
+    ...target,
+    "-dynamiclib",
+    "-install_name",
+    "@rpath/Squirrel.framework/Versions/A/Squirrel",
+    "-o",
+    join(current, "Squirrel"),
+    "-x",
+    "c",
+    "/dev/null",
+  ]);
+  await writeFile(
+    join(current, "Resources/Info.plist"),
+    plist({
+      CFBundleExecutable: "Squirrel",
+      CFBundleIdentifier: `${product.id}.relaunch`,
+      CFBundleInfoDictionaryVersion: "6.0",
+      CFBundleName: "Squirrel",
+      CFBundlePackageType: "FMWK",
+      CFBundleShortVersionString: version,
+      CFBundleVersion: version,
+    }),
+  );
+  await symlink("A", join(framework, "Versions/Current"));
+  await symlink("Versions/Current/Squirrel", join(framework, "Squirrel"));
+  await symlink("Versions/Current/Resources", join(framework, "Resources"));
+}
 
 interface Identity {
   /** `-` for ad-hoc, else the certificate's SHA-1. */
@@ -237,7 +304,8 @@ try {
   await copyFile(join(binaries, product.helper), join(macOS, product.helper));
   await copyFile(join(repo, "build/icon.icns"), join(resources, "icon.icns"));
   await stageLicences(join(resources, "licenses"), [build]);
-  await writeFile(join(app, "Contents/Info.plist"), plist);
+  await writeFile(join(app, "Contents/Info.plist"), appPlist);
+  await stageRelaunch(app);
   await writeFile(join(app, "Contents/PkgInfo"), "APPL????");
   for (const file of [
     join(macOS, product.name),
@@ -255,6 +323,8 @@ try {
   manifest.binarySha256 = sha256(await readFile(join(core, coreLayout.binary)));
   writeCoreManifest(core, manifest);
   sign(join(macOS, product.helper), identity);
+  sign(join(app, squirrel.shipIt), identity);
+  sign(join(app, squirrel.framework, "Versions/A"), identity);
   // An ad-hoc signature's own requirement is its hash, which no later build meets.
   sign(
     app,
