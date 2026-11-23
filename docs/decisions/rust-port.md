@@ -17,8 +17,18 @@ option below. Only the host changes.
 ### Processes
 
 - **One daemon binary, `nonstopvibin`.** It serves the gateway, the management API and the
-  embedded React UI, runs the CLI, and hosts the tray in desktop mode. On Linux it links no GUI
-  library, so the same binary runs on a headless server.
+  React UI, runs the CLI, and hosts the tray in desktop mode. On Linux it links no GUI
+  library, so the same binary runs on a headless server. With no command it is the desktop
+  app; on Linux without `DISPLAY` or `WAYLAND_DISPLAY` it prints the headless help instead,
+  as the TypeScript CLI did.
+- **The UI is a directory beside the daemon, not embedded.** A package puts the built
+  interface in `client/` next to the real executable (`Contents/Resources/client` in the macOS
+  bundle), as the server archive already did; a source checkout serves `dist/client`.
+  _Deviation from Fable,_ who embedded it with a `build.rs`. One code path serves packages,
+  development runs and the golden replay, `cargo build` and `cargo test` never need the
+  JavaScript build, the server archive and `install.sh` keep their layout, and a UI-only
+  change does not rebuild the daemon. The cost is a `stat` per request and a read per
+  uncached file; the ETag stays per launch, so file times are never trusted.
 - **One window helper, `nonstopvibin-window`.** It is the only code that links WebKit (WKWebView
   on macOS, WebKitGTK 4.1 on Linux). The daemon starts it when a window or a dialog opens, and
   it exits when its last window closes. Process exit is what guarantees that no WebKit process
@@ -43,7 +53,7 @@ option below. Only the host changes.
 - The helper serves `bootstrap`, `copy`, `chooseProject`, `releaseWindow` and `showWindow`.
   It forwards `openExternal`, `getLoginItem`, `setLoginItem` and `revealData` to the daemon over
   its stdio pipe, and the daemon validates each argument again.
-  *Deviation from Fable,* which moved those four to `/api/desktop/*` routes at the cost of about a
+  _Deviation from Fable,_ which moved those four to `/api/desktop/*` routes at the cost of about a
   dozen UI lines. The owner asked to keep the UI as unchanged as possible, and the pipe already
   exists and is private to a process the daemon started.
 - The session token reaches the helper on its stdin, never in argv, the environment or a URL.
@@ -59,19 +69,19 @@ option below. Only the host changes.
 
 Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 
-| Crate | Owns | Depends on |
-|---|---|---|
-| `domain` | Ids, enums, wire types, the provider and agent registry, secret newtypes, the helper protocol. No I/O. | — |
-| `store` | Data directory layout, owner and symlink checks, atomic writes, vault, SQLite thread, lock. | `domain` |
-| `net` | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring). | `domain` |
-| `core` | Core binary pin and hash checks, config, spawn, watchdog, ledger, restart policy, pool, management client, core updates. | `store`, `net` |
-| `accounts` | Accounts, quota, usage drain, the deadline scheduler, sign-in, pricing, model catalog. | `core` |
-| `agents` | The four agent setup writers, native config files, the credential socket. | `store` |
-| `gateway` | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through. | `domain` |
-| `server` | Listener, Host, Origin and token checks, `/api` routes, embedded UI, shutdown order. | all above |
-| `shell` | Tray, helper supervision, login item, app updater. | `server`, `net` |
-| `window` | The helper binary: `wry` window, bridge script, IPC, dialogs. | `domain` |
-| `cli` | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection. | `server`, `shell` |
+| Crate      | Owns                                                                                                                     | Depends on        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------- |
+| `domain`   | Ids, enums, wire types, the provider and agent registry, secret newtypes, the helper protocol. No I/O.                   | —                 |
+| `store`    | Data directory layout, owner and symlink checks, atomic writes, vault, SQLite thread, lock.                              | `domain`          |
+| `net`      | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring).                                              | `domain`          |
+| `core`     | Core binary pin and hash checks, config, spawn, watchdog, ledger, restart policy, pool, management client, core updates. | `store`, `net`    |
+| `accounts` | Accounts, quota, usage drain, the deadline scheduler, sign-in, pricing, model catalog.                                   | `core`            |
+| `agents`   | The four agent setup writers, native config files, the credential socket.                                                | `store`           |
+| `gateway`  | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                             | `domain`          |
+| `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order.                      | all above         |
+| `shell`    | Tray, helper supervision, login item, app updater.                                                                       | `server`, `net`   |
+| `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                            | `domain`          |
+| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection.                                       | `server`, `shell` |
 
 - The gateway receives a request and a `Lease` (profile id, slug, client and core keys, upstream
   address, in-flight guard). A `Lease` holds no management key, and the gateway crate cannot
@@ -147,10 +157,10 @@ every commit.
 
 ## What would change these decisions
 
-| Result | Then |
-|---|---|
-| The macOS helper fails to come to the front once in 20 tries on `macos-26` | Start it as a nested `.app` through LaunchServices, over a Unix socket |
-| Focus loss fails to close the popup once in 20 | An `NSEvent` monitor inside the helper |
-| The helper's first paint is over 150 ms slower than in-process `wry` | Keep the helper alive for 30 s after the last close |
-| `ksni` keeps the daemon above 20 MiB or 0.1 wakeups/s | Profile `zbus`; move the tray into the helper only if it cannot be made quiet |
-| A small API call's p99 during the 1 MB × 8 burst exceeds main's | Two tokio worker threads |
+| Result                                                                     | Then                                                                          |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The macOS helper fails to come to the front once in 20 tries on `macos-26` | Start it as a nested `.app` through LaunchServices, over a Unix socket        |
+| Focus loss fails to close the popup once in 20                             | An `NSEvent` monitor inside the helper                                        |
+| The helper's first paint is over 150 ms slower than in-process `wry`       | Keep the helper alive for 30 s after the last close                           |
+| `ksni` keeps the daemon above 20 MiB or 0.1 wakeups/s                      | Profile `zbus`; move the tray into the helper only if it cannot be made quiet |
+| A small API call's p99 during the 1 MB × 8 burst exceeds main's            | Two tokio worker threads                                                      |
