@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::Detected;
+use crate::install::Install;
 use crate::platform::UpdateTarget;
 
 #[derive(Debug, Clone)]
@@ -17,10 +18,12 @@ impl UpdateTarget for Target {
     const FEED: &'static str = "latest-linux.yml";
     const PAYLOAD: &'static str = ".AppImage";
 
-    fn detect() -> Detected<Self> {
-        match std::env::var_os("APPIMAGE").map(PathBuf::from) {
-            Some(image) if image.is_absolute() => Detected::Target(Self { image }),
-            _ => Detected::None,
+    fn detect(install: &Install) -> Detected<Self> {
+        match &install.app_image {
+            Some(image) => Detected::Target(Self {
+                image: image.clone(),
+            }),
+            None => Detected::None,
         }
     }
 

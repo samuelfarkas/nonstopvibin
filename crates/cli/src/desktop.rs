@@ -1,12 +1,8 @@
 //! The desktop app's daemon, as its shell sees it.
 
-use nsv_desktop::{HostEvent, TrayStatus};
-use nsv_domain::endpoint::Origin;
-use nsv_domain::id::ProfileId;
-use nsv_domain::secret::SessionToken;
 use nsv_files::DataDir;
 use nsv_server::Daemon;
-use nsv_shell::ShellHost;
+use nsv_shell::{HostEvent, Origin, ProfileId, SessionToken, ShellHost, TrayStatus};
 use tokio::sync::{broadcast, watch};
 
 /// The daemon, and the desktop part it was started with.

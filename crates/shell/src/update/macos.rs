@@ -10,6 +10,7 @@ use rustix::io::Errno;
 use tokio::process::Command;
 
 use super::Detected;
+use crate::install::{BUNDLE_RESOURCES, Install};
 use crate::log;
 use crate::platform::UpdateTarget;
 /// The bundle the release zip holds at its root.
@@ -26,22 +27,11 @@ impl UpdateTarget for Target {
     const FEED: &'static str = "latest-mac.yml";
     const PAYLOAD: &'static str = ".zip";
 
-    fn detect() -> Detected<Self> {
-        let Some((executable, bundle)) = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .ok()
-            .and_then(|executable| {
-                let bundle = executable.parent()?.parent()?.parent()?.to_owned();
-                Some((executable, bundle))
-            })
-            .filter(|(_, bundle)| {
-                bundle
-                    .extension()
-                    .is_some_and(|extension| extension == "app")
-            })
-        else {
+    fn detect(install: &Install) -> Detected<Self> {
+        let (Some(bundle), Some(executable)) = (&install.bundle, &install.executable) else {
             return Detected::None;
         };
+        let (bundle, executable) = (bundle.clone(), executable.clone());
         let replaceable = bundle
             .parent()
             .is_some_and(|folder| writable(&bundle) && writable(folder));
@@ -94,7 +84,7 @@ impl UpdateTarget for Target {
         )
         .await?;
         let core = app
-            .join("Contents/Resources")
+            .join(BUNDLE_RESOURCES)
             .join(PACKAGED_DIRECTORY)
             .join(BINARY);
         tokio::task::spawn_blocking(move || verify_core(&core, None))

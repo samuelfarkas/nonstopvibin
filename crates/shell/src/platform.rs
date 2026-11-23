@@ -1,9 +1,11 @@
 //! The shapes Linux and macOS each implement once: every platform twin in the shell implements
 //! one of these traits, beside the code it shares with the other platform.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::install::Install;
 use crate::tray::{Action, Look, TrayLink};
 use crate::update::Detected;
 
@@ -33,7 +35,9 @@ pub(crate) trait SystemTray: Sized {
 }
 
 /// Starting at login (`login.rs`).
-pub(crate) trait LoginItem {
+pub(crate) trait LoginItem: Sized {
+    /// The login item of `install`.
+    fn of(install: &Install) -> io::Result<Self>;
     fn enabled(&self) -> bool;
     /// Turns it on or off and answers whether it is on now.
     fn set(&self, enabled: bool) -> Result<bool, String>;
@@ -49,7 +53,7 @@ pub(crate) trait UpdateTarget: Sized {
     /// How the feed's payload name ends.
     const PAYLOAD: &'static str;
 
-    fn detect() -> Detected<Self>;
+    fn detect(install: &Install) -> Detected<Self>;
     /// What the swap replaces.
     fn path(&self) -> &Path;
     /// What starts the updated app.

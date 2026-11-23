@@ -20,7 +20,7 @@ pub mod panic;
 mod parse;
 mod session;
 
-pub use checks::{AllowedHost, DEV_HOST, InvalidHost};
+pub use checks::{AllowedHost, InvalidHost};
 pub use daemon::{Boundaries, CloseError, CoreOptions, Daemon, Options, StartError, VERSION};
 pub use desktop::Desktop;
 pub use panic::runtime;

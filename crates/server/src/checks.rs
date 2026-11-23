@@ -16,7 +16,7 @@ use tokio::sync::watch;
 use crate::listener::Phase;
 
 /// The Vite development server, whose Host and Origin a development run accepts.
-pub const DEV_HOST: &str = "127.0.0.1:5173";
+pub(crate) const DEV_HOST: &str = "127.0.0.1:5173";
 
 /// An exact DNS name such as a Tailscale Serve host, which an HTTPS reverse proxy uses for the
 /// interface and the management API: lowercase labels, at least one dot, an alphabetic

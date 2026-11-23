@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nsv_shell::{Login, Options};
+use nsv_shell::{Install, Login, Options};
 use nsv_testkit::shell::Host;
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
@@ -27,8 +27,14 @@ pub(crate) fn options(
     Options {
         helper,
         open_window,
-        packaged,
         login: Login::new(config, PathBuf::from("/opt/NonstopVibin/nonstopvibin")),
+        install: Install {
+            executable: None,
+            resources: PathBuf::from("/opt/NonstopVibin"),
+            packaged,
+            app_image: None,
+            bundle: None,
+        },
     }
 }
 

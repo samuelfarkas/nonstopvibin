@@ -36,6 +36,7 @@ use self::feed::{Rejected, Sums};
 use self::machine::{Checked, Command, Machine};
 use self::source::Source;
 use self::version::Version;
+use crate::install::Install;
 use crate::log;
 use crate::platform::UpdateTarget;
 
@@ -86,16 +87,16 @@ struct Updater {
 
 impl Updates {
     /// What this installation allows. Leftovers of an earlier update are removed.
-    pub(crate) fn detect(packaged: bool) -> Self {
+    pub(crate) fn detect(install: &Install) -> Self {
         #[expect(
             clippy::expect_used,
             reason = "the workspace version is X.Y.Z, which a version test parses"
         )]
         let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("an X.Y.Z version");
-        if !packaged || !cfg!(updates_enabled) {
+        if !install.packaged || !cfg!(updates_enabled) {
             return Self(Mode::Off);
         }
-        match Target::detect() {
+        match Target::detect(install) {
             Detected::None => Self(Mode::Off),
             Detected::NotReplaceable => Self(Mode::MoveFirst),
             Detected::Target(target) => {

@@ -1,6 +1,7 @@
 //! The shell's loop: tray clicks, the helper's messages, the daemon's status and events. It
 //! owns at most one helper and starts one only when a window must show.
 
+use std::io;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -13,6 +14,7 @@ use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::helper::{Event, Helper};
+use crate::install::Install;
 use crate::login::{Login, UNPACKAGED};
 use crate::platform::{LoginItem, Opener, Os, SystemTray};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
@@ -21,13 +23,30 @@ use crate::{ShellHost, UpdateFailed, external, log};
 
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// `nonstopvibin-window`: [`crate::helper_beside_executable`] in a build.
+    /// `nonstopvibin-window`.
     pub helper: PathBuf,
     /// Opens the main window once ready. `--background` and a macOS login launch start without.
     pub open_window: bool,
-    /// An installed build. A development run reads the login item but may not change it.
-    pub packaged: bool,
     pub login: Login,
+    /// An installed build may change the login item and update itself; a development run
+    /// reads the login item only.
+    pub install: Install,
+}
+
+impl Options {
+    /// The shell of `install`: its helper beside the executable, its login item, and the app
+    /// it updates.
+    ///
+    /// # Errors
+    /// When the executable's path or the configuration folder is unknown.
+    pub fn new(install: Install, open_window: bool) -> io::Result<Self> {
+        Ok(Self {
+            helper: install.helper()?,
+            open_window,
+            login: Login::of(&install)?,
+            install,
+        })
+    }
 }
 
 /// Runs the tray, the windows and app updates until Quit, until the daemon's event channel
@@ -46,7 +65,7 @@ pub async fn run(
     let mut status = host.tray_status();
     let mut events = host.events();
     let look = Look::of(&status.borrow_and_update());
-    let updates = Updates::detect(options.packaged);
+    let updates = Updates::detect(&options.install);
     let mut shell = Shell {
         host,
         tray: Tray::start(link.tray, look.clone(), updates.possible()).await,
@@ -61,7 +80,7 @@ pub async fn run(
         bounds: None,
         anchor: Anchor::point(0, 0),
     };
-    if shell.options.packaged
+    if shell.options.install.packaged
         && let Err(error) = shell.options.login.follow()
     {
         log(format_args!("could not update the login item: {error}"));
@@ -397,7 +416,7 @@ impl<H: ShellHost> Shell<'_, H> {
             }
             DaemonCall::GetLoginItem => Ok(Value::Bool(self.options.login.enabled())),
             DaemonCall::SetLoginItem(enabled) => {
-                if !self.options.packaged {
+                if !self.options.install.packaged {
                     return Err(UNPACKAGED.to_owned());
                 }
                 self.options.login.set(enabled).map(Value::Bool)

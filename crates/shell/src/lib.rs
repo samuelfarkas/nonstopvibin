@@ -6,6 +6,7 @@
 
 mod external;
 mod helper;
+mod install;
 mod login;
 mod platform;
 mod process;
@@ -13,15 +14,18 @@ mod shell;
 mod tray;
 mod update;
 
-use nsv_desktop::{HostEvent, TrayStatus};
-use nsv_domain::endpoint::Origin;
-use nsv_domain::id::ProfileId;
-use nsv_domain::secret::SessionToken;
 use nsv_files::DataDir;
 use tokio::sync::{broadcast, watch};
 
-pub use helper::{alert, beside_executable as helper_beside_executable};
+pub use helper::alert;
+pub use install::Install;
 pub use login::Login;
+// What `ShellHost` and `alert` speak, so their callers need no other crate.
+pub use nsv_desktop::pipe::Failure;
+pub use nsv_desktop::{HostEvent, TrayStatus};
+pub use nsv_domain::endpoint::Origin;
+pub use nsv_domain::id::ProfileId;
+pub use nsv_domain::secret::SessionToken;
 pub use process::run_desktop;
 pub use shell::{Options, run};
 pub use tray::TrayLink;

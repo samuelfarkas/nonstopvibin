@@ -17,6 +17,7 @@ mod linux {
     use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
 
+    use crate::install::Install;
     use crate::platform::LoginItem;
 
     const FILE: &str = "app.nonstopvibin.desktop";
@@ -38,31 +39,32 @@ mod linux {
             }
         }
 
-        /// From the environment: the configuration folder, and `$APPIMAGE` (the mounted image
-        /// moves with every launch) or else this executable.
-        ///
-        /// # Errors
-        /// When neither `$XDG_CONFIG_HOME` nor `$HOME` is set, or the executable's path is unknown.
-        pub fn from_environment() -> io::Result<Self> {
-            let absolute = |value: Option<OsString>| {
-                value.map(PathBuf::from).filter(|path| path.is_absolute())
-            };
-            let config = absolute(std::env::var_os("XDG_CONFIG_HOME"))
-                .or_else(|| absolute(std::env::var_os("HOME")).map(|home| home.join(".config")))
-                .ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
-            let executable = match absolute(std::env::var_os("APPIMAGE")) {
-                Some(image) => image,
-                None => std::env::current_exe()?,
-            };
-            Ok(Self::new(&config, executable))
-        }
-
         fn file(&self) -> PathBuf {
             self.autostart.join(FILE)
         }
     }
 
     impl LoginItem for Login {
+        /// The configuration folder from the environment, and the `AppImage` or else this
+        /// executable.
+        ///
+        /// # Errors
+        /// When neither `$XDG_CONFIG_HOME` nor `$HOME` is set, or the executable's path is unknown.
+        fn of(install: &Install) -> io::Result<Self> {
+            let absolute = |value: Option<OsString>| {
+                value.map(PathBuf::from).filter(|path| path.is_absolute())
+            };
+            let config = absolute(std::env::var_os("XDG_CONFIG_HOME"))
+                .or_else(|| absolute(std::env::var_os("HOME")).map(|home| home.join(".config")))
+                .ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
+            let executable = install
+                .app_image
+                .as_ref()
+                .or(install.executable.as_ref())
+                .ok_or_else(|| io::Error::other("the executable's path is unknown"))?;
+            Ok(Self::new(&config, executable.clone()))
+        }
+
         fn enabled(&self) -> bool {
             self.file().exists()
         }
@@ -218,8 +220,11 @@ mod linux {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::io;
+
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
+    use crate::install::Install;
     use crate::log;
     use crate::platform::LoginItem;
 
@@ -236,6 +241,11 @@ mod macos {
     }
 
     impl LoginItem for Login {
+        /// The registration names the running bundle, so the installation adds nothing.
+        fn of(_install: &Install) -> io::Result<Self> {
+            Ok(Self)
+        }
+
         #[expect(unsafe_code, reason = "objc2 marks every SMAppService method unsafe")]
         fn enabled(&self) -> bool {
             // SAFETY: a class method without arguments that returns a retained object.

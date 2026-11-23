@@ -8,7 +8,6 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, SystemTime};
 
 use nsv_agents::agent_environment;
-use nsv_domain::time::epoch_ms;
 use nsv_files::{DataDir, write_atomic};
 use nsv_server::{AllowedHost, Session};
 
@@ -275,10 +274,10 @@ fn home() -> Result<DataDir, CliError> {
 }
 
 /// Polls for half a minute until a daemon started at or after `since` answers.
-async fn wait_until_running(directory: &DataDir, since: i64) -> Result<bool, CliError> {
+async fn wait_until_running(directory: &DataDir, since: SystemTime) -> Result<bool, CliError> {
     for _ in 0..60 {
         if let Some(session) = Session::read(directory).map_err(CliError::from_display)?
-            && session.started_at >= since
+            && session.started_since(since)
             && session.probe().await.is_some()
         {
             return Ok(true);
@@ -378,7 +377,7 @@ pub(crate) async fn install(
             "The port changed from {previous_port} to {port}. Startup moves connected agents to the new port; restart running agents (or /reload in pi). Any connection it cannot update is reported in the app; resolve it in Connect agents."
         ));
     }
-    let since = epoch_ms(SystemTime::now()) - 1000;
+    let since = SystemTime::now() - Duration::from_secs(1);
     for args in [
         &["daemon-reload"][..],
         &["enable", UNIT][..],

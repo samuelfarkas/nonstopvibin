@@ -3,17 +3,17 @@
 //! owner-only ordinary file, and removed at shutdown only while it still names this process.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use nsv_domain::endpoint::{loopback_origin, session_link};
 use nsv_domain::secret::SessionToken;
-use nsv_domain::time::{iso_string, parse_iso};
+use nsv_domain::time::{epoch_ms, iso_string, parse_iso};
 use nsv_files::{DataDir, read_own_file, write_atomic_unsynced};
 use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::checks::AllowedHost;
+use crate::checks::{AllowedHost, DEV_HOST};
 
 /// What `server.json` holds.
 #[derive(Debug, Clone)]
@@ -69,6 +69,25 @@ impl Session {
     #[must_use]
     pub fn url(&self) -> String {
         session_link(&loopback_origin(self.port), &self.token)
+    }
+
+    /// The same link on the Vite development server, which serves a development run's
+    /// interface.
+    #[must_use]
+    pub fn development_url(&self) -> String {
+        session_link(&format!("http://{DEV_HOST}"), &self.token)
+    }
+
+    /// When the daemon started, as `Date.toISOString()` writes it.
+    #[must_use]
+    pub fn started(&self) -> String {
+        iso_string(self.started_at)
+    }
+
+    /// Whether the daemon started at or after `time`.
+    #[must_use]
+    pub fn started_since(&self, time: SystemTime) -> bool {
+        self.started_at >= epoch_ms(time)
     }
 
     /// The same link on each allowed HTTPS host.

@@ -9,10 +9,10 @@ mod service;
 
 use std::fmt::Display;
 use std::io::Write;
+use std::net::Ipv4Addr;
 use std::process::ExitCode;
 
 use nsv_core::upstream::SIGN_IN_PORTS;
-use nsv_domain::endpoint::LOOPBACK_HOST;
 use nsv_files::DataDir;
 use nsv_server::{AllowedHost, Session, VERSION};
 
@@ -154,8 +154,10 @@ fn url_text(session: &Session, ssh_connection: Option<&str>) -> String {
         .and_then(|connection| tunnel_command(connection, &user(), session.port));
     let mut lines = vec![
         format!(
-            "NonstopVibin is running on {LOOPBACK_HOST}:{} (pid {}).",
-            session.port, session.pid
+            "NonstopVibin is running on {}:{} (pid {}).",
+            Ipv4Addr::LOCALHOST,
+            session.port,
+            session.pid
         ),
         String::new(),
     ];
@@ -242,12 +244,7 @@ async fn command(args: &Args) -> Result<u8, CliError> {
         }
         ["service", "install"] => {
             let given_port = args.port.is_some().then_some(port);
-            service::install(
-                run::Layout::detect().packaged,
-                given_port,
-                allow_hosts.as_deref(),
-            )
-            .await?;
+            service::install(run::install().packaged, given_port, allow_hosts.as_deref()).await?;
             Ok(0)
         }
         ["service", "uninstall"] => {

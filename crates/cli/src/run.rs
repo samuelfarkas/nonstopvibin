@@ -1,16 +1,15 @@
 //! The daemon's two lives, `serve` and the desktop app, and the commands that ask a running
 //! one: `url` and `status`.
 
-use std::path::{Path, PathBuf};
+use std::net::Ipv4Addr;
+use std::path::Path;
 use std::process::ExitCode;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
-use nsv_desktop::pipe::Failure;
-use nsv_domain::endpoint::{LOOPBACK_HOST, session_link};
-use nsv_domain::time::iso_string;
 use nsv_files::{DataDir, LockError, ServerLock};
-use nsv_server::{AllowedHost, Boundaries, CoreOptions, DEV_HOST, Daemon, Options, Session, panic};
+use nsv_server::{AllowedHost, Boundaries, CoreOptions, Daemon, Options, Session, panic};
+use nsv_shell::{Failure, Install};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::desktop::Desktop;
@@ -20,6 +19,81 @@ use crate::{CliError, NOT_RUNNING, complain, say, url_text};
 /// Where the desktop app listens unless `NONSTOPVIBIN_PORT` says otherwise.
 const DESKTOP_PORT: u16 = 4318;
 
+/// Where this build is installed; a package keeps its core in its resources.
+pub(crate) fn install() -> Install {
+    Install::detect(&Path::new(PACKAGED_DIRECTORY).join(BINARY))
+}
+
+/// The daemon's two lives.
+enum Mode {
+    /// `serve`, with the command line's port and allowed hosts.
+    Serve {
+        port: u16,
+        allow_hosts: Vec<AllowedHost>,
+    },
+    /// The desktop app, with the part its shell follows.
+    Desktop(nsv_server::Desktop),
+}
+
+/// The daemon's options in `mode` on `install`; the match is where the two lives differ.
+fn options(mode: Mode, install: &Install) -> Result<Options, CliError> {
+    // `bun run dev`: a source checkout's `serve` also accepts the Vite development server's
+    // Host and Origin and starts without its core; packaged builds ignore the variable.
+    let development = matches!(mode, Mode::Serve { .. })
+        && !install.packaged
+        && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
+    let (port, allow_hosts, desktop, pinned, allow_missing) = match mode {
+        // `core:install` writes the pinned core, which development may replace by hand.
+        Mode::Serve { port, allow_hosts } => (port, allow_hosts, None, !development, development),
+        // Desktop signing rewrites the core and refreshes its manifest, and a development run
+        // without its core still opens.
+        Mode::Desktop(desktop) => (
+            desktop_port()?,
+            Vec::new(),
+            Some(desktop),
+            false,
+            !install.packaged,
+        ),
+    };
+    let (core, client) = if install.packaged {
+        (
+            install.resources.join(PACKAGED_DIRECTORY),
+            install.resources.join("client"),
+        )
+    } else {
+        (
+            install.resources.join(CHECKOUT_DIRECTORY),
+            install.resources.join("dist/client"),
+        )
+    };
+    Ok(Options {
+        port,
+        allow_hosts,
+        development,
+        desktop,
+        client,
+        core: CoreOptions {
+            binary: core.join(BINARY),
+            pinned,
+            // A source checkout shares the data folder: an installed core would shadow its pin.
+            feed: install.packaged.then(core_feed),
+            allow_missing,
+        },
+        agents: AgentDirectories::from_environment().map_err(CliError::from_display)?,
+    })
+}
+
+fn desktop_port() -> Result<u16, CliError> {
+    match std::env::var("NONSTOPVIBIN_PORT") {
+        Ok(value) if !value.is_empty() => value.parse().map_err(|_| {
+            CliError::new(format!(
+                "NONSTOPVIBIN_PORT must be a port number; got {value:?}."
+            ))
+        }),
+        _ => Ok(DESKTOP_PORT),
+    }
+}
+
 /// The reviewed core pin installed builds offer; `NONSTOPVIBIN_CORE_FEED` tries another, such
 /// as a pull request's.
 fn core_feed() -> String {
@@ -27,47 +101,6 @@ fn core_feed() -> String {
         .ok()
         .filter(|feed| !feed.is_empty())
         .unwrap_or_else(|| nsv_core::install::CORE_FEED.to_owned())
-}
-
-/// Where the core and the interface are: beside the real executable in a package (in
-/// `Contents/Resources` of a macOS bundle), or in the source checkout this was built from.
-pub(crate) struct Layout {
-    pub(crate) packaged: bool,
-    pub(crate) core: PathBuf,
-    pub(crate) client: PathBuf,
-}
-
-impl Layout {
-    pub(crate) fn detect() -> Self {
-        // The packaged binary may be reached through a ~/.local/bin symlink.
-        let resources = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .ok()
-            .and_then(|executable| executable.parent().map(Path::to_path_buf))
-            .map(|directory| {
-                if cfg!(target_os = "macos") {
-                    directory.join("../Resources")
-                } else {
-                    directory
-                }
-            });
-        if let Some(resources) = resources
-            && resources.join(PACKAGED_DIRECTORY).join(BINARY).is_file()
-        {
-            return Self {
-                packaged: true,
-                core: resources.join(PACKAGED_DIRECTORY).join(BINARY),
-                client: resources.join("client"),
-            };
-        }
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let checkout = std::fs::canonicalize(&checkout).unwrap_or(checkout);
-        Self {
-            packaged: false,
-            core: checkout.join(CHECKOUT_DIRECTORY).join(BINARY),
-            client: checkout.join("dist/client"),
-        }
-    }
 }
 
 /// SIGINT, SIGTERM and SIGHUP, received from before any initialization.
@@ -125,13 +158,13 @@ async fn start(
 }
 
 /// Waits for a signal, Quit, or a panic outside any request, then closes the daemon. Exits 1
-/// after such a panic or a failed close; the desktop app (`desktop`) first shows a failed
-/// close in main.ts's error box until it is dismissed.
+/// after such a panic or a failed close; the desktop app (`desktop`, its installation) first
+/// shows a failed close in main.ts's error box until it is dismissed.
 async fn run_until_stopped(
     daemon: &Daemon,
     signals: &mut Signals,
     shell: impl Future<Output = Result<(), nsv_shell::UpdateFailed>>,
-    desktop: bool,
+    desktop: Option<&Install>,
 ) -> u8 {
     let mut update_failed = false;
     tokio::select! {
@@ -144,9 +177,10 @@ async fn run_until_stopped(
     if let Err(error) = &closed {
         let reason = error.to_string();
         complain(&reason);
-        if desktop {
-            let shown =
-                tokio::task::spawn_blocking(move || nsv_shell::alert(Failure::Shutdown, &reason));
+        if let Some(install) = desktop.cloned() {
+            let shown = tokio::task::spawn_blocking(move || {
+                nsv_shell::alert(&install, Failure::Shutdown, &reason);
+            });
             if let Err(error) = shown.await {
                 complain(&format!("Could not show the error: {error}"));
             }
@@ -155,13 +189,7 @@ async fn run_until_stopped(
     u8::from(update_failed || closed.is_err() || panic::panicked())
 }
 
-fn agents() -> Result<AgentDirectories, CliError> {
-    AgentDirectories::from_environment().map_err(CliError::from_display)
-}
-
-/// `serve`: the headless server in the foreground. With `NONSTOPVIBIN_DEVELOPMENT=1`, a build
-/// run from its source checkout (`bun run dev`) also accepts the Vite development server's
-/// Host and Origin and starts without its core; packaged builds ignore the variable.
+/// `serve`: the headless server in the foreground.
 pub(crate) async fn serve(
     directory: DataDir,
     port: u16,
@@ -172,37 +200,21 @@ pub(crate) async fn serve(
         && existing.probe().await.is_some()
     {
         return Err(CliError::new(format!(
-            "NonstopVibin is already running on {LOOPBACK_HOST}:{} for {}. Run `nonstopvibin url` for its link.",
+            "NonstopVibin is already running on {}:{} for {}. Run `nonstopvibin url` for its link.",
+            Ipv4Addr::LOCALHOST,
             existing.port,
             directory.path().display()
         )));
     }
     let lock = directory.lock().map_err(CliError::from_display)?;
-    let layout = Layout::detect();
-    let development = !layout.packaged
-        && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
-    if !development && !layout.core.exists() {
+    let options = options(Mode::Serve { port, allow_hosts }, &install())?;
+    let development = options.development;
+    if !development && !options.core.binary.exists() {
         return Err(CliError::new(format!(
             "The proxy core is missing at {}. Reinstall NonstopVibin from its release archive.",
-            layout.core.display()
+            options.core.binary.display()
         )));
     }
-    let options = Options {
-        port,
-        allow_hosts,
-        development,
-        desktop: None,
-        client: layout.client,
-        core: CoreOptions {
-            binary: layout.core,
-            // `core:install` writes the pinned core, which development may replace by hand.
-            pinned: !development,
-            // A source checkout shares the data folder: an installed core would shadow its pin.
-            feed: layout.packaged.then(core_feed),
-            allow_missing: development,
-        },
-        agents: agents()?,
-    };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
     };
@@ -210,37 +222,41 @@ pub(crate) async fn serve(
     match daemon.session() {
         Some(session) if development => say(&format!(
             "Open the local interface: {}",
-            session_link(&format!("http://{DEV_HOST}"), &session.token)
+            session.development_url()
         )),
         Some(session) if std::io::IsTerminal::is_terminal(&std::io::stdout()) => say(&url_text(
             &session,
             std::env::var("SSH_CONNECTION").ok().as_deref(),
         )),
         _ => say(&format!(
-            "NonstopVibin {} is listening on {LOOPBACK_HOST}:{}. Run `nonstopvibin url` for the session link.",
+            "NonstopVibin {} is listening on {}:{}. Run `nonstopvibin url` for the session link.",
             nsv_server::VERSION,
+            Ipv4Addr::LOCALHOST,
             daemon.port()
         )),
     }
-    Ok(run_until_stopped(&daemon, &mut signals, std::future::pending(), false).await)
+    Ok(run_until_stopped(&daemon, &mut signals, std::future::pending(), None).await)
 }
 
 /// The desktop app: the daemon, its tray and, unless `background`, the main window. A second
 /// launch finds the first through the data directory's lock and asks it to show its window.
 pub(crate) fn desktop(background: bool) -> ExitCode {
+    let install = install();
     let directory = match crate::service::data_directory() {
         Ok(directory) => directory,
         Err(error) => {
-            could_not_start(&error.message);
+            could_not_start(&install, &error.message);
             return ExitCode::FAILURE;
         }
     };
     nsv_shell::run_desktop(move |link| {
         let result = nsv_server::runtime()
             .map_err(CliError::from_display)
-            .and_then(|runtime| runtime.block_on(desktop_daemon(directory, background, link)));
+            .and_then(|runtime| {
+                runtime.block_on(desktop_daemon(&install, directory, background, link))
+            });
         result.unwrap_or_else(|error| {
-            could_not_start(&error.message);
+            could_not_start(&install, &error.message);
             1
         })
     })
@@ -248,12 +264,13 @@ pub(crate) fn desktop(background: bool) -> ExitCode {
 
 /// main.ts's error box, which held the exit until it was dismissed. A desktop user who
 /// started the app from a launcher or at login never sees standard error.
-fn could_not_start(message: &str) {
+fn could_not_start(install: &Install, message: &str) {
     complain(&format!("NonstopVibin could not start: {message}"));
-    nsv_shell::alert(Failure::Start, message);
+    nsv_shell::alert(install, Failure::Start, message);
 }
 
 async fn desktop_daemon(
+    install: &Install,
     directory: DataDir,
     background: bool,
     link: nsv_shell::TrayLink,
@@ -269,52 +286,19 @@ async fn desktop_daemon(
         }
         Err(error) => return Err(CliError::from_display(error)),
     };
-    let port = match std::env::var("NONSTOPVIBIN_PORT") {
-        Ok(value) if !value.is_empty() => value.parse().map_err(|_| {
-            CliError::new(format!(
-                "NONSTOPVIBIN_PORT must be a port number; got {value:?}."
-            ))
-        })?,
-        _ => DESKTOP_PORT,
-    };
-    let layout = Layout::detect();
     let desktop = nsv_server::Desktop::default();
-    let options = Options {
-        port,
-        allow_hosts: Vec::new(),
-        development: false,
-        desktop: Some(desktop.clone()),
-        client: layout.client,
-        core: CoreOptions {
-            binary: layout.core,
-            // Desktop signing rewrites the core and refreshes its manifest.
-            pinned: false,
-            feed: layout.packaged.then(core_feed),
-            // A development run without its core still opens.
-            allow_missing: !layout.packaged,
-        },
-        agents: agents()?,
-    };
+    let options = options(Mode::Desktop(desktop.clone()), install)?;
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
     };
-    let helper = nsv_shell::helper_beside_executable().map_err(CliError::from_display)?;
-    #[cfg(target_os = "linux")]
-    let login = nsv_shell::Login::from_environment().map_err(CliError::from_display)?;
-    #[cfg(not(target_os = "linux"))]
-    let login = nsv_shell::Login::new();
-    let shell_options = nsv_shell::Options {
-        helper,
-        open_window: !background,
-        packaged: layout.packaged,
-        login,
-    };
+    let shell_options =
+        nsv_shell::Options::new(install.clone(), !background).map_err(CliError::from_display)?;
     let host = Desktop {
         daemon: daemon.clone(),
         desktop,
     };
     let shell = nsv_shell::run(&host, shell_options, link);
-    Ok(run_until_stopped(&daemon, &mut signals, shell, true).await)
+    Ok(run_until_stopped(&daemon, &mut signals, shell, Some(install)).await)
 }
 
 /// A running daemon's `server.json` and state, if one answers.
@@ -376,11 +360,12 @@ pub(crate) async fn status(directory: &DataDir) -> Result<u8, CliError> {
         return Ok(NOT_RUNNING);
     };
     say(&format!(
-        "NonstopVibin {} is running on {LOOPBACK_HOST}:{} (pid {}, since {}).\nCore: CLIProxyAPI {}.{unit}",
+        "NonstopVibin {} is running on {}:{} (pid {}, since {}).\nCore: CLIProxyAPI {}.{unit}",
         state.version,
+        Ipv4Addr::LOCALHOST,
         session.port,
         session.pid,
-        iso_string(session.started_at),
+        session.started(),
         state.core_version
     ));
     Ok(0)

@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use nsv_desktop::TrayStatus;
-use nsv_shell::{Login, Options};
+use nsv_shell::{Install, Login, Options};
 use nsv_testkit::shell::Host;
 
 fn main() -> ExitCode {
@@ -17,11 +17,17 @@ fn main() -> ExitCode {
     let options = Options {
         helper: data.join("no-helper"),
         open_window: false,
-        packaged: false,
         #[cfg(target_os = "linux")]
         login: Login::new(&data, data.join("idle")),
         #[cfg(target_os = "macos")]
         login: Login::new(),
+        install: Install {
+            executable: None,
+            resources: data.clone(),
+            packaged: false,
+            app_image: None,
+            bundle: None,
+        },
     };
     nsv_shell::run_desktop(move |link| {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()

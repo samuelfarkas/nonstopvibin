@@ -3,7 +3,7 @@
 //! loses half a line. Dropping a [`Helper`] closes its stdin, and the helper then exits.
 
 use std::io::{self, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{self, ExitStatus, Stdio};
 
 use nsv_desktop::pipe::{self, Failure, FromHelper, Reason, Start, ToHelper};
@@ -12,22 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufRead
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
+use crate::install::Install;
 use crate::log;
-
-const NAME: &str = "nonstopvibin-window";
-
-/// The helper beside the daemon's executable: the same folder in a checkout or an `AppImage`,
-/// `Contents/MacOS` in the app bundle.
-///
-/// # Errors
-/// When the daemon's own path is unknown.
-pub fn beside_executable() -> io::Result<PathBuf> {
-    let executable = std::env::current_exe()?;
-    let directory = executable
-        .parent()
-        .ok_or_else(|| io::Error::other("the executable has no folder"))?;
-    Ok(directory.join(NAME))
-}
 
 /// The helper at `program`, reading the pipe on its stdin and logging to the daemon's stderr.
 fn command(program: &Path, stdout: Stdio) -> process::Command {
@@ -48,9 +34,9 @@ fn command(program: &Path, stdout: Stdio) -> process::Command {
 /// Shows why the desktop app failed in the helper's error dialog, as main.ts's error box did,
 /// and returns once it is dismissed: call it off the async runtime. Without a helper that can show it, Linux posts a desktop
 /// notification instead.
-pub fn alert(failure: Failure, reason: &str) {
+pub fn alert(install: &Install, failure: Failure, reason: &str) {
     let reason = Reason::new(reason);
-    let shown = beside_executable().and_then(|program| {
+    let shown = install.helper().and_then(|program| {
         let mut child = command(&program, Stdio::null()).spawn()?;
         let message = ToHelper::Alert {
             failure,

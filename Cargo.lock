@@ -1768,7 +1768,6 @@ version = "0.2.0"
 dependencies = [
  "nsv-agents",
  "nsv-core",
- "nsv-desktop",
  "nsv-domain",
  "nsv-files",
  "nsv-server",
