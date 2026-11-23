@@ -14,7 +14,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import sharp from "sharp";
-import pkg from "../package.json" with { type: "json" };
+import { product } from "../scripts/distribution.ts";
 
 if (process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true")
   throw new Error(
@@ -23,13 +23,13 @@ if (process.platform !== "darwin" || process.env.GITHUB_ACTIONS !== "true")
 
 const root = resolve(import.meta.dirname, "..");
 const results = join(root, "test-results/mac-desktop");
-const name = pkg.build.productName;
+const name = product.name;
 const packaged = join(root, `release/mac-${process.arch}/${name}.app`);
 const apps = join(homedir(), "Applications");
 const app = join(apps, `${name}.app`);
 const macOS = join(app, "Contents/MacOS");
 const daemonPath = join(macOS, name);
-const helperPath = join(macOS, "nonstopvibin-window");
+const helperPath = join(macOS, product.helper);
 const MAIN = "NonstopVibin";
 const QUOTA = "NonstopVibin quotas";
 const TRIALS = 20;
