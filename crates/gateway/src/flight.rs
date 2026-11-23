@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use nsv_domain::id::ProfileId;
 use nsv_domain::sync::locked;
 
-/// Requests one profile may have open at once.
 pub(crate) const LIMIT: u32 = 32;
 
 /// Counts requests per profile. A profile with none has no entry, so the map stays bounded.

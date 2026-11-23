@@ -175,7 +175,6 @@ fn pairs(query: &str) -> impl Iterator<Item = (&str, &str)> {
         .map(|pair| pair.split_once('=').unwrap_or((pair, "")))
 }
 
-/// Whether `encoded` form-decodes to exactly `expected`.
 fn decodes_to(encoded: &str, expected: &str) -> bool {
     FormDecoded(encoded.as_bytes()).eq(expected.bytes())
 }

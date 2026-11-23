@@ -21,7 +21,6 @@ fn work() -> ProfileId {
     ProfileId::parse(WORK).unwrap()
 }
 
-/// Reads from `socket` until `buffer` holds `needle`.
 async fn read_until(socket: &mut TcpStream, buffer: &mut Vec<u8>, needle: &[u8]) {
     let mut chunk = [0_u8; 4096];
     while !buffer.windows(needle.len()).any(|window| window == needle) {

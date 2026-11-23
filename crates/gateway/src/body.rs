@@ -18,14 +18,12 @@ enum Kind {
 }
 
 impl Body {
-    /// A body of these bytes.
     #[must_use]
     pub fn full(bytes: impl Into<Bytes>) -> Self {
         let bytes = bytes.into();
         Self(Kind::Full((!bytes.is_empty()).then_some(bytes)))
     }
 
-    /// An empty body.
     #[must_use]
     pub const fn empty() -> Self {
         Self(Kind::Full(None))
