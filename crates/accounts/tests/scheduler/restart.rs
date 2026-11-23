@@ -294,11 +294,7 @@ async fn a_restart_blocked_by_a_credential_swap_arms_no_wakeup_of_its_own_and_be
         // Its start is due, but nothing may start it until the swap ends.
         world.scheduler.launch().await.unwrap();
         world.settle().await;
-        assert_eq!(
-            world.scheduler.wakes_at(),
-            None,
-            "no core runs, so nothing is due"
-        );
+        world.assert_only_cleanup_due("no core runs");
         world.pass(Duration::from_secs(2)).await;
         assert_eq!(world.launches(&profile), 0);
         release.send_replace(true);
@@ -383,7 +379,7 @@ async fn assert_gave_up(world: &World, profile: &ProfileId) {
         .await;
     world.settle().await;
     assert_eq!(world.scheduler.gave_up(profile).as_deref(), Some(GAVE_UP));
-    assert_eq!(world.scheduler.wakes_at(), None, "no restart is due");
+    world.assert_only_cleanup_due("no restart is due");
     let (runtime, _) = world.pool().state().runtime(profile);
     assert_eq!(runtime, nsv_domain::wire::Runtime::Error);
     let reports = world.reports();

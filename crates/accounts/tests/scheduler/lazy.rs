@@ -22,20 +22,17 @@ async fn lazy_world(oauth: bool) -> (World, nsv_domain::id::ProfileId) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_idle_daemon_has_no_pending_deadline() {
+async fn an_idle_daemons_only_pending_deadline_is_the_daily_history_cleanup() {
     let (world, profile) = lazy_world(false).await;
     world.scheduler.launch().await.unwrap();
     world.settle().await;
     assert!(world.scheduler.is_dormant(&profile));
-    assert_eq!(
-        world.scheduler.wakes_at(),
-        None,
-        "nothing runs, so nothing is due"
-    );
+    world.assert_only_cleanup_due("nothing runs");
+    // Each day's cleanup schedules the next one, and nothing else.
     world
         .pass_by(Duration::from_hours(72), Duration::from_hours(1))
         .await;
-    assert_eq!(world.scheduler.wakes_at(), None);
+    world.assert_only_cleanup_due("nothing runs");
     assert_eq!(world.launches(&profile), 0);
     assert!(world.reports().is_empty(), "{:?}", world.reports());
 }

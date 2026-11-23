@@ -212,6 +212,21 @@ impl World {
             .unwrap()
     }
 
+    /// Asserts the only wakeup ahead is the daily history cleanup, about a day away.
+    #[track_caller]
+    pub(crate) fn assert_only_cleanup_due(&self, why: &str) {
+        let left = self
+            .scheduler
+            .wakes_at()
+            .map(|at| at.duration_since(tokio::time::Instant::now()));
+        assert!(
+            left.is_some_and(
+                |left| left > Duration::from_hours(23) && left <= Duration::from_hours(24)
+            ),
+            "{why}: the next wakeup is in {left:?}"
+        );
+    }
+
     /// Lets every task run until nothing moves without the clock.
     pub(crate) async fn settle(&self) {
         for _ in 0..24 {

@@ -50,7 +50,7 @@ pub struct Timing {
     pub idle: Duration,
     /// The drain period while a request or WebSocket stays open.
     pub open: Duration,
-    /// Retention cleanup, while a core runs.
+    /// Retention cleanup, running cores or not.
     pub prune: Duration,
     /// How long the first UI read after a pause waits for fresh account status.
     pub fresh: Duration,
@@ -768,13 +768,16 @@ impl Shared {
             .collect();
         let mut due: Option<Instant> = None;
         let mut consider = |at: Instant| due = Some(due.map_or(at, |due| due.min(at)));
-        // Maintenance only while a core runs: nothing else adds usage rows or reads accounts.
-        if !state.maintenance && !running.is_empty() {
+        if !state.maintenance {
+            // Daily, even with nothing running: retention deletes rows by age.
             if let Some(at) = state.next_prune {
                 consider(at);
             }
-            // Account polling only while a UI watches: nothing else reads them.
-            if let Some(at) = state.next_accounts.filter(|_| state.watched(now)) {
+            // Account polling only while a core runs and a UI watches: nothing else reads them.
+            if let Some(at) = state
+                .next_accounts
+                .filter(|_| !running.is_empty() && state.watched(now))
+            {
                 consider(at);
             }
         }
