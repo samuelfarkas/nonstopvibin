@@ -250,6 +250,12 @@ impl<F: Fetch + 'static> SignIn<F> {
             .cloned()
     }
 
+    /// The session in progress as it changes.
+    #[must_use]
+    pub fn sessions(&self) -> watch::Receiver<Option<OAuthSession>> {
+        self.0.session.subscribe()
+    }
+
     /// Whether a sign-in is pending in this profile's core: it must not stop for being idle.
     #[must_use]
     pub fn signing_in(&self, profile: &ProfileId) -> bool {
