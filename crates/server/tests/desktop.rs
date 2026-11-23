@@ -86,6 +86,23 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
     let refused = send(daemon.port(), "POST", "/api/desktop/show", &[], b"").await;
     assert_eq!(refused.status, 401);
+    let secret = daemon.session_token().expose_secret().to_owned();
+    for presented in [
+        format!("bearer {secret}"),
+        format!("Bearer {secret}x"),
+        format!("Bearer  {secret}"),
+        secret,
+    ] {
+        let refused = send(
+            daemon.port(),
+            "POST",
+            "/api/desktop/show",
+            &[("Authorization".to_owned(), presented)],
+            b"",
+        )
+        .await;
+        assert_eq!(refused.status, 401);
+    }
     let shown = send(
         daemon.port(),
         "POST",

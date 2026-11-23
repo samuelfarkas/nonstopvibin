@@ -23,7 +23,7 @@ use nsv_core::install::Releases;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::{Agent, RegistryError, registry};
-use nsv_domain::secret::{KeyDigest, same_secret};
+use nsv_domain::secret::KeyDigest;
 use nsv_domain::wire::{CatalogModel, Model};
 use nsv_gateway::{Activity, Body, Catalog, Host, ProfileAuth, Refusal, serve_connection};
 use nsv_store::{AuthSnapshot, Store, StoreError};
@@ -303,9 +303,10 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                     ));
                 }
             }
-            let presented = text(&request, header::AUTHORIZATION).unwrap_or("");
-            let expected = format!("Bearer {}", self.token.expose_secret());
-            if !same_secret(presented, &expected) {
+            let authorized = text(&request, header::AUTHORIZATION)
+                .and_then(|presented| presented.strip_prefix("Bearer "))
+                .is_some_and(|presented| self.token.matches(presented));
+            if !authorized {
                 return Err(Failure::status(
                     401,
                     "Open NonstopVibin from the desktop app, or run nonstopvibin url on the server for a new session link.",
