@@ -77,7 +77,13 @@ pub(crate) struct Knobs {
     pub(crate) hold: Option<Hold>,
     /// A model the upstream answers 429.
     pub(crate) limited: Option<String>,
+    /// Sees each management call (the core and its path) before the core does; an answer it
+    /// gives replaces the core's.
+    pub(crate) intercept: Option<Intercept>,
 }
+
+pub(crate) type Intercept =
+    Arc<dyn Fn(&Core, &str) -> Option<BoxFuture<'static, Value>> + Send + Sync>;
 
 pub(crate) struct Core {
     pub(crate) profile: ProfileId,
@@ -348,6 +354,12 @@ impl Fake {
             .unwrap()
             .calls
             .push((core.profile.clone(), path.clone(), Instant::now()));
+        let intercepted = self
+            .knobs(|knobs| knobs.intercept.clone())
+            .and_then(|intercept| intercept(&core, &path));
+        if let Some(answer) = intercepted {
+            return Ok(respond(200, &answer.await));
+        }
         let hold = self.knobs(|knobs| {
             knobs.hold.as_ref().and_then(|hold| {
                 (path.starts_with(hold.path) && (hold.when)(&core.profile))
