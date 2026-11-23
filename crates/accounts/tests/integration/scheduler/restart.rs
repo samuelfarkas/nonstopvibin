@@ -90,7 +90,7 @@ async fn a_core_that_exits_unexpectedly_runs_again_after_the_next_pass_with_its_
     world.fake.kill(&profile);
     world
         .until("the restarted core", Duration::from_secs(5), |world| {
-            world.launches(&profile) == 2 && world.pool().usable(&profile)
+            world.launches(&profile) == 2 && world.pool().state().usable(&profile)
         })
         .await;
     world.scheduler.settled().await;
@@ -191,14 +191,14 @@ async fn only_a_profile_with_a_subscription_is_started_again_whether_or_not_it_r
             Duration::from_secs(5),
             |world| {
                 world.launches(&kept) == 2
-                    && world.pool().running(&kept)
-                    && world.pool().running(&unstarted)
+                    && world.pool().state().running(&kept)
+                    && world.pool().state().running(&unstarted)
             },
         )
         .await;
     world.pass(Duration::from_secs(5)).await;
     assert_eq!(world.launches(&bare), 1);
-    assert!(!world.pool().alive(&bare));
+    assert!(!world.pool().state().alive(&bare));
     assert_eq!(world.launches(&fresh), 0);
 }
 
@@ -220,7 +220,7 @@ async fn a_profile_held_for_a_credential_swap_and_every_profile_once_shutdown_be
     let test = async {
         world
             .until("the held core stopped", Duration::from_secs(5), |world| {
-                !world.pool().alive(&held)
+                !world.pool().state().alive(&held)
             })
             .await;
         // A pass runs while the held profile is stopped and due a restart.
@@ -229,15 +229,18 @@ async fn a_profile_held_for_a_credential_swap_and_every_profile_once_shutdown_be
             .until(
                 "the other profile restarted",
                 Duration::from_secs(5),
-                |world| world.launches(&other) == 2 && world.pool().running(&other),
+                |world| world.launches(&other) == 2 && world.pool().state().running(&other),
             )
             .await;
-        assert!(!world.pool().alive(&held), "held stays stopped");
+        assert!(!world.pool().state().alive(&held), "held stays stopped");
         release.send_replace(true);
     };
     let (swapped, ()) = tokio::join!(world.run(swap), test);
     swapped.unwrap();
-    assert!(world.pool().running(&held), "the swap itself starts it");
+    assert!(
+        world.pool().state().running(&held),
+        "the swap itself starts it"
+    );
     assert_eq!(world.launches(&held), 2);
     assert!(world.reports().is_empty(), "{:?}", world.reports());
 
@@ -247,8 +250,8 @@ async fn a_profile_held_for_a_credential_swap_and_every_profile_once_shutdown_be
     world.pass(Duration::from_secs(2)).await;
     assert_eq!(world.launches(&other), 2);
     world.run(world.scheduler.shutdown()).await.unwrap();
-    assert!(!world.pool().alive(&held));
-    assert!(!world.pool().alive(&other));
+    assert!(!world.pool().state().alive(&held));
+    assert!(!world.pool().state().alive(&other));
 }
 
 #[tokio::test(start_paused = true)]
@@ -306,7 +309,7 @@ async fn a_restart_blocked_by_a_credential_swap_arms_no_wakeup_of_its_own_and_be
     swapped.unwrap();
     world
         .until("the restart", Duration::from_secs(2), |world| {
-            world.pool().running(&profile)
+            world.pool().state().running(&profile)
         })
         .await;
     assert_eq!(world.launches(&profile), 1);
@@ -459,7 +462,7 @@ async fn the_limits_last_core_up_past_the_stability_bound_with_no_tick_in_betwee
     let (world, profile) = giving_up("Steady", vec![crashing(); 3]).await;
     world
         .until("the last allowed core", Duration::from_secs(60), |world| {
-            world.launches(&profile) == 4 && world.pool().usable(&profile)
+            world.launches(&profile) == 4 && world.pool().state().usable(&profile)
         })
         .await;
     // Time itself is what this waits for: the core must outlast the bound.
@@ -472,7 +475,7 @@ async fn the_limits_last_core_up_past_the_stability_bound_with_no_tick_in_betwee
     world.fake.kill(&profile);
     world
         .until("the restart", Duration::from_secs(5), |world| {
-            world.launches(&profile) == 5 && world.pool().usable(&profile)
+            world.launches(&profile) == 5 && world.pool().state().usable(&profile)
         })
         .await;
     assert!(world.scheduler.gave_up(&profile).is_none());
@@ -501,7 +504,7 @@ async fn shutdown_abandons_a_restarted_profiles_quota_check_and_stores_nothing_f
     world.run(world.scheduler.shutdown()).await.unwrap();
     assert!(world.host.quota_stored.lock().unwrap().is_empty());
     assert!(world.reports().is_empty(), "{:?}", world.reports());
-    assert!(!world.pool().alive(&profile));
+    assert!(!world.pool().state().alive(&profile));
 }
 
 #[tokio::test(start_paused = true)]
@@ -697,7 +700,7 @@ async fn a_start_that_succeeds_while_the_last_automatic_starts_quota_check_is_pe
             Duration::from_secs(60),
             |world| {
                 world.launches(&profile) == 4
-                    && world.pool().usable(&profile)
+                    && world.pool().state().usable(&profile)
                     && world.host.quota_checks.lock().unwrap().len()
                         > world.host.quota_stored.lock().unwrap().len()
             },
@@ -712,12 +715,12 @@ async fn a_start_that_succeeds_while_the_last_automatic_starts_quota_check_is_pe
         .unwrap();
     let started = world.fake.latest(&profile).unwrap();
     assert_ne!(started.index, fourth.index);
-    assert!(world.pool().running(&profile));
+    assert!(world.pool().state().running(&profile));
     world.fake.kill(&profile);
     open.send_replace(true);
     world
         .until("the restart", Duration::from_secs(10), |world| {
-            world.launches(&profile) == 6 && world.pool().usable(&profile)
+            world.launches(&profile) == 6 && world.pool().state().usable(&profile)
         })
         .await;
     assert!(world.scheduler.gave_up(&profile).is_none());

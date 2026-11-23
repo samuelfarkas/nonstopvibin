@@ -45,7 +45,7 @@ async fn an_api_subscription_can_join_several_profiles_but_only_once_each() {
         .await
         .unwrap();
     assert!(
-        world.cores.pool().running(&company),
+        world.cores.pool().state().running(&company),
         "adding one starts its profile"
     );
     let duplicate = credentials
@@ -227,7 +227,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
             .credential_file(&profile, account.id.as_str())
             .exists()
     );
-    assert!(world.cores.pool().running(&profile));
+    assert!(world.cores.pool().state().running(&profile));
 }
 
 #[tokio::test]
@@ -299,7 +299,7 @@ async fn refresh_starts_a_kept_profile_first_and_checks_api_quota_even_when_it_c
     world.cores.pool().stop(&profile).await.unwrap();
     world.cores.refresh(&profile).await.unwrap();
     assert!(
-        world.cores.pool().running(&profile),
+        world.cores.pool().state().running(&profile),
         "a profile the app keeps running starts first"
     );
     world.cores.pool().stop(&profile).await.unwrap();
@@ -360,7 +360,7 @@ async fn refresh_answers_a_failed_start_and_keeps_the_last_good_check() {
     let launches = world.fake.launches().len();
     world.cores.refresh(&empty).await.unwrap();
     assert_eq!(world.fake.launches().len(), launches);
-    assert!(!world.cores.pool().alive(&empty));
+    assert!(!world.cores.pool().state().alive(&empty));
 }
 
 /// Gives the profile an `OpenCode` Go key, whose quota is asked of the provider with the key and
@@ -426,7 +426,7 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
     let world = World::new("changes-refresh-go").await;
     let profile = world.profile("Go fixture").await;
     let go_checks = go_account(&world, &profile).await;
-    assert!(world.cores.pool().running(&profile));
+    assert!(world.cores.pool().state().running(&profile));
     // Adding the account checked it once already.
     let added = go_checks();
     let held = world

@@ -35,6 +35,10 @@ impl Host for TestHost {
         self.reports.lock().unwrap().push(message);
     }
 
+    fn now(&self) -> i64 {
+        nsv_domain::time::epoch_ms(std::time::SystemTime::now())
+    }
+
     fn signing_in(&self, profile: &ProfileId) -> bool {
         self.signing_in.lock().unwrap().as_ref() == Some(profile)
     }

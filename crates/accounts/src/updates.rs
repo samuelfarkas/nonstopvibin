@@ -31,7 +31,7 @@ use tokio::sync::watch;
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::sandbox::Sandbox;
-use crate::sign_in::{Backends, Report, SignIn};
+use crate::sign_in::{Backends, Report, SignIn, about};
 use crate::task::{blocking, detached};
 
 pub struct UpdateOptions {
@@ -326,7 +326,7 @@ impl Inner {
         if self.options.feed.is_none() {
             return Err(AppError::new("Only installed builds update the core.", 409));
         }
-        if self.pool.closing() || *self.closing.borrow() {
+        if self.pool.state().closing || *self.closing.borrow() {
             return Err(AppError::shutting_down());
         }
         let began = self.phase.send_if_modified(|current| {
@@ -477,7 +477,7 @@ impl Inner {
         let pool = &self.pool;
         for profile in profiles {
             // Starts are refused once shutdown begins; that is no failure of the core.
-            if pool.closing() {
+            if pool.state().closing {
                 return Ok(());
             }
             // A start under way may have read the previous core.
@@ -493,10 +493,10 @@ impl Inner {
             // Nothing else starts it between its stop and its start on the new core.
             let restarted = pool.while_stopped(&profile.id, std::future::ready(Ok(())));
             if let Err(error) = restarted.await {
-                if pool.closing() {
+                if pool.state().closing {
                     return Ok(());
                 }
-                (self.options.report)(format!("{}: {}", profile.name, error.message));
+                (self.options.report)(about(&profile.name, &error.message));
             }
         }
         Ok(())

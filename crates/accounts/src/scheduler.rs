@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, UNIX_EPOCH};
 
 use nsv_core::pool::{
     Backend, BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, PoolState,
@@ -24,7 +24,6 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
-use nsv_domain::time::epoch_ms;
 use nsv_net::Method;
 use nsv_store::{ProfileFact, ProfileFacts, Store};
 use tokio::sync::{Notify, watch};
@@ -34,6 +33,7 @@ use crate::accounts::Accounts;
 use crate::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
 };
+use crate::sign_in::about;
 use crate::usage::{PAGE, parse_page};
 
 /// The scheduler's periods.
@@ -93,6 +93,10 @@ pub static TIMING: LazyLock<Timing> = LazyLock::new(|| {
 pub trait Host: Send + Sync + 'static {
     /// One error-list entry.
     fn report(&self, message: String);
+
+    /// Milliseconds since the epoch: what stamps a usage row without its own time, and what
+    /// retention counts back from.
+    fn now(&self) -> i64;
 
     /// A sign-in is pending in the profile's core: its core must not stop for being idle.
     fn signing_in(&self, profile: &ProfileId) -> bool;
@@ -304,7 +308,7 @@ impl Scheduler {
                 .filter(|fact| fact.enabled)
                 .filter(|fact| {
                     // A core already running (started before launch) is no longer dormant.
-                    let dormant = state.lazy(&fact.id) && !self.0.pool.alive(&fact.id);
+                    let dormant = state.lazy(&fact.id) && !self.0.pool.state().alive(&fact.id);
                     state.track(&fact.id).dormant = dormant;
                     !dormant
                 })
@@ -314,10 +318,10 @@ impl Scheduler {
         let mut reported = BTreeSet::new();
         for (profile, name) in eager {
             if let Err(error) = self.0.pool.start(&profile, false).await {
-                if self.0.pool.closing() {
+                if self.0.pool.state().closing {
                     return Err(error);
                 }
-                self.0.host.report(format!("{name}: {}", error.message));
+                self.0.host.report(about(&name, &error.message));
                 reported.insert(profile);
             }
         }
@@ -556,7 +560,7 @@ impl Shared {
     }
 
     fn report_for(&self, state: &State, profile: &ProfileId, message: &str) {
-        if let Some(entry) = state.fact(profile, |fact| format!("{}: {message}", fact.name)) {
+        if let Some(entry) = state.fact(profile, |fact| about(&fact.name, message)) {
             self.host.report(entry);
         }
     }
@@ -617,7 +621,7 @@ impl Shared {
             let notified = self.notify.notified();
             let mut notified = std::pin::pin!(notified);
             notified.as_mut().enable();
-            if self.pool.closing() {
+            if self.pool.state().closing {
                 return;
             }
             let scheduled = self.lock().scheduled;
@@ -742,7 +746,7 @@ impl Shared {
             };
             let mut state = shared.lock();
             if let Some(Err(error)) = checked
-                && !shared.pool.closing()
+                && !shared.pool.state().closing
             {
                 shared.report_for(&state, &profile, &error.message);
             }
@@ -975,12 +979,8 @@ impl Shared {
 
     /// Retention cleanup, then account status or quota of every usable profile.
     async fn maintenance(self: Arc<Self>, prune: bool, accounts: bool, quotas: bool) {
-        if prune
-            && let Err(error) = self
-                .store
-                .call(|db| db.prune_usage(SystemTime::now()))
-                .await
-        {
+        let now = UNIX_EPOCH + Duration::from_millis(u64::try_from(self.host.now()).unwrap_or(0));
+        if prune && let Err(error) = self.store.call(move |db| db.prune_usage(now)).await {
             self.host
                 .report(format!("History cleanup: {}", AppError::from(error)));
         }
@@ -1116,7 +1116,7 @@ impl Shared {
                 MANAGEMENT_TIMEOUT,
             )
             .await?;
-        let records = parse_page(profile, &page, epoch_ms(SystemTime::now()))?;
+        let records = parse_page(profile, &page, self.host.now())?;
         {
             let mut state = self.lock();
             let now = Instant::now();

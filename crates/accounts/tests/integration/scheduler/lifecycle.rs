@@ -81,7 +81,7 @@ async fn a_failing_stop_does_not_keep_shutdown_from_draining_and_stopping_the_ot
             "every profile's usage was drained"
         );
     }
-    assert!(!world.pool().alive(&profiles[2]));
+    assert!(!world.pool().state().alive(&profiles[2]));
 }
 
 #[tokio::test(start_paused = true)]
@@ -91,7 +91,7 @@ async fn queued_starts_reject_shutdown_after_a_pending_accounting_drain() {
     let pool = world.pool().clone();
     let (release, holding) = world
         .fake
-        .hold("/usage-queue", move |profile| !pool.usable(profile));
+        .hold("/usage-queue", move |profile| !pool.state().usable(profile));
     let test = async {
         let stopping = world.pool().stop(profile);
         let starting = async {
@@ -122,7 +122,7 @@ async fn queued_starts_reject_shutdown_after_a_pending_accounting_drain() {
         (503, "nonstopvibin is shutting down.")
     );
     assert_eq!(world.launches(profile), 1);
-    assert!(!world.pool().alive(profile));
+    assert!(!world.pool().state().alive(profile));
     assert!(!world.pool().state().starting(profile));
 }
 
@@ -133,7 +133,7 @@ async fn shutdown_lets_the_schedulers_running_drain_pass_finish_before_it_stops_
     let pool = world.pool().clone();
     let (release, holding) = world
         .fake
-        .hold("/usage-queue", move |profile| pool.usable(profile));
+        .hold("/usage-queue", move |profile| pool.state().usable(profile));
     world.scheduler.activity(&profile, false);
     world
         .until("the drain pass", Duration::from_secs(1), |_| {
@@ -143,12 +143,15 @@ async fn shutdown_lets_the_schedulers_running_drain_pass_finish_before_it_stops_
     let shutdown = world.scheduler.shutdown();
     let test = async {
         world.pass(Duration::from_secs(1)).await;
-        assert!(world.pool().alive(&profile), "the pass is still under way");
+        assert!(
+            world.pool().state().alive(&profile),
+            "the pass is still under way"
+        );
         release.send_replace(true);
     };
     let (shut, ()) = world.run(async { tokio::join!(shutdown, test) }).await;
     shut.unwrap();
-    assert!(!world.pool().alive(&profile));
+    assert!(!world.pool().state().alive(&profile));
 }
 
 #[tokio::test(start_paused = true)]
@@ -520,7 +523,7 @@ async fn a_stop_completes_when_the_core_exits_during_its_final_drain() {
         "stopped after {:?}",
         started.elapsed()
     );
-    assert!(!world.pool().alive(profile));
+    assert!(!world.pool().state().alive(profile));
 }
 
 #[tokio::test(start_paused = true)]
@@ -557,5 +560,5 @@ async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
         "the gateway is refused during the stop"
     );
     assert_eq!(world.usage(profile).await.len(), 2 * 500 + 3);
-    assert!(!world.pool().alive(profile));
+    assert!(!world.pool().state().alive(profile));
 }

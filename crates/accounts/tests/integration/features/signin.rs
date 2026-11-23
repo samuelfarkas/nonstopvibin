@@ -429,14 +429,20 @@ async fn a_pending_sign_in_keeps_an_idle_core_running() {
         .await
         .unwrap();
     tokio::time::sleep(idle * 4).await;
-    assert!(world.cores.pool().running(&profile), "a pending sign-in");
+    assert!(
+        world.cores.pool().state().running(&profile),
+        "a pending sign-in"
+    );
     world
         .cores
         .cancel_sign_in(&profile, &session.state)
         .await
         .unwrap();
     tokio::time::sleep(idle * 4).await;
-    assert!(!world.cores.pool().running(&profile), "idle once it ended");
+    assert!(
+        !world.cores.pool().state().running(&profile),
+        "idle once it ended"
+    );
     world.cores.shutdown().await.unwrap();
 }
 
@@ -545,7 +551,7 @@ async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_i
         "the change ran before shutdown dropped the sign-in"
     );
     shutdown.await.unwrap().unwrap();
-    assert!(!world.cores.pool().alive(&profile));
+    assert!(!world.cores.pool().state().alive(&profile));
 }
 
 #[tokio::test]
@@ -586,7 +592,7 @@ async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_cor
         "no stop began during the change"
     );
     shutdown.await.unwrap().unwrap();
-    assert!(!world.cores.pool().alive(&profile));
+    assert!(!world.cores.pool().state().alive(&profile));
 }
 
 /// Signs in to Claude on the profile's sandbox and pastes the redirect.
@@ -784,7 +790,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
         core_before,
         "its core restarted"
     );
-    assert!(world.cores.pool().running(&first));
+    assert!(world.cores.pool().state().running(&first));
     assert_eq!(account.id, first_id);
     assert_eq!(account.auth_index.as_deref(), Some(first_index.as_str()));
     assert!(account.disabled);
@@ -807,7 +813,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     let account = confirm(&world, &first, &session).await;
     assert_eq!(account.id, first_id);
     assert!(
-        !world.cores.pool().alive(&first),
+        !world.cores.pool().state().alive(&first),
         "a stopped profile is not started"
     );
     assert!(account.disabled);
@@ -991,6 +997,6 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     world.cores.pool().stop(&first).await.unwrap();
     world.cores.shutdown().await.unwrap();
     assert_eq!(sign_in.sign_in_session(&first), None);
-    assert!(!world.cores.pool().alive(&second));
+    assert!(!world.cores.pool().state().alive(&second));
     assert_eq!(names(&world.data().join("oauth-pending")).len(), 0);
 }

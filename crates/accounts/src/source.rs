@@ -29,7 +29,7 @@ impl QuotaSource for PoolSource {
     }
 
     fn usable(&self, profile: &ProfileId) -> bool {
-        self.pool.usable(profile)
+        self.pool.state().usable(profile)
     }
 
     async fn api_call(&self, profile: &ProfileId, body: Value) -> Result<Value, AppError> {

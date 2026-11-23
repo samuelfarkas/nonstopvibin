@@ -90,6 +90,11 @@ pub type Backends = Arc<dyn Fn(&DataDir) -> Arc<dyn Backend> + Send + Sync>;
 /// Adds a message to the app's error list.
 pub type Report = Arc<dyn Fn(String) + Send + Sync>;
 
+/// The error-list entry for a failure of the profile named `name`.
+pub(crate) fn about(name: &str, message: &str) -> String {
+    format!("{name}: {message}")
+}
+
 pub struct SignInOptions {
     pub backends: Backends,
     /// Identity checks of a reviewed credential.
@@ -360,7 +365,7 @@ impl SignIn {
             .run(move |inner, mut state| async move {
                 let pending = inner.session.borrow().clone();
                 if let Some(session) = pending {
-                    if inner.now() < session.expires_at {
+                    if (inner.options.clock)() < session.expires_at {
                         return Err(AppError::new("Finish or cancel the sign-in first.", 409));
                     }
                     // Ended while the core that holds it still runs.
@@ -373,10 +378,6 @@ impl SignIn {
 }
 
 impl Inner {
-    fn now(&self) -> u64 {
-        u64::try_from((self.options.clock)()).unwrap_or(0)
-    }
-
     /// Runs `action` after the actions queued before it, holding the state.
     async fn run<T, A>(
         self: &Arc<Self>,
@@ -398,7 +399,7 @@ impl Inner {
             .clone()
             .filter(|session| session.profile_id == *profile && session.state == state)
             .ok_or_else(|| AppError::new(NOT_FOUND, 404))?;
-        if self.now() >= session.expires_at {
+        if (self.options.clock)() >= session.expires_at {
             return Err(AppError::new(
                 "This sign-in expired. Start a new sign-in.",
                 410,
@@ -430,13 +431,13 @@ impl Inner {
         provider: OAuthProvider,
         reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
-        if self.pool.closing() {
+        if self.pool.state().closing {
             return Err(AppError::shutting_down());
         }
         let id = profile.clone();
         self.store.call(move |db| db.profile(&id)).await?;
         let pending = self.session.borrow().clone();
-        if pending.is_some_and(|session| self.now() < session.expires_at) {
+        if pending.is_some_and(|session| (self.options.clock)() < session.expires_at) {
             return Err(AppError::new(
                 "Finish or cancel the current sign-in before starting another.",
                 409,
@@ -497,8 +498,9 @@ impl Inner {
     }
 
     /// Ends the session begun as `state.begun` once it expires.
-    fn expire_later(self: &Arc<Self>, state: &mut State, expires_at: u64) {
-        let delay = Duration::from_millis(expires_at.saturating_sub(self.now()).max(1));
+    fn expire_later(self: &Arc<Self>, state: &mut State, expires_at: i64) {
+        let left = expires_at.saturating_sub((self.options.clock)()).max(1);
+        let delay = Duration::from_millis(left.unsigned_abs());
         let (weak, begun) = (Arc::downgrade(self), state.begun);
         let timer = tokio::spawn(async move {
             tokio::time::sleep(delay).await;
@@ -567,16 +569,15 @@ impl Inner {
         ) else {
             return Err(no_link());
         };
-        let now = self.now();
+        let now = (self.options.clock)();
         let seconds = number(response.get("expires_in"))
             .unwrap_or(DEFAULT_EXPIRY_SECONDS)
             .max(1.0);
         #[expect(
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "at least one second; a lifetime beyond u64 milliseconds saturates"
+            reason = "at least one second; a lifetime beyond i64 milliseconds saturates"
         )]
-        let lifetime = (seconds * 1000.0) as u64;
+        let lifetime = (seconds * 1000.0) as i64;
         let session = OAuthSession {
             profile_id: profile.clone(),
             provider,

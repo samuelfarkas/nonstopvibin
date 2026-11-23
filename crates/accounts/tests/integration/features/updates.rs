@@ -105,7 +105,7 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
         *world.cores.pool().state().core(&profile).unwrap().binary,
         *bundled
     );
-    assert!(world.cores.pool().running(&profile));
+    assert!(world.cores.pool().state().running(&profile));
     let again = world.cores.use_bundled_core().await.unwrap_err();
     assert_eq!(
         (again.message.as_str(), again.status),

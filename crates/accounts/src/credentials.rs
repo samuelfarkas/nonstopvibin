@@ -424,7 +424,7 @@ impl Credentials {
         }
         self.listed(profile, account).await?;
         // A stopped or exited core keeps its record and port; nothing answers there.
-        if !pool.usable(profile) {
+        if !pool.state().usable(profile) {
             return Err(AppError::new("Start this profile first.", 409));
         }
         if let Some(disabled) = patch.disabled {

@@ -112,6 +112,7 @@ impl ProfileStatus {
 /// keeps the scheduler alive in a cycle.
 struct FeatureHost {
     report: Report,
+    clock: fn() -> i64,
     quotas: OnceLock<Arc<Quotas<PoolSource>>>,
     sessions: OnceLock<watch::Receiver<Option<OAuthSession>>>,
 }
@@ -119,6 +120,10 @@ struct FeatureHost {
 impl Host for FeatureHost {
     fn report(&self, message: String) {
         (self.report)(message);
+    }
+
+    fn now(&self) -> i64 {
+        (self.clock)()
     }
 
     fn signing_in(&self, profile: &ProfileId) -> bool {
@@ -178,6 +183,7 @@ impl Cores {
         let accounts = Arc::new(Accounts::new(store.clone()));
         let host = Arc::new(FeatureHost {
             report: Arc::clone(&report),
+            clock,
             quotas: OnceLock::new(),
             sessions: OnceLock::new(),
         });

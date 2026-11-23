@@ -296,26 +296,6 @@ impl Pool {
         self.context.state.clone()
     }
 
-    #[must_use]
-    pub fn running(&self, profile: &ProfileId) -> bool {
-        self.context.state.borrow().running(profile)
-    }
-
-    #[must_use]
-    pub fn usable(&self, profile: &ProfileId) -> bool {
-        self.context.state.borrow().usable(profile)
-    }
-
-    #[must_use]
-    pub fn alive(&self, profile: &ProfileId) -> bool {
-        self.context.state.borrow().alive(profile)
-    }
-
-    #[must_use]
-    pub fn closing(&self) -> bool {
-        self.context.closing()
-    }
-
     /// The port of the profile's usable core.
     ///
     /// # Errors

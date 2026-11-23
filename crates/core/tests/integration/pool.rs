@@ -148,7 +148,7 @@ async fn shutdown_completes_after_the_core_could_not_spawn() {
         error.message.starts_with("Could not launch proxy: "),
         "{error:?}"
     );
-    assert!(!world.pool().alive(&profile));
+    assert!(!world.pool().state().alive(&profile));
     world.run(world.pool().shutdown()).await.unwrap();
     assert!(!world.pool().state().starting(&profile));
 }
@@ -186,7 +186,7 @@ async fn shutdown_stops_slow_exiting_profiles_together_in_about_the_time_of_the_
             world.fake.called_at(profile, "/usage-queue").last() >= Some(&began),
             "every profile's usage was drained"
         );
-        assert!(!world.pool().alive(profile));
+        assert!(!world.pool().state().alive(profile));
         assert_eq!(world.pool().state().runtime(profile).0, Runtime::Stopped);
     }
 }
@@ -202,7 +202,7 @@ async fn a_core_held_stopped_for_a_credential_swap_cannot_start_until_the_swap_e
     let id = profile.clone();
     let swapped = world
         .run(world.pool().while_stopped(&profile, async move {
-            let alive = pool.alive(&id);
+            let alive = pool.state().alive(&id);
             let refused = pool.start(&id, false).await;
             let _ = told.send((alive, refused));
             Ok(())
@@ -215,7 +215,7 @@ async fn a_core_held_stopped_for_a_credential_swap_cannot_start_until_the_swap_e
     assert_eq!(refused.status, 409);
     assert!(refused.message.contains("reconnecting"), "{refused:?}");
     assert!(
-        world.pool().running(&profile),
+        world.pool().state().running(&profile),
         "running again after the swap"
     );
     assert!(!before.alive());
@@ -433,7 +433,7 @@ async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_shut
         "no request to the stopped core"
     );
     assert!(!world.fake.launches_of(&profile)[0].alive());
-    assert!(!world.pool().alive(&profile));
+    assert!(!world.pool().state().alive(&profile));
 }
 
 #[tokio::test(start_paused = true)]

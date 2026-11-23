@@ -99,6 +99,10 @@ impl Host for Reports {
         self.0.lock().unwrap().push(message);
     }
 
+    fn now(&self) -> i64 {
+        nsv_domain::time::epoch_ms(std::time::SystemTime::now())
+    }
+
     fn signing_in(&self, _: &ProfileId) -> bool {
         false
     }
@@ -202,6 +206,10 @@ async fn real_world(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one real core's life, start to idle stop, reads top to bottom"
+)]
 async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_and_stops_when_idle()
 {
     let root = TempDir::new("real-core");
@@ -211,7 +219,7 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
     pool.reap_orphans().await.unwrap();
     scheduler.launch().await.unwrap();
     assert!(scheduler.is_dormant(&profile));
-    assert!(!pool.alive(&profile), "not at launch");
+    assert!(!pool.state().alive(&profile), "not at launch");
 
     // A gateway request: counted in, the dormant core woken, sent to it, counted out.
     scheduler.activity(&profile, true);
@@ -290,13 +298,14 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
     assert!(killed.success());
     until("the restarted core", Duration::from_secs(10), async || {
         let recorded = ledger(&data);
-        pool.usable(&profile) && recorded.len() == 1 && recorded != crashed
+        pool.state().usable(&profile) && recorded.len() == 1 && recorded != crashed
     })
     .await;
     let restarted = Instant::now();
 
     // Unused, it stops once idle; its usage is drained first and it stays dormant.
-    until("the idle stop", idle * 4, async || !pool.alive(&profile)).await;
+    let stopped = async || !pool.state().alive(&profile);
+    until("the idle stop", idle * 4, stopped).await;
     // Seen within one 50 ms poll after the new core started, so up to that much early.
     let up = restarted.elapsed() + Duration::from_millis(100);
     assert!(up >= idle, "stopped {up:?} after the restart");
