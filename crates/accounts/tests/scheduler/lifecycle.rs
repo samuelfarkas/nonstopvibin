@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::processes::KILL_GRACE;
+use nsv_core::restart::RestartTiming;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::Strategy;
 use nsv_domain::wire::Runtime;
@@ -781,4 +782,124 @@ async fn a_confirmation_outstanding_while_a_swap_replaces_the_core_leaves_the_su
         successor.port
     );
     assert_eq!(strategy(&world, &profile).await, "round-robin");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_readiness_retry_of_one_core_keeps_its_activity_window() {
+    let world = World::new(timing()).await;
+    let profile = world.profile("Retry", false, true, false).await;
+    world.scheduler.launch().await.unwrap();
+    let failed = Arc::new(AtomicBool::new(false));
+    {
+        let (scheduler, failed, id) = (
+            world.scheduler.clone(),
+            Arc::clone(&failed),
+            profile.clone(),
+        );
+        // The first account sync fails right after a request marked activity, so readiness retries.
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if path != "/auth-files" || failed.swap(true, Ordering::SeqCst) {
+                    return None;
+                }
+                scheduler.activity(&id, false);
+                Some(Box::pin(async {
+                    serde_json::json!({ "files": "unreadable" })
+                }))
+            }));
+        });
+    }
+    let before = world.fake.calls(&profile, "/usage-queue").len();
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    assert!(failed.load(Ordering::SeqCst));
+    assert!(
+        world.fake.calls(&profile, "/auth-files").len() >= 2,
+        "readiness retried"
+    );
+    world.pass(Duration::from_secs(3)).await;
+    let drains = world.fake.calls(&profile, "/usage-queue").len() - before;
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    assert_eq!(
+        drains, 2,
+        "a prompt drain and one after the activity window"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_quotas() {
+    let timing = Timing {
+        restart: RestartTiming {
+            coalesce: 20,
+            ..timing().restart
+        },
+        accounts: Duration::from_millis(50),
+        watch: Duration::from_millis(200),
+        quotas: Duration::from_millis(100),
+        ..timing()
+    };
+    let world = World::new(timing).await;
+    let profile = world.profile("Status", false, false, false).await;
+    // The core's own listing for one signed-in Codex account.
+    let list = |cooling: bool| {
+        serde_json::json!({ "files": [{
+            "name": "codex-watch.json", "type": "codex", "provider": "codex",
+            "auth_index": "a1", "status": "active", "unavailable": cooling,
+        }] })
+    };
+    let listing = |cooling| {
+        world
+            .fake
+            .knobs(|knobs| knobs.listings.insert(profile.clone(), list(cooling)))
+    };
+    let status = async || {
+        let accounts = world.accounts.list(&profile).await.unwrap();
+        let account = accounts
+            .iter()
+            .find(|account| account.id.as_str() == "codex-watch.json")
+            .unwrap();
+        serde_json::to_value(account).unwrap()["status"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let checks = || world.host.quota_checks.lock().unwrap().len();
+    listing(false);
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    world.scheduler.launch().await.unwrap();
+    world.settle().await;
+    assert_eq!(status().await, "Ready");
+    listing(true);
+    let before = checks();
+    world.pass(Duration::from_millis(300)).await;
+    assert_eq!(status().await, "Ready", "nobody watched: not polled");
+    assert_eq!(checks(), before, "nobody watched: no quota check");
+
+    world.scheduler.watch().await;
+    assert_eq!(
+        status().await,
+        "Cooling down",
+        "the read that resumes polling already shows the cooldown"
+    );
+    world.pass(Duration::from_secs(1)).await;
+    assert!(
+        checks() > before,
+        "a stale quota refreshes once a UI watches"
+    );
+
+    listing(false);
+    for _ in 0..10 {
+        world.scheduler.watch().await;
+        world.pass(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        status().await,
+        "Ready",
+        "polling continues while the UI reads"
+    );
 }
