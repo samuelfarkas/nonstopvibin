@@ -4,7 +4,11 @@ run(async () => {
   // As the Electron check did: motion is allowed whatever the system's setting (macOS runners
   // reduce motion). The animations start once the rule applies.
   emulateMedia("prefers-reduced-motion", "no-preference");
-  const active = () => button.getAnimations({ subtree: true });
+  // Keyframe animations only: a hover that begins under a resting pointer adds the buttons'
+  // 150 ms colour transitions, which are not the logo's.
+  const keyframes = (animations) =>
+    animations.filter((animation) => animation instanceof CSSAnimation);
+  const active = () => keyframes(button.getAnimations({ subtree: true }));
   const initial = active().length;
   const spin = active().find(
     (animation) => animation.animationName === "nv-spin",
@@ -62,7 +66,7 @@ run(async () => {
   await sleep(300);
   observer.disconnect();
   equal(
-    { animations: document.getAnimations().length, changes },
+    { animations: keyframes(document.getAnimations()).length, changes },
     { animations: 0, changes: 0 },
     "the settled logo does no layout work",
   );
@@ -70,10 +74,14 @@ run(async () => {
   button.focus();
   await key(" ");
   await sleep(30);
-  equal(document.getAnimations().length, 4, "Space replays the logo");
+  equal(
+    keyframes(document.getAnimations()).length,
+    4,
+    "Space replays the logo",
+  );
   emulateMedia("prefers-reduced-motion", "reduce");
   button.click();
-  const reduced = document.getAnimations().length;
+  const reduced = keyframes(document.getAnimations()).length;
   equal(reduced, 0, "reduced motion plays nothing");
   return {
     initial,
