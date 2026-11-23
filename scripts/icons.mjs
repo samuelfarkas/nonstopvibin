@@ -100,5 +100,5 @@ header.writeUInt32BE(
   8 + frames.reduce((size, frame) => size + frame.length, 0),
   4,
 );
-// Only electron-builder reads the ICNS; keep it out of public/ and the renderer bundle.
+// Only scripts/package-mac.ts reads the ICNS; keep it out of public/ and the renderer bundle.
 await writeFile("build/icon.icns", Buffer.concat([header, ...frames]));

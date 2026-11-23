@@ -7,7 +7,7 @@ const platform = process.env.CORE_PLATFORM || process.platform;
 const arch = process.env.CORE_ARCH || process.arch;
 if (!coreTarget(platform, arch))
   throw new Error("Supported core platforms: macOS/Linux arm64 and x64.");
-// Relative to the working directory: scripts/build-server.mjs stages a core in its own.
+// Relative to the working directory: the package scripts stage a core in their own.
 const root = resolve(coreLayout.checkout);
 await mkdir(dirname(root), { recursive: true });
 // Beside the core it replaces, so one rename swaps in a verified one.

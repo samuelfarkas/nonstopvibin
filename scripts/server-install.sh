@@ -3,7 +3,7 @@
 # directory as the same non-root user that runs your coding agents.
 set -eu
 
-# Filled in by scripts/build-server.mjs (renderInstaller in scripts/distribution.ts).
+# Filled in by scripts/package-server.ts (renderInstaller in scripts/distribution.ts).
 VERSION="@VERSION@"
 ARCH="@ARCH@"
 EXECUTABLE="@EXECUTABLE@"
