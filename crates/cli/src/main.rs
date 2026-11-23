@@ -55,7 +55,6 @@ pub(crate) fn say(text: &str) {
     let _ = writeln!(std::io::stdout().lock(), "{text}");
 }
 
-/// One line on standard error.
 pub(crate) fn complain(text: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{text}");
 }

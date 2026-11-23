@@ -1,7 +1,6 @@
 //! The command line as Node's `util.parseArgs` read it (strict, positionals allowed), with its
 //! messages: `--name value`, `--name=value`, grouped short flags, `--` ending the options.
 
-/// The options and positionals of one invocation.
 #[derive(Debug, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
