@@ -1,5 +1,5 @@
 name: Checks
-# The desktop and server checks, written once. build.yml runs them on every change;
+# The workspace's checks and packages, written once. build.yml runs them on every change;
 # release.yml runs the same steps with `release: true`, which keeps the artifacts for publishing.
 on:
   workflow_call:
@@ -9,17 +9,17 @@ on:
         default: false
 permissions:
   contents: read
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
 jobs:
-  desktop:
+  checks:
     strategy:
       fail-fast: false
       matrix:
-        # macos-26 is the arm64 image macos-latest pointed to when pinned.
         os: [macos-26, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    permissions:
-      contents: read
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,63 +30,146 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: ${{ runner.os }}-bun-
-      - run: bun run setup
-      - run: bun run quality
-      - run: bun run build
-      - if: runner.os == 'macOS'
-        name: Fetch the Electron binary
-        # Fetched here with a limit; inside the smoke test a stalled download hangs the job.
-        timeout-minutes: 5
-        run: bun run install-electron
-      - if: runner.os == 'macOS'
-        name: Desktop smoke
-        # Backstop above the smoke test's own limits.
-        timeout-minutes: 6
-        run: bun run test:desktop:built
-      - if: runner.os == 'macOS'
-        name: UI checks
-        run: bun run test:ui:built
+      # The toolchain and components in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: checks
       - if: runner.os == 'Linux'
-        name: Desktop smoke with Chromium sandbox
+        name: Install WebKitGTK, GTK, Xvfb and D-Bus
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libasound2t64 libgtk-3-0 libnss3
-          bun run install-electron
-          sudo chown root:root node_modules/electron/dist/chrome-sandbox
-          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-          xvfb-run -a bun run test:desktop:built
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev xvfb dbus-daemon
+      # Dependencies and the pinned core, which the integration tests run.
+      - run: bun run setup
+      - run: bun run quality
       - run: bun test
-      # Installers for the host architecture, with the targets in package.json `build`.
-      - name: Package
-        run: bun run dist:built
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - if: runner.os == 'macOS'
-        name: Update the packaged app in place
-        # Backstop above the test's own limits.
-        timeout-minutes: 10
-        run: bun run test:update:mac
-      - if: runner.os == 'macOS' && (failure() || cancelled())
-        name: Upload desktop test diagnostics
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        run: cargo test --workspace --locked
+      - if: runner.os == 'Linux'
+        name: cargo test --workspace (display and session bus)
+        run: xvfb-run -a dbus-run-session -- cargo test --workspace --locked
+      - if: runner.os == 'Linux'
+        name: Shell tests that drive a real window helper
+        run: sh crates/shell/tests/gui.sh --locked
+      - run: bun run build:client
+      - name: UI checks in the window helper
+        run: bun run test:ui
+      - name: Generated TypeScript types match the Rust wire types
+        run: |
+          cargo test -p nsv-domain --locked
+          git diff --exit-code -- tests/types/generated
+          test -z "$(git status --porcelain -- tests/types/generated)"
+      - if: runner.os == 'Linux'
+        uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
-          retention-days: 7
-          if-no-files-found: ignore
-          name: desktop-diagnostics-${{ runner.os }}
-          path: test-results/
+          tool: cargo-machete@0.10.1
+      - if: runner.os == 'Linux'
+        name: No unused dependencies
+        run: cargo machete
+      # Downgrade: the last TypeScript release (main 4ea188a) opens what the Rust store wrote.
+      - if: runner.os == 'Linux'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 4ea188ab6a685ed83022c187aec66b524c411dec
+          path: typescript-4ea188a
+          persist-credentials: false
+      - if: runner.os == 'Linux'
+        name: The TypeScript store reads a directory the Rust store wrote
+        run: |
+          (cd typescript-4ea188a && bun ci --ignore-scripts)
+          NSV_KEEP_DIR="$RUNNER_TEMP/downgrade" cargo test -p nsv-store --locked --test integration migration
+          NSV_TS_CHECKOUT=typescript-4ea188a bun tests/downgrade/read-with-ts.ts "$RUNNER_TEMP/downgrade"
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Host architecture only, as electron-builder built: macos-26 is arm64.
+        os: [macos-26, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    # Release builds read the signing secrets of the protected `release` environment.
+    environment: ${{ inputs.release && 'release' || '' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: package
+      - run: bun run setup
+      - if: runner.os == 'macOS'
+        name: Package
+        run: bun run dist:mac
+        env:
+          # Developer ID signing and notarization in releases only, never pull requests.
+          CSC_LINK: ${{ inputs.release && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ inputs.release && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ inputs.release && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.release && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.release && secrets.APPLE_TEAM_ID || '' }}
+      - if: runner.os == 'Linux'
+        name: Package
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          bun run dist:linux
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Empty keeps the repository default for release artifacts.
           retention-days: ${{ !inputs.release && 7 || '' }}
           if-no-files-found: error
           name: nonstopvibin-${{ runner.os }}
-          # Every top-level output file: installers, blockmaps and update feeds.
-          path: |
-            release/*.*
-            !release/builder-*
+          # Installers and update feeds; release/mac-*/ holds the unpacked bundle.
+          path: release/*.*
+      # The hop every installed copy takes: the last Electron release's source, built as 0.0.1,
+      # downloads the packaged zip through electron-updater and Squirrel.Mac swaps the bundle.
+      - if: runner.os == 'macOS'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 4ea188ab6a685ed83022c187aec66b524c411dec
+          path: electron-4ea188a
+          persist-credentials: false
+      - if: runner.os == 'macOS'
+        name: Update an installed Electron build onto the Rust app
+        timeout-minutes: 20
+        run: |
+          (cd electron-4ea188a && bun run setup && bun run build)
+          NSV_ELECTRON_CHECKOUT="$PWD/electron-4ea188a" bun run test:update:mac
+      - if: runner.os == 'macOS' && (failure() || cancelled())
+        name: Upload update test diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          retention-days: 7
+          if-no-files-found: ignore
+          name: desktop-diagnostics-${{ runner.os }}
+          path: test-results/
   server:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
+    # x64 keeps the check name `server` that the Bun-compiled archive had.
+    name: ${{ matrix.arch == 'x64' && 'server' || 'server (arm64)' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each architecture builds and smoke-tests natively: musl needs a C compiler per target.
+        include:
+          - { os: ubuntu-24.04, arch: x64, target: x86_64-unknown-linux-musl }
+          - {
+              os: ubuntu-24.04-arm,
+              arch: arm64,
+              target: aarch64-unknown-linux-musl,
+            }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,15 +178,24 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-
+      - run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: server
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
       - run: bun ci
-      - run: bun run dist:server
-      - name: Smoke-test the x64 server archive
+      - run: bun run dist:server ${{ matrix.arch }}
+      - name: Smoke-test the server archive
         run: bun run test:server
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           retention-days: ${{ !inputs.release && 7 || '' }}
           if-no-files-found: error
-          name: nonstopvibin-server
+          name: nonstopvibin-server-${{ matrix.arch }}
           path: release/*.tar.gz

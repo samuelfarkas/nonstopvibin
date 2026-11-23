@@ -167,14 +167,12 @@ test("a release publishes only after the pull-request checks pass for its revisi
 });
 
 test("signing secrets reach only release packaging, and releases sign SHA256SUMS before publishing", async () => {
-  const [rust, release, build] = await Promise.all(
-    ["rust.yml", "release.yml", "build.yml"].map(workflow),
+  const [checks, release] = await Promise.all(
+    ["checks.yml", "release.yml"].map(workflow),
   );
-  assert.equal(build.jobs.rust.uses, "./.github/workflows/rust.yml");
-  assert.equal(build.jobs.rust.with, undefined);
-  const desktop = rust.jobs.desktop;
+  const desktop = checks.jobs.desktop;
   assert.equal(desktop.environment, "${{ inputs.release && 'release' || '' }}");
-  const secretSteps = Object.values(rust.jobs)
+  const secretSteps = Object.values(checks.jobs)
     .flatMap((job) => job.steps)
     .filter((step) => JSON.stringify(step).includes("secrets."));
   assert.ok(secretSteps.length);
