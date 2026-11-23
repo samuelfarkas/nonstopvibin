@@ -120,7 +120,7 @@ fn definition(value: &Value) -> Option<Definition> {
         name: name.to_owned(),
         context: count(limit.get("context")?)?,
         output: count(limit.get("output")?)?,
-        input_limit: optional(limit, "input", count)?,
+        input_limit: optional(limit, "input", count).ok()?,
         input: input
             .iter()
             .filter_map(|modality| match *modality {
@@ -131,24 +131,23 @@ fn definition(value: &Value) -> Option<Definition> {
             .collect(),
         reasoning,
         tool_call,
-        cost: optional(object, "cost", cost)?,
+        cost: optional(object, "cost", cost).ok()?,
     };
     (input.contains(&"text") && output.contains(&"text")).then_some(definition)
 }
 
-/// An optional field: absent is `Some(None)`, present must read, `null` included.
-#[expect(
-    clippy::option_option,
-    reason = "invalid, absent and present are three outcomes"
-)]
+/// A present field that `read` refuses, `null` included: the entry that holds it is dropped.
+struct Invalid;
+
+/// An optional field: absent, read, or [`Invalid`].
 fn optional<T>(
     object: &Map<String, Value>,
     key: &str,
     read: impl Fn(&Value) -> Option<T>,
-) -> Option<Option<T>> {
+) -> Result<Option<T>, Invalid> {
     match object.get(key) {
-        None => Some(None),
-        Some(value) => read(value).map(Some),
+        None => Ok(None),
+        Some(value) => read(value).map(Some).ok_or(Invalid),
     }
 }
 
@@ -178,13 +177,14 @@ fn cost(value: &Value) -> Option<Cost> {
             .iter()
             .map(tier)
             .collect::<Option<Vec<_>>>()
-    })?;
+    })
+    .ok()?;
     Some(Cost {
         input: price(object.get("input")?)?,
         output: price(object.get("output")?)?,
-        reasoning: optional(object, "reasoning", price)?,
-        cache_read: optional(object, "cache_read", price)?,
-        cache_write: optional(object, "cache_write", price)?,
+        reasoning: optional(object, "reasoning", price).ok()?,
+        cache_read: optional(object, "cache_read", price).ok()?,
+        cache_write: optional(object, "cache_write", price).ok()?,
         tiers,
     })
 }
@@ -198,9 +198,9 @@ fn tier(value: &Value) -> Option<CostTier> {
     Some(CostTier {
         input: price(object.get("input")?)?,
         output: price(object.get("output")?)?,
-        reasoning: optional(object, "reasoning", price)?,
-        cache_read: optional(object, "cache_read", price)?,
-        cache_write: optional(object, "cache_write", price)?,
+        reasoning: optional(object, "reasoning", price).ok()?,
+        cache_read: optional(object, "cache_read", price).ok()?,
+        cache_write: optional(object, "cache_write", price).ok()?,
         tier: ContextTier {
             kind: TierType::Context,
             size: count(threshold.get("size")?)?,

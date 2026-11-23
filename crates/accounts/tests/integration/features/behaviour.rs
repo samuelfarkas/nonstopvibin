@@ -701,20 +701,23 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     let store = open_store(directory.path()).await;
     let owner = profile(&store, "Owner").await;
     let account = AccountId::parse("fixture.json").unwrap();
-    let resets = CodexResets::new(store.clone());
-    let source = reset_source(None);
-    let available = Refresh(Ok(QuotaStatus::Available));
-    let consume = async |answer: Value, quotas: &Refresh| {
+    let source = Arc::new(reset_source(None));
+    let available = Arc::new(Refresh(Ok(QuotaStatus::Available)));
+    let resets = CodexResets::new(store.clone(), Arc::clone(&source), Arc::clone(&available));
+    let unrefreshed = CodexResets::new(
+        store.clone(),
+        Arc::clone(&source),
+        Arc::new(Refresh(Err(()))),
+    );
+    let consume = async |answer: Value, resets: &CodexResets<Arc<StubSource>, Refresh>| {
         source.queue([answer]);
-        let result = resets
-            .consume(&source, quotas, &owner, &account, "credit-one")
-            .await;
+        let result = resets.consume(&owner, &account, "credit-one").await;
         (result, redeem_request_id(&source.take_calls()))
     };
 
     let (failed, first) = consume(
         json!({ "status_code": 503, "body": "sensitive upstream error" }),
-        &available,
+        &resets,
     )
     .await;
     let Err(QuotaError::App(error)) = failed else {
@@ -724,7 +727,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     assert!(!error.message.contains("sensitive"));
     let (reset, retried) = consume(
         json!({ "status_code": 200, "body": "{\"code\":\"reset\"}" }),
-        &available,
+        &resets,
     )
     .await;
     assert_eq!(
@@ -734,7 +737,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     assert_eq!(retried, first, "a retry redeems with the same request id");
     let (redeemed, again) = consume(
         json!({ "status_code": 200, "body": { "code": "already_redeemed" } }),
-        &Refresh(Err(())),
+        &unrefreshed,
     )
     .await;
     assert_eq!(
@@ -744,7 +747,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     assert_eq!(again, first);
     let (unknown, kept) = consume(
         json!({ "status_code": 200, "body": { "code": "unexpected" } }),
-        &available,
+        &resets,
     )
     .await;
     assert!(matches!(
@@ -754,32 +757,29 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     assert_eq!(kept, first, "an unknown outcome keeps the request");
     let (nothing, last) = consume(
         json!({ "status_code": 200, "body": { "code": "nothing_to_reset" } }),
-        &available,
+        &resets,
     )
     .await;
     assert!(nothing.is_ok());
     assert_eq!(last, first);
     let (_, fresh) = consume(
         json!({ "status_code": 200, "body": { "code": "no_credit" } }),
-        &available,
+        &resets,
     )
     .await;
     assert_ne!(fresh, first, "nothing redeemed clears the request");
 
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let gated = reset_source(Some(Arc::clone(&gate)));
+    let gated = Arc::new(reset_source(Some(Arc::clone(&gate))));
+    let resets = CodexResets::new(store.clone(), Arc::clone(&gated), Arc::clone(&available));
     gated.queue([json!({ "status_code": 200, "body": { "code": "reset" } })]);
-    let (running, concurrent) = tokio::join!(
-        resets.consume(&gated, &available, &owner, &account, "credit-one"),
-        async {
+    let (running, concurrent) =
+        tokio::join!(resets.consume(&owner, &account, "credit-one"), async {
             called(&gated, 1).await;
-            let concurrent = resets
-                .consume(&gated, &available, &owner, &account, "credit-one")
-                .await;
+            let concurrent = resets.consume(&owner, &account, "credit-one").await;
             gate.add_permits(10);
             concurrent
-        }
-    );
+        });
     assert_eq!(
         running.unwrap(),
         ResetResult {
@@ -795,11 +795,15 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
         (409, "A reset is already in progress for this subscription.")
     );
 
-    let stopped = StubSource {
-        stopped: true,
-        ..reset_source(None)
-    };
-    let Err(QuotaError::App(error)) = resets.credits(&stopped, &owner, &account).await else {
+    let stopped = CodexResets::new(
+        store.clone(),
+        StubSource {
+            stopped: true,
+            ..reset_source(None)
+        },
+        available,
+    );
+    let Err(QuotaError::App(error)) = stopped.credits(&owner, &account).await else {
         panic!()
     };
     assert_eq!(

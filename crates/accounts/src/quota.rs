@@ -9,27 +9,24 @@
 //!   ([`QuotaSource::api_call`]); `OpenCode` Go is asked directly with the account's API key.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{Provider, registry};
-use nsv_domain::sync::locked;
 use nsv_domain::time::{self, iso_string};
 use nsv_domain::wire::{Account, AccountKind, JsNumber, Quota, QuotaStatus, QuotaWindow, True};
 use nsv_net::USER_AGENT;
 use nsv_store::{Store, StoreError};
 use serde_json::{Map, Value, json};
 
-use crate::accounts::PoolSource;
 use crate::fetch::{Outside, Request};
+use crate::identity::CLAUDE_OAUTH_BETA;
+use crate::task::Exclusive;
 
-/// The beta flag Anthropic's OAuth account endpoints require.
-pub const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
 /// `ChatGPT`'s backend for Codex subscriptions: quota and banked resets.
 pub const CODEX_API: &str = "https://chatgpt.com/backend-api/wham";
 const XAI_BILLING: &str = "https://cli-chat-proxy.grok.com/v1/billing";
@@ -659,19 +656,7 @@ pub struct Quotas<S> {
     fetch: Arc<dyn Outside>,
     /// Milliseconds since the epoch.
     clock: fn() -> i64,
-    refreshing: Mutex<HashSet<(ProfileId, AccountId)>>,
-}
-
-/// Removes an account from the running checks when its check ends, finished or dropped.
-struct Running<'a> {
-    set: &'a Mutex<HashSet<(ProfileId, AccountId)>>,
-    key: (ProfileId, AccountId),
-}
-
-impl Drop for Running<'_> {
-    fn drop(&mut self) {
-        locked(self.set).remove(&self.key);
-    }
+    refreshing: Exclusive<(ProfileId, AccountId)>,
 }
 
 impl<S: QuotaSource> Quotas<S> {
@@ -682,19 +667,13 @@ impl<S: QuotaSource> Quotas<S> {
             source,
             fetch,
             clock,
-            refreshing: Mutex::new(HashSet::new()),
+            refreshing: Exclusive::new(),
         }
     }
 
     #[must_use]
     pub fn source(&self) -> &S {
         &self.source
-    }
-
-    /// The outgoing requests' client, which model discovery and identity checks share.
-    #[must_use]
-    pub fn fetch(&self) -> &dyn Outside {
-        &*self.fetch
     }
 
     /// Asks one account's quota and stores it. A check already running for the account answers
@@ -719,19 +698,9 @@ impl<S: QuotaSource> Quotas<S> {
                 .call(move |db| db.quota(&profile, &account))
                 .await?
         };
-        let key = (profile.clone(), account_id.clone());
-        let running = {
-            let mut refreshing = locked(&self.refreshing);
-            if refreshing.contains(&key) {
-                return prior.ok_or_else(|| {
-                    AppError::new("Quota refresh is already in progress.", 409).into()
-                });
-            }
-            refreshing.insert(key.clone());
-            Running {
-                set: &self.refreshing,
-                key,
-            }
+        let Some(running) = self.refreshing.begin((profile.clone(), account_id.clone())) else {
+            return prior
+                .ok_or_else(|| AppError::new("Quota refresh is already in progress.", 409).into());
         };
         let quota = match quota_provider(&account) {
             None => Quota {
@@ -892,30 +861,6 @@ impl<S: QuotaSource> Quotas<S> {
             ));
         }
         serde_json::from_slice(&response.body).map_err(|_| NOT_JSON.to_owned())
-    }
-}
-
-impl Quotas<PoolSource> {
-    /// Reads the profile's accounts from its core again, then refreshes the quota of each
-    /// account `wanted` picks, in order, asking `wanted` as each one's turn comes
-    /// (`Quotas.refreshAccounts`). Dropping the future abandons the check in flight: nothing is
-    /// stored after.
-    ///
-    /// # Errors
-    /// The sync's error, or the first check's that fails; see [`Quotas::refresh`].
-    pub async fn refresh_accounts(
-        &self,
-        profile: &ProfileId,
-        wanted: impl Fn(&Account) -> bool + Send,
-    ) -> Result<(), AppError> {
-        let source = self.source();
-        source.accounts.sync(&source.pool, profile).await?;
-        for account in source.accounts.list(profile).await? {
-            if wanted(&account) {
-                self.refresh(profile, &account.id).await?;
-            }
-        }
-        Ok(())
     }
 }
 

@@ -13,14 +13,13 @@
 //!   updates refuse to restart cores under it.
 
 use std::future::Future;
-use std::io;
-use std::path::PathBuf;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use hyper::Method as HttpMethod;
-use nsv_core::pool::{Backend, MANAGEMENT_TIMEOUT, NoHooks, Pool};
+use nsv_core::pool::{Backend, MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{encode_uri_component, number, text};
@@ -29,7 +28,7 @@ use nsv_domain::sync::locked;
 use nsv_domain::wire::{
     Account, AccountKind, AccountStatus, Extra, OAuthReview, OAuthSession, OAuthStatus,
 };
-use nsv_files::{DataDir, owner_only_directory, unique_directory};
+use nsv_files::DataDir;
 use nsv_net::Method;
 use nsv_store::Store;
 use serde_json::{Map, Value, json};
@@ -37,12 +36,16 @@ use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::task::AbortHandle;
 use url::Url;
 
-use crate::accounts::{Accounts, PoolSource, credential_path, read_credential};
+use crate::accounts::{Accounts, credential_path, read_credential};
 use crate::callback::{Callback, Handler, Reply};
-use crate::credentials::{Credentials, SeatMatch, detached};
+use crate::credentials::{Credentials, SeatMatch};
+use crate::fetch::Outside;
 use crate::identity::{claude_identity, verify_claude_identity};
 use crate::quota::Quotas;
+use crate::sandbox::Sandbox;
 use crate::scheduler::Scheduler;
+use crate::source::PoolSource;
+use crate::task::detached;
 
 const NOT_FOUND: &str = "Sign-in session not found for this profile.";
 const DID_NOT_COMPLETE: &str = "Sign-in did not complete. Start a new sign-in.";
@@ -90,6 +93,8 @@ pub type Report = Arc<dyn Fn(String) + Send + Sync>;
 
 pub struct SignInOptions {
     pub backends: Backends,
+    /// Identity checks of a reviewed credential.
+    pub outside: Arc<dyn Outside>,
     /// How long a throwaway store's core gets to answer ([`nsv_core::pool::READY`]).
     pub ready: Duration,
     /// Milliseconds since the epoch; sessions expire by it.
@@ -126,22 +131,27 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    sandbox: Option<Sandbox>,
+    sandbox: Option<SandboxSignIn>,
     expiry: Option<AbortHandle>,
     /// Sessions begun; names the one an expiry timer belongs to.
     begun: u64,
 }
 
-/// A sign-in for a provider with organizations: a throwaway store with its own core, so the
-/// credential reaches a profile only after its seat is reviewed.
-struct Sandbox {
+/// A sign-in for a provider with organizations, in a sandbox of its own, so the credential
+/// reaches a profile only after its seat is reviewed.
+struct SandboxSignIn {
     provider: OAuthProvider,
-    directory: DataDir,
-    store: Store,
-    pool: Pool,
+    sandbox: Sandbox,
     accounts: Accounts,
-    profile: ProfileId,
     progress: Progress,
+}
+
+impl Deref for SandboxSignIn {
+    type Target = Sandbox;
+
+    fn deref(&self) -> &Sandbox {
+        &self.sandbox
+    }
 }
 
 /// How far a sandboxed sign-in got; each step is kept, so a failed later step is retried
@@ -184,24 +194,6 @@ fn state_of(url: &Url) -> Option<String> {
     url.query_pairs()
         .find(|(key, _)| key == "state")
         .map(|(_, value)| value.into_owned())
-}
-
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> io::Result<T> + Send + 'static,
-) -> Result<T, AppError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(AppError::internal)?
-        .map_err(AppError::internal)
-}
-
-/// Deletes a directory tree; a missing one is no error.
-async fn remove_tree(directory: PathBuf) -> Result<(), AppError> {
-    blocking(move || match std::fs::remove_dir_all(&directory) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    })
-    .await
 }
 
 impl SignIn {
@@ -379,31 +371,6 @@ impl SignIn {
             })
             .await
     }
-
-    /// At startup, before any core runs: sign-ins pending when the app last stopped never
-    /// resume, and core update checks never finish. Their cores are reaped and their stores
-    /// deleted.
-    ///
-    /// # Errors
-    /// A ledger or file-system error.
-    pub async fn discard_pending(data: &DataDir, backends: &Backends) -> Result<(), AppError> {
-        let pending = data.oauth_pending();
-        let listed = pending.clone();
-        let entries = blocking(move || match std::fs::read_dir(&listed) {
-            Ok(listing) => listing
-                .map(|entry| entry.map(|entry| entry.path()))
-                .collect::<io::Result<Vec<PathBuf>>>(),
-            Err(_) => Ok(Vec::new()),
-        })
-        .await?;
-        for entry in entries {
-            backends(&DataDir::new(entry))
-                .reap_orphans()
-                .await
-                .map_err(AppError::internal)?;
-        }
-        remove_tree(pending).await
-    }
 }
 
 impl Inner {
@@ -506,9 +473,8 @@ impl Inner {
         let opened = if entry.organizations {
             match self.sandbox(provider).await {
                 Ok(sandbox) => {
-                    let (pool, core) = (sandbox.pool.clone(), sandbox.profile.clone());
                     state.sandbox = Some(sandbox);
-                    self.open(&pool, &core, provider, &profile)
+                    self.open(state.sandbox.as_deref(), provider, &profile)
                         .await
                         .map(|session| OAuthSession {
                             reconnect_account_id: reconnect
@@ -520,7 +486,7 @@ impl Inner {
                 Err(error) => Err(error),
             }
         } else {
-            self.open(self.pool(), &profile, provider, &profile).await
+            self.open(None, provider, &profile).await
         };
         let session = match opened {
             Ok(session) => session,
@@ -564,65 +530,36 @@ impl Inner {
         state.expiry = Some(timer.abort_handle());
     }
 
-    /// A throwaway store with one profile and a pool of its own, under `oauth-pending/`.
-    async fn sandbox(&self, provider: OAuthProvider) -> Result<Sandbox, AppError> {
-        let parent = self.store.directory().oauth_pending();
-        let prefix = format!("{}-", provider.as_str());
-        let directory = DataDir::new(
-            blocking(move || {
-                owner_only_directory(&parent, || Ok::<(), io::Error>(()))?;
-                unique_directory(&parent, &prefix)
-            })
-            .await?,
-        );
-        let opened = async {
-            let store = Store::open(&directory, self.store.vault().clone()).await?;
-            match store
-                .call(|db| Ok(db.create_profile("Pending sign-in")?.id))
-                .await
-            {
-                Ok(profile) => Ok((store, profile)),
-                Err(error) => {
-                    store.close().await;
-                    Err(AppError::from(error))
-                }
-            }
-        }
-        .await;
-        let (store, profile) = match opened {
-            Ok(opened) => opened,
-            Err(error) => {
-                remove_tree(directory.path().to_owned()).await?;
-                return Err(error);
-            }
-        };
-        let pool = Pool::new(
-            store.clone(),
+    /// The sign-in's sandbox.
+    async fn sandbox(&self, provider: OAuthProvider) -> Result<SandboxSignIn, AppError> {
+        let sandbox = Sandbox::open(
+            &self.store,
+            format!("{}-", provider.as_str()),
+            "Pending sign-in",
             self.pool().state().binary.to_path_buf(),
-            (self.options.backends)(&directory),
+            &self.options.backends,
             self.options.ready,
-            Arc::new(NoHooks),
-        );
-        Ok(Sandbox {
+        )
+        .await?;
+        Ok(SandboxSignIn {
             provider,
-            directory,
-            accounts: Accounts::new(store.clone()),
-            store,
-            pool,
-            profile,
+            accounts: Accounts::new(sandbox.store.clone()),
+            sandbox,
             progress: Progress::Waiting,
         })
     }
 
-    /// Asks `pool`'s core for a sign-in link for `core`, the profile that will hold the
-    /// credential, and listens for the browser's return.
+    /// Asks for a sign-in link for `profile`, from the sandbox's core or else the profile's,
+    /// and listens for the browser's return.
     async fn open(
         self: &Arc<Self>,
-        pool: &Pool,
-        core: &ProfileId,
+        sandbox: Option<&Sandbox>,
         provider: OAuthProvider,
         profile: &ProfileId,
     ) -> Result<OAuthSession, AppError> {
+        let (pool, core) = sandbox.map_or((self.pool(), profile), |sandbox| {
+            (&sandbox.pool, &sandbox.profile)
+        });
         pool.start(core, false).await?;
         let path = format!("/{}-auth-url", core_name(provider));
         let response = pool
@@ -760,9 +697,7 @@ impl Inner {
         let pending = self.session.borrow().clone();
         if let Some(sandbox) = &state.sandbox {
             self.close_callback(None, false);
-            sandbox.pool.shutdown().await?;
-            sandbox.store.close().await;
-            remove_tree(sandbox.directory.path().to_owned()).await?;
+            sandbox.discard().await?;
             state.sandbox = None;
         } else if let Some(session) = pending {
             let path = format!(
@@ -911,7 +846,7 @@ impl Inner {
                 }
                 Progress::Read(credential) => {
                     let credential =
-                        verify_claude_identity(self.quotas.fetch(), credential).await?;
+                        verify_claude_identity(&*self.options.outside, credential).await?;
                     let review = self
                         .review_of(profile, sandbox.provider, &credential, session)
                         .await?;
@@ -981,7 +916,7 @@ impl Inner {
         key: &str,
     ) -> Result<OAuthStatus, AppError> {
         let session = self.current(profile, key)?;
-        let Some(Sandbox {
+        let Some(SandboxSignIn {
             provider,
             progress: Progress::Reviewed { credential, .. },
             ..

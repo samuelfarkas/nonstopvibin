@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::SystemTime;
 
 use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
@@ -24,7 +24,6 @@ use nsv_store::{Db, Store, StoreError};
 use serde_json::{Map, Value};
 
 use crate::identity::{SeatIdentity, claude_identity};
-use crate::quota::QuotaSource;
 
 /// A profile's credential file `name`.
 ///
@@ -327,39 +326,6 @@ fn api_listing(account: ApiAccount) -> Account {
         prefix: Some(account.prefix),
         model_count: Some(u32::try_from(account.models.len()).unwrap_or(u32::MAX)),
         extra: Extra::new(),
-    }
-}
-
-/// The quota and reset features' view of the core pool and the account list.
-#[derive(Clone)]
-pub struct PoolSource {
-    pub pool: Pool,
-    pub accounts: Arc<Accounts>,
-}
-
-impl QuotaSource for PoolSource {
-    async fn accounts(&self, profile: &ProfileId) -> Result<Vec<Account>, AppError> {
-        self.accounts.list(profile).await
-    }
-
-    fn chatgpt_account_id(&self, profile: &ProfileId, account: &AccountId) -> Option<String> {
-        self.accounts.chatgpt_account_id(profile, account.as_str())
-    }
-
-    fn usable(&self, profile: &ProfileId) -> bool {
-        self.pool.usable(profile)
-    }
-
-    async fn api_call(&self, profile: &ProfileId, body: Value) -> Result<Value, AppError> {
-        self.pool
-            .management(
-                profile,
-                &Method::POST,
-                "/api-call",
-                Some(&body),
-                MANAGEMENT_TIMEOUT,
-            )
-            .await
     }
 }
 

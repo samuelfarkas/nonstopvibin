@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use nsv_core::binary::{bundled_pin, verify_core};
 use nsv_core::pool::{BoxFuture, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -14,13 +13,15 @@ use nsv_domain::wire::{AccountKind, OAuthSession, QuotaStatus};
 use nsv_store::Store;
 use tokio::sync::watch;
 
-use crate::accounts::{Accounts, PoolSource};
+use crate::accounts::Accounts;
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::quota::Quotas;
 use crate::resets::CodexResets;
+use crate::sandbox;
 use crate::scheduler::{Host, Scheduler, Timing};
 use crate::sign_in::{Backends, Report, SignIn, SignInOptions};
+use crate::source::PoolSource;
 use crate::updates::{CoreUpdates, UpdateOptions};
 
 pub struct CoresOptions {
@@ -63,7 +64,6 @@ pub struct Cores {
     store: Store,
     binary: PathBuf,
     backends: Backends,
-    require_pinned_core: bool,
     allow_missing_core: bool,
 }
 
@@ -154,7 +154,7 @@ impl Cores {
         };
         let quotas = Arc::new(Quotas::new(
             store.clone(),
-            source,
+            source.clone(),
             Arc::clone(&outside),
             clock,
         ));
@@ -163,6 +163,7 @@ impl Cores {
             scheduler.clone(),
             Arc::clone(&accounts),
             Arc::clone(&quotas),
+            Arc::clone(&outside),
         );
         let sign_in = SignIn::new(
             store.clone(),
@@ -172,6 +173,7 @@ impl Cores {
             Arc::clone(&quotas),
             SignInOptions {
                 backends: Arc::clone(&backends),
+                outside: Arc::clone(&outside),
                 ready,
                 clock,
                 report: Arc::clone(&report),
@@ -197,7 +199,7 @@ impl Cores {
         let _quotas = host.quotas.set(Arc::clone(&quotas));
         let _sessions = host.sessions.set(sign_in.sessions());
         Ok(Self {
-            resets: CodexResets::new(store.clone()),
+            resets: CodexResets::new(store.clone(), source, Arc::clone(&quotas)),
             scheduler,
             accounts,
             quotas,
@@ -207,7 +209,6 @@ impl Cores {
             store,
             binary,
             backends,
-            require_pinned_core,
             allow_missing_core,
         })
     }
@@ -229,15 +230,7 @@ impl Cores {
     pub async fn launch(&self) -> Result<(), AppError> {
         let missing = self.allow_missing_core && !self.binary.exists();
         if !self.updates.select().await? && !missing {
-            let pinned = if self.require_pinned_core {
-                Some(bundled_pin().map_err(AppError::internal)?)
-            } else {
-                None
-            };
-            let binary = self.binary.clone();
-            tokio::task::spawn_blocking(move || verify_core(&binary, pinned))
-                .await
-                .map_err(AppError::internal)??;
+            self.updates.verify_bundled().await?;
         }
         // Orphans first: if the pending sign-ins cannot be removed, startup fails without
         // leaving one running.
@@ -245,7 +238,7 @@ impl Cores {
             .reap_orphans()
             .await
             .map_err(AppError::internal)?;
-        SignIn::discard_pending(self.store.directory(), &self.backends).await?;
+        sandbox::discard_all(self.store.directory(), &self.backends).await?;
         self.scheduler.launch().await?;
         if self.updates.enabled() {
             let updates = self.updates.clone();

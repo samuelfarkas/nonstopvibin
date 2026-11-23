@@ -413,10 +413,9 @@ impl App {
                 self.state_reply().await
             }
             Route::ResetCredits => {
-                let source = cores.quotas.source();
                 let credits = cores
                     .resets
-                    .credits(source, &call.profile()?, &call.account()?)
+                    .credits(&call.profile()?, &call.account()?)
                     .await?;
                 json(StatusCode::OK, &credits)
             }
@@ -424,13 +423,7 @@ impl App {
                 let credit = parse::single(&body(request).await?, "creditId", 500)?;
                 let result = cores
                     .resets
-                    .consume(
-                        cores.quotas.source(),
-                        cores.quotas.as_ref(),
-                        &call.profile()?,
-                        &call.account()?,
-                        &credit,
-                    )
+                    .consume(&call.profile()?, &call.account()?, &credit)
                     .await?;
                 json(StatusCode::OK, &result)
             }

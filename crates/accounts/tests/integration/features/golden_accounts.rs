@@ -329,7 +329,7 @@ async fn quota_refreshes_and_resets_replay_in_order() {
     }
     assert_eq!(replayed, 16);
 
-    let resets = CodexResets::new(store.clone());
+    let resets = CodexResets::new(store.clone(), Arc::clone(&source), Arc::new(Available));
     let identity = chatgpt["codex-pro.json"].clone();
     for case in named(&cases, "reset ") {
         let input = &case["input"];
@@ -340,11 +340,11 @@ async fn quota_refreshes_and_resets_replay_in_order() {
         let credit = input["creditId"].as_str();
         let result = match credit {
             None => resets
-                .credits(&source, &profile, &account)
+                .credits(&profile, &account)
                 .await
                 .map(|credits| serde_json::to_value(credits).unwrap()),
             Some(credit) => resets
-                .consume(&source, &Available, &profile, &account, credit)
+                .consume(&profile, &account, credit)
                 .await
                 .map(|result| serde_json::to_value(result).unwrap()),
         };

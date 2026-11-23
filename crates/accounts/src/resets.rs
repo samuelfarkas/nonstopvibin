@@ -2,22 +2,23 @@
 //! one. A redemption keeps its request id in the store until the outcome is known, so a retry
 //! after a failure, an ambiguous answer or a restart redeems the same credit once.
 
-use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{Provider, ResetResultCode, registry};
-use nsv_domain::sync::locked;
 use nsv_domain::time;
 use nsv_domain::wire::{AccountKind, QuotaStatus, ResetCredit, ResetCredits, ResetResult};
 use nsv_store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::quota::{
-    CODEX_API, QuotaError, QuotaSource, RefreshQuota, UpstreamRequest, call_upstream, status_text,
+    CODEX_API, QuotaError, QuotaSource, Quotas, RefreshQuota, UpstreamRequest, call_upstream,
+    status_text,
 };
+use crate::source::PoolSource;
+use crate::task::Exclusive;
 
 /// zod's `resetCreditsSchema` (`OpenAI`'s `backend-client/src/types.rs`).
 #[must_use]
@@ -56,26 +57,35 @@ fn reset_credit(value: &Value) -> Option<ResetCredit> {
         Value::String(time) if time::is_offset_datetime(time) => Some(time.clone()),
         _ => return None,
     };
+    // The wire keeps an absent field apart from a `null` one.
+    let wire = |field| match field {
+        Nullable::Absent => None,
+        Nullable::Null => Some(None),
+        Nullable::Text(text) => Some(Some(text)),
+    };
     Some(ResetCredit {
         id: id.to_owned(),
         reset_type: object.get("reset_type")?.as_str()?.to_owned(),
         status: object.get("status")?.as_str()?.to_owned(),
         expires_at,
-        title: nullable_text(object, "title")?,
-        description: nullable_text(object, "description")?,
+        title: wire(nullable_text(object, "title")?),
+        description: wire(nullable_text(object, "description")?),
     })
 }
 
-/// An optional, nullable string: absent, `null` or text; `None` for anything else.
-#[expect(
-    clippy::option_option,
-    reason = "invalid, absent, null and text are four outcomes"
-)]
-fn nullable_text(object: &Map<String, Value>, key: &str) -> Option<Option<Option<String>>> {
+/// An optional, nullable string field.
+enum Nullable {
+    Absent,
+    Null,
+    Text(String),
+}
+
+/// The field `key` as [`Nullable`]; `None` for anything else, which drops the credit.
+fn nullable_text(object: &Map<String, Value>, key: &str) -> Option<Nullable> {
     match object.get(key) {
-        None => Some(None),
-        Some(Value::Null) => Some(Some(None)),
-        Some(Value::String(text)) => Some(Some(Some(text.clone()))),
+        None => Some(Nullable::Absent),
+        Some(Value::Null) => Some(Nullable::Null),
+        Some(Value::String(text)) => Some(Nullable::Text(text.clone())),
         Some(_) => None,
     }
 }
@@ -92,38 +102,32 @@ struct Subscription {
     identity: String,
 }
 
-/// Redemptions, one at a time per `ChatGPT` account.
-pub struct CodexResets {
+/// Redemptions, one at a time per `ChatGPT` account, through `source`'s cores; a redemption
+/// refreshes the account's quota through `quotas`.
+pub struct CodexResets<S = PoolSource, Q = Quotas<PoolSource>> {
     store: Store,
-    redeeming: Mutex<HashSet<String>>,
+    source: S,
+    quotas: Arc<Q>,
+    redeeming: Exclusive<String>,
 }
 
-/// Ends a subscription's redemption when the call ends, finished or dropped.
-struct Redeeming<'a> {
-    set: &'a Mutex<HashSet<String>>,
-    identity: String,
-}
-
-impl Drop for Redeeming<'_> {
-    fn drop(&mut self) {
-        locked(self.set).remove(&self.identity);
-    }
-}
-
-impl CodexResets {
+impl<S: QuotaSource, Q: RefreshQuota> CodexResets<S, Q> {
     #[must_use]
-    pub fn new(store: Store) -> Self {
+    pub fn new(store: Store, source: S, quotas: Arc<Q>) -> Self {
         Self {
             store,
-            redeeming: Mutex::new(HashSet::new()),
+            source,
+            quotas,
+            redeeming: Exclusive::new(),
         }
     }
 
     async fn subscription(
-        source: &impl QuotaSource,
+        &self,
         profile: &ProfileId,
         account_id: &AccountId,
     ) -> Result<Subscription, QuotaError> {
+        let source = &self.source;
         if !source.usable(profile) {
             return Err(AppError::new("Start this profile first.", 409).into());
         }
@@ -162,7 +166,6 @@ impl CodexResets {
     /// Lists (no credit) or redeems a credit, and answers the unwrapped body.
     async fn call(
         &self,
-        source: &impl QuotaSource,
         profile: &ProfileId,
         subscription: &Subscription,
         credit_id: Option<&str>,
@@ -191,8 +194,13 @@ impl CodexResets {
                 request
             }
         };
-        let answer =
-            call_upstream(source, profile, Some(&subscription.auth_index), &request).await?;
+        let answer = call_upstream(
+            &self.source,
+            profile,
+            Some(&subscription.auth_index),
+            &request,
+        )
+        .await?;
         if answer.status != Some(200.0) {
             return Err(AppError::new(
                 format!(
@@ -222,12 +230,11 @@ impl CodexResets {
     /// failure or an answer that does not match the schema.
     pub async fn credits(
         &self,
-        source: &impl QuotaSource,
         profile: &ProfileId,
         account: &AccountId,
     ) -> Result<ResetCredits, QuotaError> {
-        let subscription = Self::subscription(source, profile, account).await?;
-        let body = self.call(source, profile, &subscription, None).await?;
+        let subscription = self.subscription(profile, account).await?;
+        let body = self.call(profile, &subscription, None).await?;
         reset_credits(&body)
             .ok_or_else(|| AppError::new("Codex reset information is unavailable.", 502).into())
     }
@@ -241,30 +248,19 @@ impl CodexResets {
     /// and 502 for an unknown outcome.
     pub async fn consume(
         &self,
-        source: &impl QuotaSource,
-        quotas: &impl RefreshQuota,
         profile: &ProfileId,
         account: &AccountId,
         credit_id: &str,
     ) -> Result<ResetResult, QuotaError> {
-        let subscription = Self::subscription(source, profile, account).await?;
-        let _redeeming = {
-            let mut redeeming = locked(&self.redeeming);
-            if !redeeming.insert(subscription.identity.clone()) {
-                return Err(AppError::new(
-                    "A reset is already in progress for this subscription.",
-                    409,
-                )
-                .into());
-            }
-            Redeeming {
-                set: &self.redeeming,
-                identity: subscription.identity.clone(),
-            }
+        let subscription = self.subscription(profile, account).await?;
+        let Some(_redeeming) = self.redeeming.begin(subscription.identity.clone()) else {
+            return Err(AppError::new(
+                "A reset is already in progress for this subscription.",
+                409,
+            )
+            .into());
         };
-        let body = self
-            .call(source, profile, &subscription, Some(credit_id))
-            .await?;
+        let body = self.call(profile, &subscription, Some(credit_id)).await?;
         let code = reset_result(&body)
             .ok_or_else(|| AppError::new("Reset outcome is unknown. Retry the same reset.", 502))?;
         if matches!(
@@ -277,7 +273,8 @@ impl CodexResets {
                 .await?;
         }
         // The redemption is settled even if a concurrent refresh or an account removal wins.
-        let quota_refreshed = quotas
+        let quota_refreshed = self
+            .quotas
             .refresh(profile, account)
             .await
             .is_ok_and(|quota| quota.status == QuotaStatus::Available);

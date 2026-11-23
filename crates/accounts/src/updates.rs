@@ -21,18 +21,19 @@ use nsv_core::binary::{BINARY, CorePin, CoreTarget, Version, bundled_pin, verify
 use nsv_core::install::{
     ActiveCore, CORE_ARCHIVES, Staging, fetch_pin, install_core, prune, select_installed_core,
 };
-use nsv_core::pool::{NoHooks, Pool};
+use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::sync::locked;
 use nsv_domain::wire::{CorePhase, CoreState};
-use nsv_files::{DataDir, owner_only_directory, unique_directory};
 use nsv_store::Store;
 use tokio::sync::watch;
 
-use crate::credentials::{Credentials, detached};
+use crate::credentials::Credentials;
 use crate::fetch::Outside;
+use crate::sandbox::Sandbox;
 use crate::scheduler::Scheduler;
 use crate::sign_in::{Backends, Report, SignIn};
+use crate::task::{blocking, detached};
 
 pub struct UpdateOptions {
     pub outside: Arc<dyn Outside>,
@@ -86,14 +87,6 @@ struct Status {
 
 fn io_error(error: &io::Error) -> AppError {
     AppError::internal(error)
-}
-
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, AppError> + Send + 'static,
-) -> Result<T, AppError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .map_err(AppError::internal)?
 }
 
 impl CoreUpdates {
@@ -255,13 +248,7 @@ impl CoreUpdates {
                     ));
                 }
                 // Startup checked the installed core instead; keep it unless this one is intact.
-                let binary = inner.bundled.binary.clone();
-                let pinned = if inner.options.require_pinned_core {
-                    Some(bundled_pin().map_err(AppError::internal)?)
-                } else {
-                    None
-                };
-                blocking(move || Ok(verify_core(&binary, pinned)?)).await?;
+                inner.verify_bundled().await?;
                 let bundled = inner.bundled.clone();
                 inner.switch_to(bundled, None).await?;
                 // Only now does no start read an installed executable. A crash before this
@@ -270,6 +257,14 @@ impl CoreUpdates {
                 blocking(move || prune(&cores, None).map_err(|error| io_error(&error))).await
             })
             .await
+    }
+
+    /// Checks the bundled core, which profiles start from unless an update is selected.
+    ///
+    /// # Errors
+    /// A bundled core that is missing or fails its integrity check.
+    pub(crate) async fn verify_bundled(&self) -> Result<(), AppError> {
+        self.0.verify_bundled().await
     }
 
     /// Aborts a download or start check, then waits for the operation in progress to end.
@@ -282,6 +277,17 @@ impl CoreUpdates {
 }
 
 impl Inner {
+    /// Checks the bundled core, and in a headless release that it is the pin compiled in.
+    async fn verify_bundled(&self) -> Result<(), AppError> {
+        let binary = self.bundled.binary.clone();
+        let pinned = if self.options.require_pinned_core {
+            Some(bundled_pin().map_err(AppError::internal)?)
+        } else {
+            None
+        };
+        blocking(move || Ok(verify_core(&binary, pinned)?)).await
+    }
+
     fn status(&self) -> MutexGuard<'_, Status> {
         locked(&self.status)
     }
@@ -412,42 +418,23 @@ impl Inner {
     /// Starts `binary` on a throwaway profile, as a sign-in sandbox does, and lists its models
     /// through its client key. Startup reaps and deletes what a crash leaves.
     async fn preflight(&self, binary: &Path, version: Version) -> Result<(), AppError> {
-        let parent = self.store.directory().oauth_pending();
-        let directory = DataDir::new(
-            blocking(move || {
-                owner_only_directory(&parent, || Ok::<(), io::Error>(()))
-                    .and_then(|()| unique_directory(&parent, "core-"))
-                    .map_err(|error| io_error(&error))
-            })
-            .await?,
-        );
-        let sandbox = match Store::open(&directory, self.store.vault().clone()).await {
-            Ok(sandbox) => sandbox,
-            Err(error) => {
-                remove(directory.path().to_owned()).await?;
-                return Err(error.into());
-            }
-        };
-        let pool = Pool::new(
-            sandbox.clone(),
+        let sandbox = Sandbox::open(
+            &self.store,
+            "core-".to_owned(),
+            "Core check",
             binary.to_owned(),
-            (self.options.backends)(&directory),
+            &self.options.backends,
             self.options.ready,
-            Arc::new(NoHooks),
-        );
+        )
+        .await?;
         let checked = self
             .abortable(async {
-                let profile = sandbox
-                    .call(|db| Ok(db.create_profile("Core check")?.id))
-                    .await?;
-                pool.start(&profile, false).await?;
-                pool.models(&profile).await?;
+                sandbox.pool.start(&sandbox.profile, false).await?;
+                sandbox.pool.models(&sandbox.profile).await?;
                 Ok(())
             })
             .await;
-        let stopped = pool.shutdown().await;
-        sandbox.close().await;
-        let removed = remove(directory.path().to_owned()).await;
+        let discarded = sandbox.discard().await;
         match checked {
             Err(error) if *self.closing.borrow() => Err(error),
             Err(error) => Err(AppError::new(
@@ -457,7 +444,7 @@ impl Inner {
                 ),
                 502,
             )),
-            Ok(()) => stopped.and(removed),
+            Ok(()) => discarded,
         }
     }
 
@@ -519,13 +506,4 @@ impl Inner {
         }
         Ok(())
     }
-}
-
-/// Deletes a directory tree; a missing one is no error.
-async fn remove(directory: PathBuf) -> Result<(), AppError> {
-    blocking(move || match std::fs::remove_dir_all(&directory) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        other => other.map_err(|error| io_error(&error)),
-    })
-    .await
 }

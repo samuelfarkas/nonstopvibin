@@ -26,11 +26,14 @@ use nsv_store::Store;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
-use crate::accounts::{Accounts, CredentialFile, PoolSource, credential_path};
+use crate::accounts::{Accounts, CredentialFile, credential_path};
 use crate::api_accounts::api_account;
+use crate::fetch::Outside;
 use crate::identity::{claude_identity, same_seat};
 use crate::quota::Quotas;
 use crate::scheduler::Scheduler;
+use crate::source::PoolSource;
+use crate::task::detached;
 
 const NOT_FOUND: &str = "Account not found in this profile.";
 
@@ -76,26 +79,8 @@ struct Inner {
     scheduler: Scheduler,
     accounts: Arc<Accounts>,
     quotas: Arc<Quotas<PoolSource>>,
+    outside: Arc<dyn Outside>,
     queue: Arc<Mutex<()>>,
-}
-
-/// Runs `work` in a task of its own once `turn` is held, so it ends even if its caller stops
-/// waiting; the turn ends with it.
-pub(crate) async fn detached<T, G>(
-    turn: G,
-    work: impl Future<Output = Result<T, AppError>> + Send + 'static,
-) -> Result<T, AppError>
-where
-    T: Send + 'static,
-    G: Send + 'static,
-{
-    tokio::spawn(async move {
-        let result = work.await;
-        drop(turn);
-        result
-    })
-    .await
-    .map_err(AppError::internal)?
 }
 
 impl Credentials {
@@ -105,12 +90,14 @@ impl Credentials {
         scheduler: Scheduler,
         accounts: Arc<Accounts>,
         quotas: Arc<Quotas<PoolSource>>,
+        outside: Arc<dyn Outside>,
     ) -> Self {
         Self(Arc::new(Inner {
             store,
             scheduler,
             accounts,
             quotas,
+            outside,
             queue: Arc::new(Mutex::new(())),
         }))
     }
@@ -364,7 +351,7 @@ impl Credentials {
         profile: &ProfileId,
         input: ApiAccountInput,
     ) -> Result<(), AppError> {
-        let account = api_account(&input, self.0.quotas.fetch()).await?;
+        let account = api_account(&input, &*self.0.outside).await?;
         let key = input.api_key;
         let (this, id, saved) = (self.clone(), profile.clone(), account.clone());
         self.queue(async move {

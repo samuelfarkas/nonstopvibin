@@ -488,11 +488,7 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
 async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_with_the_same_id() {
     let world = World::new("changes-resets").await;
     let profile = world.profile("Reset fixture").await;
-    let (resets, source, quotas) = (
-        &world.cores.resets,
-        world.cores.quotas.source(),
-        world.cores.quotas.as_ref(),
-    );
+    let resets = &world.cores.resets;
     let account = AccountId::parse("fixture.json").unwrap();
     let (message, status) = {
         let cases = cases("api");
@@ -504,7 +500,7 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
         )
     };
     let stopped = resets
-        .credits(source, &profile, &account)
+        .credits(&profile, &account)
         .await
         .map_err(AppError::from)
         .unwrap_err();
@@ -559,10 +555,10 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
             });
         });
     }
-    let credits = resets.credits(source, &profile, &account).await.unwrap();
+    let credits = resets.credits(&profile, &account).await.unwrap();
     assert_eq!(credits.available_count, 1);
     let uncertain = resets
-        .consume(source, quotas, &profile, &account, "credit-one")
+        .consume(&profile, &account, "credit-one")
         .await
         .map_err(AppError::from)
         .unwrap_err();
@@ -586,22 +582,11 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     let pending = tokio::spawn({
         let (cores, profile, account) =
             (Arc::clone(&world.cores), profile.clone(), account.clone());
-        async move {
-            cores
-                .resets
-                .consume(
-                    cores.quotas.source(),
-                    cores.quotas.as_ref(),
-                    &profile,
-                    &account,
-                    "credit-one",
-                )
-                .await
-        }
+        async move { cores.resets.consume(&profile, &account, "credit-one").await }
     });
     entered.notified().await;
     let busy = resets
-        .consume(source, quotas, &profile, &account, "credit-one")
+        .consume(&profile, &account, "credit-one")
         .await
         .map_err(AppError::from)
         .unwrap_err();
