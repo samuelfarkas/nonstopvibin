@@ -7,6 +7,7 @@ pub mod install;
 pub mod pool;
 pub mod processes;
 pub mod restart;
+pub mod upstream;
 mod yaml;
 
 use std::io;

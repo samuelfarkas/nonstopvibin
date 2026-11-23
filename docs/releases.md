@@ -163,6 +163,8 @@ release. To publish one:
 1. Review the chosen [upstream release](https://github.com/router-for-me/CLIProxyAPI/releases)
    and its changes to configuration, management APIs, authentication and routing.
 2. Run `bun run core:pin <version>`, or `bun run core:pin` for the latest release.
+   Like `core:install` it runs `bun run core:tool`, the dev-only
+   [core tool](../crates/core/examples/core-tool.rs) over the daemon's own pin code.
    It requires all four targets in the release's `checksums.txt`, checks each
    downloaded archive against it, and writes the archive and executable hashes.
    Checksums published beside the downloads establish integrity, not independent
@@ -170,8 +172,8 @@ release. To publish one:
 3. If the core needs app changes, set `minApp` to the first NonstopVibin version
    that has them; older apps keep their core. `core:pin` keeps an existing `minApp`.
 4. Quit the running app and run `bun run core:install`. This installs the pin
-   into `.vendor/core`. For another packaging target, set `CORE_PLATFORM` and
-   `CORE_ARCH`, for example `CORE_PLATFORM=linux CORE_ARCH=x64 bun run core:install`.
+   into `.vendor/core`. For another packaging target, pass `--target`, for example
+   `bun run core:install --target linux_x64`.
 5. Run the checks of the first-release checklist above and exercise the
    synthetic-provider integration tests against the new core.
 6. Try the pin on an installed app: start it with `NONSTOPVIBIN_CORE_FEED` set to
@@ -205,7 +207,8 @@ folder with an installed app. On macOS an installed core keeps upstream's own
 signature instead of the app's; that path is untested.
 
 `core:install` and packaging accept only the bundled pin. Packaging rejects
-mismatched versions, platforms, architectures and binary hashes.
+mismatched versions, platforms, architectures and binary hashes, and ships the
+staged release's own `LICENSE` as `licenses/CLIProxyAPI.txt`.
 
 The 8.1.0 upgrade keeps the legacy YAML configuration and `/v0/management`
 routes, which upstream retains alongside its v8 configuration and OAuth APIs.

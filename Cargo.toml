@@ -116,6 +116,10 @@ iter_over_hash_type = "warn"
 infinite_loop = "warn"
 clone_on_ref_ptr = "warn"
 
+# The core tool and the tests hash 80 MB cores; unoptimized SHA-256 takes over a second each.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

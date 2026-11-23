@@ -14,7 +14,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { coreLayout, coreVersion } from "./core-binary.ts";
 import {
   renderInstaller,
   serverArchive,
@@ -23,6 +22,7 @@ import {
   serverArchitectures,
 } from "./distribution.ts";
 import {
+  coreLayout,
   cargoBuild,
   releaseDir,
   repo,
@@ -54,9 +54,8 @@ for (const arch of arches) {
   try {
     const out = join(work, name);
     const entries = serverArchive;
-    await mkdir(join(work, "core-stage"));
-    await stageCore(
-      join(work, "core-stage"),
+    const coreLicence = await stageCore(
+      work,
       join(out, entries.core),
       "linux",
       arch,
@@ -66,7 +65,7 @@ for (const arch of arches) {
       join(out, entries.executable),
     );
     await stageClient(join(out, entries.client));
-    await stageLicences(join(out, entries.licenses), [build]);
+    await stageLicences(join(out, entries.licenses), [build], coreLicence);
     await writeFile(
       join(out, entries.installer),
       renderInstaller(
@@ -94,7 +93,7 @@ A systemd user session is optional:
 Then run \`nonstopvibin url\` for the session link and SSH tunnel command.
 Full guide: ${pkg.homepage}/blob/main/docs/server.md
 
-\`${entries.core}/${coreLayout.manifest}\` records the bundled CLIProxyAPI ${coreVersion} checksums.
+\`${entries.core}/${coreLayout.manifest}\` records the bundled CLIProxyAPI ${coreLayout.version} checksums.
 They are integrity evidence, not independent proof of the publisher.
 Licenses are in \`licenses/\`.
 `,

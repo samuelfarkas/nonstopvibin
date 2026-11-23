@@ -14,7 +14,6 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
-  readFile,
   rm,
   symlink,
   writeFile,
@@ -22,17 +21,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  coreLayout,
-  readCoreManifest,
-  writeCoreManifest,
-} from "./core-binary.ts";
-import {
   architecture,
   desktopArtifact,
   product,
   rustTarget,
 } from "./distribution.ts";
 import {
+  coreLayout,
+  coreTool,
   cargoBuild,
   releaseDir,
   repo,
@@ -44,7 +40,6 @@ import {
   version,
   writeFeed,
 } from "./package-common.ts";
-import { sha256 } from "./pinned-download.ts";
 import {
   bundle,
   squirrel,
@@ -299,13 +294,12 @@ try {
   const resources = join(app, "Contents/Resources");
   const core = join(resources, coreLayout.packaged);
   await mkdir(macOS, { recursive: true });
-  await mkdir(join(work, "core-stage"));
-  await stageCore(join(work, "core-stage"), core, "darwin", arch);
+  const coreLicence = await stageCore(work, core, "darwin", arch);
   await copyFile(join(binaries, product.executable), join(macOS, product.name));
   await copyFile(join(binaries, product.helper), join(macOS, product.helper));
   await copyFile(join(repo, "build/icon.icns"), join(resources, "icon.icns"));
   await stageClient(join(resources, "client"));
-  await stageLicences(join(resources, "licenses"), [build]);
+  await stageLicences(join(resources, "licenses"), [build], coreLicence);
   await writeFile(join(app, "Contents/Info.plist"), appPlist);
   await stageRelaunch(app);
   await writeFile(join(app, "Contents/PkgInfo"), "APPL????");
@@ -321,9 +315,7 @@ try {
   // Inside out: the core and the helper, then the bundle, which seals them.
   sign(join(core, coreLayout.binary), identity);
   // Signing rewrote the core; the app verifies it against its manifest at runtime.
-  const manifest = readCoreManifest(core);
-  manifest.binarySha256 = sha256(await readFile(join(core, coreLayout.binary)));
-  writeCoreManifest(core, manifest);
+  coreTool("rehash", core);
   sign(join(macOS, product.helper), identity);
   sign(join(app, squirrel.shipIt), identity);
   sign(join(app, squirrel.framework, "Versions/A"), identity);

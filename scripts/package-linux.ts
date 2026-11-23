@@ -17,9 +17,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { coreLayout } from "./core-binary.ts";
 import { desktopArtifact, product, rustTarget } from "./distribution.ts";
 import {
+  coreLayout,
   cargoBuild,
   releaseDir,
   repo,
@@ -79,9 +79,8 @@ try {
   // The app folder both packages install: the daemon, its helper beside it, core/, client/
   // and licenses/.
   const app = join(work, "app");
-  await mkdir(join(work, "core-stage"));
-  await stageCore(
-    join(work, "core-stage"),
+  const coreLicence = await stageCore(
+    work,
     join(app, coreLayout.packaged),
     "linux",
     arch,
@@ -95,7 +94,7 @@ try {
     join(app, product.helper),
   );
   await stageClient(join(app, "client"));
-  await stageLicences(join(app, "licenses"), [daemon, helper]);
+  await stageLicences(join(app, "licenses"), [daemon, helper], coreLicence);
   for (const file of [
     product.executable,
     product.helper,

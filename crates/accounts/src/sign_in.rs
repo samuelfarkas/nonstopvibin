@@ -2,7 +2,7 @@
 //!
 //! - The core makes the sign-in link (`/<provider>-auth-url`) and holds the pending
 //!   authorization. The browser comes back to a loopback listener on the port the link's
-//!   redirect names (1455 for Codex, 54545 for Claude), which forwards a callback with the
+//!   redirect names ([`nsv_core::upstream::SIGN_IN_PORTS`]), which forwards a callback with the
 //!   session's path and state to the core. A headless server's user pastes the redirect URL
 //!   instead ([`SignIn::callback`]).
 //! - A provider with organizations (Claude) signs in on a throwaway store under

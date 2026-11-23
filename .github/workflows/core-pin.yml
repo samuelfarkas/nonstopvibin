@@ -21,25 +21,19 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - run: bun ci --ignore-scripts
+      # Bun runs `bun run core:tool`; Rust builds the core tool it names.
+      - uses: ./.github/actions/setup
+        with:
+          build: core-pin
       - name: Open a pull request for a newer CLIProxyAPI
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          pinned=$(jq -r .version crates/core/core-release.json)
-          read -r tag published < <(gh release view --repo router-for-me/CLIProxyAPI \
-            --json tagName,publishedAt --jq '"\(.tagName) \(.publishedAt)"')
-          version=${tag#v}
-          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Unexpected latest CLIProxyAPI tag: $tag"
-            exit 1
-          fi
-          if [ "$(printf '%s\n%s\n' "$pinned" "$version" | sort -V | tail -n 1)" = "$pinned" ]; then
-            echo "CLIProxyAPI $pinned is pinned; upstream's latest is $version."
-            exit 0
-          fi
+          # Nothing when the pin is upstream's latest release or newer.
+          pending=$(bun run --silent core:tool pending)
+          [ -n "$pending" ] || exit 0
+          read -r version published pinned releases <<<"$pending"
           # Upstream keeps uploading archives and checksums after it publishes a release.
           age=$(( $(date +%s) - $(date -d "$published" +%s) ))
           if [ "$age" -lt 7200 ]; then
@@ -63,8 +57,8 @@ jobs:
           Upstream released CLIProxyAPI $version. \`bun run core:pin $version\` checked each
           target's archive against the release's \`checksums.txt\` and pinned its hashes.
 
-          - Release notes: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v$version
-          - Changes since $pinned: https://github.com/router-for-me/CLIProxyAPI/compare/v$pinned...v$version
+          - Release notes: $releases/tag/v$version
+          - Changes since $pinned: ${releases%/releases}/compare/v$pinned...v$version
 
           Merging ships this core to installed apps, which offer it in Settings. Before merging:
 

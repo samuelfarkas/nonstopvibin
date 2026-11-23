@@ -19,8 +19,9 @@
   "scripts": {
     "dev": "bun scripts/dev.mjs",
     "start": "cargo build -p nsv-window && cargo run -p nsv-cli --bin nonstopvibin",
-    "core:install": "bun scripts/install-core.mjs",
-    "core:pin": "bun scripts/pin-core.mjs",
+    "core:install": "bun run core:tool install",
+    "core:pin": "bun run core:tool pin",
+    "core:tool": "cargo run --quiet --locked -p nsv-core --example core-tool --",
     "check": "tsc --noEmit",
     "test": "bun test && sh scripts/cargo.sh test --locked",
     "test:ui": "sh crates/window/tests/ui.sh --locked",

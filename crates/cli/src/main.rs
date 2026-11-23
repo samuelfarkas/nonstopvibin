@@ -12,6 +12,7 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use nsv_core::upstream::SIGN_IN_PORTS;
 use nsv_domain::endpoint::LOOPBACK_HOST;
 use nsv_files::DataDir;
 use nsv_server::{Session, VERSION, valid_allow_host};
@@ -22,8 +23,6 @@ use crate::args::Args;
 pub(crate) const SERVER_PORT: u16 = 4320;
 /// `status` and `url` exit with this when no server runs.
 const NOT_RUNNING: u8 = 3;
-/// The browser sign-in callback ports a tunnel can forward: Codex, Claude.
-const SIGN_IN_PORTS: [u16; 2] = [1455, 54545];
 
 /// A message for the user and the exit code it ends with.
 #[derive(Debug)]
