@@ -115,7 +115,6 @@ pub(crate) struct Helper {
 }
 
 impl Helper {
-    /// Starts a helper with `start`.
     pub(crate) async fn spawn(
         program: &Path,
         start: Start,

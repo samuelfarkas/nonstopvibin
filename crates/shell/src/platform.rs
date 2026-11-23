@@ -26,8 +26,7 @@ pub(crate) trait SystemTray: Sized {
     /// What the main thread hands the daemon thread for the tray.
     type Link;
 
-    /// Without a tray host the shell runs on without a tray, as Electron did. `updates`
-    /// enables "Check for updates…".
+    /// Without a tray host the shell runs on without a tray, as Electron did.
     async fn start(link: Self::Link, look: Look, updates: bool) -> Self;
     /// `None` once no tray can report anything.
     async fn next(&mut self) -> Option<Action>;
@@ -36,7 +35,6 @@ pub(crate) trait SystemTray: Sized {
 
 /// Starting at login (`login.rs`).
 pub(crate) trait LoginItem: Sized {
-    /// The login item of `install`.
     fn of(install: &Install) -> io::Result<Self>;
     fn enabled(&self) -> bool;
     /// Turns it on or off and answers whether it is on now.

@@ -115,7 +115,6 @@ impl Updates {
         }
     }
 
-    /// Whether "Check for updates…" is enabled.
     pub(crate) fn possible(&self) -> bool {
         !matches!(self.0, Mode::Off)
     }

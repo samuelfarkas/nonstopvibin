@@ -45,7 +45,6 @@ fn number(text: &str) -> Option<u64> {
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
-        // A release (no beta) sorts above every prerelease of the same X.Y.Z.
         let key = |v: &Self| (v.core, v.beta.is_none(), v.beta);
         key(self).cmp(&key(other))
     }
