@@ -16,10 +16,10 @@ coding when configuring Codex; increase it for problems that warrant deeper work
 
 Done means the requested behavior works, touched files are formatted, relevant
 checks pass, and any remaining blockers or unverified behavior are reported.
-For code/config changes, `bun run quality` is the completion gate. Rust changes
-also need `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets --locked -- -D warnings`, and
-`cargo test -p <crate> --locked` for each affected crate. Use affected `bun test`
+For code/config changes, `bun run quality` is the completion gate; it includes
+`cargo fmt --check`, clippy with `-D warnings` and the wire-type drift check. Rust
+changes also need `cargo test -p <crate> --locked` for each affected crate
+(`bun run test` runs every test). Use affected `bun test`
 tests for TypeScript behavior changes and `bun run build` for runtime/build
 boundaries. Documentation-only changes need formatting and diff review.
 Fix failures caused by the change; repeat or broaden checks only for new edits,

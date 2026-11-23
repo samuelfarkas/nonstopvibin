@@ -35,11 +35,9 @@ bun run start    # The desktop app, with its tray and window
 ```
 
 CI runs every check on your pull request ([SECURITY.md](SECURITY.md#required-checks)
-says where they are defined). Before opening one, run `bun run quality` and
-`bun test`, and `bun run build` when changing runtime or build boundaries. For Rust
-changes, also run `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets --locked -- -D warnings`, and the affected
-crates' `cargo test -p <crate> --locked`. Format
+says where they are defined). Before opening one, run `bun run quality` (it
+includes `cargo fmt`, clippy and the drift checks) and `bun run test`, and
+`bun run build` when changing runtime or build boundaries. Format
 touched files with `bunx --no-install oxfmt --write <files>` before the final checks.
 Documentation-only changes need formatting and a diff review.
 

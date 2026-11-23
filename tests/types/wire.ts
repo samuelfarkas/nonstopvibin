@@ -1,4 +1,4 @@
-// The Rust wire types (crates/domain/src/wire), as `cargo test -p nsv-domain` exports them to
+// The Rust wire types (crates/domain/src/wire), as `bun run wire:export` writes them to
 // ./generated, must stay mutually assignable with their twins in src/shared. `bun run check`
 // fails here when either side drifts.
 import type * as Api from "../../src/shared/api.ts";

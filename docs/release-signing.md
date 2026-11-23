@@ -44,7 +44,7 @@ new code hash, and the app can no longer update.
 
 Pull request builds are signed the same way, so they can update and be updated.
 On every pull request and release, `bun run test:update:mac` updates an Electron build
-to the packaged app, and `tests/mac-update-rust.mjs` updates an older Rust build.
+and then an older Rust build to the packaged app.
 
 Signing rewrites the bundled core binary. `scripts/package-mac.ts` checks the
 unsigned core against the reviewed pin, signs it, and then writes the signed binary's

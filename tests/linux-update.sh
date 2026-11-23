@@ -9,7 +9,7 @@
 #
 # Run it in a Linux container or VM with WebKitGTK 4.1 and GTK 3 development files, Xvfb,
 # xdotool, musl-tools, python3, bun, cargo with the x86_64-unknown-linux-musl target, after
-# `bun run build` and `bun run setup` in the checkout, for example:
+# `bun run build` and `bun run setup` in the checkout (`bun run test:update:linux`), for example:
 #   docker run --rm -v ~/.local/rust:/rust -v "$PWD":/src:ro -v <bun>:/usr/local/bin/bun:ro \
 #     -v <target dir>:/target -e CARGO_TARGET_DIR=/target <image> sh /src/tests/linux-update.sh
 set -eu

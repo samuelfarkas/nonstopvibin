@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -28,15 +29,9 @@ fn fixture() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// Regenerates `tests/types/generated`, which `tests/types/wire.ts` checks against
-/// `src/shared` and CI diffs against the commit.
-#[test]
-fn export_typescript_twins() {
-    let out = repository().join("tests/types/generated");
-    if out.exists() {
-        std::fs::remove_dir_all(&out).unwrap();
-    }
-    let config = Config::new().with_large_int("number").with_out_dir(&out);
+/// Writes every wire type's `ts-rs` twin into `out`.
+fn export_typescript_twins(out: &Path) {
+    let config = Config::new().with_large_int("number").with_out_dir(out);
     macro_rules! export {
         ($($ty:ty),+ $(,)?) => { $(<$ty as TS>::export_all(&config).unwrap();)+ };
     }
@@ -76,6 +71,52 @@ fn export_typescript_twins() {
         Strategy,
         ResetResultCode,
     );
+}
+
+/// Each file of a directory by name.
+fn files(directory: &Path) -> BTreeMap<String, String> {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+            (name, std::fs::read_to_string(&path).unwrap())
+        })
+        .collect()
+}
+
+/// `tests/types/generated`, which `tests/types/wire.ts` checks against `src/shared`, is what the
+/// wire types export now (`bun run wire:check`).
+#[test]
+fn generated_typescript_twins_match_the_wire_types() {
+    let out = std::env::temp_dir().join(format!("nsv-wire-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    export_typescript_twins(&out);
+    let (exported, committed) = (
+        files(&out),
+        files(&repository().join("tests/types/generated")),
+    );
+    std::fs::remove_dir_all(&out).unwrap();
+    let stale: BTreeSet<&String> = exported
+        .keys()
+        .chain(committed.keys())
+        .filter(|name| exported.get(*name) != committed.get(*name))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "tests/types/generated differs from the wire types in {stale:?}; run bun run wire:export"
+    );
+}
+
+/// Rewrites `tests/types/generated` from the wire types (`bun run wire:export`).
+#[test]
+#[ignore = "writes into the checkout; bun run wire:export runs it"]
+fn write_generated_typescript_twins() {
+    let out = repository().join("tests/types/generated");
+    if out.exists() {
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+    export_typescript_twins(&out);
 }
 
 #[test]

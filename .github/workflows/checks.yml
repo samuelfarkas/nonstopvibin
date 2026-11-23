@@ -12,6 +12,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: "0"
+  # The last TypeScript release: the store downgrade reads with it, and the macOS update test
+  # builds its Electron app from it.
+  TYPESCRIPT_MAIN: 4ea188ab6a685ed83022c187aec66b524c411dec
 jobs:
   checks:
     strategy:
@@ -24,48 +27,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/setup
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-      # The toolchain and components in rust-toolchain.toml.
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: checks
-      - if: runner.os == 'Linux'
-        name: Install WebKitGTK, GTK, Xvfb and D-Bus
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev xvfb dbus-daemon
+          build: checks
+          packages: libwebkit2gtk-4.1-dev libgtk-3-dev xvfb dbus-daemon
       # Dependencies and the pinned core, which the integration tests run.
       - run: bun run setup
       - run: bun run quality
       # The package tests read the built interface's dist/licenses/THIRD-PARTY.txt.
       - run: bun run build:client
-      - run: bun test
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - if: runner.os == 'macOS'
-        run: cargo test --workspace --locked
-      # The window helper's placement tests assume the 1280x800 screen gui.sh also uses.
+        run: bun run test
       - if: runner.os == 'Linux'
-        name: cargo test --workspace (display and session bus)
-        run: xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- cargo test --workspace --locked
+        name: bun run test (display and session bus)
+        run: sh tests/headless.sh bun run test
       - if: runner.os == 'Linux'
         name: Shell tests that drive a real window helper
-        run: sh crates/shell/tests/gui.sh --locked
-      # Builds the interface, its fixture pages, the daemon and the helper; on Linux it starts
-      # its own Xvfb and D-Bus session.
+        run: bun run test:shell
+      # Builds the interface, its fixture pages, the daemon and the helper; on Linux it runs
+      # under tests/headless.sh.
       - name: UI checks in the window helper
         run: bun run test:ui
-      - name: Generated TypeScript types match the Rust wire types
-        run: |
-          cargo test -p nsv-domain --locked
-          git diff --exit-code -- tests/types/generated
-          test -z "$(git status --porcelain -- tests/types/generated)"
       - if: runner.os == 'Linux'
         uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
         with:
@@ -73,19 +55,19 @@ jobs:
       - if: runner.os == 'Linux'
         name: No unused dependencies
         run: cargo machete
-      # Downgrade: the last TypeScript release (main 4ea188a) opens what the Rust store wrote.
+      # Downgrade: the last TypeScript release opens what the Rust store wrote.
       - if: runner.os == 'Linux'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 4ea188ab6a685ed83022c187aec66b524c411dec
-          path: typescript-4ea188a
+          ref: ${{ env.TYPESCRIPT_MAIN }}
+          path: typescript-main
           persist-credentials: false
       - if: runner.os == 'Linux'
         name: The TypeScript store reads a directory the Rust store wrote
         run: |
-          (cd typescript-4ea188a && bun ci --ignore-scripts)
+          (cd typescript-main && bun ci --ignore-scripts)
           NSV_KEEP_DIR="$RUNNER_TEMP/downgrade" cargo test -p nsv-store --locked --test integration migration
-          NSV_TS_CHECKOUT=typescript-4ea188a bun tests/downgrade/read-with-ts.ts "$RUNNER_TEMP/downgrade"
+          NSV_TS_CHECKOUT=typescript-main bun tests/downgrade/read-with-ts.ts "$RUNNER_TEMP/downgrade"
   desktop:
     strategy:
       fail-fast: false
@@ -100,16 +82,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/setup
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: package
+          build: package
+          target: ${{ runner.os == 'Linux' && 'x86_64-unknown-linux-musl' || '' }}
+          packages: libwebkit2gtk-4.1-dev libgtk-3-dev musl-tools xvfb xdotool
       - run: bun run setup
       - if: runner.os == 'macOS'
         name: Package
@@ -123,11 +100,7 @@ jobs:
           APPLE_TEAM_ID: ${{ inputs.release && secrets.APPLE_TEAM_ID || '' }}
       - if: runner.os == 'Linux'
         name: Package
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev musl-tools
-          rustup target add x86_64-unknown-linux-musl
-          bun run dist:linux
+        run: bun run dist:linux
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # Empty keeps the repository default for release artifacts.
@@ -136,12 +109,18 @@ jobs:
           name: nonstopvibin-${{ runner.os }}
           # Installers and update feeds; release/mac-*/ holds the unpacked bundle.
           path: release/*.*
+      # This checkout rebuilt as 0.0.1 into an AppImage refuses a tampered payload and a foreign
+      # signature, then replaces itself from a local feed signed with a throwaway key.
+      - if: runner.os == 'Linux'
+        name: Update an installed AppImage in place
+        timeout-minutes: 25
+        run: bun run test:update:linux
       # The packaged app as a user drives it: the menu bar item, the quota popup, the tray menu,
       # the main window in front (20 of 20), the Dock icon, the login item and quitting.
       - if: runner.os == 'macOS'
         name: Desktop behaviour of the packaged app
         timeout-minutes: 20
-        run: bun tests/mac-desktop.mjs
+        run: bun run test:desktop:mac
       - if: runner.os == 'macOS' && !cancelled()
         name: Upload the desktop behaviour results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -152,24 +131,20 @@ jobs:
           path: test-results/mac-desktop/
       # The hop every installed copy takes: the last Electron release's source, built as 0.0.1,
       # downloads the packaged zip through electron-updater and Squirrel.Mac swaps the bundle.
+      # Then this checkout rebuilt as 0.0.1 refuses a forged bundle and a foreign signature, and
+      # installs the packaged zip from a local feed signed with a throwaway key and relaunches it.
       - if: runner.os == 'macOS'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 4ea188ab6a685ed83022c187aec66b524c411dec
-          path: electron-4ea188a
+          ref: ${{ env.TYPESCRIPT_MAIN }}
+          path: electron-main
           persist-credentials: false
       - if: runner.os == 'macOS'
-        name: Update an installed Electron build onto the Rust app
-        timeout-minutes: 20
+        name: Update an installed Electron build, then an installed Rust build, onto this one
+        timeout-minutes: 45
         run: |
-          (cd electron-4ea188a && bun run setup && bun run build)
-          NSV_ELECTRON_CHECKOUT="$PWD/electron-4ea188a" bun run test:update:mac
-      - if: runner.os == 'macOS'
-        name: Update an installed Rust build in place
-        # This checkout rebuilt as 0.0.1 refuses a forged bundle and a foreign signature, then
-        # installs the packaged zip from a local feed signed with a throwaway key and relaunches it.
-        timeout-minutes: 25
-        run: bun tests/mac-update-rust.mjs
+          (cd electron-main && bun run setup && bun run build)
+          NSV_ELECTRON_CHECKOUT="$PWD/electron-main" bun run test:update:mac
       - if: runner.os == 'macOS' && (failure() || cancelled())
         name: Upload update test diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -198,21 +173,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/setup
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-bun-
-      - run: |
-          rustup toolchain install
-          rustup target add ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: server
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+          build: server
+          target: ${{ matrix.target }}
+          packages: musl-tools
       - run: bun ci
       - run: bun run dist:server ${{ matrix.arch }}
       - name: Smoke-test the server archive

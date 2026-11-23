@@ -122,7 +122,7 @@ types with `any` or non-null assertions to bypass an unresolved boundary.
 [Zod parsing](https://zod.dev/basics).
 
 The UI's wire types in `src/shared` have Rust twins in `nsv-domain`.
-`cargo test -p nsv-domain` regenerates `tests/types/generated` with `ts-rs`, and
+`bun run wire:export` regenerates `tests/types/generated` with `ts-rs`, and
 `bun run check` asserts that each pair is mutually assignable. Provider, agent and
 vocabulary data stays in TypeScript: after changing it, run `bun run registry:export`
 to rewrite `crates/domain/data/registry.json`. `bun run quality` fails on drift.

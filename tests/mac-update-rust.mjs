@@ -1,4 +1,4 @@
-// Run with `bun tests/mac-update-rust.mjs` on a GitHub Actions macOS runner after
+// Run with `bun run test:update:mac` on a GitHub Actions macOS runner after
 // `bun scripts/package-mac.ts`: an installed Rust build updates itself in place to the packaged
 // release. It builds this checkout again as 0.0.1 with a test feed on 127.0.0.1
 // (NONSTOPVIBIN_TEST_UPDATE_FEED) and a throwaway release key, serves the packaged release with a

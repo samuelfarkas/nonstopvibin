@@ -97,17 +97,13 @@ section. Work through these steps in order.
    bun run setup
    bun run quality
    bun run build:client
-   bun test
-   cargo fmt --all --check
-   cargo clippy --workspace --all-targets --locked -- -D warnings
-   # On Linux, under a display and a session bus as CI runs them:
-   xvfb-run -a dbus-run-session -- cargo test --workspace --locked
-   sh crates/shell/tests/gui.sh --locked
+   bun run test        # On Linux: sh tests/headless.sh bun run test
+   bun run test:shell  # Linux only
    bun run test:ui
    # On the target system: dist:mac on macOS, dist:linux on Linux.
    bun run dist:mac
    # On a GitHub Actions macOS runner only: update older builds to this one.
-   bun run test:update:mac && bun tests/mac-update-rust.mjs
+   bun run test:update:mac
    # On Linux, for the host architecture (CI builds x64 and arm64):
    bun run dist:server && bun run test:server
    bun run security:deps
@@ -266,9 +262,8 @@ release after it):
 update discovery, Later, explicit restart, shutdown of the core/gateway, restored
 credentials/profile identity, and offline/corrupt-download recovery. Verify beta
 discovery separately before advertising it. `bun run test:update:mac` proves the
-Electron-to-Rust update and `bun tests/mac-update-rust.mjs` the Rust-to-Rust update in
-place on a CI runner, without Gatekeeper's first-launch check and with the runner's
-pre-granted privacy permissions. `tests/linux-update.sh` updates an AppImage in a
-container and checks that a tampered payload and a foreign signature are refused.
+Electron-to-Rust update and the Rust-to-Rust update in place on a CI runner, without Gatekeeper's first-launch check and with the runner's
+pre-granted privacy permissions. `bun run test:update:linux` updates an AppImage on a
+CI runner and checks that a tampered payload and a foreign signature are refused.
 Installation and Linux desktop behavior remain unverified until tested on the
 supported target systems.

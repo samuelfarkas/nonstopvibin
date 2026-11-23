@@ -1,4 +1,4 @@
-// Run with `bun tests/mac-desktop.mjs` on a GitHub Actions macOS runner after `bun run dist:mac`:
+// Run with `bun run test:desktop:mac` on a GitHub Actions macOS runner after `bun run dist:mac`:
 // the packaged app's desktop behaviour, driven as a user drives it. Mouse clicks are posted
 // CoreGraphics events, keys and menus go through System Events (the runner grants osascript
 // Accessibility), and every result is read back from the system: the menu bar item and its

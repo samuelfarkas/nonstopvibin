@@ -56,34 +56,36 @@ reload shows the new UI without a restart.
 ## Checks and builds
 
 ```sh
-bun run quality       # TypeScript, Oxlint, Oxfmt and registry drift checks
+bun run quality       # The static gate: TypeScript, Oxlint, Oxfmt, cargo fmt, clippy, registry and wire drift
 bun run format        # Format TypeScript sources, tests, scripts and configuration
 bun test              # TypeScript tests; add --watch to rerun while editing
-cargo test -p nsv-domain --locked   # One crate's tests; --workspace for all
-bun run test          # bun test, then cargo test for the whole workspace
+cargo test -p nsv-domain --locked   # One crate's tests
+bun run test          # bun test, then cargo test (see below for the workspace)
 bun run build         # The interface, then the Rust binaries in release mode
 bun run build:client  # The interface alone, into dist/client
-bun run test:ui       # UI checks in the real window helper (Xvfb on Linux)
+bun run test:ui       # UI checks in the real window helper (tests/headless.sh on Linux)
+bun run test:shell    # The shell's tests that drive a real window helper (Linux)
 bun run test:server   # Installs and runs the server archive (Linux, after dist:server)
 bun run dist:mac      # DMG and ZIP, on macOS
 bun run dist:linux    # AppImage and deb, on Linux
 bun run dist:server   # Headless server archive for this host's architecture
 ```
 
-CI also runs `cargo fmt --all --check`,
-`cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo machete`
-for unused dependencies. Run them before pushing Rust changes.
+`bun run quality` and `bun run test` cover the whole workspace where the window
+helper builds (macOS, or Linux with WebKitGTK 4.1's development files) and
+Cargo.toml's default-members elsewhere (`scripts/cargo.sh`). CI also runs
+`cargo machete` for unused dependencies.
 
-Some tests need a display or a session bus. On Linux, run them under Xvfb and
-`dbus-run-session`, as CI does:
+Some tests need a display or a session bus. On Linux, `tests/headless.sh` runs a
+command on a 1280x800 Xvfb screen in its own D-Bus session, as CI does:
 
 ```sh
-xvfb-run -a dbus-run-session -- cargo test --workspace --locked
-sh crates/shell/tests/gui.sh --locked
+sh tests/headless.sh bun run test
+bun run test:shell
 ```
 
-`crates/shell/tests/gui.sh` runs the shell's tests that drive a real window
-helper. `bun run test:ui` runs `crates/window/tests/ui.sh`, which builds the
+`bun run test:shell` runs `crates/shell/tests/gui.sh`, the shell's tests that
+drive a real window helper. `bun run test:ui` runs `crates/window/tests/ui.sh`, which builds the
 interface, the daemon and the helper, then checks focus, the logo, page layout,
 the close guard and, on Linux, the error dialogs and signals. On macOS the
 terminal needs the Accessibility permission.
@@ -99,10 +101,11 @@ for it, so CI builds each on a native runner. See
 The app update tests run on CI runners, not on a workstation:
 
 - `bun run test:update:mac` updates an Electron build, made from a checkout of
-  main 4ea188a in `NSV_ELECTRON_CHECKOUT`, to the packaged Rust app.
-- `bun tests/mac-update-rust.mjs` updates an older Rust build in place.
-- `tests/linux-update.sh` updates an installed AppImage in place. Run it in a
-  Linux container or VM; its header lists what it needs.
+  main 4ea188a in `NSV_ELECTRON_CHECKOUT`, to the packaged Rust app, then an
+  older Rust build in place.
+- `bun run test:update:linux` updates an installed AppImage in place. Run it in a
+  Linux container, VM or CI runner; its header lists what it needs.
+- `bun run test:desktop:mac` drives the packaged macOS app as a user does.
 
 `tests/downgrade/read-with-ts.ts` proves that the last TypeScript store opens a
 data directory the Rust store wrote. CI runs it against a checkout of main 4ea188a, the last TypeScript release.
@@ -142,9 +145,10 @@ an identifier operand. It remains excluded from linting and formatting.
 ## Wire types and the registry
 
 The interface's wire types in `src/shared` have Rust twins in `nsv-domain`.
-`cargo test -p nsv-domain` writes the `ts-rs` output to `tests/types/generated`,
-and `bun run check` asserts that each pair is mutually assignable. Commit the
-generated files. Provider, agent and vocabulary data stays in TypeScript. After
+`bun run wire:export` writes the `ts-rs` output to `tests/types/generated`,
+`bun run check` asserts that each pair is mutually assignable, and `bun run quality`
+(`bun run wire:check`) fails while the committed files differ from the export.
+Commit the generated files. Provider, agent and vocabulary data stays in TypeScript. After
 changing it, run `bun run registry:export`, which rewrites
 `crates/domain/data/registry.json`; `bun run quality` fails while the two differ.
 
