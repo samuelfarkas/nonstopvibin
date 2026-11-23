@@ -261,31 +261,42 @@ pub struct Scheduler(Arc<Shared>);
 
 impl Scheduler {
     /// The scheduler and its pool, whose cores start from `binary` through `backend` and get
-    /// `ready` to answer. Nothing is scheduled before [`Scheduler::launch`].
-    #[must_use]
-    pub fn new(
+    /// `ready` to answer. The host's features drive the pool, so `assemble` builds the host
+    /// from it, with whatever else the caller keeps. Nothing is scheduled before
+    /// [`Scheduler::launch`].
+    pub fn new<T>(
         store: Store,
         binary: PathBuf,
         backend: Arc<dyn Backend>,
         ready: Duration,
         accounts: Arc<Accounts>,
-        host: Arc<dyn Host>,
         timing: Timing,
-    ) -> Self {
-        Self(Arc::new_cyclic(|shared| {
+        assemble: impl FnOnce(&Pool) -> (Arc<dyn Host>, T),
+    ) -> (Self, T) {
+        let mut kept = None;
+        let shared = Arc::new_cyclic(|shared| {
             let hooks = Arc::new(PoolHooks(Weak::clone(shared)));
+            let pool = Pool::new(store.clone(), binary, backend, ready, hooks);
+            let (host, rest) = assemble(&pool);
+            kept = Some(rest);
             Shared {
                 state: Mutex::new(State::new(store.facts())),
                 notify: Notify::new(),
                 timing,
                 epoch: Instant::now(),
-                pool: Pool::new(store.clone(), binary, backend, ready, hooks),
+                pool,
                 store,
                 accounts,
                 host,
                 work: watch::Sender::new(0),
             }
-        }))
+        });
+        #[expect(
+            clippy::unreachable,
+            reason = "Arc::new_cyclic runs its closure once before it returns"
+        )]
+        let Some(kept) = kept else { unreachable!() };
+        (Self(shared), kept)
     }
 
     #[must_use]

@@ -5,7 +5,7 @@
 //! the facts the store published.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_core::install::CoreSource;
@@ -109,8 +109,8 @@ impl ProfileStatus {
 struct FeatureHost {
     report: Report,
     clock: fn() -> i64,
-    quotas: OnceLock<Arc<Quotas<PoolSource>>>,
-    sessions: OnceLock<watch::Receiver<Option<OAuthSession>>>,
+    quotas: Arc<Quotas<PoolSource>>,
+    sessions: watch::Receiver<Option<OAuthSession>>,
 }
 
 impl Host for FeatureHost {
@@ -123,12 +123,10 @@ impl Host for FeatureHost {
     }
 
     fn signing_in(&self, profile: &ProfileId) -> bool {
-        self.sessions.get().is_some_and(|sessions| {
-            sessions
-                .borrow()
-                .as_ref()
-                .is_some_and(|session| session.profile_id == *profile)
-        })
+        self.sessions
+            .borrow()
+            .as_ref()
+            .is_some_and(|session| session.profile_id == *profile)
     }
 
     fn refresh_quotas(
@@ -136,13 +134,8 @@ impl Host for FeatureHost {
         pool: Pool,
         profile: ProfileId,
     ) -> BoxFuture<'static, Result<(), AppError>> {
-        let quotas = self.quotas.get().cloned();
+        let quotas = Arc::clone(&self.quotas);
         Box::pin(async move {
-            let Some(quotas) = quotas else {
-                return Err(AppError::internal(
-                    "the quota refresh ran before the features were assembled",
-                ));
-            };
             // Each account is checked as its turn comes; a stop or shutdown ends the pass.
             quotas
                 .refresh_accounts(&profile, |account| {
@@ -176,55 +169,56 @@ impl Cores {
             app,
         } = options;
         let accounts = Arc::new(Accounts::new(store.clone()));
-        let host = Arc::new(FeatureHost {
-            report: Arc::clone(&report),
-            clock,
-            quotas: OnceLock::new(),
-            sessions: OnceLock::new(),
-        });
-        let hooks: Arc<dyn Host> = Arc::<FeatureHost>::clone(&host);
-        let scheduler = Scheduler::new(
+        let (scheduler, (source, quotas, credentials, sign_in)) = Scheduler::new(
             store.clone(),
             binary.clone(),
             backends(store.directory()),
             ready,
             Arc::clone(&accounts),
-            hooks,
             timing,
-        );
-        let source = PoolSource {
-            pool: scheduler.pool().clone(),
-            accounts: Arc::clone(&accounts),
-        };
-        let quotas = Arc::new(Quotas::new(
-            store.clone(),
-            source.clone(),
-            Arc::clone(&outside),
-            clock,
-        ));
-        let pool = scheduler.pool().clone();
-        let credentials = Credentials::new(
-            store.clone(),
-            pool.clone(),
-            Arc::clone(&accounts),
-            Arc::clone(&quotas),
-            Arc::clone(&outside),
-        );
-        let sign_in = SignIn::new(
-            store.clone(),
-            pool.clone(),
-            Arc::clone(&accounts),
-            credentials.clone(),
-            Arc::clone(&quotas),
-            SignInOptions {
-                backends: Arc::clone(&backends),
-                outside: Arc::clone(&outside),
-                ready,
-                clock,
-                report: Arc::clone(&report),
-                accepted: sign_in_accepted,
+            |pool| {
+                let source = PoolSource {
+                    pool: pool.clone(),
+                    accounts: Arc::clone(&accounts),
+                };
+                let quotas = Arc::new(Quotas::new(
+                    store.clone(),
+                    source.clone(),
+                    Arc::clone(&outside),
+                    clock,
+                ));
+                let credentials = Credentials::new(
+                    store.clone(),
+                    pool.clone(),
+                    Arc::clone(&accounts),
+                    Arc::clone(&quotas),
+                    Arc::clone(&outside),
+                );
+                let sign_in = SignIn::new(
+                    store.clone(),
+                    pool.clone(),
+                    Arc::clone(&accounts),
+                    credentials.clone(),
+                    Arc::clone(&quotas),
+                    SignInOptions {
+                        backends: Arc::clone(&backends),
+                        outside: Arc::clone(&outside),
+                        ready,
+                        clock,
+                        report: Arc::clone(&report),
+                        accepted: sign_in_accepted,
+                    },
+                );
+                let host = Arc::new(FeatureHost {
+                    report: Arc::clone(&report),
+                    clock,
+                    quotas: Arc::clone(&quotas),
+                    sessions: sign_in.sessions(),
+                });
+                (host, (source, quotas, credentials, sign_in))
             },
         );
+        let pool = scheduler.pool().clone();
         let updates = CoreUpdates::new(
             store.clone(),
             pool.clone(),
@@ -240,9 +234,6 @@ impl Cores {
                 app,
             },
         )?;
-        // Set once, before anything is scheduled: `launch` comes after `new`.
-        let _quotas = host.quotas.set(Arc::clone(&quotas));
-        let _sessions = host.sessions.set(sign_in.sessions());
         Ok(Self {
             resets: CodexResets::new(store.clone(), source, Arc::clone(&quotas)),
             scheduler,

@@ -193,14 +193,14 @@ async fn real_world(
     };
     let reports = Arc::new(Reports::default());
     let host: Arc<dyn Host> = Arc::<Reports>::clone(&reports);
-    let scheduler = Scheduler::new(
+    let (scheduler, ()) = Scheduler::new(
         store.clone(),
         binary,
         Arc::new(Processes::new(&directory)),
         READY,
         Arc::new(Accounts::new(store.clone())),
-        host,
         timing,
+        |_| (host, ()),
     );
     (data, store, profile, scheduler, reports)
 }

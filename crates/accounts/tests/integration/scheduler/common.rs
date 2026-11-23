@@ -114,14 +114,14 @@ impl World {
         let host = Arc::new(TestHost::default());
         let shared: Arc<dyn Host> = Arc::<TestHost>::clone(&host);
         let accounts = Arc::new(Accounts::new(paused.store.clone()));
-        let scheduler = Scheduler::new(
+        let (scheduler, ()) = Scheduler::new(
             paused.store.clone(),
             paused.binary.clone(),
             Arc::new(paused.backend()),
             ready,
             Arc::clone(&accounts),
-            shared,
             timing,
+            |_| (shared, ()),
         );
         Self {
             paused,
