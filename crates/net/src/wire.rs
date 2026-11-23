@@ -54,18 +54,16 @@ impl<I: AsyncRead + AsyncWrite + Unpin + Send + 'static> Wire<I> {
         }
     }
 
-    /// Hands each data frame of `body` to `sink` until the body ends.
-    pub(crate) async fn read(
-        &mut self,
-        body: &mut Incoming,
-        mut sink: impl AsyncFnMut(Bytes) -> Result<(), NetError>,
-    ) -> Result<(), NetError> {
+    /// The next data frame of `body`, or `None` at its end. A loop over this, unlike a
+    /// callback taking an async closure, keeps the caller's future `Send`, so a request can be
+    /// spawned.
+    pub(crate) async fn next(&mut self, body: &mut Incoming) -> Result<Option<Bytes>, NetError> {
         while let Some(frame) = self.drive(async { Ok(body.frame().await) }).await? {
             if let Ok(data) = frame?.into_data() {
-                sink(data).await?;
+                return Ok(Some(data));
             }
         }
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -78,14 +76,12 @@ pub(crate) async fn collect<I: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let (head, mut body) = response.into_parts();
     check_declared(&head.headers, limit)?;
     let mut bytes = Vec::new();
-    wire.read(&mut body, async |data: Bytes| {
+    while let Some(data) = wire.next(&mut body).await? {
         if too_large(bytes.len(), data.len(), limit) {
             return Err(NetError::TooLarge { limit });
         }
         bytes.extend_from_slice(&data);
-        Ok(())
-    })
-    .await?;
+    }
     Ok(crate::Response {
         status: head.status,
         headers: head.headers,
