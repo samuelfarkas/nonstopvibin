@@ -1,6 +1,7 @@
 //! `nonstopvibin-window`: the only process that links WebKit. The daemon starts it whenever a
 //! window or dialog must show and talks to it over stdin and stdout (`nsv_domain::helper`); it
-//! exits when its last window closes, so no WebKit process outlives the window.
+//! exits when its last window closes, so no WebKit process outlives the window. A daemon that
+//! failed to start or stop starts it for an error dialog alone (`Alert`).
 #![forbid(unsafe_code)]
 
 mod app;
@@ -12,14 +13,15 @@ use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use nsv_domain::helper::{self, ToHelper};
+use nsv_domain::helper::{self, Failure, Reason, ToHelper};
 use nsv_domain::secret::SessionToken;
 
 fn main() -> ExitCode {
     // The lock ends here; whatever it buffered stays in stdin for the pipe thread.
-    let boot = boot(&mut io::stdin().lock());
-    match boot {
-        Ok(boot) => app::run(boot),
+    let launch = launch(&mut io::stdin().lock());
+    match launch {
+        Ok(Launch::Window(boot)) => app::run(boot),
+        Ok(Launch::Alert(failure, reason)) => app::alert(failure, reason),
         Err(error) => {
             app::log(format_args!("could not start: {error}"));
             ExitCode::FAILURE
@@ -27,17 +29,23 @@ fn main() -> ExitCode {
     }
 }
 
-fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
+enum Launch {
+    Window(app::Boot),
+    Alert(Failure, Reason),
+}
+
+fn launch(input: &mut impl BufRead) -> io::Result<Launch> {
     let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message.to_owned());
-    let Some(ToHelper::Start {
-        origin,
-        view,
-        bounds,
-        data_directory,
-        updates,
-    }) = helper::read(input)?
-    else {
-        return Err(invalid("the first message must be Start"));
+    let (origin, view, bounds, data_directory, updates) = match helper::read(input)? {
+        Some(ToHelper::Alert { failure, reason }) => return Ok(Launch::Alert(failure, reason)),
+        Some(ToHelper::Start {
+            origin,
+            view,
+            bounds,
+            data_directory,
+            updates,
+        }) => (origin, view, bounds, data_directory, updates),
+        _ => return Err(invalid("the first message must be Start or Alert")),
     };
     let token = helper::read_line(input)?
         .and_then(|line| String::from_utf8(line).ok())
@@ -48,7 +56,7 @@ fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
     let _: bool = updates;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(io::Error::other)?;
-    Ok(app::Boot {
+    Ok(Launch::Window(app::Boot {
         origin,
         token: SessionToken::new(token),
         view,
@@ -57,7 +65,7 @@ fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
         nonce: format!("{:032x}", u128::from_le_bytes(nonce)),
         #[cfg(target_os = "macos")]
         updates,
-    })
+    }))
 }
 
 /// Linux keeps the webview's storage in `<data dir>/webview`, for the owner only.

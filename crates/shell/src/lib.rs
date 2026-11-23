@@ -19,7 +19,7 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use tokio::sync::{broadcast, watch};
 
-pub use helper::beside_executable as helper_beside_executable;
+pub use helper::{alert, beside_executable as helper_beside_executable};
 pub use instance::{ShowError, show_running};
 pub use login::Login;
 pub use shell::{Options, run};

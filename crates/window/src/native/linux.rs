@@ -6,7 +6,7 @@ use gtk::gdk::prelude::*;
 use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
-use nsv_domain::helper::{DialogKind, Rect};
+use nsv_domain::helper::{DialogKind, Reason, Rect};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::Window;
 
@@ -76,7 +76,7 @@ pub(crate) fn choose_folder(parent: &Window, proxy: &Proxy, ticket: Ticket) {
 }
 
 /// A message dialog of its own; answers with `DialogAnswered`.
-pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
+pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Proxy) {
     let text = dialog_text(kind);
     let dialog = gtk::MessageDialog::new(
         None::<&gtk::Window>,
@@ -90,7 +90,8 @@ pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
         text.message,
     );
     dialog.set_title("NonstopVibin");
-    dialog.set_secondary_text(Some(text.detail));
+    // Plain text: GTK reads markup only when told to.
+    dialog.set_secondary_text(Some(reason.map_or(text.detail, Reason::as_str)));
     let mut last = ResponseType::None;
     for (index, label) in (0u16..).zip(text.buttons) {
         last = ResponseType::Other(index);

@@ -2,11 +2,11 @@
 //! token written first, and its messages read on a task of their own so the shell's loop never
 //! loses half a line. Dropping a [`Helper`] closes its stdin, and the helper then exits.
 
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 
-use nsv_domain::helper::{FromHelper, MAX_LINE, ToHelper};
+use nsv_domain::helper::{Failure, FromHelper, MAX_LINE, Reason, ToHelper};
 use nsv_domain::secret::SessionToken;
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -28,6 +28,79 @@ pub fn beside_executable() -> io::Result<PathBuf> {
         .parent()
         .ok_or_else(|| io::Error::other("the executable has no folder"))?;
     Ok(directory.join(NAME))
+}
+
+/// Shows why the desktop app failed in the helper's error dialog, as main.ts's error box did,
+/// and returns once it is dismissed: call it off the async runtime. Without a helper that can show it, Linux posts a desktop
+/// notification instead.
+pub fn alert(failure: Failure, reason: &str) {
+    let reason = Reason::new(reason);
+    let shown = beside_executable().and_then(|program| {
+        let mut child = std::process::Command::new(program)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let message = ToHelper::Alert {
+            failure,
+            reason: reason.clone(),
+        };
+        // Dropping stdin ends the pipe; the helper needs nothing after the one line.
+        let written = match child.stdin.take() {
+            Some(mut stdin) => line(&message).and_then(|line| stdin.write_all(&line)),
+            None => Err(io::Error::other("the helper's stdin is missing")),
+        };
+        let status = child.wait()?;
+        written?;
+        Ok(status)
+    });
+    let failed = match shown {
+        Ok(status) if status.success() => return,
+        Ok(status) => format!("it exited with {status}"),
+        Err(error) => error.to_string(),
+    };
+    log(format_args!(
+        "the window helper could not show the error: {failed}"
+    ));
+    #[cfg(target_os = "linux")]
+    if let Err(error) = notify(failure, &reason) {
+        log(format_args!("no desktop notification either: {error}"));
+    }
+}
+
+/// `org.freedesktop.Notifications`, which needs no GUI library in this process. The body may
+/// be read as markup, so the reason is escaped.
+#[cfg(target_os = "linux")]
+fn notify(failure: Failure, reason: &Reason) -> zbus::Result<()> {
+    let body = reason
+        .as_str()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let bus = zbus::Connection::session().await?;
+        bus.call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &(
+                "NonstopVibin",
+                0_u32,
+                "dialog-error",
+                failure.title(),
+                body.as_str(),
+                Vec::<&str>::new(),
+                std::collections::HashMap::<&str, zbus::zvariant::Value<'_>>::new(),
+                -1_i32,
+            ),
+        )
+        .await?;
+        Ok(())
+    })
 }
 
 #[derive(Debug)]

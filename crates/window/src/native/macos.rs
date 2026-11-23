@@ -3,7 +3,7 @@
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use nsv_domain::helper::{DialogKind, Rect};
+use nsv_domain::helper::{DialogKind, Reason, Rect};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSModalResponseOK, NSOpenPanel,
@@ -68,7 +68,7 @@ pub(crate) fn choose_folder(_parent: &Window, proxy: &Proxy, ticket: Ticket) {
 }
 
 /// An application-modal alert; answers with `DialogAnswered`.
-pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
+pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Proxy) {
     let Some(main_thread) = MainThreadMarker::new() else {
         log(format_args!("a dialog must open on the main thread"));
         return;
@@ -77,7 +77,9 @@ pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
     activate(main_thread);
     let alert = NSAlert::new(main_thread);
     alert.setMessageText(&NSString::from_str(text.message));
-    alert.setInformativeText(&NSString::from_str(text.detail));
+    alert.setInformativeText(&NSString::from_str(
+        reason.map_or(text.detail, Reason::as_str),
+    ));
     alert.setAlertStyle(if text.error {
         NSAlertStyle::Critical
     } else {

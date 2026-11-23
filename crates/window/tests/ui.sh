@@ -1,5 +1,6 @@
 #!/bin/sh
-# The UI checks (crates/window/tests/ui) in the real window helper. Builds the interface, the
+# The UI checks (crates/window/tests/ui) in the real window helper, and on Linux the desktop
+# app's error boxes and signals (crates/window/tests/app.rs). Builds the interface, the
 # fixture pages, the daemon and the helper, then runs the checks; needs `bun install`,
 # `bun run core:install` (.vendor/core) and, on Linux, WebKitGTK 4.1's development files, Xvfb
 # and dbus-daemon. On macOS the terminal running it needs the Accessibility permission (System
@@ -24,4 +25,4 @@ xvfb=$!
 trap 'kill $xvfb' EXIT
 for _ in $(seq 50); do [ -e /tmp/.X11-unix/X98 ] && break; sleep 0.1; done
 # shellcheck disable=SC2086
-dbus-run-session -- cargo test -p nsv-window --test ui $cargo_args -- --include-ignored --test-threads=1 "$@"
+dbus-run-session -- cargo test -p nsv-window --test ui --test app $cargo_args -- --include-ignored --test-threads=1 "$@"

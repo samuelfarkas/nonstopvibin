@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
+use nsv_domain::helper::Failure;
 use nsv_net::Https;
 use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
 use nsv_store::{LockError, ServerLock};
@@ -125,11 +126,13 @@ async fn start(
 }
 
 /// Waits for a signal, Quit, or a panic outside any request, then closes the daemon. Exits 1
-/// after such a panic or a failed close.
+/// after such a panic or a failed close; the desktop app (`desktop`) first shows a failed
+/// close in main.ts's error box until it is dismissed.
 async fn run_until_stopped(
     daemon: &Daemon<Https>,
     signals: &mut Signals,
     shell: impl Future<Output = Result<(), nsv_shell::UpdateFailed>>,
+    desktop: bool,
 ) -> u8 {
     let mut update_failed = false;
     tokio::select! {
@@ -140,7 +143,15 @@ async fn run_until_stopped(
     }
     let closed = daemon.close().await;
     if let Err(error) = &closed {
-        complain(&error.to_string());
+        let reason = error.to_string();
+        complain(&reason);
+        if desktop {
+            let shown =
+                tokio::task::spawn_blocking(move || nsv_shell::alert(Failure::Shutdown, &reason));
+            if let Err(error) = shown.await {
+                complain(&format!("Could not show the error: {error}"));
+            }
+        }
     }
     u8::from(update_failed || closed.is_err() || panic::panicked())
 }
@@ -221,7 +232,7 @@ pub(crate) async fn serve(
             daemon.port()
         )),
     }
-    Ok(run_until_stopped(&daemon, &mut signals, std::future::pending()).await)
+    Ok(run_until_stopped(&daemon, &mut signals, std::future::pending(), false).await)
 }
 
 /// The desktop app: the daemon, its tray and, unless `background`, the main window. A second
@@ -232,7 +243,7 @@ pub(crate) fn desktop(background: bool) -> ExitCode {
     ) {
         Ok(directory) => directory,
         Err(error) => {
-            complain(&format!("NonstopVibin could not start: {}", error.message));
+            could_not_start(&error.message);
             return ExitCode::FAILURE;
         }
     };
@@ -240,10 +251,17 @@ pub(crate) fn desktop(background: bool) -> ExitCode {
         let result = crate::runtime()
             .and_then(|runtime| runtime.block_on(desktop_daemon(directory, background, link)));
         result.unwrap_or_else(|error| {
-            complain(&format!("NonstopVibin could not start: {}", error.message));
+            could_not_start(&error.message);
             1
         })
     })
+}
+
+/// main.ts's error box, which held the exit until it was dismissed. A desktop user who
+/// started the app from a launcher or at login never sees standard error.
+fn could_not_start(message: &str) {
+    complain(&format!("NonstopVibin could not start: {message}"));
+    nsv_shell::alert(Failure::Start, message);
 }
 
 async fn desktop_daemon(
@@ -308,7 +326,7 @@ async fn desktop_daemon(
         login,
     };
     let shell = nsv_shell::run(&daemon, shell_options, link);
-    Ok(run_until_stopped(&daemon, &mut signals, shell).await)
+    Ok(run_until_stopped(&daemon, &mut signals, shell, true).await)
 }
 
 /// A running daemon's `server.json` and state, if one answers.

@@ -1,6 +1,7 @@
 //! The pipe between the daemon and the window helper (`nonstopvibin-window`): one JSON object
 //! per line on the helper's stdin and stdout. The daemon writes `Start`, then the session token
 //! alone on the next line, so the token never appears in argv, the environment or a URL.
+//! A daemon that failed to start or stop writes `Alert` instead, and nothing after it.
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
@@ -90,10 +91,82 @@ pub enum DialogKind {
     UpdateFailed,
     MoveToApplications,
     CouldNotStart,
+    CouldNotShutDown,
     /// The daemon could not stop for "Restart to update".
     CouldNotRestart,
     /// The update could not be swapped in or started.
     CouldNotInstall,
+}
+
+/// What failed when the daemon writes `Alert`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Failure {
+    Start,
+    Shutdown,
+}
+
+impl Failure {
+    /// The title main.ts gave the error box.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Start => "NonstopVibin could not start",
+            Self::Shutdown => "Could not shut down cleanly",
+        }
+    }
+
+    /// The dialog the helper shows, with the reason in place of its text.
+    #[must_use]
+    pub const fn dialog(self) -> DialogKind {
+        match self {
+            Self::Start => DialogKind::CouldNotStart,
+            Self::Shutdown => DialogKind::CouldNotShutDown,
+        }
+    }
+}
+
+/// The one free text that crosses the pipe: why the daemon failed, shown as a dialog's plain
+/// text. Every construction, deserializing included, drops control characters except line
+/// breaks, drops bidirectional controls and keeps at most [`Reason::MAX_CHARS`] characters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct Reason(String);
+
+impl Reason {
+    pub const MAX_CHARS: usize = 1000;
+
+    #[must_use]
+    pub fn new(text: &str) -> Self {
+        let mut kept = text.chars().filter(|&c| {
+            c == '\n'
+                || !(c.is_control()
+                    || matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        });
+        let mut reason: String = kept.by_ref().take(Self::MAX_CHARS).collect();
+        if kept.next().is_some() {
+            reason.pop();
+            reason.push('…');
+        }
+        Self(reason)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Reason {
+    fn from(value: String) -> Self {
+        Self::new(&value)
+    }
+}
+
+impl From<Reason> for String {
+    fn from(value: Reason) -> Self {
+        value.0
+    }
 }
 
 /// What the daemon asks the helper to show.
@@ -160,6 +233,9 @@ pub enum ToHelper {
         /// The app can update itself: the macOS app menu enables "Check for updates…".
         updates: bool,
     },
+    /// The only line, in place of `Start`: an error dialog of its own, with no window, origin
+    /// or token. The helper exits once it is dismissed.
+    Alert { failure: Failure, reason: Reason },
     /// Opens a view, or focuses it when it is open.
     Show { view: View },
     Reply {
@@ -376,10 +452,40 @@ mod tests {
                 json!({"type": "Closed", "view": {"window": "dialog", "kind": "updateReady"}}),
             ),
             (wire(&FromHelper::QuitApp), json!({"type": "QuitApp"})),
+            (
+                wire(&ToHelper::Alert {
+                    failure: Failure::Start,
+                    reason: Reason::new("vault.key is missing."),
+                }),
+                json!({"type": "Alert", "failure": "start", "reason": "vault.key is missing."}),
+            ),
         ];
         for (actual, expected) in cases {
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn an_alert_reason_is_plain_bounded_text_even_from_the_pipe() {
+        let line = json!({
+            "type": "Alert",
+            "failure": "shutdown",
+            "reason": "a\tb\r\nc\u{1b}[31md\u{0}e\u{202e}f\u{2067}g",
+        })
+        .to_string();
+        let message: Option<ToHelper> = read(&mut format!("{line}\n").as_bytes()).unwrap();
+        assert_eq!(
+            message,
+            Some(ToHelper::Alert {
+                failure: Failure::Shutdown,
+                reason: Reason::new("ab\nc[31mdefg"),
+            })
+        );
+        assert_eq!(Reason::new("ab\nc[31mdefg").as_str(), "ab\nc[31mdefg");
+        let long = Reason::new(&"é".repeat(1500));
+        assert_eq!(long.as_str(), format!("{}…", "é".repeat(999)));
+        let exact = "x".repeat(1000);
+        assert_eq!(Reason::new(&exact).as_str(), exact);
     }
 
     #[test]
@@ -426,6 +532,7 @@ mod tests {
             r#"{"type":"Show","view":{"window":"main","profile":"not-a-uuid"}}"#,
             r#"{"type":"Start","origin":"https://example.com","view":{"window":"main"},"dataDirectory":"/d"}"#,
             r#"{"type":"Eval","script":"alert(1)"}"#,
+            r#"{"type":"Alert","failure":"custom","reason":"hi"}"#,
         ] {
             let input = format!("{line}\n");
             assert!(read::<ToHelper>(&mut input.as_bytes()).is_err(), "{line}");

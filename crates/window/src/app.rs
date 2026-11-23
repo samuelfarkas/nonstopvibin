@@ -7,14 +7,16 @@ use std::io;
 use std::path::PathBuf;
 
 use nsv_domain::helper::{
-    self, DialogKind, FromHelper, Origin, Outcome, Rect, ToHelper, View, ViewKind,
+    self, DialogKind, Failure, FromHelper, Origin, Outcome, Reason, Rect, ToHelper, View, ViewKind,
 };
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use serde_json::{Value, json};
 use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
+use tao::event_loop::{
+    ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget,
+};
 use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{
     NewWindowResponse, PageLoadEvent, PermissionResponse, WebContext, WebView, WebViewBuilder,
@@ -146,7 +148,7 @@ struct App {
     updates: bool,
 }
 
-pub(crate) fn run(boot: Boot) -> ! {
+fn event_loop() -> EventLoop<UserEvent> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
     let event_loop = {
@@ -155,6 +157,29 @@ pub(crate) fn run(boot: Boot) -> ! {
         event_loop.set_activation_policy(ActivationPolicy::Accessory);
         event_loop
     };
+    event_loop
+}
+
+/// `failure`'s error dialog with `reason` as its text, then exit once it is dismissed.
+pub(crate) fn alert(failure: Failure, reason: Reason) -> ! {
+    let event_loop = event_loop();
+    let proxy = event_loop.create_proxy();
+    event_loop.run(move |event, _target, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::NewEvents(StartCause::Init) => {
+                native::show_dialog(failure.dialog(), Some(&reason), &proxy);
+            }
+            Event::UserEvent(UserEvent::DialogAnswered { .. }) => {
+                *control_flow = ControlFlow::ExitWithCode(0);
+            }
+            _ => {}
+        }
+    })
+}
+
+pub(crate) fn run(boot: Boot) -> ! {
+    let event_loop = event_loop();
     let proxy = event_loop.create_proxy();
     read_daemon(&proxy);
     let mut first = Some(boot.view);
@@ -312,7 +337,7 @@ impl App {
                 if !self.dialogs.contains(&kind) {
                     self.dialogs.push(kind);
                     self.mark_ready();
-                    native::show_dialog(kind, &self.proxy);
+                    native::show_dialog(kind, None, &self.proxy);
                 }
             }
         }
@@ -517,8 +542,10 @@ impl App {
             }
             UserEvent::Daemon(ToHelper::CloseQuota) => self.close_quota(),
             UserEvent::Daemon(ToHelper::Quit) | UserEvent::DaemonGone => self.quit(),
-            UserEvent::Daemon(ToHelper::Start { .. }) => {
-                log(format_args!("ignored a second Start"));
+            UserEvent::Daemon(ToHelper::Start { .. } | ToHelper::Alert { .. }) => {
+                log(format_args!(
+                    "ignored a first-line message after the first line"
+                ));
             }
             UserEvent::Ipc { pane, url, body } => self.ipc(pane, &url, &body),
             UserEvent::PageLoad { pane, finished } => self.page_load(pane, finished),

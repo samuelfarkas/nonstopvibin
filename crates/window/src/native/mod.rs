@@ -2,7 +2,7 @@
 //! platform module offers `copy`, `choose_folder` and `show_dialog`; answers come back as
 //! events on the loop.
 
-use nsv_domain::helper::DialogKind;
+use nsv_domain::helper::{DialogKind, Failure};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -19,7 +19,7 @@ pub(crate) use macos::{
 pub(crate) const FOLDER_TITLE: &str = "Connect Claude Code in a project";
 pub(crate) const FOLDER_BUTTON: &str = "Choose project";
 
-/// A dialog's text, fixed per kind. The first button is "Restart to update" for
+/// A dialog's text, fixed per kind; an `Alert` gives its reason in place of `detail`. The first button is "Restart to update" for
 /// [`DialogKind::UpdateReady`]; the last button is the default.
 pub(crate) struct DialogText {
     pub(crate) message: &'static str,
@@ -56,7 +56,13 @@ pub(crate) fn dialog_text(kind: DialogKind) -> DialogText {
             false,
         ),
         DialogKind::CouldNotStart => (
-            "NonstopVibin could not start",
+            Failure::Start.title(),
+            "Please reopen NonstopVibin and try again.",
+            &["OK"],
+            true,
+        ),
+        DialogKind::CouldNotShutDown => (
+            Failure::Shutdown.title(),
             "Please reopen NonstopVibin and try again.",
             &["OK"],
             true,

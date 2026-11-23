@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use common::x11::{self, Window, X};
 use common::{Helper, Server, TOKEN, pause, processes, tree, wait_until};
-use nsv_domain::helper::{DaemonCall, DialogKind, FromHelper, Rect, ToHelper, View, ViewKind};
+use nsv_domain::helper::{
+    DaemonCall, DialogKind, Failure, FromHelper, Reason, Rect, ToHelper, View, ViewKind,
+};
 use nsv_domain::id::ProfileId;
 use serde_json::{Value, json};
 
@@ -419,6 +421,34 @@ fn update_dialog_defaults_to_later() {
         }
     );
     assert!(helper.wait().success());
+}
+
+/// A daemon that failed writes `Alert` and nothing else: no origin, no token, no webview.
+#[test]
+fn an_alert_shows_alone_and_exits_once_dismissed() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let x = X::open();
+    let mut child = std::process::Command::new(binary())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let alert = ToHelper::Alert {
+        failure: Failure::Start,
+        reason: Reason::new("vault.key is missing for an existing database."),
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    nsv_domain::helper::write(&mut stdin, &alert).unwrap();
+    drop(stdin);
+    let dialog = shown_window(&x, "NonstopVibin");
+    wait_until("the dialog has the focus", || x.has_focus(dialog));
+    let ran = tree(child.id());
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "exited before the click"
+    );
+    x.key(x11::RETURN);
+    assert!(child.wait().unwrap().success());
+    assert_all_gone(&ran);
 }
 
 #[test]

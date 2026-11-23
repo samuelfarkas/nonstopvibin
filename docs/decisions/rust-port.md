@@ -65,6 +65,18 @@ option below. Only the host changes.
   release builds. The CSP stays byte-identical to main's.
 - A second launch finds the running daemon through `server.json` and calls
   `POST /api/desktop/show` with its token.
+- When the desktop app cannot start, or its quit cannot close cleanly, it shows main.ts's
+  error box ("NonstopVibin could not start", "Could not shut down cleanly") with the reason and
+  exits 1 once it is dismissed. The daemon starts the helper with a single `Alert` line in
+  place of `Start`: no origin, token or webview. _Deviation from Fable,_ whose dialogs carry
+  only fixed message kinds and no free text. The reason (a missing `vault.key`, a refused
+  lock, a missing core) is what the user must act on, and stderr never reaches a user who
+  started the app from a launcher or at login. `Reason` is the one free text on the pipe, and
+  both ends parse it: control characters except line breaks and bidirectional controls are
+  dropped, at most 1,000 characters are kept, and the helper shows it only as the dialog's
+  plain text (GTK secondary text without markup, `NSAlert` informative text). If the helper
+  cannot show it, for example without WebKitGTK, Linux posts the reason, markup-escaped, as a
+  desktop notification over D-Bus; stderr keeps it in every case.
 
 ### Code layout
 
