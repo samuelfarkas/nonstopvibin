@@ -1,6 +1,10 @@
 // What the Rust packaging scripts (package-mac.ts, package-linux.ts, package-server.ts) share:
-// the cargo build, the verified core, the licences and the electron-updater feed.
-import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
+// the cargo build, the core tool, the verified core, the licences and the electron-updater feed.
+import {
+  execFileSync,
+  spawnSync,
+  type ExecFileSyncOptions,
+} from "node:child_process";
 import {
   copyFile,
   cp,
@@ -12,7 +16,6 @@ import {
 import { join, resolve } from "node:path";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
-import { checkCoreDirectory, coreFiles, coreLayout } from "./core-binary.ts";
 import { clientDirectory, rustLicenses, uiLicences } from "./distribution.ts";
 import { sha256, sha512 } from "./pinned-download.ts";
 import {
@@ -57,26 +60,48 @@ export function cargoBuild(
   );
 }
 
+/** Runs `bun run core:tool` (crates/core/examples/core-tool.rs); answers what it printed. */
+export function coreTool(...args: string[]): string {
+  const result = spawnSync("bun", ["run", "--silent", "core:tool", ...args], {
+    cwd: repo,
+    encoding: "utf8",
+  });
+  if (result.status !== 0)
+    throw new Error(
+      result.stderr.trim() || `core:tool ${args.join(" ")} failed`,
+    );
+  return result.stdout;
+}
+
+/** The core's file names and the bundled pin's version, as crates/core/src/binary.rs names them. */
+export const coreLayout: {
+  /** Relative to the packaged app's resources and the server archive. */
+  packaged: string;
+  binary: string;
+  manifest: string;
+  license: string;
+  version: string;
+} = JSON.parse(coreTool("layout"));
+/** What a packaged core folder holds. */
+export const coreFiles = [coreLayout.binary, coreLayout.manifest];
+
 /**
- * Installs the pinned core for `platform`/`arch` with `core:install` in `work` (its own cwd, so
- * the checkout's .vendor/core stays as it is), checks it against the pin and copies its files
- * to `destination`.
+ * Installs the pinned core for `platform`/`arch` under `work` (so the checkout's .vendor/core
+ * stays as it is) and copies the files that ship to `destination`. Answers the path of the
+ * release's licence, which stageLicences ships.
  */
 export async function stageCore(
   work: string,
   destination: string,
   platform: string,
   arch: string,
-): Promise<void> {
-  run("bun", [join(repo, "scripts/install-core.mjs")], {
-    cwd: work,
-    env: { ...process.env, CORE_PLATFORM: platform, CORE_ARCH: arch },
-  });
-  const core = join(work, coreLayout.checkout);
-  checkCoreDirectory(core, platform, arch);
+): Promise<string> {
+  const core = join(work, "core-stage");
+  coreTool("install", "--target", `${platform}_${arch}`, core);
   await mkdir(destination, { recursive: true });
   for (const file of coreFiles)
     await copyFile(join(core, file), join(destination, file));
+  return join(core, coreLayout.license);
 }
 
 /** Copies the Vite build (`bun run build:client`) to `destination`, the `client/` the daemon serves. */
@@ -90,10 +115,14 @@ export async function stageClient(destination: string): Promise<void> {
   await cp(client, destination, { recursive: true });
 }
 
-/** Writes the licence folder every Rust package ships (distribution.ts `rustLicenses`). */
+/**
+ * Writes the licence folder every Rust package ships (distribution.ts `rustLicenses`);
+ * `coreLicence` is the staged core's, from stageCore.
+ */
 export async function stageLicences(
   destination: string,
   builds: RustBuild[],
+  coreLicence: string,
 ): Promise<void> {
   await stat(join(repo, uiLicences)).catch(() => {
     throw new Error(`Missing ${uiLicences}; run bun run build:client first.`);
@@ -102,6 +131,7 @@ export async function stageLicences(
   const generated = new Map([
     ["THIRD-PARTY-RUST.txt", rustLicenseText(builds)],
     ["Rust-std.html", rustStdNotices()],
+    ["CLIProxyAPI.txt", await readFile(coreLicence, "utf8")],
   ]);
   for (const [name, source] of Object.entries(rustLicenses)) {
     const target = join(destination, name);

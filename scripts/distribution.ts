@@ -1,5 +1,5 @@
 // What the build ships and for which targets: plain data for the build scripts and tests, so it
-// must not import build tooling. The pinned core is scripts/core-binary.ts.
+// must not import build tooling. The pinned core is crates/core/examples/core-tool.rs.
 
 interface Architecture {
   /** What `uname -m` prints on a Linux server. */
@@ -131,8 +131,9 @@ export const uiLicences = "dist/licenses/THIRD-PARTY.txt";
 /**
  * Licence files every Rust package ships in its `licenses/` folder, each with the checkout file
  * it copies. THIRD-PARTY.txt covers the UI's npm packages, THIRD-PARTY-RUST.txt the crates
- * compiled into the binaries and Rust-std.html the standard library with musl: these two have no
- * source, scripts/rust-licenses.ts writes them. CLIProxyAPI.txt covers the core.
+ * compiled into the binaries and Rust-std.html the standard library with musl, which
+ * scripts/rust-licenses.ts writes; CLIProxyAPI.txt is the staged core release's own LICENSE.
+ * These three have no checkout source.
  */
 export const rustLicenses = {
   LICENSE: "LICENSE",
@@ -140,7 +141,7 @@ export const rustLicenses = {
   "THIRD-PARTY.txt": uiLicences,
   "THIRD-PARTY-RUST.txt": undefined,
   "Rust-std.html": undefined,
-  "CLIProxyAPI.txt": "licenses/CLIProxyAPI.txt",
+  "CLIProxyAPI.txt": undefined,
 } as const;
 
 /**

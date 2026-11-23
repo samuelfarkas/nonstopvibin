@@ -17,20 +17,13 @@ import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import {
-  checkCoreDirectory,
-  coreFiles,
-  coreLayout,
-  coreVersion,
-  pinnedArchive,
-} from "./core-binary.ts";
-import {
   architecture,
   privateFilePattern,
   product,
   rustLicenses,
   serverArchive,
 } from "./distribution.ts";
-import { sha256 } from "./pinned-download.ts";
+import { coreFiles, coreLayout, coreTool } from "./package-common.ts";
 
 const repo = resolve(import.meta.dirname, "..");
 
@@ -184,25 +177,22 @@ function checkMode(path: string): void {
   assert.equal(statSync(path).mode & 0o777, 0o755, `${path} must be 0755`);
 }
 
-/** Signing rewrites the core: its manifest then records the signed binary's hash. */
-function checkSignedCore(directory: string, arch: string): void {
-  const manifest = JSON.parse(
-    readFileSync(join(directory, coreLayout.manifest), "utf8"),
-  );
-  assert.ok(
-    manifest.version === coreVersion &&
-      pinnedArchive(manifest.platform, manifest.arch, manifest.sha256),
-    "The proxy core does not match the reviewed release pin.",
-  );
-  assert.deepEqual(
-    [manifest.platform, manifest.arch],
-    ["darwin", arch],
-    "The proxy core is for another target.",
-  );
-  assert.equal(
-    manifest.binarySha256,
-    sha256(readFileSync(join(directory, coreLayout.binary))),
-    "The signed core differs from its manifest.",
+/**
+ * Throws unless the core in `directory` is the reviewed pin for `platform`/`arch`. Signing
+ * rewrites the core, so a `signed` one's binary is held to its manifest instead of the pin.
+ */
+function checkCoreDirectory(
+  directory: string,
+  platform: string,
+  arch: string,
+  signed = false,
+): void {
+  coreTool(
+    "check",
+    "--target",
+    `${platform}_${arch}`,
+    ...(signed ? ["--signed"] : []),
+    directory,
   );
 }
 
@@ -369,8 +359,7 @@ export function verifyMacBundle(
     architecture(arch).machO,
     "The core is not a darwin executable for the target",
   );
-  if (signed) checkSignedCore(core, arch);
-  else checkCoreDirectory(core, "darwin", arch);
+  checkCoreDirectory(core, "darwin", arch, signed);
   const plist = readFileSync(join(app, "Contents/Info.plist"), "utf8");
   for (const [key, value] of [
     ["CFBundleIdentifier", product.id],
