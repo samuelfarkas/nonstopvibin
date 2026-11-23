@@ -169,16 +169,16 @@ await new Promise((done) => feed.listen(port, "127.0.0.1", done));
 try {
   // The old version: this checkout at 0.0.1, pointed at the test feed, with the test key.
   const source = join(work, "src");
-  command("rsync", [
-    "-a",
-    "--exclude=/target",
-    "--exclude=/node_modules",
-    "--exclude=/.git",
-    "--exclude=/release",
-    "--exclude=/test-results",
-    `${root}/`,
-    `${source}/`,
-  ]);
+  const skipped = new Set(
+    ["target", "node_modules", ".git", "release", "test-results"].map((name) =>
+      join(root, name),
+    ),
+  );
+  cpSync(root, source, {
+    recursive: true,
+    verbatimSymlinks: true,
+    filter: (path) => !skipped.has(path),
+  });
   symlinkSync(join(root, "node_modules"), join(source, "node_modules"));
   writeFileSync(
     join(source, "build/update-signing.pub"),

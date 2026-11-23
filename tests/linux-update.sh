@@ -27,10 +27,12 @@ mkdir -p "$work/src" "$work/feed" "$apps" "$HOME"
 mkdir -m 700 "$NONSTOPVIBIN_DATA_DIR"
 
 pids=""
+app=""
 cleanup() {
   status=$?
   # shellcheck disable=SC2086
   [ -n "$pids" ] && kill $pids 2>/dev/null
+  [ -n "$app" ] && /bin/kill -s KILL -- "-$app" 2>/dev/null
   if [ "$status" != 0 ] && [ -f "$log" ]; then
     echo "--- app log"
     cat "$log"
@@ -110,14 +112,16 @@ publish() {
 
 cp "$work/old/NonstopVibin-$old-linux-x86_64.AppImage" "$image"
 before=$(sha256sum <"$image")
-app=""
+# The AppImage runtime runs the daemon as its child: each launch gets a process group, and
+# stop() ends all of it, the daemon gracefully.
 launch() {
   : >"$log"
-  "$image" --background >>"$log" 2>&1 &
+  setsid "$image" --background >>"$log" 2>&1 &
   app=$!
 }
 stop() {
-  kill "$app" 2>/dev/null || true
+  /bin/kill -s TERM -- "-$app" 2>/dev/null || true
+  wait_for "the app to stop" 30 sh -c "! /bin/kill -0 -- -$app 2>/dev/null"
   wait "$app" 2>/dev/null || true
 }
 logged() { grep -q "$1" "$log"; }
