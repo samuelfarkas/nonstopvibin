@@ -35,7 +35,6 @@ use crate::daemon::{Shared, VERSION};
 use crate::parse;
 use crate::session::LOOPBACK_LIMIT;
 
-/// The largest management request body.
 const BODY_LIMIT: usize = 2_097_152;
 
 /// A matched route with the path parameters it names.

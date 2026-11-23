@@ -404,7 +404,6 @@ impl Daemon {
         Ok(())
     }
 
-    /// The loopback port it accepts on.
     #[must_use]
     pub fn port(&self) -> u16 {
         self.0.shared.port
@@ -433,7 +432,6 @@ impl Daemon {
         &self.0.directory
     }
 
-    /// Whether the store has `profile`.
     #[must_use]
     pub fn has_profile(&self, profile: &ProfileId) -> bool {
         self.0
@@ -449,7 +447,6 @@ impl Daemon {
         self.0.shared.errors.report(message.to_owned());
     }
 
-    /// Asks the daemon's owner to shut it down: [`Daemon::stopping`] resolves.
     pub fn stop(&self) {
         advance(&self.0.phase, Phase::StopAsked);
     }

@@ -70,7 +70,6 @@ pub async fn fatal() {
     }
 }
 
-/// Whether a fatal panic happened: the exit code is non-zero.
 #[must_use]
 pub fn panicked() -> bool {
     PANICKED.load(Ordering::Acquire)

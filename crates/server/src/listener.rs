@@ -71,7 +71,6 @@ pub(crate) fn serve(app: &Arc<App>, listener: TcpListener, phase: &watch::Sender
     });
 }
 
-/// Resolves once `phase` reached `wanted`.
 async fn reached(phase: &mut watch::Receiver<Phase>, wanted: Phase) {
     // The sender lives as long as the daemon; without it, there is nothing left to serve.
     let _ = phase.wait_for(|phase| *phase >= wanted).await;

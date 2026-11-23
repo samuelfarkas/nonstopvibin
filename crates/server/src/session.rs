@@ -15,7 +15,6 @@ use serde_json::json;
 
 use crate::checks::{AllowedHost, DEV_HOST};
 
-/// What `server.json` holds.
 #[derive(Debug, Clone)]
 pub struct Session {
     pub pid: u32,
@@ -126,8 +125,6 @@ impl Session {
         }))
     }
 
-    /// Writes it atomically with mode 0600.
-    ///
     /// # Errors
     /// A file-system error.
     pub fn write(&self, directory: &DataDir) -> io::Result<()> {
