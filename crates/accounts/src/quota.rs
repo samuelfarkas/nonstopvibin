@@ -728,6 +728,12 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
         &self.source
     }
 
+    /// The outgoing requests' client, which model discovery and identity checks share.
+    #[must_use]
+    pub fn fetch(&self) -> &F {
+        &self.fetch
+    }
+
     /// Asks one account's quota and stores it. A check already running for the account answers
     /// the stored quota. A dropped call stores nothing.
     ///

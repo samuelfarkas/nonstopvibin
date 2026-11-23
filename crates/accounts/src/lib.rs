@@ -3,7 +3,9 @@
 
 pub mod accounts;
 pub mod api_accounts;
+mod callback;
 pub mod catalog;
+pub mod credentials;
 pub mod fetch;
 pub mod identity;
 pub mod imports;
@@ -12,4 +14,5 @@ pub mod pricing;
 pub mod quota;
 pub mod resets;
 pub mod scheduler;
+pub mod sign_in;
 pub mod usage;

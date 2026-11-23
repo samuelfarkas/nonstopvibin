@@ -49,6 +49,16 @@ impl ApiAccountError {
     }
 }
 
+/// What the API answers for an account it cannot add.
+impl From<ApiAccountError> for AppError {
+    fn from(error: ApiAccountError) -> Self {
+        match error {
+            ApiAccountError::App(error) => error,
+            other => Self::new(other.to_string(), other.status()),
+        }
+    }
+}
+
 /// `OpenCode` Go publishes different wire protocols per model. Live endpoint metadata wins over
 /// the model family.
 #[must_use]

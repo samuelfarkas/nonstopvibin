@@ -5,6 +5,7 @@
 //! `None` instead of failing.
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
@@ -478,6 +479,20 @@ fn two_digits(bytes: Option<&[u8]>, most: u8) -> bool {
 /// A string's length in UTF-16 code units, as zod's `.min()` and `.max()` count it.
 pub(crate) fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
+}
+
+/// `encodeURIComponent`: every byte but `A–Z a–z 0–9 - _ . ! ~ * ' ( )` as `%XX`.
+pub(crate) fn encode_uri_component(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            // Writing to a String cannot fail.
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
