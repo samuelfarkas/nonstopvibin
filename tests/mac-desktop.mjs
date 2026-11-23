@@ -568,6 +568,19 @@ try {
         "the main window is in front with key focus",
         state,
       );
+      // A new window shows "Opening your workspace…" until the header is there.
+      await waitFor(
+        "the page header",
+        () => {
+          try {
+            jxa(webElement("AXButton", "Add subscription"));
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        30_000,
+      );
       const before = windowNamed(MAIN);
       const [x, y] = [
         before.position[0] + before.size[0] - 200,
