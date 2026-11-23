@@ -3,15 +3,12 @@
 //! crate's; here a request is what the gateway does with the scheduler: count it in, wake the
 //! profile, send it to the core's port, count it out.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::json;
-use tokio::sync::watch;
 
 use crate::common::{World, short};
-use crate::fake::Hold;
 
 const IDLE: Duration = Duration::from_secs(3);
 
@@ -137,19 +134,12 @@ async fn an_idle_core_stops_after_its_last_request_without_losing_its_usage_and_
 async fn a_request_that_arrives_while_an_idle_stop_drains_its_core_is_served_by_the_next_core() {
     let (world, profile) = lazy_world(false).await;
     world.scheduler.launch().await.unwrap();
-    let (release, released) = watch::channel(false);
-    let holding = Arc::new(AtomicUsize::new(0));
     // The stop's own final drain, made once its core is marked stopping, waits for the
     // request below.
     let pool = world.pool().clone();
-    world.fake.knobs(|knobs| {
-        knobs.hold = Some(Hold {
-            path: "/usage-queue",
-            when: Box::new(move |profile| !pool.usable(profile)),
-            released,
-            holding: Arc::clone(&holding),
-        });
-    });
+    let (release, holding) = world
+        .fake
+        .hold("/usage-queue", move |profile| !pool.usable(profile));
     assert_eq!(world.chat(&profile, "fixture-model").await, 200);
     let first = world.fake.latest(&profile).unwrap();
     world

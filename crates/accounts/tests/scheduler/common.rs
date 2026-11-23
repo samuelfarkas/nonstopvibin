@@ -16,10 +16,9 @@ use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{Account, ApiAccount};
 use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
+use nsv_testkit::fake::FakeCores;
 use serde_json::json;
 use tokio::sync::watch;
-
-use crate::fake::Fake;
 
 /// The host: reports are kept, quota checks recorded and answered as a test says.
 #[derive(Default)]
@@ -92,7 +91,7 @@ pub(crate) struct World {
     _root: TempDir,
     pub(crate) data: PathBuf,
     pub(crate) store: Store,
-    pub(crate) fake: Fake,
+    pub(crate) fake: FakeCores,
     pub(crate) host: Arc<TestHost>,
     pub(crate) accounts: Arc<Accounts>,
     pub(crate) scheduler: Scheduler,
@@ -127,7 +126,7 @@ impl World {
             .unwrap();
         let binary = root.path().join("cli-proxy-api");
         fs::write(&binary, "fake").unwrap();
-        let fake = Fake::default();
+        let fake = FakeCores::default();
         let host = Arc::new(TestHost::default());
         let shared: Arc<dyn Host> = Arc::<TestHost>::clone(&host);
         let accounts = Arc::new(Accounts::new(store.clone()));
@@ -314,6 +313,6 @@ impl World {
     }
 
     pub(crate) fn launches(&self, profile: &ProfileId) -> usize {
-        self.fake.launches(profile).len()
+        self.fake.launches_of(profile).len()
     }
 }

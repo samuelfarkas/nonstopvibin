@@ -1,5 +1,11 @@
 //! The account features assembled as the daemon assembles them, over fake cores, a stub
 //! provider fetch and stub releases, in real time.
+#![expect(
+    clippy::indexing_slicing,
+    clippy::missing_panics_doc,
+    clippy::unwrap_used,
+    reason = "test support: a panic fails the test that called it, and is its report"
+)]
 
 use std::cell::Cell;
 use std::future::{Future, ready};
@@ -10,27 +16,125 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nsv_accounts::cores::{Cores, CoresOptions};
+use nsv_accounts::fetch::{Fetch, Request};
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::binary::{CoreManifest, CoreTarget, Sha256Digest, bundled_pin};
 use nsv_core::install::Releases;
 use nsv_core::pool::Backend;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_net::{NetError, Response};
-use nsv_store::Store;
-use nsv_testkit::TempDir;
+use nsv_net::{Loopback, NetError, Response};
+use nsv_store::files::owner_only_directory;
+use nsv_store::{Store, Vault};
 use serde_json::{Value, json};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 
-use crate::common::{StubFetch, open_store, profile, response};
-use crate::fake_core::{Directory, FakeCores};
+use crate::TempDir;
+use crate::fake::{Directory, FakeCores, response};
+
+pub async fn open_store(directory: &Path) -> Store {
+    owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
+    Store::open(directory, Vault::open(directory).unwrap())
+        .await
+        .unwrap()
+}
+
+pub async fn profile(store: &Store, name: &str) -> ProfileId {
+    let name = name.to_owned();
+    store
+        .call(move |db| Ok(db.create_profile(&name)?.id))
+        .await
+        .unwrap()
+}
+
+/// What a stub fetch was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seen {
+    pub request: Request,
+    pub loopback: Option<(Loopback, String)>,
+}
+
+type Answer = Box<dyn Fn(&str) -> Result<Response, NetError> + Send + Sync>;
+
+/// Answers each request by its URL and records it; a gate holds answers until it opens.
+pub struct StubFetch {
+    pub seen: Mutex<Vec<Seen>>,
+    answer: Mutex<Answer>,
+    gate: Option<Arc<Semaphore>>,
+}
+
+impl StubFetch {
+    pub fn new(
+        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            seen: Mutex::new(Vec::new()),
+            answer: Mutex::new(Box::new(answer)),
+            gate: None,
+        }
+    }
+
+    /// Holds every answer until a permit is added to the returned gate.
+    pub fn gated(
+        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
+    ) -> (Self, Arc<Semaphore>) {
+        let gate = Arc::new(Semaphore::new(0));
+        let mut stub = Self::new(answer);
+        stub.gate = Some(Arc::clone(&gate));
+        (stub, gate)
+    }
+
+    pub fn answer(
+        &self,
+        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
+    ) {
+        *self.answer.lock().unwrap() = Box::new(answer);
+    }
+
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+
+    async fn reply(&self, seen: Seen) -> Result<Response, NetError> {
+        let url = seen.request.url.clone();
+        self.seen.lock().unwrap().push(seen);
+        if let Some(gate) = &self.gate {
+            gate.acquire().await.unwrap().forget();
+        }
+        (self.answer.lock().unwrap())(&url)
+    }
+}
+
+impl Fetch for StubFetch {
+    async fn https(&self, request: Request) -> Result<Response, NetError> {
+        self.reply(Seen {
+            request,
+            loopback: None,
+        })
+        .await
+    }
+
+    async fn loopback(
+        &self,
+        to: Loopback,
+        target: String,
+        request: Request,
+    ) -> Result<Response, NetError> {
+        self.reply(Seen {
+            request,
+            loopback: Some((to, target)),
+        })
+        .await
+    }
+}
 
 thread_local! {
     /// Moves this test's clock; each tokio test runs its tasks on its own thread.
     static SKEW: Cell<i64> = const { Cell::new(0) };
 }
 
-pub(crate) fn skew(milliseconds: i64) {
+pub fn skew(milliseconds: i64) {
     SKEW.with(|skew| skew.set(milliseconds));
 }
 
@@ -41,12 +145,12 @@ fn clock() -> i64 {
 
 /// The feed and archives a test serves. The archive URL must be upstream's.
 #[derive(Default)]
-pub(crate) struct TestReleases {
-    pub(crate) feed: Mutex<Value>,
-    pub(crate) archive: Mutex<Vec<u8>>,
-    pub(crate) downloads: Mutex<Vec<String>>,
+pub struct TestReleases {
+    pub feed: Mutex<Value>,
+    pub archive: Mutex<Vec<u8>>,
+    pub downloads: Mutex<Vec<String>>,
     /// Holds downloads until notified; tells when one waits.
-    pub(crate) hold: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
+    pub hold: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
 }
 
 impl Releases for TestReleases {
@@ -67,25 +171,26 @@ impl Releases for TestReleases {
     }
 }
 
-pub(crate) type TestCores = Cores<Arc<StubFetch>, Arc<TestReleases>>;
+pub type TestCores = Cores<Arc<StubFetch>, Arc<TestReleases>>;
 
-pub(crate) struct World {
-    pub(crate) directory: TempDir,
-    pub(crate) store: Store,
-    pub(crate) fake: FakeCores,
-    pub(crate) fetch: Arc<StubFetch>,
-    pub(crate) releases: Arc<TestReleases>,
-    pub(crate) cores: Arc<TestCores>,
-    pub(crate) reports: Arc<Mutex<Vec<String>>>,
-    pub(crate) accepted: Arc<AtomicUsize>,
-    pub(crate) bundled: PathBuf,
+pub struct World {
+    pub directory: TempDir,
+    pub store: Store,
+    pub fake: FakeCores,
+    pub fetch: Arc<StubFetch>,
+    pub releases: Arc<TestReleases>,
+    pub cores: Arc<TestCores>,
+    pub reports: Arc<Mutex<Vec<String>>>,
+    pub accepted: Arc<AtomicUsize>,
+    pub bundled: PathBuf,
 }
 
 /// The version of the core update a test releases.
-pub(crate) const UPDATE: &str = "99.0.0";
+pub const UPDATE: &str = "99.0.0";
 
 /// `bytes` released as core `UPDATE`: its archive and a pin naming it for this target.
-pub(crate) fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
+#[must_use]
+pub fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
     let stage = work.join(format!("stage-{}", bytes.len()));
     std::fs::create_dir_all(&stage).unwrap();
     std::fs::write(stage.join("cli-proxy-api"), bytes).unwrap();
@@ -102,7 +207,7 @@ pub(crate) fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
     let target = CoreTarget::current().unwrap();
     let key = format!("{}_{}", target.platform(), target.arch());
     let mut pin: Value =
-        serde_json::from_str(include_str!("../../../core/core-release.json")).unwrap();
+        serde_json::from_str(include_str!("../../core/core-release.json")).unwrap();
     pin["version"] = json!(UPDATE);
     pin["checksums"][&key] = json!(Sha256Digest::of_file(&archive).unwrap().to_string());
     pin["binaries"][&key] = json!(
@@ -114,7 +219,8 @@ pub(crate) fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
 }
 
 /// A bundled core of this test's own: a file with its manifest.
-pub(crate) fn bundled_core(directory: &Path) -> PathBuf {
+#[must_use]
+pub fn bundled_core(directory: &Path) -> PathBuf {
     let core = directory.join("bundled");
     std::fs::create_dir_all(&core).unwrap();
     let binary = core.join("cli-proxy-api");
@@ -128,12 +234,12 @@ pub(crate) fn bundled_core(directory: &Path) -> PathBuf {
 }
 
 impl World {
-    pub(crate) async fn new(name: &str) -> Self {
+    pub async fn new(name: &str) -> Self {
         Self::with(name, None, TIMING).await
     }
 
     /// An installed build reading `feed`, or a development run without one.
-    pub(crate) async fn with(name: &str, feed: Option<&str>, timing: Timing) -> Self {
+    pub async fn with(name: &str, feed: Option<&str>, timing: Timing) -> Self {
         let directory = TempDir::new(name);
         let data = directory.path().join("data");
         let bundled = bundled_core(directory.path());
@@ -149,7 +255,7 @@ impl World {
     }
 
     /// The features over `data`, as a relaunch opens them.
-    pub(crate) async fn open(
+    pub async fn open(
         directory: TempDir,
         data: &Path,
         bundled: PathBuf,
@@ -199,26 +305,30 @@ impl World {
         }
     }
 
-    pub(crate) async fn profile(&self, name: &str) -> ProfileId {
+    pub async fn profile(&self, name: &str) -> ProfileId {
         profile(&self.store, name).await
     }
 
-    pub(crate) fn data(&self) -> &Path {
+    #[must_use]
+    pub fn data(&self) -> &Path {
         self.store.directory()
     }
 
     /// The names under `oauth-pending/`.
-    pub(crate) fn pending(&self) -> Vec<String> {
+    #[must_use]
+    pub fn pending(&self) -> Vec<String> {
         names(&self.data().join("oauth-pending"))
     }
 
-    pub(crate) fn credential_file(&self, profile: &ProfileId, name: &str) -> PathBuf {
+    #[must_use]
+    pub fn credential_file(&self, profile: &ProfileId, name: &str) -> PathBuf {
         nsv_store::layout::credential_directory(self.data(), profile).join(name)
     }
 }
 
 /// The entry names of a directory, sorted; none when it is missing.
-pub(crate) fn names(directory: &Path) -> Vec<String> {
+#[must_use]
+pub fn names(directory: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(directory).map_or_else(
         |_| Vec::new(),
         |listing| {
@@ -232,7 +342,8 @@ pub(crate) fn names(directory: &Path) -> Vec<String> {
 }
 
 /// A Claude credential for one seat of `organization`, as the provider returns it.
-pub(crate) fn claude(organization: &str, token: &str) -> Value {
+#[must_use]
+pub fn claude(organization: &str, token: &str) -> Value {
     json!({
         "type": "claude",
         "email": "same@example.invalid",
@@ -244,6 +355,6 @@ pub(crate) fn claude(organization: &str, token: &str) -> Value {
     })
 }
 
-pub(crate) const ACCOUNT: &str = "aaaaaaaa-0000-4000-8000-000000000001";
-pub(crate) const ORGANIZATION_A: &str = "bbbbbbbb-0000-4000-8000-00000000000a";
-pub(crate) const ORGANIZATION_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";
+pub const ACCOUNT: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+pub const ORGANIZATION_A: &str = "bbbbbbbb-0000-4000-8000-00000000000a";
+pub const ORGANIZATION_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";

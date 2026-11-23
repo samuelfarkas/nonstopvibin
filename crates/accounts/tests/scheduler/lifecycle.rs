@@ -13,11 +13,11 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::registry::Strategy;
 use nsv_domain::wire::Runtime;
 use nsv_net::Method;
+use nsv_testkit::fake::Script;
 use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
 use crate::common::{World, short};
-use crate::fake::{Hold, Script};
 
 /// A profile whose core has started, with the scheduler running.
 async fn running(world: &World, name: &str) -> ProfileId {
@@ -49,25 +49,6 @@ fn gaps(times: &[Instant]) -> Vec<u128> {
         .windows(2)
         .map(|pair| pair[1].duration_since(pair[0]).as_millis())
         .collect()
-}
-
-/// Holds requests to `path` while `when` says so; answers the release and how many were held.
-fn hold(
-    world: &World,
-    path: &'static str,
-    when: impl Fn(&ProfileId) -> bool + Send + Sync + 'static,
-) -> (watch::Sender<bool>, Arc<AtomicUsize>) {
-    let (release, released) = watch::channel(false);
-    let holding = Arc::new(AtomicUsize::new(0));
-    world.fake.knobs(|knobs| {
-        knobs.hold = Some(Hold {
-            path,
-            when: Box::new(when),
-            released,
-            holding: Arc::clone(&holding),
-        });
-    });
-    (release, holding)
 }
 
 #[tokio::test(start_paused = true)]
@@ -159,7 +140,7 @@ async fn shutdown_stops_slow_exiting_profiles_together_in_about_the_time_of_the_
     );
     for profile in &profiles {
         assert!(
-            world.fake.calls(profile, "/usage-queue").last() >= Some(&began),
+            world.fake.called_at(profile, "/usage-queue").last() >= Some(&began),
             "every profile's usage was drained"
         );
         assert!(!world.pool().alive(profile));
@@ -197,7 +178,7 @@ async fn a_failing_stop_does_not_keep_shutdown_from_draining_and_stopping_the_ot
     );
     for profile in &profiles {
         assert!(
-            world.fake.calls(profile, "/usage-queue").last() >= Some(&began),
+            world.fake.called_at(profile, "/usage-queue").last() >= Some(&began),
             "every profile's usage was drained"
         );
     }
@@ -209,7 +190,9 @@ async fn queued_starts_reject_shutdown_after_a_pending_accounting_drain() {
     let (world, profiles) = launched(timing(), &["Queued"]).await;
     let profile = &profiles[0];
     let pool = world.pool().clone();
-    let (release, holding) = hold(&world, "/usage-queue", move |profile| !pool.usable(profile));
+    let (release, holding) = world
+        .fake
+        .hold("/usage-queue", move |profile| !pool.usable(profile));
     let test = async {
         let stopping = world.pool().stop(profile);
         let starting = async {
@@ -249,7 +232,9 @@ async fn shutdown_lets_the_schedulers_running_drain_pass_finish_before_it_stops_
     let (world, profiles) = launched(timing(), &["Pass"]).await;
     let profile = profiles[0].clone();
     let pool = world.pool().clone();
-    let (release, holding) = hold(&world, "/usage-queue", move |profile| pool.usable(profile));
+    let (release, holding) = world
+        .fake
+        .hold("/usage-queue", move |profile| pool.usable(profile));
     world.scheduler.activity(&profile, false);
     world
         .until("the drain pass", Duration::from_secs(1), |_| {
@@ -303,10 +288,10 @@ async fn a_finished_request_drains_usage_once_and_once_more_after_the_activity_w
     let (world, profiles) = launched(timing(), &["Drain"]).await;
     let profile = &profiles[0];
     world.pass(Duration::from_secs(1)).await;
-    let before = world.fake.calls(profile, "/usage-queue").len();
+    let before = world.fake.called_at(profile, "/usage-queue").len();
     world.scheduler.activity(profile, false);
     world.pass(Duration::from_secs(3)).await;
-    let drains = world.fake.calls(profile, "/usage-queue");
+    let drains = world.fake.called_at(profile, "/usage-queue");
     assert_eq!(
         drains.len() - before,
         2,
@@ -321,10 +306,10 @@ async fn idle_profiles_stop_draining_usage_after_one_trailing_drain_unless_a_req
     let profile = &profiles[0];
     world.scheduler.activity(profile, false);
     world.pass(Duration::from_secs(2)).await;
-    let settled = world.fake.calls(profile, "/usage-queue").len();
+    let settled = world.fake.called_at(profile, "/usage-queue").len();
     world.pass(Duration::from_secs(60)).await;
     assert_eq!(
-        world.fake.calls(profile, "/usage-queue").len(),
+        world.fake.called_at(profile, "/usage-queue").len(),
         settled,
         "no usage wakeups while idle"
     );
@@ -332,7 +317,7 @@ async fn idle_profiles_stop_draining_usage_after_one_trailing_drain_unless_a_req
     world
         .pass_by(Duration::from_secs(65), Duration::from_millis(500))
         .await;
-    let open = world.fake.calls(profile, "/usage-queue");
+    let open = world.fake.called_at(profile, "/usage-queue");
     assert!(
         open.len() >= settled + 3,
         "an open stream or WebSocket keeps its periodic drain: {}",
@@ -347,10 +332,10 @@ async fn idle_profiles_stop_draining_usage_after_one_trailing_drain_unless_a_req
     );
     world.scheduler.activity(profile, false);
     world.pass(Duration::from_secs(2)).await;
-    let before_stop = world.fake.calls(profile, "/usage-queue").len();
+    let before_stop = world.fake.called_at(profile, "/usage-queue").len();
     world.run(world.pool().stop(profile)).await.unwrap();
     assert_eq!(
-        world.fake.calls(profile, "/usage-queue").len(),
+        world.fake.called_at(profile, "/usage-queue").len(),
         before_stop + 1,
         "stop still drains the queue"
     );
@@ -369,14 +354,14 @@ async fn a_failing_usage_drain_retries_once_promptly_then_backs_off_to_a_bound_a
     world
         .fake
         .knobs(|knobs| knobs.failing_queue.insert(profile.clone()));
-    let before = world.fake.calls(profile, "/usage-queue").len();
+    let before = world.fake.called_at(profile, "/usage-queue").len();
     world.scheduler.activity(profile, false);
     world
         .until("seven failed reads", Duration::from_secs(20), |world| {
-            world.fake.calls(profile, "/usage-queue").len() >= before + 7
+            world.fake.called_at(profile, "/usage-queue").len() >= before + 7
         })
         .await;
-    let attempts = world.fake.calls(profile, "/usage-queue");
+    let attempts = world.fake.called_at(profile, "/usage-queue");
     // Retry n waits min(coalesce × 2^(n − 1), backoff); the first retry waits for nothing but
     // the coalescing wait, and the clock moves in 50 ms steps.
     let waits: Vec<u128> = gaps(&attempts[before..]);
@@ -399,14 +384,14 @@ async fn a_failing_usage_drain_retries_once_promptly_then_backs_off_to_a_bound_a
     world
         .fake
         .knobs(|knobs| knobs.failing_queue.insert(profile.clone()));
-    let before = world.fake.calls(profile, "/usage-queue").len();
+    let before = world.fake.called_at(profile, "/usage-queue").len();
     world.scheduler.activity(profile, false);
     world
         .until("two failed reads", Duration::from_secs(5), |world| {
-            world.fake.calls(profile, "/usage-queue").len() >= before + 2
+            world.fake.called_at(profile, "/usage-queue").len() >= before + 2
         })
         .await;
-    let again = gaps(&world.fake.calls(profile, "/usage-queue")[before..]);
+    let again = gaps(&world.fake.called_at(profile, "/usage-queue")[before..]);
     assert!((200..300).contains(&again[0]), "{again:?}");
 }
 
@@ -419,7 +404,7 @@ async fn account_status_is_polled_only_while_a_ui_reads_the_state() {
     };
     let (world, profiles) = launched(timing, &["Watch"]).await;
     let profile = &profiles[0];
-    let syncs = || world.fake.calls(profile, "/auth-files").len();
+    let syncs = || world.fake.called_at(profile, "/auth-files").len();
     let before = syncs();
     world.pass(Duration::from_secs(4)).await;
     assert_eq!(syncs(), before, "no UI reads: no account polling");
@@ -478,9 +463,9 @@ async fn a_settings_change_saved_while_the_core_starts_is_applied_once_the_core_
     let profile = world.profile("Settings", false, false, false).await;
     let first = Arc::new(AtomicBool::new(true));
     // The core's first readiness answer waits until the change is saved.
-    let (release, holding) = hold(&world, "/config", move |_| {
-        first.swap(false, Ordering::SeqCst)
-    });
+    let (release, holding) = world
+        .fake
+        .hold("/config", move |_| first.swap(false, Ordering::SeqCst));
     let test = async {
         let start = world.pool().start(&profile, false);
         let change = async {
@@ -563,9 +548,9 @@ fn held_readiness(
     Arc<AtomicUsize>,
 ) {
     let first = Arc::new(AtomicBool::new(true));
-    let (release, holding) = hold(world, "/config", move |_| {
-        first.swap(false, Ordering::SeqCst)
-    });
+    let (release, holding) = world
+        .fake
+        .hold("/config", move |_| first.swap(false, Ordering::SeqCst));
     let (answered, confirmations) = (
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
@@ -617,7 +602,7 @@ async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_a_sw
         0,
         "no request to the stopped core"
     );
-    let cores = world.fake.launches(&profile);
+    let cores = world.fake.launches_of(&profile);
     assert_eq!(cores.len(), 2);
     assert!(!cores[0].alive());
     // The successor wrote its own config from the saved settings.
@@ -654,7 +639,7 @@ async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_shut
         0,
         "no request to the stopped core"
     );
-    assert!(!world.fake.launches(&profile)[0].alive());
+    assert!(!world.fake.launches_of(&profile)[0].alive());
     assert!(!world.pool().alive(&profile));
 }
 
@@ -696,7 +681,7 @@ async fn a_settings_change_that_waited_for_a_start_leaves_alone_a_core_that_a_pl
             0,
             "change first {change_first}: no request to the stopping core"
         );
-        assert!(!world.fake.launches(&profile)[0].alive());
+        assert!(!world.fake.launches_of(&profile)[0].alive());
         world.fake.knobs(|knobs| knobs.intercept = None);
         world
             .run(world.pool().start(&profile, false))
@@ -809,18 +794,18 @@ async fn a_readiness_retry_of_one_core_keeps_its_activity_window() {
             }));
         });
     }
-    let before = world.fake.calls(&profile, "/usage-queue").len();
+    let before = world.fake.called_at(&profile, "/usage-queue").len();
     world
         .run(world.pool().start(&profile, false))
         .await
         .unwrap();
     assert!(failed.load(Ordering::SeqCst));
     assert!(
-        world.fake.calls(&profile, "/auth-files").len() >= 2,
+        world.fake.called_at(&profile, "/auth-files").len() >= 2,
         "readiness retried"
     );
     world.pass(Duration::from_secs(3)).await;
-    let drains = world.fake.calls(&profile, "/usage-queue").len() - before;
+    let drains = world.fake.called_at(&profile, "/usage-queue").len() - before;
     world.fake.knobs(|knobs| knobs.intercept = None);
     assert_eq!(
         drains, 2,
@@ -918,8 +903,8 @@ async fn concurrent_drains_of_one_profile_share_one_queue_read() {
     let profile = &profiles[0];
     world.pass(Duration::from_secs(3)).await;
     queue_requests(&world, profile, 3);
-    let before = world.fake.calls(profile, "/usage-queue").len();
-    let (release, holding) = hold(&world, "/usage-queue", |_| true);
+    let before = world.fake.called_at(profile, "/usage-queue").len();
+    let (release, holding) = world.fake.hold("/usage-queue", |_| true);
     let test = async {
         // A finished request's drain, held at the core.
         world.scheduler.activity(profile, false);
@@ -938,7 +923,7 @@ async fn concurrent_drains_of_one_profile_share_one_queue_read() {
     };
     world.run(test).await.unwrap();
     assert_eq!(
-        world.fake.calls(profile, "/usage-queue").len() - before,
+        world.fake.called_at(profile, "/usage-queue").len() - before,
         1,
         "the overlapping drains read the queue once"
     );
@@ -961,7 +946,7 @@ async fn slow_account_maintenance_does_not_hold_up_usage_collection() {
     world.pass(Duration::from_secs(3)).await;
     // The read that resumes polling syncs at once; the maintenance pass after it is held.
     let syncs = Arc::new(AtomicUsize::new(0));
-    let (release, holding) = hold(&world, "/auth-files", move |_| {
+    let (release, holding) = world.fake.hold("/auth-files", move |_| {
         syncs.fetch_add(1, Ordering::SeqCst) > 0
     });
     world.scheduler.watch().await;
@@ -970,12 +955,12 @@ async fn slow_account_maintenance_does_not_hold_up_usage_collection() {
             holding.load(Ordering::SeqCst) > 0
         })
         .await;
-    let before = world.fake.calls(profile, "/usage-queue").len();
+    let before = world.fake.called_at(profile, "/usage-queue").len();
     queue_requests(&world, profile, 1);
     world.scheduler.activity(profile, false);
     world.pass(Duration::from_secs(1)).await;
     assert!(
-        world.fake.calls(profile, "/usage-queue").len() > before,
+        world.fake.called_at(profile, "/usage-queue").len() > before,
         "a finished request is drained while maintenance waits"
     );
     assert_eq!(world.usage(profile).await.len(), 1);
@@ -1018,7 +1003,7 @@ async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
     world.pass(Duration::from_secs(3)).await;
     // Two full pages and a short one.
     queue_requests(&world, profile, 2 * 500 + 3);
-    let before = world.fake.calls(profile, "/usage-queue").len();
+    let before = world.fake.called_at(profile, "/usage-queue").len();
     let refused = Arc::new(AtomicUsize::new(0));
     {
         let (pool, id, refused) = (world.pool().clone(), profile.clone(), Arc::clone(&refused));
@@ -1037,7 +1022,7 @@ async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
     world.fake.knobs(|knobs| knobs.intercept = None);
     first.unwrap();
     second.unwrap();
-    let reads = world.fake.calls(profile, "/usage-queue").len() - before;
+    let reads = world.fake.called_at(profile, "/usage-queue").len() - before;
     assert_eq!(reads, 3, "only the stop reads a stopping core's queue");
     assert_eq!(
         refused.load(Ordering::SeqCst),

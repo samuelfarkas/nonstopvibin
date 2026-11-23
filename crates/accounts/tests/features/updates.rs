@@ -9,10 +9,9 @@ use nsv_core::binary::{CoreTarget, Version, bundled_pin};
 use nsv_core::install::CORE_ARCHIVES;
 use nsv_domain::registry::OAuthProvider;
 use nsv_domain::wire::CorePhase;
+use nsv_testkit::world::{UPDATE, World, names, release};
 use serde_json::json;
 use tokio::sync::Notify;
-
-use crate::world::{UPDATE, World, names, release};
 
 const FEED: &str = "https://feed.example.invalid/core-release.json";
 

@@ -1,12 +1,29 @@
 [package]
 name = "nsv-testkit"
-description = "Integration-test support: temporary directories, port reservations and chunked bodies. A dev-dependency only, never shipped."
+description = "Integration-test support: temporary directories, port reservations, chunked bodies, fake cores and the account features. A dev-dependency only, never shipped."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
+
+# A crate's tests enable only what builds on crates they already build.
+[features]
+# The fake cores behind the pool's `Backend`.
+core = ["dep:nsv-core", "dep:nsv-domain", "dep:nsv-net", "dep:nsv-store", "dep:serde_json", "dep:tokio", "dep:url"]
+# The account features assembled as the daemon assembles them, over the fake cores.
+accounts = ["core", "dep:nsv-accounts"]
+
+[dependencies]
+nsv-accounts = { workspace = true, optional = true }
+nsv-core = { workspace = true, optional = true }
+nsv-domain = { workspace = true, optional = true }
+nsv-net = { workspace = true, optional = true }
+nsv-store = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["macros", "rt", "sync", "time"] }
+url = { workspace = true, optional = true }
 
 [lints]
 workspace = true

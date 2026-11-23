@@ -1,33 +1,15 @@
 //! Sign-in, credentials, resets, API accounts and core updates through the daemon's HTTP API:
 //! the daemon assembles its own `Cores` over the fake cores, stub provider fetch and stub
-//! releases of `crates/accounts/tests/features`. No provider is contacted and no real core runs.
+//! releases of `nsv_testkit`. No provider is contacted and no real core runs.
 // Marks the whole binary as test code for the workspace's test-only lint exceptions.
 #![cfg(test)]
 
-#[path = "../../accounts/tests/features/common.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the account features; this binary uses part of it"
-)]
-mod common;
-#[path = "../../accounts/tests/features/fake_core.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the account features; this binary uses part of it"
-)]
-mod fake_core;
 #[path = "golden/common.rs"]
 #[expect(
     dead_code,
     reason = "shared with the golden replay; this binary uses part of it"
 )]
 mod golden;
-#[path = "../../accounts/tests/features/world.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the account features; this binary uses part of it"
-)]
-mod world;
 
 use std::future::Future;
 use std::path::Path;
@@ -45,15 +27,16 @@ use nsv_server::{CoreOptions, Daemon, Options, TIMING};
 use nsv_shell::{HostEvent, ShellHost};
 use nsv_store::ServerLock;
 use nsv_store::layout::credential_directory;
+use nsv_testkit::fake::{Directory, FakeCores, response};
+use nsv_testkit::world::{
+    ACCOUNT, ORGANIZATION_A, StubFetch, TestReleases, UPDATE, bundled_core, claude, release,
+};
 use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::common::{StubFetch, response};
-use crate::fake_core::{Directory, FakeCores};
 use crate::golden::now;
-use crate::world::{ACCOUNT, ORGANIZATION_A, TestReleases, UPDATE, bundled_core, claude, release};
 
 const FEED: &str = "https://feed.example.invalid/core-release.json";
 

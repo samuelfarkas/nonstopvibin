@@ -5,17 +5,15 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::wire::{Account, AccountStatus};
 use nsv_store::layout::credential_directory;
 use serde_json::{Value, json};
-use tokio::sync::watch;
 
 use crate::common::{World, short};
-use crate::fake::Hold;
 
 async fn metadata(world: &World, profile: &ProfileId) -> Vec<Account> {
     let profile = profile.clone();
@@ -140,16 +138,9 @@ async fn an_account_sync_that_outlives_its_core_does_not_overwrite_the_restarted
         );
     });
     let first = Arc::new(AtomicBool::new(true));
-    let (release, released) = watch::channel(false);
-    let holding = Arc::new(AtomicUsize::new(0));
-    world.fake.knobs(|knobs| {
-        knobs.hold = Some(Hold {
-            path: "/auth-files",
-            when: Box::new(move |_| first.swap(false, Ordering::SeqCst)),
-            released,
-            holding: Arc::clone(&holding),
-        });
-    });
+    let (release, holding) = world
+        .fake
+        .hold("/auth-files", move |_| first.swap(false, Ordering::SeqCst));
     let stale = world.accounts.sync(world.pool(), &profile);
     let restart = async {
         world

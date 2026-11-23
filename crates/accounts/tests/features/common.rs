@@ -6,14 +6,11 @@ use std::future::{Future, ready};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use nsv_accounts::fetch::{Fetch, Request};
+use nsv_accounts::fetch::Request;
 use nsv_accounts::quota::QuotaSource;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::wire::Account;
-use nsv_net::{HeaderMap, Loopback, NetError, Response, StatusCode};
-use nsv_store::files::owner_only_directory;
-use nsv_store::{Store, Vault};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
@@ -45,110 +42,6 @@ pub(crate) fn replaced(value: &Value, pairs: &[(&str, &str)]) -> Value {
         text = text.replace(placeholder, actual);
     }
     serde_json::from_str(&text).unwrap()
-}
-
-pub(crate) async fn open_store(directory: &Path) -> Store {
-    owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
-    Store::open(directory, Vault::open(directory).unwrap())
-        .await
-        .unwrap()
-}
-
-pub(crate) async fn profile(store: &Store, name: &str) -> ProfileId {
-    let name = name.to_owned();
-    store
-        .call(move |db| Ok(db.create_profile(&name)?.id))
-        .await
-        .unwrap()
-}
-
-pub(crate) fn response(status: u16, body: impl Into<Vec<u8>>) -> Response {
-    Response {
-        status: StatusCode::from_u16(status).unwrap(),
-        headers: HeaderMap::new(),
-        body: body.into(),
-    }
-}
-
-/// What a stub fetch was asked.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Seen {
-    pub(crate) request: Request,
-    pub(crate) loopback: Option<(Loopback, String)>,
-}
-
-type Answer = Box<dyn Fn(&str) -> Result<Response, NetError> + Send + Sync>;
-
-/// Answers each request by its URL and records it; a gate holds answers until it opens.
-pub(crate) struct StubFetch {
-    pub(crate) seen: Mutex<Vec<Seen>>,
-    answer: Mutex<Answer>,
-    gate: Option<Arc<Semaphore>>,
-}
-
-impl StubFetch {
-    pub(crate) fn new(
-        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            seen: Mutex::new(Vec::new()),
-            answer: Mutex::new(Box::new(answer)),
-            gate: None,
-        }
-    }
-
-    /// Holds every answer until a permit is added to the returned gate.
-    pub(crate) fn gated(
-        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
-    ) -> (Self, Arc<Semaphore>) {
-        let gate = Arc::new(Semaphore::new(0));
-        let mut stub = Self::new(answer);
-        stub.gate = Some(Arc::clone(&gate));
-        (stub, gate)
-    }
-
-    pub(crate) fn answer(
-        &self,
-        answer: impl Fn(&str) -> Result<Response, NetError> + Send + Sync + 'static,
-    ) {
-        *self.answer.lock().unwrap() = Box::new(answer);
-    }
-
-    pub(crate) fn count(&self) -> usize {
-        self.seen.lock().unwrap().len()
-    }
-
-    async fn reply(&self, seen: Seen) -> Result<Response, NetError> {
-        let url = seen.request.url.clone();
-        self.seen.lock().unwrap().push(seen);
-        if let Some(gate) = &self.gate {
-            gate.acquire().await.unwrap().forget();
-        }
-        (self.answer.lock().unwrap())(&url)
-    }
-}
-
-impl Fetch for StubFetch {
-    async fn https(&self, request: Request) -> Result<Response, NetError> {
-        self.reply(Seen {
-            request,
-            loopback: None,
-        })
-        .await
-    }
-
-    async fn loopback(
-        &self,
-        to: Loopback,
-        target: String,
-        request: Request,
-    ) -> Result<Response, NetError> {
-        self.reply(Seen {
-            request,
-            loopback: Some((to, target)),
-        })
-        .await
-    }
 }
 
 /// The core and account list as the golden recorder stubbed them: queued `/api-call`

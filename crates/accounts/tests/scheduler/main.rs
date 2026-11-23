@@ -4,7 +4,6 @@
 #![cfg(test)]
 
 mod common;
-mod fake;
 mod golden;
 mod lazy;
 mod lifecycle;

@@ -27,7 +27,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 url.workspace = true
 
 [dev-dependencies]
-nsv-testkit.workspace = true
+nsv-testkit = { workspace = true, features = ["accounts"] }
 rusqlite.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
 

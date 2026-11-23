@@ -95,7 +95,7 @@ Twelve crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 | `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the server implements.                               | `domain`, `net`   |
 | `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                      | `domain`          |
 | `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection.                                                 | `server`, `shell` |
-| `testkit`  | Test support, a dev-dependency only: temporary directories, loopback port reservations, chunked bodies.                            | —                 |
+| `testkit`  | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world.         | `accounts`        |
 
 - The gateway receives a request and a `Lease` (profile id, slug, client and core keys, upstream
   address, in-flight guard). A `Lease` holds no management key, and the gateway crate cannot

@@ -7,12 +7,12 @@ use std::time::Duration;
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::restart::RestartTiming;
 use nsv_domain::id::ProfileId;
+use nsv_testkit::fake::Script;
 use serde_json::json;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::common::World;
-use crate::fake::Script;
 
 fn timing(coalesce: i64, backoff: i64, limit: u32) -> Timing {
     Timing {
@@ -120,7 +120,7 @@ async fn a_core_that_keeps_failing_to_start_is_retried_with_backoff_to_a_bound_a
         .await;
     let times: Vec<Instant> = world
         .fake
-        .launches(&profile)
+        .launches_of(&profile)
         .iter()
         .map(|core| core.launched)
         .collect();
@@ -155,7 +155,7 @@ async fn a_core_that_exits_right_after_each_start_is_restarted_with_the_same_bac
     // Each core lives 10 ms, so the wait from one launch to the next is the backoff plus that.
     let times: Vec<Instant> = world
         .fake
-        .launches(&profile)
+        .launches_of(&profile)
         .iter()
         .map(|core| core.launched)
         .collect();
@@ -326,7 +326,7 @@ async fn a_core_that_answers_but_never_finishes_its_readiness_keeps_its_backoff_
         .await;
     let times: Vec<Instant> = world
         .fake
-        .launches(&profile)
+        .launches_of(&profile)
         .iter()
         .map(|core| core.launched)
         .collect();
@@ -568,7 +568,7 @@ async fn an_automatic_start_waiting_for_its_core_does_not_hold_up_another_profil
             world.launches(&unready) == 1
         })
         .await;
-    let before = world.fake.calls(&healthy, "/auth-files").len();
+    let before = world.fake.called_at(&healthy, "/auth-files").len();
     let watching = tokio::spawn({
         let scheduler = world.scheduler.clone();
         async move { scheduler.watch().await }
@@ -577,7 +577,7 @@ async fn an_automatic_start_waiting_for_its_core_does_not_hold_up_another_profil
         .until(
             "the healthy profile's sync",
             Duration::from_secs(2),
-            |world| world.fake.calls(&healthy, "/auth-files").len() > before,
+            |world| world.fake.called_at(&healthy, "/auth-files").len() > before,
         )
         .await;
     assert!(
@@ -599,7 +599,7 @@ async fn a_start_joined_to_an_automatic_one_ends_with_shutdowns_503_in_its_retry
     world.scheduler.launch().await.unwrap();
     world
         .until("the failed readiness", Duration::from_secs(2), |world| {
-            !world.fake.calls(&profile, "/auth-files").is_empty()
+            !world.fake.called_at(&profile, "/auth-files").is_empty()
         })
         .await;
     assert!(world.pool().state().starting(&profile));

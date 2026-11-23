@@ -1916,6 +1916,16 @@ dependencies = [
 [[package]]
 name = "nsv-testkit"
 version = "0.2.0"
+dependencies = [
+ "nsv-accounts",
+ "nsv-core",
+ "nsv-domain",
+ "nsv-net",
+ "nsv-store",
+ "serde_json",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "nsv-window"
