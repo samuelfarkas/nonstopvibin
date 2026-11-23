@@ -138,13 +138,13 @@ decision record) and is shown for comparison.
 | Host wakeups/s 30–90 s after a burst   | 8.9–31.2           | 1.9–2.0                | 0.0                      | 0.0                     |
 | Host wakeups/s 120–180 s after a burst | 21.9–51.6          | 1.9–2.0                | 0.0                      | 0.0                     |
 | Host RSS / PSS right after 1 MB × 8    | 90–101 / 88–99 MiB | 125 / 82–84 MiB (main) | 11.8–12.1 / 9.7–10.0 MiB | 9.4–11.4 / 9.4–11.4 MiB |
-| Host PSS 90 s after the burst          | 65.3–65.9 MiB      | 191–194 MiB (tree)     | 9.8–10.1 MiB             | not recorded            |
+| Host PSS 90 s after the burst          | 65.3–65.9 MiB      | 191–194 MiB (tree)     | 9.8–10.1 MiB             | 9.5–11.5 MiB            |
 | Host CPU, 290 KB request               | 1.7–6.0 ms         | 1.3–2.8 ms             | 0.32–0.65 ms             | 0.53–0.85 ms            |
 | Host CPU, 1 MB request                 | 4.3–6.0 ms         | 3.3–5.7 ms             | 0.81–1.26 ms             | 1.03–1.54 ms            |
 | Host CPU, 200-event stream             | 18.5–47.5 ms       | 23–35 ms               | 7.5–8.5 ms               | 9.8–14.3 ms             |
-| Per event (stream ÷ 200, with request) | 93–238 µs          | 115–175 µs             | 38–42 µs                 | not recorded            |
-| First request on a lazy profile        | 277–317 ms         | 261–307 ms             | 274–509 ms               | not recorded            |
-| Shutdown with cores running            | 0.28–0.31 s        | 0.28 s                 | 0.29 s                   | not recorded            |
+| Per event (stream ÷ 200, with request) | 93–238 µs          | 115–175 µs             | 38–42 µs                 | 37 µs (A/B median)      |
+| First request on a lazy profile        | 277–317 ms         | 261–307 ms             | 274–509 ms               | 269–287 ms              |
+| Shutdown with cores running            | 0.28–0.31 s        | 0.28 s                 | 0.29 s                   | 0.28–0.29 s             |
 
 - The Rust daemon's CPU comes from schedstat nanoseconds of its live threads; main's comes from
   `/proc/<pid>/stat` ticks, which are ±0.2–0.5 ms per request.
@@ -157,5 +157,47 @@ decision record) and is shown for comparison.
   microbenchmark measured 35 µs per event against a 30 µs raw byte-relay floor on this host.
 - Electron ran headless (`--ozone-platform=headless`, software GPU). A desktop session adds a
   GPU process, so its PSS here is a floor.
-- Not measured: macOS, the desktop app with its tray and the daemon in one process, and install
-  size of the Rust packages.
+- Not measured: macOS.
+
+## Desktop mode (Linux, Docker with Xvfb)
+
+The branch tip at 103bcb2, release build, packaged layout (`nonstopvibin`, `nonstopvibin-window`,
+`core/`, `client/`), started as the desktop app with `--background`. Each run had its own session
+bus, a StatusNotifierWatcher (so the tray registered), the synthetic upstream and three API-key
+profiles. Two runs at load 0.7–1.2 and 2.5–3.9. Harness: `desktop-run.sh`, `cycles.py`.
+
+| Metric                               | Electron 44, no window (host) | Rust daemon + tray (container) |
+| ------------------------------------ | ----------------------------- | ------------------------------ |
+| Idle PSS                             | 178.6–185.1 MiB, 7 processes  | 10.6–10.8 MiB, 1 process       |
+| Idle wakeups/s                       | 2.0–2.6                       | 0.0                            |
+| PSS after 1 MB × 8 burst             | 191–194 MiB                   | 12.8–13.8 MiB                  |
+| Wakeups/s after the burst            | 1.9–2.0                       | 0.0                            |
+| PSS after 55 window opens and closes | —                             | 13.3–14.3 MiB, no helper left  |
+
+| Open (the React UI, median of 20–40)       | Window shown | Content stable |
+| ------------------------------------------ | ------------ | -------------- |
+| Main window, new helper process            | 277 ms       | 474 ms         |
+| Quota popup, new helper process            | 282 ms       | 415 ms         |
+| Window in a helper that is already running | 139–146 ms   | 267–353 ms     |
+
+- Starting a helper costs 120–124 ms (main window) and 140–143 ms (popup) over opening in a
+  running helper, the stand-in for in-process wry. Both are under the 150 ms threshold, so the
+  helper still exits on close; the popup's margin is 7–14 ms.
+- The helper and its WebKit processes exit within a median 34 ms of the last close. With a
+  window open they use about 410 MiB (main) or 351 MiB (popup) in 3 processes. The container
+  charges the helper's 155 shared libraries in full, so a desktop reads lower; the daemon links
+  only libc, libm and libgcc_s.
+- The first open after a fresh start took 1.4–1.7 s to paint while Mesa built its shader cache
+  (inferred from timestamps); those opens are left out of the medians.
+- Rendering was software-only (Xvfb, no GPU or window manager). Not measured: wakeups with a
+  window open, Wayland, a real tray host, macOS.
+
+## Install size (Linux x64, unpacked)
+
+| Package        | Main (Electron / Bun)            | Rust                                              |
+| -------------- | -------------------------------- | ------------------------------------------------- |
+| Desktop app    | 362 MB (Electron runtime 283 MB) | about 91 MB: daemon 12 MB, window 1.2 MB, UI 1 MB |
+| Server archive | 156 MB (Bun binary 78 MB)        | 92 MB: daemon 12 MB, UI 1 MB                      |
+
+Both include the same 77 MB CLIProxyAPI core. Compressed artefacts on CI: AppImage 24.9 MiB, deb
+18.6 MiB, server archive 25.9 MiB, macOS zip 24.3 MiB, dmg 28.0 MiB.

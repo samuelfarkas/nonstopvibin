@@ -151,9 +151,10 @@ replaced, on the same synthetic workload with three profiles. They cover the hos
 | Memory (PSS) right after eight 1 MB requests  | 88–99 MiB     | 82–84 MiB, main process only | 9.4–11.4 MiB |
 
 The Rust column is the static musl build that the Linux packages ship, run as the
-headless server. The desktop shell, with its tray and window supervisor, measured
-3.5 MiB and no wakeups as a process of its own. The window process measured
-269 MiB with a test page open. See
+headless server. As the desktop app with its tray registered and no window open, the
+daemon measured 10.6–10.8 MiB and no wakeups, and 12.8–13.8 MiB after the same burst.
+Opening the window starts the window process in 277–282 ms; it uses about 350–410 MiB
+while open and exits within about 34 ms of the last close. See
 [the measurements](docs/decisions/rust-port-evidence.md) for the method, CPU per
 request, and macOS gaps.
 
