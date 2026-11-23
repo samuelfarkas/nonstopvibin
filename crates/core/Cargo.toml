@@ -14,7 +14,8 @@ nsv-net.workspace = true
 nsv-store.workspace = true
 rustix.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# preserve_order: the core config keeps the key order it is built in, as YAML.stringify did.
+serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
