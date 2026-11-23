@@ -72,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Host architecture only, as electron-builder built: macos-26 is arm64.
+        # Host architecture only: macos-26 is arm64.
         os: [macos-26, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     # Release builds read the signing secrets of the protected `release` environment.
