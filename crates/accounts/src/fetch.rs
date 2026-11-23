@@ -4,6 +4,7 @@
 //! refused, as fetch's `redirect: "error"`.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_net::{Get, Https, Loopback, LoopbackRequest, Method, NetError, Redirects, Response};
@@ -69,5 +70,21 @@ impl Fetch for Https {
             limit: request.limit,
         })
         .await
+    }
+}
+
+/// One client shared by every feature.
+impl<T: Fetch> Fetch for Arc<T> {
+    fn https(&self, request: Request) -> impl Future<Output = Result<Response, NetError>> + Send {
+        T::https(self, request)
+    }
+
+    fn loopback(
+        &self,
+        to: Loopback,
+        target: String,
+        request: Request,
+    ) -> impl Future<Output = Result<Response, NetError>> + Send {
+        T::loopback(self, to, target, request)
     }
 }

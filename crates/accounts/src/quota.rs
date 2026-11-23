@@ -11,7 +11,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::future::Future;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
@@ -56,6 +56,32 @@ pub trait QuotaSource: Send + Sync {
         profile: &ProfileId,
         body: Value,
     ) -> impl Future<Output = Result<Value, AppError>> + Send;
+}
+
+/// One pool shared by quotas and resets.
+impl<T: QuotaSource> QuotaSource for Arc<T> {
+    fn accounts(
+        &self,
+        profile: &ProfileId,
+    ) -> impl Future<Output = Result<Vec<Account>, AppError>> + Send {
+        T::accounts(self, profile)
+    }
+
+    fn chatgpt_account_id(&self, profile: &ProfileId, account: &AccountId) -> Option<String> {
+        T::chatgpt_account_id(self, profile, account)
+    }
+
+    fn usable(&self, profile: &ProfileId) -> bool {
+        T::usable(self, profile)
+    }
+
+    fn api_call(
+        &self,
+        profile: &ProfileId,
+        body: Value,
+    ) -> impl Future<Output = Result<Value, AppError>> + Send {
+        T::api_call(self, profile, body)
+    }
 }
 
 /// A request the core sends upstream, putting the account's token in place of `$TOKEN$`.
