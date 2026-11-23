@@ -479,7 +479,10 @@ struct Move {
 }
 
 /// The moves possible from `world`; every event happens at now = 0, after an advance.
-#[expect(clippy::too_many_lines, reason = "one entry per move, as the TypeScript test")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one entry per move, as the TypeScript test"
+)]
 fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
     let event = |name, event, next: World| Move {
         name,

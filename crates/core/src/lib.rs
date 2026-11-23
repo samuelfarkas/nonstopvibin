@@ -2,8 +2,10 @@
 #![forbid(unsafe_code)]
 
 pub mod binary;
+pub mod config;
 pub mod install;
 pub mod restart;
+mod yaml;
 
 use std::io;
 
