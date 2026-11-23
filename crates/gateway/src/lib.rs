@@ -39,7 +39,7 @@ use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
 use tokio::net::TcpStream;
 
 pub use body::Body;
-use flight::{Counts, InFlight, Release};
+use flight::{Counts, InFlight, LIMIT, Release};
 
 /// The cap on hyper's read buffer in both directions. A request or response head must fit;
 /// bodies stream through in pieces no larger.
@@ -333,7 +333,7 @@ impl<H: Host> Gateway<H> {
         let first = self.inner.counts.open(&auth.id).ok_or_else(|| {
             Refusal::new(
                 StatusCode::TOO_MANY_REQUESTS,
-                "This profile has 32 requests in flight. Retry shortly.",
+                format!("This profile has {LIMIT} requests in flight. Retry shortly."),
             )
         })?;
         self.inner
