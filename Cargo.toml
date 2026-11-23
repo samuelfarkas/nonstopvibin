@@ -20,13 +20,21 @@ nsv-agents = { path = "crates/agents" }
 nsv-gateway = { path = "crates/gateway" }
 nsv-server = { path = "crates/server" }
 nsv-shell = { path = "crates/shell" }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+base64 = "0.23.1"
+getrandom = "0.4.3"
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "cache"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 subtle = "2.6.1"
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false }
 ts-rs = { version = "12.0.1", default-features = false, features = ["no-serde-warnings", "serde-compat"] }
+unicode-normalization = "0.1.26"
+zeroize = "1.9.2"
 
 [workspace.lints.rust]
 # Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.

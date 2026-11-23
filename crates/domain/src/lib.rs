@@ -2,7 +2,9 @@
 //! protocol. No I/O.
 #![forbid(unsafe_code)]
 
+pub mod error;
 pub mod id;
 pub mod registry;
 pub mod secret;
+pub mod time;
 pub mod wire;
