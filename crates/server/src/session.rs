@@ -3,15 +3,13 @@
 //! owner-only ordinary file, and removed at shutdown only while it still names this process.
 
 use std::io;
-use std::path::Path;
 use std::time::Duration;
 
 use nsv_domain::endpoint::{loopback_origin, session_link};
 use nsv_domain::secret::SessionToken;
 use nsv_domain::time::{iso_string, parse_iso};
+use nsv_files::{DataDir, read_own_file, write_atomic_unsynced};
 use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
-use nsv_store::files::{read_own_file, write_atomic_unsynced};
-use nsv_store::layout::session_path;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -68,10 +66,9 @@ impl Session {
     ///
     /// # Errors
     /// [`SessionError::Unsafe`] when it is not an owner-only ordinary file of this user.
-    pub fn read(directory: &Path) -> Result<Option<Self>, SessionError> {
-        let Some(text) = read_own_file(&session_path(directory), 0o077, 65_536, || {
-            SessionError::Unsafe
-        })?
+    pub fn read(directory: &DataDir) -> Result<Option<Self>, SessionError> {
+        let Some(text) =
+            read_own_file(&directory.session(), 0o077, 65_536, || SessionError::Unsafe)?
         else {
             return Ok(None);
         };
@@ -99,7 +96,7 @@ impl Session {
     ///
     /// # Errors
     /// A file-system error.
-    pub fn write(&self, directory: &Path) -> io::Result<()> {
+    pub fn write(&self, directory: &DataDir) -> io::Result<()> {
         // JSON.stringify's key order, which earlier CLIs read.
         let text = json!({
             "pid": self.pid,
@@ -110,16 +107,16 @@ impl Session {
             "startedAt": iso_string(self.started_at),
         })
         .to_string();
-        write_atomic_unsynced(&session_path(directory), text.as_bytes(), 0o600)
+        write_atomic_unsynced(&directory.session(), text.as_bytes(), 0o600)
     }
 
     /// Removes `server.json` if it still names `pid`: a newer instance may have replaced it.
     ///
     /// # Errors
     /// An unsafe file, or a file-system error.
-    pub fn remove(directory: &Path, pid: u32) -> Result<(), SessionError> {
+    pub fn remove(directory: &DataDir, pid: u32) -> Result<(), SessionError> {
         if Self::read(directory)?.is_some_and(|session| session.pid == pid) {
-            match std::fs::remove_file(session_path(directory)) {
+            match std::fs::remove_file(directory.session()) {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
                 _ => {}
             }

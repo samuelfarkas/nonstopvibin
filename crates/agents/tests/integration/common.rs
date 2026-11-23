@@ -12,6 +12,7 @@ use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_domain::error::AppError;
 use nsv_domain::secret::ClientKey;
 use nsv_domain::wire::Profile;
+use nsv_files::DataDir;
 use serde_json::{Value, json};
 
 /// A fresh directory under the system temporary directory, canonical, removed on drop.
@@ -131,7 +132,7 @@ impl Broker {
 }
 
 pub(crate) fn setup(data: &Path, broker: &Broker, directories: AgentDirectories) -> AgentSetup {
-    AgentSetup::new(data, broker.source(), directories).unwrap()
+    AgentSetup::new(&DataDir::new(data), broker.source(), directories)
 }
 
 pub(crate) fn home_only(home: &Path) -> AgentDirectories {

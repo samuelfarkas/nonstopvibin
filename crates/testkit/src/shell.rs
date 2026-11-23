@@ -6,13 +6,14 @@
     reason = "test support: a panic fails the test that called it, and is its report"
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nsv_domain::endpoint::{Origin, loopback_origin};
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
+use nsv_files::DataDir;
 use nsv_shell::{HostEvent, ShellHost, TrayStatus};
 use tokio::sync::{broadcast, watch};
 
@@ -23,7 +24,7 @@ pub const PROFILE: &str = "0b6f4f5e-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
 pub struct Host {
     origin: Origin,
     token: SessionToken,
-    data: PathBuf,
+    data: DataDir,
     pub status: watch::Sender<TrayStatus>,
     /// `None` once closed, which ends the shell.
     events: Mutex<Option<broadcast::Sender<HostEvent>>>,
@@ -41,7 +42,7 @@ impl Host {
         Arc::new(Self {
             origin: Origin::parse(&loopback_origin(port)).unwrap(),
             token: SessionToken::new(TOKEN),
-            data: data.to_owned(),
+            data: DataDir::new(data),
             status: watch::channel(TrayStatus::default()).0,
             events: Mutex::new(Some(events)),
             first: Mutex::new(Some(first)),
@@ -78,7 +79,7 @@ impl ShellHost for Host {
     fn session_token(&self) -> &SessionToken {
         &self.token
     }
-    fn data_directory(&self) -> &Path {
+    fn data_directory(&self) -> &DataDir {
         &self.data
     }
     fn tray_status(&self) -> watch::Receiver<TrayStatus> {

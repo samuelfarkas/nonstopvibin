@@ -546,12 +546,7 @@ impl Launch {
             Ok(prepared) => prepared,
             Err(error) => return self.end_start(Err(error)).await,
         };
-        let data = self.context.store.directory();
-        let mut handle = match self
-            .context
-            .backend
-            .launch(&self.binary, data, &self.profile)
-        {
+        let mut handle = match self.context.backend.launch(&self.binary, &self.profile) {
             Ok(handle) => handle,
             Err(error) => {
                 let text = format!("Could not launch proxy: {error}");

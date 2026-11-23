@@ -15,8 +15,8 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::registry::Strategy;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{ApiAccount, Profile};
+use nsv_files::DataDir;
 use nsv_net::{Loopback, LoopbackRequest, Method, Response, loopback};
-use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
 use nsv_store::{Store, Vault};
 use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
@@ -344,7 +344,7 @@ impl Running {
         let config = write_config(store, profile.id.clone(), port).await.unwrap();
         // The core binds it.
         drop(reserved);
-        let core = spawn_core(binary, data, &profile.id).unwrap();
+        let core = spawn_core(binary, &DataDir::new(data), &profile.id).unwrap();
         let management = config.management_key.expose_secret().to_owned();
         let reported = reported_config(port, &management).await;
         assert!(applied(&config, &reported), "{reported}");
@@ -352,7 +352,7 @@ impl Running {
             port,
             key: config.core_key.expose_secret().to_owned(),
             management,
-            directory: profile_directory(data, &profile.id),
+            directory: DataDir::new(data).profile(&profile.id),
             core,
         }
     }
@@ -420,8 +420,9 @@ pub(crate) fn frame(kind: &str, fields: Value) -> String {
 }
 
 pub(crate) async fn open(directory: &Path) -> Store {
-    nsv_store::files::owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
-    Store::open(directory, Vault::open(directory).unwrap())
+    nsv_files::owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
+    let data = DataDir::new(directory);
+    Store::open(&data, Vault::open(&data).unwrap())
         .await
         .unwrap()
 }
@@ -680,9 +681,9 @@ async fn load(
     profile: &ProfileId,
     config: &CoreConfiguration,
 ) -> Value {
-    std::fs::create_dir_all(credential_directory(data, profile)).unwrap();
-    std::fs::write(core_config_path(data, profile), config.to_yaml()).unwrap();
-    let mut core: CoreProcess = spawn_core(binary, data, profile).unwrap();
+    std::fs::create_dir_all(DataDir::new(data).credentials(profile)).unwrap();
+    std::fs::write(DataDir::new(data).core_config(profile), config.to_yaml()).unwrap();
+    let mut core: CoreProcess = spawn_core(binary, &DataDir::new(data), profile).unwrap();
     let reported = reported_config(config.port, config.management_key.expose_secret()).await;
     core.terminate().await.unwrap();
     reported
@@ -698,7 +699,8 @@ async fn the_pinned_core_reads_every_golden_config_as_written() {
     for (name, mut config, _) in golden_config_cases() {
         let reserved = Port::reserve();
         config.port = reserved.number();
-        config.auth_dir = credential_directory(&data, &profile)
+        config.auth_dir = DataDir::new(&data)
+            .credentials(&profile)
             .to_str()
             .unwrap()
             .to_owned();

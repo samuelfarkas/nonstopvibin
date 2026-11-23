@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 nsv-domain.workspace = true
-nsv-store.workspace = true
+nsv-files.workspace = true
 rustix.workspace = true
 # preserve_order: the user's Claude settings keep their key order when merged, as JSON.parse and
 # JSON.stringify keep it. Cargo unifies the feature for the whole workspace.

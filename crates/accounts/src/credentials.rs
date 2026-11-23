@@ -20,9 +20,9 @@ use nsv_domain::js::{encode_uri_component, text};
 use nsv_domain::registry::{OAuthProvider, Provider, registry};
 use nsv_domain::secret::same_secret;
 use nsv_domain::wire::{Account, AccountKind, AccountPatch, ApiAccountInput, OAuthAction};
+use nsv_files::write_atomic;
 use nsv_net::Method;
 use nsv_store::Store;
-use nsv_store::files::write_atomic;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 

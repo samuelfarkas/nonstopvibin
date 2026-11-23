@@ -7,7 +7,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use nsv_domain::js;
-use nsv_store::files::{EntryKind, own_entry, read_own_file, write_atomic};
+use nsv_files::{EntryKind, own_entry, read_own_file, write_atomic};
 use serde_json::{Map, Value};
 
 use crate::error::{AgentError, conflicting, refused};

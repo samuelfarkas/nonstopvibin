@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
+use nsv_files::DataDir;
 use nsv_net::{Loopback, LoopbackRequest, Method, NetError, Response, loopback};
 
 use super::BoxFuture;
@@ -17,16 +18,11 @@ use crate::processes::{CoreProcess, Ledger, Ps, forget, spawn_core};
 
 /// Launches cores and carries the pool's loopback requests.
 pub trait Backend: Send + Sync + 'static {
-    /// Starts `binary` as `profile`'s core of the data directory `data`.
+    /// Starts `binary` as `profile`'s core of this backend's data directory.
     ///
     /// # Errors
     /// The core could not be started.
-    fn launch(
-        &self,
-        binary: &Path,
-        data: &Path,
-        profile: &ProfileId,
-    ) -> io::Result<Box<dyn CoreHandle>>;
+    fn launch(&self, binary: &Path, profile: &ProfileId) -> io::Result<Box<dyn CoreHandle>>;
 
     /// One request to a core: management, readiness and the model list.
     fn send(&self, call: Call) -> BoxFuture<'static, Result<Response, NetError>>;
@@ -66,27 +62,24 @@ pub trait CoreHandle: Send + 'static {
 /// Real cores: [`spawn_core`], the watchdog and the ledger of `core-processes/`.
 #[derive(Debug)]
 pub struct Processes {
+    data: DataDir,
     ledger: Arc<Ledger<Ps>>,
 }
 
 impl Processes {
     #[must_use]
-    pub fn new(data: &Path) -> Self {
+    pub fn new(data: &DataDir) -> Self {
         Self {
+            data: data.clone(),
             ledger: Arc::new(Ledger::new(data, Ps::default())),
         }
     }
 }
 
 impl Backend for Processes {
-    fn launch(
-        &self,
-        binary: &Path,
-        data: &Path,
-        profile: &ProfileId,
-    ) -> io::Result<Box<dyn CoreHandle>> {
+    fn launch(&self, binary: &Path, profile: &ProfileId) -> io::Result<Box<dyn CoreHandle>> {
         Ok(Box::new(Process {
-            core: spawn_core(binary, data, profile)?,
+            core: spawn_core(binary, &self.data, profile)?,
             ledger: Arc::clone(&self.ledger),
             entry: None,
         }))

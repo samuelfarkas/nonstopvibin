@@ -14,7 +14,7 @@
 
 use std::future::Future;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -29,10 +29,9 @@ use nsv_domain::sync::locked;
 use nsv_domain::wire::{
     Account, AccountKind, AccountStatus, Extra, OAuthReview, OAuthSession, OAuthStatus,
 };
+use nsv_files::{DataDir, owner_only_directory, unique_directory};
 use nsv_net::Method;
 use nsv_store::Store;
-use nsv_store::files::{owner_only_directory, unique_directory};
-use nsv_store::layout::oauth_pending_directory;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::task::AbortHandle;
@@ -86,7 +85,7 @@ const ACCEPTED: Reply = Reply {
 
 /// Launches a data directory's cores: `Processes::new(directory)` in the daemon, so a throwaway
 /// store's cores are recorded in its own ledger.
-pub type Backends = Arc<dyn Fn(&Path) -> Arc<dyn Backend> + Send + Sync>;
+pub type Backends = Arc<dyn Fn(&DataDir) -> Arc<dyn Backend> + Send + Sync>;
 /// Adds a message to the app's error list.
 pub type Report = Arc<dyn Fn(String) + Send + Sync>;
 
@@ -138,7 +137,7 @@ struct State {
 /// credential reaches a profile only after its seat is reviewed.
 struct Sandbox {
     provider: OAuthProvider,
-    directory: PathBuf,
+    directory: DataDir,
     store: Store,
     pool: Pool,
     accounts: Accounts,
@@ -388,8 +387,8 @@ impl<F: Fetch + 'static> SignIn<F> {
     ///
     /// # Errors
     /// A ledger or file-system error.
-    pub async fn discard_pending(data: &Path, backends: &Backends) -> Result<(), AppError> {
-        let pending = oauth_pending_directory(data);
+    pub async fn discard_pending(data: &DataDir, backends: &Backends) -> Result<(), AppError> {
+        let pending = data.oauth_pending();
         let listed = pending.clone();
         let entries = blocking(move || match std::fs::read_dir(&listed) {
             Ok(listing) => listing
@@ -399,7 +398,7 @@ impl<F: Fetch + 'static> SignIn<F> {
         })
         .await?;
         for entry in entries {
-            backends(&entry)
+            backends(&DataDir::new(entry))
                 .reap_orphans()
                 .await
                 .map_err(|error| AppError::new(error.to_string(), 500))?;
@@ -568,13 +567,15 @@ impl<F: Fetch + 'static> Inner<F> {
 
     /// A throwaway store with one profile and a pool of its own, under `oauth-pending/`.
     async fn sandbox(&self, provider: OAuthProvider) -> Result<Sandbox, AppError> {
-        let parent = oauth_pending_directory(self.store.directory());
+        let parent = self.store.directory().oauth_pending();
         let prefix = format!("{}-", provider.as_str());
-        let directory = blocking(move || {
-            owner_only_directory(&parent, || Ok::<(), io::Error>(()))?;
-            unique_directory(&parent, &prefix)
-        })
-        .await?;
+        let directory = DataDir::new(
+            blocking(move || {
+                owner_only_directory(&parent, || Ok::<(), io::Error>(()))?;
+                unique_directory(&parent, &prefix)
+            })
+            .await?,
+        );
         let opened = async {
             let store = Store::open(&directory, self.store.vault().clone()).await?;
             match store
@@ -592,7 +593,7 @@ impl<F: Fetch + 'static> Inner<F> {
         let (store, profile) = match opened {
             Ok(opened) => opened,
             Err(error) => {
-                remove_tree(directory).await?;
+                remove_tree(directory.path().to_owned()).await?;
                 return Err(error);
             }
         };
@@ -762,7 +763,7 @@ impl<F: Fetch + 'static> Inner<F> {
             self.close_callback(None, false);
             sandbox.pool.shutdown().await?;
             sandbox.store.close().await;
-            remove_tree(sandbox.directory.clone()).await?;
+            remove_tree(sandbox.directory.path().to_owned()).await?;
             state.sandbox = None;
         } else if let Some(session) = pending {
             let path = format!(

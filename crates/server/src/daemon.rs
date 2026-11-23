@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
@@ -25,9 +25,10 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::random;
 use nsv_domain::secret::SessionToken;
 use nsv_domain::sync::locked;
+use nsv_files::{DataDir, ServerLock};
 use nsv_gateway::Gateway;
 use nsv_shell::{HostEvent, ShellHost, TrayStatus};
-use nsv_store::{AuthSnapshot, ProfileNames, ServerLock, Store, StoreError, Vault, VaultError};
+use nsv_store::{AuthSnapshot, ProfileNames, Store, StoreError, Vault, VaultError};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, OnceCell, broadcast, watch};
 
@@ -39,8 +40,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// How the daemon runs.
 pub struct Options<F> {
-    /// The data directory, whose lock the caller holds.
-    pub directory: PathBuf,
     /// The loopback port; 0 takes any free one.
     pub port: u16,
     /// Exact DNS names an HTTPS reverse proxy (such as Tailscale Serve) uses for the interface
@@ -68,7 +67,7 @@ pub struct Options<F> {
 /// Each data directory's cores run as processes of the core binary.
 #[must_use]
 pub fn processes() -> Backends {
-    Arc::new(|directory: &Path| -> Arc<dyn Backend> { Arc::new(Processes::new(directory)) })
+    Arc::new(|directory: &DataDir| -> Arc<dyn Backend> { Arc::new(Processes::new(directory)) })
 }
 
 /// Which core profiles start from.
@@ -208,7 +207,7 @@ impl Shared {
 /// Everything a request may reach.
 pub(crate) struct App<F> {
     pub(crate) shared: Arc<Shared>,
-    pub(crate) directory: PathBuf,
+    pub(crate) directory: DataDir,
     pub(crate) allow_hosts: Vec<String>,
     pub(crate) development: bool,
     pub(crate) client: PathBuf,
@@ -260,11 +259,11 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
                 serde_json::Value::String(host.clone()).to_string(),
             ));
         }
-        let directory = options.directory.clone();
+        let directory = lock.directory().clone();
         let vault = tokio::task::spawn_blocking(move || Vault::open(&directory))
             .await
             .map_err(|error| StartError::Other(error.to_string()))??;
-        let store = Store::open(&options.directory, vault).await?;
+        let store = Store::open(lock.directory(), vault).await?;
         match Self::assemble(options, lock, store.clone()).await {
             Ok(daemon) => Ok(daemon),
             Err(error) => {
@@ -323,16 +322,15 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             store: store.clone(),
         });
         let agents = AgentSetup::new(
-            &options.directory,
+            lock.directory(),
             connection_source(&shared, &store, &cores.scheduler, port),
             options.agents.clone(),
-        )
-        .map_err(|error| StartError::Other(error.to_string()))?;
+        );
         let token = SessionToken::generate()?;
         let app = Arc::new(App {
             imports: Arc::new(Mutex::new(ImportCatalog::new(&options.agents.home))),
             shared,
-            directory: options.directory,
+            directory: lock.directory().clone(),
             allow_hosts: options.allow_hosts,
             development: options.development,
             client: options.client,
@@ -556,7 +554,7 @@ impl<F: Fetch + Releases + Clone + 'static> ShellHost for Daemon<F> {
         &self.0.token
     }
 
-    fn data_directory(&self) -> &Path {
+    fn data_directory(&self) -> &DataDir {
         &self.0.directory
     }
 

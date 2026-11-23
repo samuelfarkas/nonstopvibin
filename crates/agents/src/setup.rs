@@ -8,7 +8,6 @@
 
 use std::cmp::Ordering;
 use std::fs::{self, DirBuilder};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,8 +20,7 @@ use nsv_domain::registry::{Agent, registry};
 use nsv_domain::secret::ClientKey;
 use nsv_domain::sha256_hex;
 use nsv_domain::wire::{self, AgentSetupInput, Profile};
-use nsv_store::files::write_atomic;
-use nsv_store::layout::{agent_connections_directory, data_directory_from};
+use nsv_files::{DataDir, write_atomic};
 use tokio::sync::Mutex;
 
 use crate::connection::{Context, definition, native_provider, text};
@@ -90,7 +88,7 @@ fn configured(agent: Agent) -> Option<PathBuf> {
         .or_else(|| Some(Path::new(&set("XDG_CONFIG_HOME")?).join(directory.xdg?)))
 }
 
-/// The first 24 hexadecimal digits of SHA-256: socket directories and Claude manifest names.
+/// The first 24 hexadecimal digits of SHA-256: Claude manifest names.
 fn short_hash(bytes: &[u8]) -> String {
     let mut hex = sha256_hex(bytes);
     hex.truncate(24);
@@ -114,37 +112,27 @@ struct Inner {
 }
 
 impl AgentSetup {
-    /// Agent setup for the data directory `data_directory` (resolved like the server resolves
-    /// it). Nothing is created until a connection is made or restored.
-    ///
-    /// # Errors
-    /// When a relative data directory cannot be resolved.
+    /// Agent setup for the data directory `data`. Nothing is created until a connection is made
+    /// or restored.
+    #[must_use]
     pub fn new(
-        data_directory: &Path,
+        data: &DataDir,
         connection: ConnectionSource,
         directories: AgentDirectories,
-    ) -> Result<Self, AgentError> {
-        let data = data_directory_from(Some(data_directory.as_os_str()))?;
-        let directory = agent_connections_directory(&data);
-        // A short path stays within macOS's 103-byte socket path limit, whatever the home or
-        // data directory. The directory's owner and mode are checked before use.
-        let socket_directory = PathBuf::from(format!(
-            "/tmp/nonstopvibin-{}-{}",
-            rustix::process::getuid().as_raw(),
-            short_hash(data.as_os_str().as_bytes())
-        ));
-        Ok(Self {
+    ) -> Self {
+        let directory = data.agent_connections();
+        Self {
             inner: Arc::new(Inner {
                 pi_preferences: directory.join("pi-preferences"),
                 directory,
-                socket_path: socket_directory.join("agents.sock"),
-                socket_directory,
+                socket_path: data.credential_socket(),
+                socket_directory: data.socket_directory(),
                 directories,
                 connection,
                 busy: AtomicBool::new(false),
             }),
             server: Mutex::new(None),
-        })
+        }
     }
 
     /// `<data>/agent-connections`.
@@ -153,7 +141,7 @@ impl AgentSetup {
         &self.inner.directory
     }
 
-    /// `/tmp/nonstopvibin-<uid>-<24 hex of SHA-256 of the data directory>`.
+    /// [`DataDir::socket_directory`].
     #[must_use]
     pub fn socket_directory(&self) -> &Path {
         &self.inner.socket_directory

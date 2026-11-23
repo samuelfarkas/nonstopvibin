@@ -3,8 +3,5 @@
 #![cfg(test)]
 
 mod common;
-mod files;
-mod layout;
-mod lock;
 mod migration;
 mod store;

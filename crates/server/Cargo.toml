@@ -15,6 +15,7 @@ nsv-accounts.workspace = true
 nsv-agents.workspace = true
 nsv-core.workspace = true
 nsv-domain.workspace = true
+nsv-files.workspace = true
 nsv-gateway.workspace = true
 nsv-net.workspace = true
 nsv-shell.workspace = true

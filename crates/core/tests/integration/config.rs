@@ -8,7 +8,7 @@ use nsv_core::config::{CoreConfiguration, applied, write_config};
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::secret::{ApiKey, CoreKey, ManagementKey};
 use nsv_domain::wire::{ApiAccount, Profile};
-use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
+use nsv_files::DataDir;
 use nsv_store::{Store, StoreError, Vault};
 use nsv_testkit::TempDir;
 use serde_json::{Map, Value, json};
@@ -362,8 +362,9 @@ fn credentials_never_cross_endpoints_whose_urls_share_a_suffix() {
 }
 
 async fn open(directory: &std::path::Path) -> Store {
-    nsv_store::files::owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
-    Store::open(directory, Vault::open(directory).unwrap())
+    nsv_files::owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
+    let data = DataDir::new(directory);
+    Store::open(&data, Vault::open(&data).unwrap())
         .await
         .unwrap()
 }
@@ -404,7 +405,7 @@ async fn replays_the_golden_slugs_and_the_unknown_profile() {
         unknown["error"]
     );
     assert!(
-        !profile_directory(root.path(), &missing).exists(),
+        !DataDir::new(root.path()).profile(&missing).exists(),
         "nothing was created"
     );
     store.close().await;
@@ -430,12 +431,12 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     let config = write_config(&store, profile.id.clone(), 8317)
         .await
         .unwrap();
-    let path = core_config_path(root.path(), &profile.id);
-    let auth = credential_directory(root.path(), &profile.id);
+    let path = DataDir::new(root.path()).core_config(&profile.id);
+    let auth = DataDir::new(root.path()).credentials(&profile.id);
     assert_eq!(config.auth_dir, auth.to_str().unwrap());
     assert_eq!(mode(&path), 0o600);
     assert_eq!(mode(&auth), 0o700);
-    assert_eq!(mode(&profile_directory(root.path(), &profile.id)), 0o700);
+    assert_eq!(mode(&DataDir::new(root.path()).profile(&profile.id)), 0o700);
     let written = read_yaml(&fs::read_to_string(&path).unwrap());
     assert_eq!(written, Value::Object(config.to_json()));
     assert_eq!(written["port"], 8317);

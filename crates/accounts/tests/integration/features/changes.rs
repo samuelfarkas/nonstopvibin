@@ -306,7 +306,7 @@ async fn refresh_starts_a_kept_profile_first_and_checks_api_quota_even_when_it_c
     );
     world.cores.pool().stop(&profile).await.unwrap();
     // A config the core cannot be written for: the start fails, the API quota is still checked.
-    let blocker = nsv_store::layout::core_config_path(world.data(), &profile);
+    let blocker = nsv_files::DataDir::new(world.data()).core_config(&profile);
     std::fs::remove_file(&blocker).unwrap();
     std::fs::create_dir(&blocker).unwrap();
     let failed = world.cores.refresh(&profile).await.unwrap_err();

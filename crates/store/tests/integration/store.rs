@@ -12,11 +12,12 @@ use nsv_domain::registry::RetentionDays;
 use nsv_domain::secret::{ApiKey, ClientKey};
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{ApiAccount, Profile, UsageRecord};
+use nsv_files::DataDir;
 use nsv_store::{Db, Store, StoreError, UsageCursor, UsageRange, Vault, VaultError};
-use nsv_testkit::TempDir;
+use nsv_testkit::{TempDir, mode, set_mode};
 use serde_json::json;
 
-use crate::common::{mode, open, owner, raw, set_mode};
+use crate::common::{open, owner, raw};
 
 const DAY: Duration = Duration::from_hours(24);
 
@@ -69,7 +70,7 @@ async fn existing_databases_never_receive_a_replacement_vault_key() {
     let path = directory.join("vault.key");
     let original = fs::read(&path).unwrap();
     fs::remove_file(&path).unwrap();
-    let missing = Vault::open(directory).unwrap_err();
+    let missing = Vault::open(&DataDir::new(directory)).unwrap_err();
     assert!(matches!(missing, VaultError::MissingKey));
     assert_eq!(
         missing.to_string(),
@@ -85,9 +86,12 @@ async fn existing_databases_never_receive_a_replacement_vault_key() {
         .unwrap()
         .write_all(&original)
         .unwrap();
-    let store = Store::open(directory, Vault::open(directory).unwrap())
-        .await
-        .unwrap();
+    let store = Store::open(
+        &DataDir::new(directory),
+        Vault::open(&DataDir::new(directory)).unwrap(),
+    )
+    .await
+    .unwrap();
     let id = profile.id.clone();
     let reread = store.call(move |db| db.client_key(&id)).await.unwrap();
     assert_eq!(reread.expose_secret(), secret.expose_secret());
@@ -97,15 +101,15 @@ async fn existing_databases_never_receive_a_replacement_vault_key() {
 async fn vault_keys_must_be_32_bytes_and_are_kept_owner_only() {
     let temp = TempDir::new("vault-key");
     let directory = temp.path();
-    Vault::open(directory).unwrap();
+    Vault::open(&DataDir::new(directory)).unwrap();
     let path = directory.join("vault.key");
     assert_eq!(fs::read(&path).unwrap().len(), 32);
     assert_eq!(mode(&path), 0o600);
     set_mode(&path, 0o644);
-    Vault::open(directory).unwrap();
+    Vault::open(&DataDir::new(directory)).unwrap();
     assert_eq!(mode(&path), 0o600);
     fs::write(&path, [7_u8; 31]).unwrap();
-    let invalid = Vault::open(directory).unwrap_err();
+    let invalid = Vault::open(&DataDir::new(directory)).unwrap_err();
     assert!(matches!(invalid, VaultError::InvalidKey));
     assert_eq!(
         invalid.to_string(),
@@ -121,7 +125,7 @@ async fn vault_keys_are_refused_through_links_fifos_or_at_the_wrong_length() {
     let elsewhere = directory.join("elsewhere");
     fs::write(&elsewhere, [7_u8; 32]).unwrap();
     std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
-    let linked = Vault::open(directory).unwrap_err();
+    let linked = Vault::open(&DataDir::new(directory)).unwrap_err();
     assert!(matches!(linked, VaultError::UnsafeKey));
     assert_eq!(
         linked.to_string(),
@@ -136,14 +140,14 @@ async fn vault_keys_are_refused_through_links_fifos_or_at_the_wrong_length() {
         .unwrap();
     assert!(made.success());
     assert!(matches!(
-        Vault::open(directory).unwrap_err(),
+        Vault::open(&DataDir::new(directory)).unwrap_err(),
         VaultError::UnsafeKey
     ));
 
     fs::remove_file(&path).unwrap();
     fs::write(&path, [7_u8; 33]).unwrap();
     assert!(matches!(
-        Vault::open(directory).unwrap_err(),
+        Vault::open(&DataDir::new(directory)).unwrap_err(),
         VaultError::InvalidKey
     ));
 }
@@ -152,11 +156,14 @@ async fn vault_keys_are_refused_through_links_fifos_or_at_the_wrong_length() {
 async fn a_linked_database_is_refused() {
     let temp = TempDir::new("linked-database");
     let directory = temp.path();
-    let vault = Vault::open(directory).unwrap();
+    let vault = Vault::open(&DataDir::new(directory)).unwrap();
     let elsewhere = directory.join("elsewhere.sqlite");
     fs::write(&elsewhere, b"").unwrap();
     std::os::unix::fs::symlink(&elsewhere, directory.join("nonstopvibin.sqlite")).unwrap();
-    let refused = Store::open(directory, vault).await.err().unwrap();
+    let refused = Store::open(&DataDir::new(directory), vault)
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(refused, StoreError::UnsafeDatabase));
     assert_eq!(
         refused.to_string(),

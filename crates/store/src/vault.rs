@@ -14,11 +14,9 @@ use aes_gcm::{AeadInOut, Aes256Gcm, KeyInit};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use nsv_domain::random;
+use nsv_files::{DataDir, EntryKind, own_entry};
 use rustix::fs::{Mode, OFlags};
 use zeroize::Zeroizing;
-
-use crate::files::{EntryKind, own_entry};
-use crate::layout::{database_path, vault_key_path};
 
 const NONCE: usize = 12;
 const TAG: usize = 16;
@@ -66,11 +64,11 @@ impl Vault {
     /// [`VaultError::MissingKey`] for a database without its key, [`VaultError::UnsafeKey`] for
     /// a link, a non-regular file or another user's file, [`VaultError::InvalidKey`] for a key
     /// that is not 32 bytes, or a file-system error.
-    pub fn open(directory: &Path) -> Result<Self, VaultError> {
-        let path = vault_key_path(directory);
+    pub fn open(directory: &DataDir) -> Result<Self, VaultError> {
+        let path = directory.vault_key();
         let mut file = match open_key(&path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if database_path(directory).exists() {
+                if directory.database().exists() {
                     return Err(VaultError::MissingKey);
                 }
                 let key = Zeroizing::new(random::bytes::<32>()?);

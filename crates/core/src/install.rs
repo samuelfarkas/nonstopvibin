@@ -280,9 +280,9 @@ impl Staging {
     /// # Errors
     /// A file-system error.
     pub fn create(cores: &Path) -> io::Result<Self> {
-        nsv_store::files::owner_only_directory(cores, || Ok::<(), io::Error>(()))?;
+        nsv_files::owner_only_directory(cores, || Ok::<(), io::Error>(()))?;
         Ok(Self {
-            path: nsv_store::files::unique_directory(cores, ".staging-")?,
+            path: nsv_files::unique_directory(cores, ".staging-")?,
             cores: cores.to_owned(),
             committed: false,
         })

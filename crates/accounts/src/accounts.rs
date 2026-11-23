@@ -18,8 +18,8 @@ use nsv_domain::registry::{Provider, ProviderEntry, registry};
 use nsv_domain::sync::locked;
 use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
+use nsv_files::DataDir;
 use nsv_net::Method;
-use nsv_store::layout::credential_directory;
 use nsv_store::{Db, Store, StoreError};
 use serde_json::{Map, Value};
 
@@ -30,8 +30,12 @@ use crate::quota::QuotaSource;
 ///
 /// # Errors
 /// 400 "Unsupported credential filename." unless `name` is a `.json` name without a path.
-pub fn credential_path(data: &Path, profile: &ProfileId, name: &str) -> Result<PathBuf, AppError> {
-    credential_file(&credential_directory(data, profile), name)
+pub fn credential_path(
+    data: &DataDir,
+    profile: &ProfileId,
+    name: &str,
+) -> Result<PathBuf, AppError> {
+    credential_file(&data.credentials(profile), name)
 }
 
 #[expect(
@@ -165,7 +169,7 @@ impl Accounts {
                 (organizations && !truthy(file.get("runtime_only"))).then(|| name.to_owned())
             })
             .collect();
-        let directory = credential_directory(self.store.directory(), profile);
+        let directory = self.store.directory().credentials(profile);
         let known = self.with(profile, |state| std::mem::take(&mut state.claude));
         let limit = registry().limits.credential_file_bytes;
         let (identities, parsed, repaired) =
@@ -265,7 +269,7 @@ impl Accounts {
     ) -> Result<Vec<CredentialFile>, AppError> {
         let id = profile.clone();
         self.store.call(move |db| db.profile(&id)).await?;
-        let directory = credential_directory(self.store.directory(), profile);
+        let directory = self.store.directory().credentials(profile);
         let limit = registry().limits.credential_file_bytes;
         tokio::task::spawn_blocking(move || {
             let listing = match fs::read_dir(&directory) {

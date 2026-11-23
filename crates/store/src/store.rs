@@ -2,12 +2,12 @@
 //! callers await each closure's reply, so no async thread ever blocks on SQLite.
 
 use std::io;
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::InvalidId;
+use nsv_files::DataDir;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::db::{AuthSnapshot, Db};
@@ -52,7 +52,7 @@ enum Job {
 pub struct Store {
     jobs: mpsc::Sender<Job>,
     auth: watch::Receiver<Arc<AuthSnapshot>>,
-    directory: Arc<Path>,
+    directory: DataDir,
     vault: Vault,
 }
 
@@ -72,10 +72,10 @@ impl Store {
     ///
     /// # Errors
     /// A file-system or database error, or [`StoreError::Closed`] if the thread failed.
-    pub async fn open(directory: &Path, vault: Vault) -> Result<Self, StoreError> {
+    pub async fn open(directory: &DataDir, vault: Vault) -> Result<Self, StoreError> {
         let (opened, opening) = oneshot::channel();
         let (jobs, queue) = mpsc::channel(QUEUE);
-        let thread_directory = directory.to_path_buf();
+        let thread_directory = directory.clone();
         let thread_vault = vault.clone();
         thread::Builder::new()
             .name("nsv-store".to_owned())
@@ -84,7 +84,7 @@ impl Store {
         Ok(Self {
             jobs,
             auth,
-            directory: Arc::from(directory),
+            directory: directory.clone(),
             vault,
         })
     }
@@ -118,7 +118,7 @@ impl Store {
     }
 
     #[must_use]
-    pub fn directory(&self) -> &Path {
+    pub fn directory(&self) -> &DataDir {
         &self.directory
     }
 
@@ -141,7 +141,7 @@ impl Store {
 type Opened = Result<watch::Receiver<Arc<AuthSnapshot>>, StoreError>;
 
 fn serve(
-    directory: &Path,
+    directory: &DataDir,
     vault: Vault,
     opened: oneshot::Sender<Opened>,
     mut queue: mpsc::Receiver<Job>,

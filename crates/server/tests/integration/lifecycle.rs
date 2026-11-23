@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 use nsv_agents::AgentDirectories;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
+use nsv_files::DataDir;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, Timing, processes};
 use nsv_shell::ShellHost;
-use nsv_store::{ServerLock, Store, Vault};
+use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,11 +24,15 @@ fn pinned_core() -> PathBuf {
     Path::new(REPOSITORY).join(".vendor/core/cli-proxy-api")
 }
 
-/// A desktop-less daemon's options on `data`, serving the interface from `root/client`.
-fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Options<ModelsDev> {
-    nsv_store::files::owner_only_directory(data, || Ok::<(), std::io::Error>(())).unwrap();
-    Options {
-        directory: data.to_owned(),
+/// A desktop-less daemon on `data` and its options, serving the interface from `root/client`.
+struct Run {
+    data: DataDir,
+    options: Options<ModelsDev>,
+}
+
+fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Run {
+    nsv_files::owner_only_directory(data, || Ok::<(), std::io::Error>(())).unwrap();
+    let options = Options {
         port: 0,
         allow_hosts: Vec::new(),
         development: false,
@@ -44,6 +49,10 @@ fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Op
         fetch: ModelsDev::new(),
         clock: now,
         timing,
+    };
+    Run {
+        data: DataDir::new(data),
+        options,
     }
 }
 
@@ -56,19 +65,18 @@ fn core(binary: PathBuf, pinned: bool, allow_missing: bool) -> CoreOptions {
     }
 }
 
-async fn start(options: Options<ModelsDev>) -> Daemon<ModelsDev> {
-    let lock = ServerLock::acquire(&options.directory).unwrap();
-    let daemon = Daemon::start(options, lock).await.unwrap();
+async fn start(run: Run) -> Daemon<ModelsDev> {
+    let lock = run.data.lock().unwrap();
+    let daemon = Daemon::start(run.options, lock).await.unwrap();
     daemon.restore().await.unwrap();
     daemon
 }
 
 /// A start or restore that fails, closed as the CLI closes it: its message, once the data
 /// directory is free again.
-async fn refused(options: Options<ModelsDev>) -> String {
-    let data = options.directory.clone();
-    let lock = ServerLock::acquire(&data).unwrap();
-    let message = match Daemon::start(options, lock).await {
+async fn refused(run: Run) -> String {
+    let lock = run.data.lock().unwrap();
+    let message = match Daemon::start(run.options, lock).await {
         Err(error) => error.to_string(),
         Ok(daemon) => {
             let Err(error) = daemon.restore().await else {
@@ -78,7 +86,7 @@ async fn refused(options: Options<ModelsDev>) -> String {
             error.to_string()
         }
     };
-    ServerLock::acquire(&data).unwrap().release();
+    run.data.lock().unwrap().release();
     message
 }
 
@@ -139,7 +147,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
         core(pinned_core(), true, false),
         *TIMING,
     );
-    busy.port = port;
+    busy.options.port = port;
     let message = refused(busy).await;
     assert!(message.contains("already in use"), "{message}");
 
@@ -155,7 +163,8 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
     let (first, second) = tokio::join!(lenient.close(), lenient.close());
     first.unwrap();
     second.unwrap();
-    ServerLock::acquire(&root.path().join("lenient"))
+    DataDir::new(root.path().join("lenient"))
+        .lock()
         .unwrap()
         .release();
 }
@@ -262,7 +271,7 @@ async fn an_idle_core_stops_after_its_last_request_keeps_its_usage_and_starts_ag
     };
     let options = options(&root, &data, core(pinned_core(), true, false), timing);
     let upstream = provider().await;
-    let store = Store::open(&data, Vault::open(&data).unwrap())
+    let store = Store::open(&options.data, Vault::open(&options.data).unwrap())
         .await
         .unwrap();
     let (id, slug, key) = store

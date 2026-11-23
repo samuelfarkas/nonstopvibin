@@ -13,11 +13,10 @@ use nsv_core::install::Releases;
 use nsv_core::pool::Backend;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_files::DataDir;
 use nsv_net::{Loopback, NetError, Response};
 use nsv_server::{CoreOptions, Daemon, Options, TIMING};
 use nsv_shell::{HostEvent, ShellHost};
-use nsv_store::ServerLock;
-use nsv_store::layout::credential_directory;
 use nsv_testkit::fake::{Directory, FakeCores, response};
 use nsv_testkit::world::{
     ACCOUNT, ORGANIZATION_A, StubFetch, TestReleases, UPDATE, bundled_core, claude, release,
@@ -79,7 +78,7 @@ struct Running {
 async fn running(name: &str, feed: Option<&str>) -> Running {
     let root = TempDir::new(name);
     let data = root.path().join("data");
-    nsv_store::files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
+    nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
     let fake = FakeCores::default();
     let outside = Outside {
         fetch: Arc::new(StubFetch::new(|_| Ok(response(404, "{}")))),
@@ -87,7 +86,6 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
     };
     let backends_fake = fake.clone();
     let options = Options {
-        directory: data.clone(),
         port: 0,
         allow_hosts: Vec::new(),
         development: false,
@@ -105,14 +103,14 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
             opencode: None,
             pi: None,
         },
-        backends: Arc::new(move |data: &Path| -> Arc<dyn Backend> {
+        backends: Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
             Arc::new(Directory(backends_fake.clone(), data.to_owned()))
         }),
         fetch: outside.clone(),
         clock: now,
         timing: *TIMING,
     };
-    let lock = ServerLock::acquire(&data).unwrap();
+    let lock = DataDir::new(&data).lock().unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();
     daemon.restore().await.unwrap();
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
@@ -360,10 +358,8 @@ async fn imported_accounts_reconnect_change_and_go_away() {
         (&json!("ok"), &json!(seat)),
         "{confirmed}"
     );
-    let directory = credential_directory(
-        &app.root.path().join("data"),
-        &ProfileId::parse(&profile).unwrap(),
-    );
+    let directory = DataDir::new(app.root.path().join("data"))
+        .credentials(&ProfileId::parse(&profile).unwrap());
     let credential = std::fs::read_to_string(directory.join(&seat)).unwrap();
     assert!(
         credential.contains("synthetic-access-again"),

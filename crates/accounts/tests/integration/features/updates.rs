@@ -86,7 +86,7 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
         fake,
         ..
     } = world;
-    let data = store.directory().to_owned();
+    let data = store.directory().path().to_owned();
     store.close().await;
     let world = World::open(directory, &data, bundled.clone(), Some(FEED), *TIMING, fake).await;
     world.cores.launch().await.unwrap();

@@ -12,6 +12,7 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileSlug;
 use nsv_domain::registry::Agent;
 use nsv_domain::wire::{self, AgentSetupInput, Profile};
+use nsv_files::DataDir;
 use serde_json::{Value, json};
 
 use crate::common::{Broker, Scratch, directory, home_only, key, profile, read, run, setup};
@@ -755,14 +756,13 @@ async fn special_files_and_shared_roots_are_refused() {
     let shared = f.root.root.join("codex-shared");
     directory(&shared, 0o777);
     let custom = AgentSetup::new(
-        &f.root.root.join("other-data"),
+        &DataDir::new(f.root.root.join("other-data")),
         f.broker.source(),
         AgentDirectories {
             codex: Some(shared),
             ..home_only(&f.home)
         },
-    )
-    .unwrap();
+    );
     let input = Fixture::input(Agent::Codex, &f.project);
     assert_refused(
         custom

@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -17,14 +16,13 @@ use nsv_domain::registry::{RetentionDays, Strategy, registry};
 use nsv_domain::secret::{ApiKey, ClientKey, CoreKey, KeyDigest, ManagementKey};
 use nsv_domain::time::{epoch_ms, iso_string};
 use nsv_domain::wire::{Account, ApiAccount, Extra, Profile, Quota, UsageRecord};
+use nsv_files::{DataDir, EntryKind, own_entry, owner_only_directory};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Params, params};
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::files::{EntryKind, own_entry, owner_only_directory};
-use crate::layout::database_path;
 use crate::store::StoreError;
 use crate::vault::Vault;
 
@@ -145,11 +143,11 @@ pub struct Db {
 
 impl Db {
     pub(crate) fn open(
-        directory: &Path,
+        directory: &DataDir,
         vault: Vault,
     ) -> Result<(Self, watch::Receiver<Arc<AuthSnapshot>>), StoreError> {
-        owner_only_directory(directory, || Ok::<(), StoreError>(()))?;
-        let path = database_path(directory);
+        owner_only_directory(directory.path(), || Ok::<(), StoreError>(()))?;
+        let path = directory.database();
         // chmod and SQLite follow a symbolic link, so refuse one before either runs.
         match fs::symlink_metadata(&path) {
             Ok(status) if !own_entry(&status, EntryKind::File, 0) || status.nlink() != 1 => {
@@ -791,8 +789,9 @@ mod tests {
     fn a_failed_rollback_keeps_the_transaction_s_own_error() {
         let directory = std::env::temp_dir().join(format!("nsv-rollback-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
-        let vault = Vault::open(&directory).unwrap();
-        let (mut db, _auth) = Db::open(&directory, vault).unwrap();
+        let data = DataDir::new(directory.as_path());
+        let vault = Vault::open(&data).unwrap();
+        let (mut db, _auth) = Db::open(&data, vault).unwrap();
         let failed = db.transaction(|db| -> Result<(), StoreError> {
             // Ends the transaction, so the store's own ROLLBACK fails.
             db.connection.execute_batch("ROLLBACK")?;

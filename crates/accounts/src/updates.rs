@@ -26,9 +26,8 @@ use nsv_core::pool::{NoHooks, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::sync::locked;
 use nsv_domain::wire::{CorePhase, CoreState};
+use nsv_files::{DataDir, owner_only_directory, unique_directory};
 use nsv_store::Store;
-use nsv_store::files::{owner_only_directory, unique_directory};
-use nsv_store::layout::{cores_directory, oauth_pending_directory};
 use tokio::sync::watch;
 
 use crate::credentials::{Credentials, detached};
@@ -118,7 +117,7 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
         let app = Version::parse(env!("CARGO_PKG_VERSION"))
             .ok_or_else(|| AppError::new("The app version is not X.Y.Z.", 500))?;
         Ok(Self(Arc::new(Inner {
-            cores: cores_directory(store.directory()),
+            cores: store.directory().cores(),
             store,
             scheduler,
             sign_in,
@@ -416,17 +415,19 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
     /// Starts `binary` on a throwaway profile, as a sign-in sandbox does, and lists its models
     /// through its client key. Startup reaps and deletes what a crash leaves.
     async fn preflight(&self, binary: &Path, version: Version) -> Result<(), AppError> {
-        let parent = oauth_pending_directory(self.store.directory());
-        let directory = blocking(move || {
-            owner_only_directory(&parent, || Ok::<(), io::Error>(()))
-                .and_then(|()| unique_directory(&parent, "core-"))
-                .map_err(|error| io_error(&error))
-        })
-        .await?;
+        let parent = self.store.directory().oauth_pending();
+        let directory = DataDir::new(
+            blocking(move || {
+                owner_only_directory(&parent, || Ok::<(), io::Error>(()))
+                    .and_then(|()| unique_directory(&parent, "core-"))
+                    .map_err(|error| io_error(&error))
+            })
+            .await?,
+        );
         let sandbox = match Store::open(&directory, self.store.vault().clone()).await {
             Ok(sandbox) => sandbox,
             Err(error) => {
-                remove(directory).await?;
+                remove(directory.path().to_owned()).await?;
                 return Err(error.into());
             }
         };
@@ -449,7 +450,7 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
             .await;
         let stopped = pool.shutdown().await;
         sandbox.close().await;
-        let removed = remove(directory).await;
+        let removed = remove(directory.path().to_owned()).await;
         match checked {
             Err(error) if *self.closing.borrow() => Err(error),
             Err(error) => Err(AppError::new(

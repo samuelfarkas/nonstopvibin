@@ -12,11 +12,12 @@ use std::time::Duration;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{Account, ApiAccount};
+use nsv_files::DataDir;
 use nsv_store::{Store, Vault};
 use serde_json::json;
 
 use crate::TempDir;
-use crate::fake::FakeCores;
+use crate::fake::{Directory, FakeCores};
 
 pub struct Paused {
     _root: TempDir,
@@ -46,8 +47,9 @@ impl Paused {
         });
         let root = TempDir::new("world");
         let data = root.path().join("data");
-        nsv_store::files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
-        let store = Store::open(&data, Vault::open(&data).unwrap())
+        nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
+        let directory = DataDir::new(&data);
+        let store = Store::open(&directory, Vault::open(&directory).unwrap())
             .await
             .unwrap();
         let binary = root.path().join("cli-proxy-api");
@@ -60,6 +62,12 @@ impl Paused {
             fake: FakeCores::default(),
             hold,
         }
+    }
+
+    /// The fake cores of this store's data directory.
+    #[must_use]
+    pub fn backend(&self) -> Directory {
+        Directory(self.fake.clone(), self.store.directory().clone())
     }
 
     /// A profile; `enabled` as a run that started it left it, with an API-key account and an

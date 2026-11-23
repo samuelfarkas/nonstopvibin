@@ -23,8 +23,8 @@ use nsv_core::install::Releases;
 use nsv_core::pool::Backend;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_files::{DataDir, owner_only_directory};
 use nsv_net::{Loopback, NetError, Response};
-use nsv_store::files::owner_only_directory;
 use nsv_store::{Store, Vault};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, Semaphore};
@@ -34,7 +34,8 @@ use crate::fake::{Directory, FakeCores, response};
 
 pub async fn open_store(directory: &Path) -> Store {
     owner_only_directory(directory, || Ok::<(), std::io::Error>(())).unwrap();
-    Store::open(directory, Vault::open(directory).unwrap())
+    let data = DataDir::new(directory);
+    Store::open(&data, Vault::open(&data).unwrap())
         .await
         .unwrap()
 }
@@ -274,8 +275,8 @@ impl World {
             Cores::new(CoresOptions {
                 store: store.clone(),
                 binary: bundled.clone(),
-                backends: Arc::new(move |data: &Path| -> Arc<dyn Backend> {
-                    Arc::new(Directory(backends_fake.clone(), data.to_owned()))
+                backends: Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
+                    Arc::new(Directory(backends_fake.clone(), data.clone()))
                 }),
                 ready: Duration::from_secs(5),
                 timing,
@@ -311,7 +312,7 @@ impl World {
 
     #[must_use]
     pub fn data(&self) -> &Path {
-        self.store.directory()
+        self.store.directory().path()
     }
 
     /// The names under `oauth-pending/`.
@@ -322,7 +323,7 @@ impl World {
 
     #[must_use]
     pub fn credential_file(&self, profile: &ProfileId, name: &str) -> PathBuf {
-        nsv_store::layout::credential_directory(self.data(), profile).join(name)
+        self.store.directory().credentials(profile).join(name)
     }
 }
 

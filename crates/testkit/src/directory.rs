@@ -4,7 +4,8 @@
     reason = "test support: a panic fails the test that called it, and is its report"
 )]
 
-use std::fs;
+use std::fs::{self, Permissions};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -37,4 +38,14 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// The permission bits of `path`, not following a symbolic link.
+#[must_use]
+pub fn mode(path: &Path) -> u32 {
+    fs::symlink_metadata(path).unwrap().mode() & 0o777
+}
+
+pub fn set_mode(path: &Path, mode: u32) {
+    fs::set_permissions(path, Permissions::from_mode(mode)).unwrap();
 }

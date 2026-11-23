@@ -12,8 +12,7 @@ use nsv_domain::js;
 use nsv_domain::registry::{Protocol, Provider, Strategy, registry};
 use nsv_domain::secret::{ApiKey, CoreKey, ManagementKey};
 use nsv_domain::wire::{ApiAccount, Profile};
-use nsv_store::files::owner_only_directory;
-use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
+use nsv_files::owner_only_directory;
 use nsv_store::{Store, StoreError};
 use rustix::fs::{Mode, OFlags};
 use serde::Serialize;
@@ -275,14 +274,12 @@ pub async fn write_config(
     profile: ProfileId,
     port: u16,
 ) -> Result<CoreConfiguration, StoreError> {
-    let directory = store.directory().to_owned();
+    let directory = store.directory().clone();
     store
         .call(move |db| {
             let record = db.profile(&profile)?;
-            let auth = credential_directory(&directory, &profile);
-            owner_only_directory(&profile_directory(&directory, &profile), || {
-                Ok::<(), StoreError>(())
-            })?;
+            let auth = directory.credentials(&profile);
+            owner_only_directory(&directory.profile(&profile), || Ok::<(), StoreError>(()))?;
             owner_only_directory(&auth, || Ok::<(), StoreError>(()))?;
             let auth_dir = auth
                 .to_str()
@@ -299,7 +296,7 @@ pub async fn write_config(
                 db.api_key(id)
             })?;
             write_in_place(
-                &core_config_path(&directory, &profile),
+                &directory.core_config(&profile),
                 config.to_yaml().as_bytes(),
             )?;
             Ok(config)

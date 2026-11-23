@@ -172,8 +172,8 @@ pub enum ToHelper {
         view: View,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bounds: Option<Rect>,
-        /// The data directory; Linux keeps the webview's storage in `<it>/webview`.
-        data_directory: PathBuf,
+        /// The data directory's webview storage, which Linux keeps for the owner only.
+        webview: PathBuf,
         /// The app can update itself: the macOS app menu enables "Check for updates…".
         updates: bool,
     },
@@ -296,12 +296,12 @@ mod tests {
                         profile: Some(profile.clone()),
                     },
                     bounds: None,
-                    data_directory: PathBuf::from("/data"),
+                    webview: PathBuf::from("/data/webview"),
                     updates: true,
                 }),
                 json!({"type": "Start", "origin": "http://127.0.0.1:4100",
                        "view": {"window": "main", "profile": profile.as_str()},
-                       "dataDirectory": "/data", "updates": true}),
+                       "webview": "/data/webview", "updates": true}),
             ),
             (
                 wire(&ToHelper::Show {
@@ -427,7 +427,7 @@ mod tests {
         for line in [
             r#"{"type":"Show","view":{"window":"dialog","kind":"custom","text":"hi"}}"#,
             r#"{"type":"Show","view":{"window":"main","profile":"not-a-uuid"}}"#,
-            r#"{"type":"Start","origin":"https://example.com","view":{"window":"main"},"dataDirectory":"/d"}"#,
+            r#"{"type":"Start","origin":"https://example.com","view":{"window":"main"},"webview":"/d/webview","updates":false}"#,
             r#"{"type":"Eval","script":"alert(1)"}"#,
             r#"{"type":"Alert","failure":"custom","reason":"hi"}"#,
         ] {

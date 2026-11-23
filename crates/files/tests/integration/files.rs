@@ -2,10 +2,8 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
 
-use nsv_store::files::{EntryKind, own_entry, owner_only_directory, read_own_file, write_atomic};
-use nsv_testkit::TempDir;
-
-use crate::common::{mode, set_mode};
+use nsv_files::{EntryKind, own_entry, owner_only_directory, read_own_file, write_atomic};
+use nsv_testkit::{TempDir, mode, set_mode};
 
 #[derive(Debug)]
 enum ReadError {

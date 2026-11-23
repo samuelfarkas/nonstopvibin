@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsv_accounts::accounts::credential_path;
 use nsv_accounts::usage::parse_page;
 use nsv_domain::id::ProfileId;
-use nsv_store::layout::credential_directory;
+use nsv_files::DataDir;
 use serde_json::{Value, json};
 
 use super::common::{World, short};
@@ -133,7 +133,7 @@ async fn usage_queue_pages_are_stored_as_the_typescript_server_stored_them() {
 fn credential_paths_match_the_recorded_cases() {
     let cases = cases("accounts.json");
     let mut replayed = 0;
-    let data = std::path::Path::new("/data");
+    let data = &DataDir::new("/data");
     let profile = ProfileId::parse("00000000-0000-4000-8000-000000000001").unwrap();
     for case in named(&cases, "credentialPath ") {
         let name = case["name"].as_str().unwrap();
@@ -171,7 +171,7 @@ async fn account_lists_are_synced_as_the_typescript_server_synced_them() {
         .run(world.pool().start(&profile, false))
         .await
         .unwrap();
-    let auth = credential_directory(&world.data, &profile);
+    let auth = DataDir::new(&world.data).credentials(&profile);
     for (name, content) in listing["input"]["credentialFiles"].as_object().unwrap() {
         let path = auth.join(name);
         fs::write(&path, content.as_str().unwrap()).unwrap();

@@ -1,11 +1,8 @@
 use std::fs;
 use std::os::unix::fs::{MetadataExt, symlink};
 
-use nsv_store::layout::server_lock_path;
-use nsv_store::{LockError, ServerLock};
-use nsv_testkit::TempDir;
-
-use crate::common::{mode, set_mode};
+use nsv_files::{DataDir, LockError};
+use nsv_testkit::{TempDir, mode, set_mode};
 
 #[test]
 fn one_owner_holds_a_directory_until_it_releases_and_the_inode_survives() {
@@ -14,14 +11,14 @@ fn one_owner_holds_a_directory_until_it_releases_and_the_inode_survives() {
     fs::create_dir(&directory).unwrap();
     set_mode(&directory, 0o755);
 
-    let lock = ServerLock::acquire(&directory).unwrap();
-    let path = server_lock_path(&directory);
+    let lock = DataDir::new(&directory).lock().unwrap();
+    let path = DataDir::new(&directory).server_lock();
     assert_eq!(mode(&directory), 0o700);
     assert_eq!(mode(&path), 0o600);
     let inode = fs::metadata(&path).unwrap().ino();
 
     let canonical = fs::canonicalize(&directory).unwrap();
-    match ServerLock::acquire(&directory) {
+    match DataDir::new(&directory).lock() {
         Err(error @ LockError::Occupied(_)) => assert_eq!(
             error.to_string(),
             format!(
@@ -33,7 +30,7 @@ fn one_owner_holds_a_directory_until_it_releases_and_the_inode_survives() {
     }
 
     lock.release();
-    let successor = ServerLock::acquire(&directory).unwrap();
+    let successor = DataDir::new(&directory).lock().unwrap();
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
     drop(successor);
     assert!(path.exists(), "the lock file is never unlinked");
@@ -43,7 +40,7 @@ fn one_owner_holds_a_directory_until_it_releases_and_the_inode_survives() {
 fn another_process_writer_occupies_the_directory_but_a_reader_does_not() {
     let temp = TempDir::new("lock-contention");
     let directory = temp.path();
-    let path = server_lock_path(directory);
+    let path = DataDir::new(directory).server_lock();
     fs::write(&path, "").unwrap();
     set_mode(&path, 0o600);
 
@@ -52,29 +49,29 @@ fn another_process_writer_occupies_the_directory_but_a_reader_does_not() {
     reader
         .execute_batch("BEGIN; SELECT name FROM sqlite_master")
         .unwrap();
-    let lock = ServerLock::acquire(directory).unwrap();
+    let lock = DataDir::new(directory).lock().unwrap();
     drop(lock);
     drop(reader);
 
     let writer = rusqlite::Connection::open(&path).unwrap();
     writer.execute_batch("BEGIN IMMEDIATE").unwrap();
     assert!(matches!(
-        ServerLock::acquire(directory),
+        DataDir::new(directory).lock(),
         Err(LockError::Occupied(_))
     ));
     drop(writer);
-    ServerLock::acquire(directory).unwrap();
+    DataDir::new(directory).lock().unwrap();
 }
 
 #[test]
 fn unsafe_lock_files_and_directories_are_refused_unchanged() {
     let temp = TempDir::new("lock-unsafe");
     let directory = temp.path().join("data");
-    ServerLock::acquire(&directory).unwrap().release();
-    let path = server_lock_path(&directory);
+    DataDir::new(&directory).lock().unwrap().release();
+    let path = DataDir::new(&directory).server_lock();
 
     set_mode(&path, 0o644);
-    let refused = ServerLock::acquire(&directory).unwrap_err();
+    let refused = DataDir::new(&directory).lock().unwrap_err();
     assert!(matches!(refused, LockError::UnsafeLockFile));
     assert_eq!(
         refused.to_string(),
@@ -85,14 +82,14 @@ fn unsafe_lock_files_and_directories_are_refused_unchanged() {
     fs::remove_file(&path).unwrap();
     symlink(directory.join("unexpected"), &path).unwrap();
     assert!(matches!(
-        ServerLock::acquire(&directory),
+        DataDir::new(&directory).lock(),
         Err(LockError::UnsafeLockFile)
     ));
     assert!(fs::symlink_metadata(&path).unwrap().is_symlink());
 
     let linked = temp.path().join("linked");
     symlink(&directory, &linked).unwrap();
-    let refused = ServerLock::acquire(&linked).unwrap_err();
+    let refused = DataDir::new(&linked).lock().unwrap_err();
     assert!(matches!(refused, LockError::UnsafeDirectory));
     assert_eq!(
         refused.to_string(),

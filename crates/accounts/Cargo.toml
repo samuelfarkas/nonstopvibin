@@ -13,6 +13,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["server"] }
 hyper-util = { workspace = true, features = ["server"] }
 nsv-domain.workspace = true
+nsv-files.workspace = true
 nsv-store.workspace = true
 nsv-net.workspace = true
 nsv-core.workspace = true

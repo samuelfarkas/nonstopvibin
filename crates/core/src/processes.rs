@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::js::utf16_len;
-use nsv_store::layout::{core_arguments, core_ledger_directory, profile_directory};
+use nsv_files::{DataDir, read_own_file};
 use rustix::process::{Pid, Signal};
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
@@ -124,11 +124,11 @@ async fn process_identity(ps: OsString, pid: u32) -> io::Result<Option<String>> 
 /// Whether `identity` is a core started with a profile config inside `directory`: its command
 /// ends in ` --config <directory>/profiles/<uuid>/config.yaml`. `lstart` is fixed-width in the
 /// C locale, so the command starts after 24 characters.
-fn core_of(directory: &Path, identity: &str) -> bool {
+fn core_of(directory: &DataDir, identity: &str) -> bool {
     let Some(command) = identity.get(24..).map(str::trim_start) else {
         return false;
     };
-    let Some(profiles) = directory.join("profiles").to_str().map(str::to_owned) else {
+    let Some(profiles) = directory.profiles().to_str().map(str::to_owned) else {
         return false;
     };
     let prefix = format!(" --config {profiles}/");
@@ -166,22 +166,27 @@ pub struct CoreProcess {
     watchdog: Result<Child, io::Error>,
 }
 
+/// The core's arguments; reaping orphaned cores recognises them by this command line.
+#[must_use]
+pub fn core_arguments(data: &DataDir, profile: &ProfileId) -> [OsString; 2] {
+    [
+        OsString::from("--config"),
+        data.core_config(profile).into_os_string(),
+    ]
+}
+
 /// Starts `binary` as `profile`'s core in its profile directory with the config arguments,
 /// a minimal environment and no standard streams, then its watchdog. Without `/bin/sh` the
 /// core still runs and only the ledger guards it; [`CoreProcess::watchdog`] says why.
 ///
 /// # Errors
 /// The core could not be started.
-pub fn spawn_core(
-    binary: &Path,
-    data_directory: &Path,
-    profile: &ProfileId,
-) -> io::Result<CoreProcess> {
-    let arguments = core_arguments(data_directory, profile);
+pub fn spawn_core(binary: &Path, data: &DataDir, profile: &ProfileId) -> io::Result<CoreProcess> {
+    let arguments = core_arguments(data, profile);
     let mut command = Command::new(binary);
     command
         .args(&arguments)
-        .current_dir(profile_directory(data_directory, profile))
+        .current_dir(data.profile(profile))
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -311,7 +316,7 @@ enum OwnerLookup {
 /// next instance to reap after a crash.
 #[derive(Debug)]
 pub struct Ledger<I: Identify = Ps> {
-    directory: PathBuf,
+    directory: DataDir,
     identify: I,
     /// This process's identity, once determined; a failed or empty lookup is retried.
     owner: OnceCell<String>,
@@ -319,9 +324,9 @@ pub struct Ledger<I: Identify = Ps> {
 
 impl<I: Identify> Ledger<I> {
     #[must_use]
-    pub fn new(data_directory: &Path, identify: I) -> Self {
+    pub fn new(data: &DataDir, identify: I) -> Self {
         Self {
-            directory: data_directory.to_owned(),
+            directory: data.clone(),
             identify,
             owner: OnceCell::new(),
         }
@@ -354,7 +359,7 @@ impl<I: Identify> Ledger<I> {
         if !core_of(&self.directory, &identity) || core.exited()? {
             return Ok(None);
         }
-        let ledger = core_ledger_directory(&self.directory);
+        let ledger = self.directory.core_ledger();
         DirBuilder::new()
             .recursive(true)
             .mode(0o700)
@@ -385,7 +390,7 @@ impl<I: Identify> Ledger<I> {
     /// # Errors
     /// A malformed entry could not be removed.
     pub async fn reap_orphans(&self) -> io::Result<()> {
-        let ledger = core_ledger_directory(&self.directory);
+        let ledger = self.directory.core_ledger();
         let Ok(listing) = fs::read_dir(&ledger) else {
             return Ok(());
         };
@@ -394,7 +399,7 @@ impl<I: Identify> Ledger<I> {
             .collect();
         for name in names {
             let path = ledger.join(&name);
-            let entry = nsv_store::files::read_own_file(&path, 0, 64 * 1024, || {
+            let entry = read_own_file(&path, 0, 64 * 1024, || {
                 io::Error::other("not a ledger entry")
             })
             .ok()
@@ -468,7 +473,7 @@ mod tests {
 
     #[test]
     fn a_core_of_a_directory_is_recognised_by_its_command_line_suffix() {
-        let data = Path::new("/home/u/.nonstopvibin");
+        let data = &DataDir::new("/home/u/.nonstopvibin");
         let id = "0b5a4f3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
         let start = "Thu Jan  1 00:00:00 1970";
         let identity = |command: &str| format!("{start}     {command}");
@@ -476,7 +481,7 @@ mod tests {
             data,
             &identity(&format!(
                 "/app/cli-proxy-api --config {}/profiles/{id}/config.yaml",
-                data.display()
+                data.path().display()
             ))
         ));
         for refused in [
@@ -484,16 +489,19 @@ mod tests {
             format!("/app/cli-proxy-api --config /other/profiles/{id}/config.yaml"),
             format!(
                 "/app/cli-proxy-api --config {}/profiles/not-a-uuid/config.yaml",
-                data.display()
+                data.path().display()
             ),
             format!(
                 "/app/cli-proxy-api --config {}/profiles/{id}/config.yaml --x",
-                data.display()
+                data.path().display()
             ),
-            format!("--config {}/profiles/{id}/config.yaml", data.display()),
+            format!(
+                "--config {}/profiles/{id}/config.yaml",
+                data.path().display()
+            ),
             format!(
                 "/app/cli-proxy-api --config {}/profiles/{}/config.yaml",
-                data.display(),
+                data.path().display(),
                 id.to_uppercase()
             ),
         ] {

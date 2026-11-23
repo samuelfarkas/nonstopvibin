@@ -12,11 +12,10 @@ mod shell;
 mod tray;
 mod update;
 
-use std::path::Path;
-
 use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
+use nsv_files::DataDir;
 use tokio::sync::{broadcast, watch};
 
 pub use helper::{alert, beside_executable as helper_beside_executable};
@@ -31,7 +30,7 @@ pub trait ShellHost {
     fn origin(&self) -> &Origin;
     /// The session token the helper hands the UI; never in argv, the environment or a URL.
     fn session_token(&self) -> &SessionToken;
-    fn data_directory(&self) -> &Path;
+    fn data_directory(&self) -> &DataDir;
     /// The running profiles' names and whether any request streams. The tray redraws on each
     /// change that alters its icon or tooltip; it never polls.
     fn tray_status(&self) -> watch::Receiver<TrayStatus>;

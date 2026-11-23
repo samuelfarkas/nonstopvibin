@@ -3,12 +3,10 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use nsv_domain::endpoint::LOOPBACK_HOST;
-use nsv_store::files::read_own_file;
-use nsv_store::layout::session_path;
+use nsv_files::{DataDir, read_own_file};
 use serde::Deserialize;
 
 /// How long a second launch waits for a daemon that holds the lock but is still starting.
@@ -40,8 +38,8 @@ struct Session {
 ///
 /// # Errors
 /// When `server.json` is unsafe or does not appear, or the daemon does not answer 2xx.
-pub fn show_running(data_directory: &Path) -> Result<(), ShowError> {
-    let path = session_path(data_directory);
+pub fn show_running(data_directory: &DataDir) -> Result<(), ShowError> {
+    let path = data_directory.session();
     let deadline = Instant::now() + STARTING;
     let session = loop {
         let text = read_own_file(&path, 0o077, 64 * 1024, || ShowError::UnsafeSession)?;
@@ -94,7 +92,7 @@ mod tests {
     use std::fs;
     use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::thread;
 
     fn directory(name: &str) -> PathBuf {
@@ -140,7 +138,7 @@ mod tests {
         let data = directory("show");
         let (port, served) = daemon("204 No Content");
         write_session(&data, port, 0o600);
-        show_running(&data).unwrap();
+        show_running(&DataDir::new(&data)).unwrap();
         let request = served.join().unwrap();
         assert!(
             request.starts_with("POST /api/desktop/show HTTP/1.1\r\n"),
@@ -156,11 +154,14 @@ mod tests {
         let data = directory("refused");
         let (port, served) = daemon("401 Unauthorized");
         write_session(&data, port, 0o600);
-        assert!(matches!(show_running(&data), Err(ShowError::NoAnswer(_))));
+        assert!(matches!(
+            show_running(&DataDir::new(&data)),
+            Err(ShowError::NoAnswer(_))
+        ));
         served.join().unwrap();
         write_session(&data, port, 0o644);
         assert_eq!(
-            show_running(&data).unwrap_err().to_string(),
+            show_running(&DataDir::new(&data)).unwrap_err().to_string(),
             "server.json must be an owner-only ordinary file you own (chmod 600)."
         );
         fs::remove_dir_all(data).unwrap();

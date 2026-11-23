@@ -25,8 +25,8 @@ use std::time::{Duration, SystemTime};
 use nsv_core::pool::{Backend, BoxFuture, Call, CoreHandle};
 use nsv_core::processes::KILL_GRACE;
 use nsv_domain::id::ProfileId;
+use nsv_files::DataDir;
 use nsv_net::{HeaderMap, Method, NetError, Response, StatusCode};
-use nsv_store::layout::core_config_path;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
@@ -386,10 +386,10 @@ impl FakeCores {
     fn launch_core(
         &self,
         binary: &Path,
-        data: &Path,
+        data: &DataDir,
         profile: &ProfileId,
     ) -> io::Result<Arc<Core>> {
-        let config = core_config_path(data, profile);
+        let config = data.core_config(profile);
         let text = std::fs::read_to_string(&config)?;
         // An executable whose bytes say so cannot start.
         if std::fs::read(binary).is_ok_and(|bytes| bytes.starts_with(b"broken")) {
@@ -416,7 +416,7 @@ impl FakeCores {
             profile: profile.clone(),
             port: u16::try_from(settings["port"].as_u64().unwrap()).unwrap(),
             index: cores.launched.len(),
-            data: data.to_owned(),
+            data: data.path().to_owned(),
             binary: binary.to_owned(),
             launched: Instant::now(),
             terms: AtomicUsize::new(0),
@@ -779,45 +779,28 @@ fn scalar(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned()))
 }
 
-impl Backend for FakeCores {
-    fn launch(
-        &self,
-        binary: &Path,
-        data: &Path,
-        profile: &ProfileId,
-    ) -> io::Result<Box<dyn CoreHandle>> {
-        Ok(Box::new(Handle(self.launch_core(binary, data, profile)?)))
+/// The backend of one data directory, recording its reaping.
+pub struct Directory(pub FakeCores, pub DataDir);
+
+impl Backend for Directory {
+    fn launch(&self, binary: &Path, profile: &ProfileId) -> io::Result<Box<dyn CoreHandle>> {
+        Ok(Box::new(Handle(
+            self.0.launch_core(binary, &self.1, profile)?,
+        )))
     }
 
     fn send(&self, call: Call) -> BoxFuture<'static, Result<Response, NetError>> {
-        let fake = self.clone();
+        let fake = self.0.clone();
         Box::pin(async move { fake.answer(call).await })
     }
 
     fn reap_orphans(&self) -> BoxFuture<'_, io::Result<()>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
-/// The backend of one data directory, recording its reaping.
-pub struct Directory(pub FakeCores, pub PathBuf);
-
-impl Backend for Directory {
-    fn launch(
-        &self,
-        binary: &Path,
-        data: &Path,
-        profile: &ProfileId,
-    ) -> io::Result<Box<dyn CoreHandle>> {
-        self.0.launch(binary, data, profile)
-    }
-
-    fn send(&self, call: Call) -> BoxFuture<'static, Result<Response, NetError>> {
-        self.0.send(call)
-    }
-
-    fn reap_orphans(&self) -> BoxFuture<'_, io::Result<()>> {
-        self.0.0.lock().unwrap().reaped.push(self.1.clone());
+        self.0
+            .0
+            .lock()
+            .unwrap()
+            .reaped
+            .push(self.1.path().to_owned());
         Box::pin(async { Ok(()) })
     }
 }

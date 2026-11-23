@@ -43,7 +43,7 @@ impl World {
         let pool = Pool::new(
             paused.store.clone(),
             paused.binary.clone(),
-            Arc::new(paused.fake.clone()),
+            Arc::new(paused.backend()),
             ready,
             Arc::new(Drain),
         );
@@ -546,7 +546,7 @@ async fn a_confirmation_outstanding_while_a_swap_replaces_the_core_leaves_the_su
     let (configured, successor) = world.run(test).await;
     configured.unwrap();
     let config =
-        std::fs::read_to_string(nsv_store::layout::core_config_path(&world.data, &profile))
+        std::fs::read_to_string(nsv_files::DataDir::new(&world.data).core_config(&profile))
             .unwrap();
     assert!(
         config

@@ -1005,7 +1005,7 @@ async fn a_queued_history_runs_its_own_read_after_the_one_ahead_fails() {
     let catalog = Arc::new(ModelCatalog::new(Arc::clone(&fetch), fixed));
     let prices = Arc::new(UsagePrices::new(Arc::clone(&fetch), fixed));
     add(&store, vec![fixture_record(&owner, "fixture")]).await;
-    let database = nsv_store::layout::database_path(directory.path());
+    let database = nsv_files::DataDir::new(directory.path()).database();
     let rename = move |from: &str, to: &str| {
         rusqlite::Connection::open(&database)
             .unwrap()

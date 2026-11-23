@@ -5,9 +5,10 @@
 use nsv_agents::AgentDirectories;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
+use nsv_files::DataDir;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
 use nsv_shell::{HostEvent, ShellHost};
-use nsv_store::{ServerLock, Store, Vault};
+use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
 use serde_json::json;
 
@@ -16,8 +17,9 @@ use crate::common::{ModelsDev, now, send};
 /// A fresh data directory with one enabled API-key profile, which sleeps until a request.
 async fn seeded(root: &TempDir) -> std::path::PathBuf {
     let data = root.path().join("data");
-    nsv_store::files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
-    let store = Store::open(&data, Vault::open(&data).unwrap())
+    nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
+    let directory = DataDir::new(&data);
+    let store = Store::open(&directory, Vault::open(&directory).unwrap())
         .await
         .unwrap();
     store
@@ -41,7 +43,6 @@ async fn seeded(root: &TempDir) -> std::path::PathBuf {
 async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
     let data = seeded(root).await;
     let options = Options {
-        directory: data.clone(),
         port: 0,
         allow_hosts: Vec::new(),
         development: false,
@@ -64,7 +65,7 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
         clock: now,
         timing: *TIMING,
     };
-    let lock = ServerLock::acquire(&data).unwrap();
+    let lock = DataDir::new(&data).lock().unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();
     daemon.restore().await.unwrap();
     daemon
@@ -184,7 +185,8 @@ async fn the_headless_server_has_no_desktop_route() {
     daemon.close().await.unwrap();
     // Closing removed server.json and freed the directory.
     assert!(!root.path().join("data/server.json").exists());
-    ServerLock::acquire(&root.path().join("data"))
+    DataDir::new(root.path().join("data"))
+        .lock()
         .unwrap()
         .release();
 }

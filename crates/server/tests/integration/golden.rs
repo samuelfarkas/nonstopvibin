@@ -9,12 +9,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use nsv_agents::{AgentDirectories, AgentSetup};
+use nsv_agents::AgentDirectories;
+use nsv_files::DataDir;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
-use nsv_store::ServerLock;
 use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 
@@ -233,7 +232,6 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
         pi: None,
     };
     let options = Options {
-        directory: data.clone(),
         port: PORT,
         allow_hosts: Vec::new(),
         development: false,
@@ -245,25 +243,21 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
             feed: None,
             allow_missing: true,
         },
-        agents: agents.clone(),
+        agents,
         backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,
         timing: *TIMING,
     };
-    let lock = ServerLock::acquire(&data).unwrap();
-    let daemon = Daemon::start(options, lock).await.unwrap();
+    let data = DataDir::new(&data);
+    let daemon = Daemon::start(options, data.lock().unwrap()).await.unwrap();
     daemon.restore().await.unwrap();
-    let refuse = |_: &_| Err(nsv_domain::error::AppError::new("unused", 500));
-    let socket = AgentSetup::new(&data, Arc::new(refuse), agents)
-        .unwrap()
-        .socket_directory()
-        .to_path_buf();
+    let socket = data.socket_directory();
     let mut placeholders = Placeholders::default();
     let session = daemon.session().unwrap();
     placeholders.add(session.token.expose_secret(), "<token>");
     placeholders.add(socket.to_string_lossy(), "<socket-dir>");
-    placeholders.add(data.to_string_lossy(), "<data>");
+    placeholders.add(data.path().to_string_lossy(), "<data>");
     placeholders.add(agent_home.to_string_lossy(), "<agent-home>");
     placeholders.add(root.to_string_lossy(), "<root>");
     (daemon, placeholders)

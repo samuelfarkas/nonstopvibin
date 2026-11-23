@@ -26,23 +26,23 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use nsv_core::processes::{CoreProcess, Identify, KILL_GRACE, Ledger, Ps, forget, spawn_core};
-use nsv_domain::id::ProfileId;
-use nsv_store::layout::{
-    core_arguments, core_config_path, core_ledger_directory, profile_directory,
+use nsv_core::processes::{
+    CoreProcess, Identify, KILL_GRACE, Ledger, Ps, core_arguments, forget, spawn_core,
 };
+use nsv_domain::id::ProfileId;
+use nsv_files::DataDir;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("--config") => fake_core(Path::new(&args[2])),
         Some("spawn") => spawn_one(
-            Path::new(&args[2]),
+            &DataDir::new(&args[2]),
             Path::new(&args[3]),
             Path::new(&args[4]),
         ),
         Some("owner") => owner(
-            Path::new(&args[2]),
+            &DataDir::new(&args[2]),
             args[3].parse().unwrap(),
             Path::new(&args[4]),
         ),
@@ -81,14 +81,14 @@ fn profile(index: usize) -> ProfileId {
 }
 
 /// The profile directory and a config a fake core can read.
-fn prepare(data: &Path, profile: &ProfileId, config: &str) {
-    fs::create_dir_all(profile_directory(data, profile)).unwrap();
-    fs::write(core_config_path(data, profile), config).unwrap();
+fn prepare(data: &DataDir, profile: &ProfileId, config: &str) {
+    fs::create_dir_all(data.profile(profile)).unwrap();
+    fs::write(data.core_config(profile), config).unwrap();
 }
 
 /// Starts `count` fake cores, records each, prints `core <pid> <watchdog>` lines and
 /// `self <pid> <identity>`, then waits to be killed with its cores still owned.
-fn owner(data: &Path, count: usize, binary: &Path) -> ExitCode {
+fn owner(data: &DataDir, count: usize, binary: &Path) -> ExitCode {
     runtime().block_on(async {
         let ledger = Ledger::new(data, Ps::default());
         let mut cores = Vec::new();
@@ -118,7 +118,7 @@ fn owner(data: &Path, count: usize, binary: &Path) -> ExitCode {
 
 /// Starts one fake core whose config names `out`, waits until it wrote its environment
 /// there, and stops it.
-fn spawn_one(data: &Path, binary: &Path, out: &Path) -> ExitCode {
+fn spawn_one(data: &DataDir, binary: &Path, out: &Path) -> ExitCode {
     runtime().block_on(async {
         let mut core = spawn_core(binary, data, &profile(0)).unwrap();
         let started = Instant::now();
@@ -146,7 +146,7 @@ fn run(test: impl Future<Output = ()>) {
 
 struct Fixture {
     root: PathBuf,
-    data: PathBuf,
+    data: DataDir,
     binary: PathBuf,
     tracked: Vec<Tracked>,
 }
@@ -177,7 +177,7 @@ impl Fixture {
         std::os::unix::fs::symlink(std::env::current_exe().unwrap(), &binary).unwrap();
         Self {
             root,
-            data,
+            data: DataDir::new(data),
             binary,
             tracked: Vec::new(),
         }
@@ -260,8 +260,8 @@ async fn gone(process: &Tracked) -> bool {
     false
 }
 
-fn ledger_entries(data: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(core_ledger_directory(data)).map_or_else(
+fn ledger_entries(data: &DataDir) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(data.core_ledger()).map_or_else(
         |_| Vec::new(),
         |listing| {
             listing
@@ -298,7 +298,7 @@ fn fixture_profile() -> ProfileId {
     profile(0)
 }
 
-fn core_identity(data: &Path) -> String {
+fn core_identity(data: &DataDir) -> String {
     let arguments: Vec<String> = core_arguments(data, &fixture_profile())
         .iter()
         .map(|a| a.to_str().unwrap().to_owned())
@@ -317,7 +317,7 @@ struct Instance {
 async fn start_owner(fixture: &mut Fixture, count: usize) -> Instance {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .arg("owner")
-        .arg(&fixture.data)
+        .arg(fixture.data.path())
         .arg(count.to_string())
         .arg(&fixture.binary)
         .stdin(Stdio::null())
@@ -410,7 +410,7 @@ fn a_new_instance_reaps_cores_of_a_dead_instance_and_refuses_reused_pids() {
             bystanders.push(fixture.track(sleeper.id()).await);
             sleepers.push(sleeper);
         }
-        let config = core_config_path(&fixture.data, &fixture_profile());
+        let config = fixture.data.core_config(&fixture_profile());
         let decoys = [
             // A core of this directory once had this PID; another process has it now.
             format!(
@@ -421,7 +421,7 @@ fn a_new_instance_reaps_cores_of_a_dead_instance_and_refuses_reused_pids() {
             // Exactly this process's identity, but it is not a core of this directory.
             bystanders[1].identity.clone(),
         ];
-        let ledger = core_ledger_directory(&fixture.data);
+        let ledger = fixture.data.core_ledger();
         for (bystander, identity) in bystanders.iter().zip(&decoys) {
             write_entry(
                 &ledger,
@@ -458,7 +458,7 @@ fn a_new_instance_reaps_cores_of_a_dead_instance_and_refuses_reused_pids() {
 fn reaping_never_touches_cores_of_a_live_instance_or_of_another_data_directory() {
     run(async {
         let mut fixture = Fixture::new("live");
-        let other = fixture.root.join("other");
+        let other = DataDir::new(fixture.root.join("other"));
         let mut instance = start_owner(&mut fixture, 1).await;
         let core = instance.cores[0].clone();
         let entries = fixture.ledger_entries();
@@ -470,7 +470,7 @@ fn reaping_never_touches_cores_of_a_live_instance_or_of_another_data_directory()
         assert_eq!(fixture.ledger_entries(), entries);
         // Another directory's ledger naming this exact core, claimed by a dead owner.
         write_entry(
-            &core_ledger_directory(&other),
+            &other.core_ledger(),
             core.pid,
             &serde_json::json!({
                 "pid": core.pid, "identity": core.identity,
@@ -515,7 +515,10 @@ fn a_failed_owner_identity_lookup_is_retried_by_the_next_record() {
         let path = ledger.record(&mut core).await.unwrap().unwrap();
         assert_eq!(
             path,
-            core_ledger_directory(&fixture.data).join(format!("{}.json", core.pid()))
+            fixture
+                .data
+                .core_ledger()
+                .join(format!("{}.json", core.pid()))
         );
         assert_eq!(fixture.ledger_entries(), [format!("{}.json", core.pid())]);
         core.terminate().await.unwrap();
@@ -548,7 +551,7 @@ fn an_owner_identity_lookup_without_ps_writes_nothing_and_is_retried() {
         let error = ledger.record(&mut core).await.unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
         assert!(
-            !core_ledger_directory(&fixture.data).exists(),
+            !fixture.data.core_ledger().exists(),
             "no entry for that core"
         );
         assert!(ledger.record(&mut core).await.unwrap().is_some());
@@ -580,7 +583,7 @@ fn a_core_identity_read_before_its_exec_settles_is_not_recorded() {
         let ledger = Ledger::new(&fixture.data, identify);
         assert_eq!(ledger.record(&mut core).await.unwrap(), None);
         assert!(
-            !core_ledger_directory(&fixture.data).exists(),
+            !fixture.data.core_ledger().exists(),
             "no entry that could never be reaped"
         );
         settled.store(1, Ordering::Relaxed);
@@ -601,7 +604,7 @@ fn reaping_without_ps_keeps_the_entry_and_signals_nothing() {
             .spawn()
             .unwrap();
         let core = fixture.track(child.id()).await;
-        let ledger = core_ledger_directory(&fixture.data);
+        let ledger = fixture.data.core_ledger();
         let me = std::process::id();
         write_entry(
             &ledger,
@@ -693,7 +696,7 @@ fn a_core_inherits_only_the_allowed_environment() {
     // An instance whose own environment holds keys, proxies and provider settings.
     let status = Command::new(std::env::current_exe().unwrap())
         .arg("spawn")
-        .arg(&fixture.data)
+        .arg(fixture.data.path())
         .arg(&fixture.binary)
         .arg(&out)
         .env_clear()

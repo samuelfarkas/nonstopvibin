@@ -10,6 +10,7 @@ default-members = [
     "crates/cli",
     "crates/core",
     "crates/domain",
+    "crates/files",
     "crates/gateway",
     "crates/net",
     "crates/server",
@@ -31,6 +32,7 @@ nsv-accounts = { path = "crates/accounts" }
 nsv-agents = { path = "crates/agents" }
 nsv-core = { path = "crates/core" }
 nsv-domain = { path = "crates/domain" }
+nsv-files = { path = "crates/files" }
 nsv-gateway = { path = "crates/gateway" }
 nsv-net = { path = "crates/net" }
 nsv-server = { path = "crates/server" }

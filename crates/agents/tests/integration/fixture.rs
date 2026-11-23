@@ -12,6 +12,7 @@ use nsv_agents::AgentSetup;
 use nsv_domain::error::AppError;
 use nsv_domain::registry::Agent;
 use nsv_domain::wire::{self, Profile};
+use nsv_files::DataDir;
 use serde_json::Value;
 
 use crate::common::{
@@ -82,7 +83,7 @@ impl Copy {
             let secret = format!("{}:client", profile.id);
             broker.start(profile, expected["secrets"][&secret].as_str().unwrap());
         }
-        let setup = AgentSetup::new(&data, broker.source(), home_only(&home)).unwrap();
+        let setup = AgentSetup::new(&DataDir::new(&data), broker.source(), home_only(&home));
         Self {
             root,
             data,

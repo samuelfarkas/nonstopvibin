@@ -1736,6 +1736,7 @@ dependencies = [
  "hyper-util",
  "nsv-core",
  "nsv-domain",
+ "nsv-files",
  "nsv-net",
  "nsv-store",
  "nsv-testkit",
@@ -1753,7 +1754,7 @@ name = "nsv-agents"
 version = "0.2.0"
 dependencies = [
  "nsv-domain",
- "nsv-store",
+ "nsv-files",
  "rustix",
  "serde_json",
  "thiserror 2.0.21",
@@ -1767,6 +1768,7 @@ dependencies = [
  "nsv-agents",
  "nsv-core",
  "nsv-domain",
+ "nsv-files",
  "nsv-net",
  "nsv-server",
  "nsv-shell",
@@ -1783,6 +1785,7 @@ name = "nsv-core"
 version = "0.2.0"
 dependencies = [
  "nsv-domain",
+ "nsv-files",
  "nsv-net",
  "nsv-store",
  "nsv-testkit",
@@ -1807,6 +1810,17 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "ts-rs",
+]
+
+[[package]]
+name = "nsv-files"
+version = "0.2.0"
+dependencies = [
+ "nsv-domain",
+ "nsv-testkit",
+ "rusqlite",
+ "rustix",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1848,6 +1862,7 @@ dependencies = [
  "nsv-agents",
  "nsv-core",
  "nsv-domain",
+ "nsv-files",
  "nsv-gateway",
  "nsv-net",
  "nsv-shell",
@@ -1871,8 +1886,8 @@ dependencies = [
  "muda",
  "nsv-core",
  "nsv-domain",
+ "nsv-files",
  "nsv-net",
- "nsv-store",
  "nsv-testkit",
  "objc2",
  "objc2-app-kit",
@@ -1899,6 +1914,7 @@ dependencies = [
  "aes-gcm",
  "base64",
  "nsv-domain",
+ "nsv-files",
  "nsv-testkit",
  "rusqlite",
  "rustix",
@@ -1918,6 +1934,7 @@ dependencies = [
  "nsv-accounts",
  "nsv-core",
  "nsv-domain",
+ "nsv-files",
  "nsv-net",
  "nsv-shell",
  "nsv-store",

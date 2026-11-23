@@ -9,18 +9,12 @@ use std::time::{Duration, SystemTime};
 
 use nsv_agents::AGENT_ENVIRONMENT;
 use nsv_domain::time::epoch_ms;
+use nsv_files::{DataDir, write_atomic};
 use nsv_server::Session;
-use nsv_store::files::write_atomic;
-use nsv_store::layout::data_directory_from;
 
 use crate::{CliError, SERVER_PORT, complain, say, user};
 
 pub(crate) const UNIT: &str = "nonstopvibin.service";
-
-/// The variables a unit carries from the installing shell.
-fn service_environment() -> impl Iterator<Item = &'static str> {
-    std::iter::once("NONSTOPVIBIN_DATA_DIR").chain(AGENT_ENVIRONMENT)
-}
 
 /// systemd quoting: C-style escapes inside double quotes; `%` starts a specifier, and `$` a
 /// variable in `ExecStart` arguments (not the executable).
@@ -230,10 +224,12 @@ Without systemd, install with --no-service and run `nonstopvibin serve` in a ter
 
 /// The data directory `url` and `status` look in: the shell's override, or else the one the
 /// running user service was started with, read from its live environment.
-pub(crate) fn discovery_directory() -> Result<PathBuf, CliError> {
-    let override_path = std::env::var_os("NONSTOPVIBIN_DATA_DIR").filter(|value| !value.is_empty());
-    if override_path.is_some() || !cfg!(target_os = "linux") {
-        return data_directory(override_path.as_deref());
+pub(crate) fn discovery_directory() -> Result<DataDir, CliError> {
+    if let Some(chosen) = DataDir::from_environment().map_err(CliError::from_display)? {
+        return Ok(chosen);
+    }
+    if !cfg!(target_os = "linux") {
+        return home();
     }
     let pid = systemctl(&["show", UNIT, "--property=MainPID", "--value"])
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -241,13 +237,18 @@ pub(crate) fn discovery_directory() -> Result<PathBuf, CliError> {
     if let Some(pid) = pid {
         match std::fs::read(format!("/proc/{pid}/environ")) {
             Ok(environment) => {
+                let prefix = format!("{}=", DataDir::VARIABLE);
                 let found = environment
                     .split(|byte| *byte == 0)
-                    .find_map(|entry| entry.strip_prefix(b"NONSTOPVIBIN_DATA_DIR="))
-                    .filter(|value| !value.is_empty())
+                    .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))
                     .map(|value| String::from_utf8_lossy(value).into_owned());
-                if let Some(value) = found {
-                    return data_directory(Some(OsStr::new(&value)));
+                if let Some(chosen) = found
+                    .map(|value| DataDir::chosen(OsStr::new(&value)))
+                    .transpose()
+                    .map_err(CliError::from_display)?
+                    .flatten()
+                {
+                    return Ok(chosen);
                 }
             }
             Err(error)
@@ -258,15 +259,23 @@ pub(crate) fn discovery_directory() -> Result<PathBuf, CliError> {
             Err(error) => return Err(CliError::new(error.to_string())),
         }
     }
-    data_directory(None)
+    home()
 }
 
-pub(crate) fn data_directory(override_path: Option<&OsStr>) -> Result<PathBuf, CliError> {
-    data_directory_from(override_path).map_err(|error| CliError::new(error.to_string()))
+/// The data directory this process serves: the environment's choice, or `~/.nonstopvibin`.
+pub(crate) fn data_directory() -> Result<DataDir, CliError> {
+    match DataDir::from_environment().map_err(CliError::from_display)? {
+        Some(chosen) => Ok(chosen),
+        None => home(),
+    }
+}
+
+fn home() -> Result<DataDir, CliError> {
+    DataDir::home().map_err(CliError::from_display)
 }
 
 /// Polls for half a minute until a daemon started at or after `since` answers.
-async fn wait_until_running(directory: &Path, since: i64) -> Result<bool, CliError> {
+async fn wait_until_running(directory: &DataDir, since: i64) -> Result<bool, CliError> {
     for _ in 0..60 {
         if let Some(session) = Session::read(directory).map_err(CliError::from_display)?
             && session.started_at >= since
@@ -318,7 +327,7 @@ pub(crate) async fn install(
             "Install the service from the packaged release, not from source.",
         ));
     }
-    let directory = data_directory(std::env::var_os("NONSTOPVIBIN_DATA_DIR").as_deref())?;
+    let chosen = DataDir::from_environment().map_err(CliError::from_display)?;
     let path = unit_path()?;
     let previous = read_optional(&path)?;
     let mut args = vec![
@@ -329,16 +338,19 @@ pub(crate) async fn install(
     for host in allow_hosts.unwrap_or_default() {
         args.extend(["--allow-host".to_owned(), host.clone()]);
     }
-    let environment: Vec<(String, String)> = service_environment()
-        .filter_map(|key| {
-            let value = std::env::var(key).ok().filter(|value| !value.is_empty())?;
-            let value = if key == "NONSTOPVIBIN_DATA_DIR" {
-                directory.display().to_string()
-            } else {
-                value
-            };
-            Some((key.to_owned(), value))
+    // The unit carries the shell's data directory, resolved, and the agent variables as set.
+    let environment: Vec<(String, String)> = chosen
+        .map(|directory| {
+            (
+                DataDir::VARIABLE.to_owned(),
+                directory.path().display().to_string(),
+            )
         })
+        .into_iter()
+        .chain(AGENT_ENVIRONMENT.into_iter().filter_map(|key| {
+            let value = std::env::var(key).ok().filter(|value| !value.is_empty())?;
+            Some((key.to_owned(), value))
+        }))
         .collect();
     let unit = if let Some(previous) = &previous {
         update_unit(previous, port, allow_hosts, &environment)?
@@ -448,7 +460,7 @@ pub(crate) fn uninstall() -> Result<(), CliError> {
     say(&format!(
         "Removed {}.\nYour data remains in {}. Lingering is unchanged; run `loginctl disable-linger` if you no longer need it.",
         path.display(),
-        directory.display()
+        directory.path().display()
     ));
     Ok(())
 }

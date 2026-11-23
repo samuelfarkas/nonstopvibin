@@ -256,7 +256,7 @@ impl Helper {
             origin: origin.clone(),
             view,
             bounds,
-            data_directory: directory.to_owned(),
+            webview: directory.join("webview"),
             updates: false,
         };
         helper::write(&mut input, &start).unwrap();

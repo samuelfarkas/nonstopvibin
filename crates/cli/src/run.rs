@@ -10,9 +10,9 @@ use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_domain::endpoint::{LOOPBACK_HOST, session_link};
 use nsv_domain::helper::Failure;
 use nsv_domain::time::{epoch_ms, iso_string};
+use nsv_files::{DataDir, LockError, ServerLock};
 use nsv_net::Https;
 use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
-use nsv_store::{LockError, ServerLock};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::service::{UNIT, systemctl};
@@ -171,7 +171,7 @@ fn https() -> Result<Https, CliError> {
 /// run from its source checkout (`bun run dev`) also accepts the Vite development server's
 /// Host and Origin and starts without its core; packaged builds ignore the variable.
 pub(crate) async fn serve(
-    directory: PathBuf,
+    directory: DataDir,
     port: u16,
     allow_hosts: Vec<String>,
 ) -> Result<u8, CliError> {
@@ -182,10 +182,10 @@ pub(crate) async fn serve(
         return Err(CliError::new(format!(
             "NonstopVibin is already running on {LOOPBACK_HOST}:{} for {}. Run `nonstopvibin url` for its link.",
             existing.port,
-            directory.display()
+            directory.path().display()
         )));
     }
-    let lock = ServerLock::acquire(&directory).map_err(CliError::from_display)?;
+    let lock = directory.lock().map_err(CliError::from_display)?;
     let layout = Layout::detect();
     let development = !layout.packaged
         && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
@@ -196,7 +196,6 @@ pub(crate) async fn serve(
         )));
     }
     let options = Options {
-        directory,
         port,
         allow_hosts,
         development,
@@ -241,9 +240,7 @@ pub(crate) async fn serve(
 /// The desktop app: the daemon, its tray and, unless `background`, the main window. A second
 /// launch finds the first through the data directory's lock and asks it to show its window.
 pub(crate) fn desktop(background: bool) -> ExitCode {
-    let directory = match crate::service::data_directory(
-        std::env::var_os("NONSTOPVIBIN_DATA_DIR").as_deref(),
-    ) {
+    let directory = match crate::service::data_directory() {
         Ok(directory) => directory,
         Err(error) => {
             could_not_start(&error.message);
@@ -268,12 +265,12 @@ fn could_not_start(message: &str) {
 }
 
 async fn desktop_daemon(
-    directory: PathBuf,
+    directory: DataDir,
     background: bool,
     link: nsv_shell::TrayLink,
 ) -> Result<u8, CliError> {
     let mut signals = Signals::new()?;
-    let lock = match ServerLock::acquire(&directory) {
+    let lock = match directory.lock() {
         Ok(lock) => lock,
         Err(LockError::Occupied(_)) => {
             let shown = tokio::task::spawn_blocking(move || nsv_shell::show_running(&directory))
@@ -294,7 +291,6 @@ async fn desktop_daemon(
     };
     let layout = Layout::detect();
     let options = Options {
-        directory,
         port,
         allow_hosts: Vec::new(),
         development: false,
@@ -333,7 +329,9 @@ async fn desktop_daemon(
 }
 
 /// A running daemon's `server.json` and state, if one answers.
-async fn running(directory: &Path) -> Result<Option<(Session, nsv_server::ServerState)>, CliError> {
+async fn running(
+    directory: &DataDir,
+) -> Result<Option<(Session, nsv_server::ServerState)>, CliError> {
     let Some(session) = Session::read(directory).map_err(CliError::from_display)? else {
         return Ok(None);
     };
@@ -341,12 +339,12 @@ async fn running(directory: &Path) -> Result<Option<(Session, nsv_server::Server
 }
 
 /// `url [--json]`.
-pub(crate) async fn url(directory: &Path, json: bool) -> Result<u8, CliError> {
+pub(crate) async fn url(directory: &DataDir, json: bool) -> Result<u8, CliError> {
     let Some((session, state)) = running(directory).await? else {
         return Err(CliError {
             message: format!(
                 "NonstopVibin is not running for {}.\nCheck `systemctl --user status nonstopvibin`, or start it with `nonstopvibin serve`.",
-                directory.display()
+                directory.path().display()
             ),
             code: NOT_RUNNING,
         });
@@ -372,7 +370,7 @@ pub(crate) async fn url(directory: &Path, json: bool) -> Result<u8, CliError> {
 }
 
 /// `status`: exit 0 with the running daemon's details, or 3.
-pub(crate) async fn status(directory: &Path) -> Result<u8, CliError> {
+pub(crate) async fn status(directory: &DataDir) -> Result<u8, CliError> {
     let unit = if cfg!(target_os = "linux") {
         systemctl(&["is-active", UNIT])
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -384,7 +382,7 @@ pub(crate) async fn status(directory: &Path) -> Result<u8, CliError> {
     let Some((session, state)) = running(directory).await? else {
         say(&format!(
             "NonstopVibin is not running for {}.{unit}",
-            directory.display()
+            directory.path().display()
         ));
         return Ok(NOT_RUNNING);
     };

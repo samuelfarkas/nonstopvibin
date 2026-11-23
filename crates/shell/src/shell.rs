@@ -8,7 +8,6 @@ use nsv_domain::endpoint::session_link;
 use nsv_domain::helper::{
     DaemonCall, DialogKind, FromHelper, Outcome, Rect, ToHelper, View, ViewKind,
 };
-use nsv_store::layout::database_path;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -263,7 +262,7 @@ impl<H: ShellHost> Shell<'_, H> {
             origin: self.host.origin().clone(),
             view: view.clone(),
             bounds: self.bounds,
-            data_directory: self.host.data_directory().to_owned(),
+            webview: self.host.data_directory().webview(),
             updates: self.updates.possible(),
         };
         match Helper::spawn(&self.options.helper, &start, self.host.session_token()).await {
@@ -423,7 +422,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.options.login.set(enabled).map(Value::Bool)
             }
             DaemonCall::RevealData => {
-                external::reveal(&database_path(self.host.data_directory())).await?;
+                external::reveal(&self.host.data_directory().database()).await?;
                 Ok(Value::Null)
             }
         }

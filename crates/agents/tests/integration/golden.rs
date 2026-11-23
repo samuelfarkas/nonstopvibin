@@ -17,6 +17,7 @@ use nsv_domain::error::AppError;
 use nsv_domain::registry::Agent;
 use nsv_domain::secret::ClientKey;
 use nsv_domain::wire::{AgentSetupInput, CatalogModel, Model, Profile};
+use nsv_files::DataDir;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -103,7 +104,7 @@ impl<'a> Scenario<'a> {
         }));
         let state = Arc::clone(&gateway);
         let setup = AgentSetup::new(
-            &data,
+            &DataDir::new(&data),
             Arc::new(move |id| {
                 let Gateway { port, running } = *state.lock().unwrap();
                 match id.as_str() {
@@ -127,8 +128,7 @@ impl<'a> Scenario<'a> {
                 opencode: moved("opencode"),
                 pi: moved("pi"),
             },
-        )
-        .unwrap();
+        );
         Self {
             name,
             input,
@@ -361,7 +361,7 @@ async fn credential_socket(cases: &[&Value]) -> Vec<String> {
     }));
     let state = Arc::clone(&gateway);
     let setup = AgentSetup::new(
-        &data,
+        &DataDir::new(&data),
         Arc::new(move |id| {
             let Gateway { port, running } = *state.lock().unwrap();
             if running && id.as_str() == WORK {
@@ -374,8 +374,7 @@ async fn credential_socket(cases: &[&Value]) -> Vec<String> {
             }
         }),
         crate::common::home_only(&home),
-    )
-    .unwrap();
+    );
     let installed = setup
         .install(
             &work(),
@@ -498,7 +497,7 @@ async fn pi_controls(source: &str) -> bool {
     let (home, data) = (root.root.join("home"), root.root.join("data"));
     directory(&home, 0o755);
     let setup = AgentSetup::new(
-        &data,
+        &DataDir::new(&data),
         Arc::new(|_| {
             Ok(Connection {
                 key: ClientKey::new(key('a')),
@@ -506,8 +505,7 @@ async fn pi_controls(source: &str) -> bool {
             })
         }),
         crate::common::home_only(&home),
-    )
-    .unwrap();
+    );
     let input = AgentSetupInput {
         agent: Agent::Pi,
         project_directory: None,

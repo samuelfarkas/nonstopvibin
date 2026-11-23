@@ -1,4 +1,4 @@
-//! The headless server's single-instance lock: an owner-only `server.lock.sqlite` held in a
+//! The daemon's single-instance lock: an owner-only `server.lock.sqlite` held in a
 //! `BEGIN IMMEDIATE` transaction for the process lifetime.
 //!
 //! The file is never unlinked: SQLite's OS-backed writer lock is released on exit or crash,
@@ -9,15 +9,15 @@ use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use nsv_domain::sync::locked;
 use rusqlite::{Connection, ErrorCode};
 
+use crate::data_dir::DataDir;
 use crate::files::{EntryKind, own_entry, owner_only_directory};
-use crate::layout::server_lock_path;
 
 /// Directories this process holds. POSIX advisory locks are per process, so a second
 /// descriptor for a locked inode must never be opened and closed here.
@@ -45,22 +45,17 @@ pub enum LockError {
     Sqlite(#[from] rusqlite::Error),
 }
 
-/// Holds a data directory until released or dropped.
+/// Holds a data directory until released or dropped; [`DataDir::lock`] takes it.
 #[derive(Debug)]
 pub struct ServerLock {
     connection: Option<Connection>,
-    directory: PathBuf,
+    directory: DataDir,
+    canonical: PathBuf,
 }
 
 impl ServerLock {
-    /// Vets and tightens `directory` (creating it owner-only), then takes its lock without
-    /// waiting. Blocks on the file system.
-    ///
-    /// # Errors
-    /// [`LockError::Occupied`] when any process holds it, [`LockError::UnsafeDirectory`] or
-    /// [`LockError::UnsafeLockFile`] for an entry that is not this user's own, unlinked
-    /// ordinary one (its mode is left as it is), or a file-system or database error.
-    pub fn acquire(directory: &Path) -> Result<Self, LockError> {
+    pub(crate) fn acquire(data: &DataDir) -> Result<Self, LockError> {
+        let directory = data.path();
         // Tightened before the lock exists, and only once the directory is vetted.
         owner_only_directory(directory, || {
             // Any mode: owner_only_directory tightens it next.
@@ -75,7 +70,7 @@ impl ServerLock {
         if owned.contains(&canonical) {
             return Err(LockError::Occupied(canonical));
         }
-        let path = server_lock_path(&canonical);
+        let path = DataDir::new(canonical.as_path()).server_lock();
         // O_CREAT|O_EXCL never follows a symbolic link: one at the path fails with EEXIST.
         match OpenOptions::new()
             .write(true)
@@ -108,8 +103,15 @@ impl ServerLock {
         owned.insert(canonical.clone());
         Ok(Self {
             connection: Some(connection),
-            directory: canonical,
+            directory: data.clone(),
+            canonical,
         })
+    }
+
+    /// The directory held, as it was chosen.
+    #[must_use]
+    pub fn directory(&self) -> &DataDir {
+        &self.directory
     }
 
     /// Releases the directory for the next owner.
@@ -121,6 +123,6 @@ impl ServerLock {
 impl Drop for ServerLock {
     fn drop(&mut self) {
         drop(self.connection.take());
-        owned().remove(&self.directory);
+        owned().remove(&self.canonical);
     }
 }

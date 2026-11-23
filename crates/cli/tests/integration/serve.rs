@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
-use nsv_store::{ServerLock, Store, Vault};
+use nsv_files::DataDir;
+use nsv_store::{Store, Vault};
 use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -43,8 +44,11 @@ struct Seeded {
 /// Enabled profiles, each with one API-key account on `upstream` and no OAuth account, as an
 /// earlier run left them: they sleep until their first request.
 async fn seed(data: &Path, count: usize, upstream: u16) -> Vec<Seeded> {
-    nsv_store::files::owner_only_directory(data, || Ok::<(), std::io::Error>(())).unwrap();
-    let store = Store::open(data, Vault::open(data).unwrap()).await.unwrap();
+    nsv_files::owner_only_directory(data, || Ok::<(), std::io::Error>(())).unwrap();
+    let directory = DataDir::new(data);
+    let store = Store::open(&directory, Vault::open(&directory).unwrap())
+        .await
+        .unwrap();
     let mut seeded = Vec::new();
     for index in 0..count {
         let seed = store
@@ -530,7 +534,7 @@ async fn a_dormant_profile_streams_through_the_gateway_and_each_signal_stops_in_
         );
         assert_eq!(ledger(&data), 0, "a core outlived {signal}");
         // The lock is free again.
-        ServerLock::acquire(&data).unwrap().release();
+        DataDir::new(&data).lock().unwrap().release();
     }
 }
 
@@ -539,8 +543,8 @@ async fn one_instance_runs_per_data_directory() {
     let root = Root::new("instance");
     // A stale server.json of a process that is gone does not block a start.
     std::fs::create_dir_all(root.data()).unwrap();
-    nsv_store::files::owner_only_directory(&root.data(), || Ok::<(), std::io::Error>(())).unwrap();
-    nsv_store::files::write_atomic(
+    nsv_files::owner_only_directory(&root.data(), || Ok::<(), std::io::Error>(())).unwrap();
+    nsv_files::write_atomic(
         &root.data().join("server.json"),
         json!({ "pid": 4242, "port": Port::reserve().release(), "token": "stale", "allowHosts": [], "version": "0.2.0", "startedAt": "2026-11-22T11:00:00.000Z" })
             .to_string()
@@ -569,7 +573,7 @@ async fn one_instance_runs_per_data_directory() {
     let inode = std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&lock).unwrap());
     daemon.signal("KILL");
     let _ = daemon.exited().await;
-    let held = ServerLock::acquire(&root.data()).unwrap();
+    let held = DataDir::new(root.data()).lock().unwrap();
     // Held by another process (this test), a start is refused before it opens anything.
     let refused = command(&root)
         .args(["serve", "--port", &Port::reserve().release().to_string()])

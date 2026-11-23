@@ -430,7 +430,7 @@ fn the_tray_drives_the_helper_and_quits_cleanly() {
     );
     let database = format!(
         "file://{}",
-        nsv_store::layout::database_path(&data).display()
+        nsv_files::DataDir::new(&data).database().display()
     );
     assert_eq!(*shown.lock().unwrap(), [database]);
     // The approved call, then the page's denied window through the same allowlist.

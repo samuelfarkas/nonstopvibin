@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use nsv_domain::endpoint::LOOPBACK_HOST;
+use nsv_files::DataDir;
 use nsv_server::{Session, VERSION, valid_allow_host};
 
 use crate::args::Args;
@@ -69,7 +70,7 @@ pub(crate) fn user() -> String {
 }
 
 fn help() -> Result<String, CliError> {
-    let data = service::data_directory(std::env::var_os("NONSTOPVIBIN_DATA_DIR").as_deref())?;
+    let data = service::data_directory()?;
     Ok(format!(
         "NonstopVibin {VERSION} — headless server
 
@@ -97,9 +98,10 @@ Manage the service with systemd:
   systemctl --user restart nonstopvibin    (issues a new session link)
   journalctl --user -u nonstopvibin -f
 
-Data: {} (override with NONSTOPVIBIN_DATA_DIR).
+Data: {} (override with {}).
 Profiles, subscriptions and agent connections are managed in the web UI.",
-        data.display()
+        data.path().display(),
+        DataDir::VARIABLE
     ))
 }
 
@@ -243,7 +245,7 @@ async fn command(args: &Args) -> Result<u8, CliError> {
     let positionals: Vec<&str> = args.positionals.iter().map(String::as_str).collect();
     let directory = match positionals.first() {
         Some(&("url" | "status")) => service::discovery_directory()?,
-        _ => service::data_directory(std::env::var_os("NONSTOPVIBIN_DATA_DIR").as_deref())?,
+        _ => service::data_directory()?,
     };
     match positionals.as_slice() {
         ["serve"] => run::serve(directory, port, allow_hosts.unwrap_or_default()).await,
@@ -369,6 +371,7 @@ mod golden {
 
     use nsv_domain::secret::SessionToken;
     use nsv_domain::time::parse_iso;
+    use nsv_files::DataDir;
     use serde_json::Value;
 
     use super::{tunnel_command, url_text, user};
@@ -500,9 +503,12 @@ mod golden {
         let home = std::env::home_dir().unwrap();
         let cwd = std::env::current_dir().unwrap();
         for case in cases("dataDirectory ") {
-            let chosen = case["input"]["override"].as_str().map(std::ffi::OsStr::new);
-            let resolved = nsv_store::layout::data_directory_from(chosen).unwrap();
+            let chosen = case["input"]["override"].as_str().unwrap_or_default();
+            let resolved = DataDir::chosen(std::ffi::OsStr::new(chosen))
+                .unwrap()
+                .unwrap_or_else(|| DataDir::home().unwrap());
             let text = resolved
+                .path()
                 .to_string_lossy()
                 .replacen(&*cwd.to_string_lossy(), "<repository>", 1)
                 .replacen(&*home.to_string_lossy(), "<home>", 1);

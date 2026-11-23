@@ -17,8 +17,8 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
+use nsv_files::DataDir;
 use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
-use nsv_store::layout::core_ledger_directory;
 use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
 use serde_json::json;
@@ -119,7 +119,7 @@ fn command_line(pid: u32) -> String {
 }
 
 fn ledger(data: &Path) -> Vec<u32> {
-    std::fs::read_dir(core_ledger_directory(data)).map_or_else(
+    std::fs::read_dir(DataDir::new(data).core_ledger()).map_or_else(
         |_| Vec::new(),
         |entries| {
             entries
@@ -153,8 +153,9 @@ async fn real_world(
 ) -> (PathBuf, Store, ProfileId, Scheduler, Arc<Reports>) {
     let binary = pinned_core();
     let data = root.path().join("data");
-    nsv_store::files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
-    let store = Store::open(&data, Vault::open(&data).unwrap())
+    nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
+    let directory = DataDir::new(&data);
+    let store = Store::open(&directory, Vault::open(&directory).unwrap())
         .await
         .unwrap();
     let upstream = stub_upstream().await;
@@ -188,7 +189,7 @@ async fn real_world(
     let scheduler = Scheduler::new(
         store.clone(),
         binary,
-        Arc::new(Processes::new(&data)),
+        Arc::new(Processes::new(&directory)),
         READY,
         Arc::new(Accounts::new(store.clone())),
         host,

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::wire::{Account, AccountStatus};
-use nsv_store::layout::credential_directory;
+use nsv_files::DataDir;
 use serde_json::{Value, json};
 
 use super::common::{World, short};
@@ -89,7 +89,9 @@ async fn account_sync_rereads_a_claude_identity_only_when_its_file_changes_and_r
         { "name": "seat.json", "provider": "claude", "auth_index": "seat" },
     ] }))
     .await;
-    let path = credential_directory(&world.data, &profile).join("seat.json");
+    let path = DataDir::new(&world.data)
+        .credentials(&profile)
+        .join("seat.json");
     let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
     let write = |organization: &str, modified: SystemTime| {
         fs::write(

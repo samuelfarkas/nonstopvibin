@@ -11,16 +11,17 @@ repository.workspace = true
 # A crate's tests enable only what builds on crates they already build.
 [features]
 # The fake cores behind the pool's `Backend`, and a store under tokio's paused clock.
-core = ["dep:nsv-core", "dep:nsv-domain", "dep:nsv-net", "dep:nsv-store", "dep:serde_json", "dep:tokio", "dep:url", "tokio/macros", "tokio/rt", "tokio/test-util", "tokio/time"]
+core = ["dep:nsv-core", "dep:nsv-domain", "dep:nsv-files", "dep:nsv-net", "dep:nsv-store", "dep:serde_json", "dep:tokio", "dep:url", "tokio/macros", "tokio/rt", "tokio/test-util", "tokio/time"]
 # The account features assembled as the daemon assembles them, over the fake cores.
 accounts = ["core", "dep:nsv-accounts"]
 # A host for the shell's tests and idle example, adding no tokio feature to the measured example.
-shell = ["dep:nsv-domain", "dep:nsv-shell", "dep:tokio"]
+shell = ["dep:nsv-domain", "dep:nsv-files", "dep:nsv-shell", "dep:tokio"]
 
 [dependencies]
 nsv-accounts = { workspace = true, optional = true }
 nsv-core = { workspace = true, optional = true }
 nsv-domain = { workspace = true, optional = true }
+nsv-files = { workspace = true, optional = true }
 nsv-net = { workspace = true, optional = true }
 nsv-shell = { workspace = true, optional = true }
 nsv-store = { workspace = true, optional = true }

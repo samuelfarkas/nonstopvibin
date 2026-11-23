@@ -10,7 +10,7 @@ mod layout;
 mod native;
 
 use std::io::{self, BufRead};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nsv_domain::helper::{self, Failure, Reason, ToHelper};
@@ -37,15 +37,15 @@ enum Launch {
 
 fn launch(input: &mut impl BufRead) -> io::Result<Launch> {
     let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message.to_owned());
-    let (origin, view, bounds, data_directory, updates) = match helper::read(input)? {
+    let (origin, view, bounds, webview, updates) = match helper::read(input)? {
         Some(ToHelper::Alert { failure, reason }) => return Ok(Launch::Alert(failure, reason)),
         Some(ToHelper::Start {
             origin,
             view,
             bounds,
-            data_directory,
+            webview,
             updates,
-        }) => (origin, view, bounds, data_directory, updates),
+        }) => (origin, view, bounds, webview, updates),
         _ => return Err(invalid("the first message must be Start or Alert")),
     };
     let token = helper::read_line(input)?
@@ -61,19 +61,18 @@ fn launch(input: &mut impl BufRead) -> io::Result<Launch> {
         token: SessionToken::new(token),
         view,
         bounds,
-        web_data: web_data(&data_directory)?,
+        web_data: web_data(webview)?,
         nonce: format!("{:032x}", u128::from_le_bytes(nonce)),
         #[cfg(target_os = "macos")]
         updates,
     }))
 }
 
-/// Linux keeps the webview's storage in `<data dir>/webview`, for the owner only.
+/// Linux keeps the webview's storage in `path`, for the owner only.
 #[cfg(target_os = "linux")]
-fn web_data(data_directory: &Path) -> io::Result<Option<PathBuf>> {
+fn web_data(path: PathBuf) -> io::Result<Option<PathBuf>> {
     use std::fs;
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let path = data_directory.join("webview");
     match fs::DirBuilder::new().mode(0o700).create(&path) {
         Err(error) if error.kind() != io::ErrorKind::AlreadyExists => return Err(error),
         _ => {}
@@ -94,6 +93,6 @@ fn web_data(data_directory: &Path) -> io::Result<Option<PathBuf>> {
 /// macOS keeps WebKit's default store.
 #[cfg(not(target_os = "linux"))]
 #[expect(clippy::unnecessary_wraps, reason = "the Linux twin can fail")]
-fn web_data(_data_directory: &Path) -> io::Result<Option<PathBuf>> {
+fn web_data(_path: PathBuf) -> io::Result<Option<PathBuf>> {
     Ok(None)
 }

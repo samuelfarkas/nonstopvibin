@@ -111,7 +111,7 @@ impl World {
         let scheduler = Scheduler::new(
             paused.store.clone(),
             paused.binary.clone(),
-            Arc::new(paused.fake.clone()),
+            Arc::new(paused.backend()),
             ready,
             Arc::clone(&accounts),
             shared,
