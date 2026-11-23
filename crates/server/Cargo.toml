@@ -1,6 +1,6 @@
 [package]
 name = "nsv-server"
-description = "The daemon: listener, Host/Origin/token checks, the management API, the embedded UI and shutdown."
+description = "The daemon: listener, Host/Origin/token checks, the management API, the UI and shutdown."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +9,33 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
-nsv-domain.workspace = true
-nsv-store.workspace = true
-nsv-net.workspace = true
-nsv-core.workspace = true
+base64.workspace = true
+getrandom = { workspace = true, features = ["std"] }
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server"] }
 nsv-accounts.workspace = true
 nsv-agents.workspace = true
+nsv-core.workspace = true
+nsv-domain.workspace = true
 nsv-gateway.workspace = true
+nsv-net.workspace = true
+nsv-shell.workspace = true
+nsv-store.workspace = true
+serde.workspace = true
+# preserve_order: server.json keeps JSON.stringify's key order.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+
+[[test]]
+name = "golden"
+path = "tests/golden/main.rs"
 
 [lints]
 workspace = true

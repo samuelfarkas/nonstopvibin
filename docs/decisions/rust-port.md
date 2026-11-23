@@ -17,8 +17,18 @@ option below. Only the host changes.
 ### Processes
 
 - **One daemon binary, `nonstopvibin`.** It serves the gateway, the management API and the
-  embedded React UI, runs the CLI, and hosts the tray in desktop mode. On Linux it links no GUI
-  library, so the same binary runs on a headless server.
+  React UI, runs the CLI, and hosts the tray in desktop mode. On Linux it links no GUI
+  library, so the same binary runs on a headless server. With no command it is the desktop
+  app; on Linux without `DISPLAY` or `WAYLAND_DISPLAY` it prints the headless help instead,
+  as the TypeScript CLI did.
+- **The UI is a directory beside the daemon, not embedded.** A package puts the built
+  interface in `client/` next to the real executable (`Contents/Resources/client` in the macOS
+  bundle), as the server archive already did; a source checkout serves `dist/client`.
+  _Deviation from Fable,_ who embedded it with a `build.rs`. One code path serves packages,
+  development runs and the golden replay, `cargo build` and `cargo test` never need the
+  JavaScript build, the server archive and `install.sh` keep their layout, and a UI-only
+  change does not rebuild the daemon. The cost is a `stat` per request and a read per
+  uncached file; the ETag stays per launch, so file times are never trusted.
 - **One window helper, `nonstopvibin-window`.** It is the only code that links WebKit (WKWebView
   on macOS, WebKitGTK 4.1 on Linux). The daemon starts it when a window or a dialog opens, and
   it exits when its last window closes. Process exit is what guarantees that no WebKit process
@@ -68,8 +78,8 @@ Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 | `accounts` | Accounts, quota, usage drain, the deadline scheduler, sign-in, credentials, core updates, pricing, model catalog.                  | `core`            |
 | `agents`   | The four agent setup writers, native config files, the credential socket.                                                          | `store`           |
 | `gateway`  | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                                       | `domain`          |
-| `server`   | Listener, Host, Origin and token checks, `/api` routes, embedded UI, shutdown order.                                               | all above         |
-| `shell`    | Tray, helper supervision, login item, app updater.                                                                                 | `server`, `net`   |
+| `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order.                                | all above         |
+| `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the server implements.                               | `domain`, `net`   |
 | `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                      | `domain`          |
 | `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection.                                                 | `server`, `shell` |
 

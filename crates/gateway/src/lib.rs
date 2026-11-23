@@ -25,13 +25,14 @@ use std::error::Error;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hyper::body::{Bytes, Incoming};
 use hyper::client::conn::http1 as client;
 use hyper::header::{self, HeaderValue};
 use hyper::service::Service;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use nsv_domain::id::{ProfileId, ProfileSlug};
 use nsv_domain::registry::{Agent, AgentCatalog, RegistryError, registry};
 use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
@@ -377,14 +378,22 @@ fn proxy_error(status: StatusCode) -> Response<Body> {
     response
 }
 
-/// Serves one accepted agent connection the way the gateway needs it: Nagle off, hyper's
-/// buffer capped, upgrades enabled and half-closed connections refused, so an agent's FIN
-/// ends its requests.
+/// How long a client may take to send a request head, as Node's `headersTimeout`.
+pub const HEADERS_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Serves one accepted connection the way the gateway needs it: Nagle off, hyper's buffer
+/// capped, a request head due within [`HEADERS_TIMEOUT`], upgrades enabled and half-closed
+/// connections refused, so an agent's FIN ends its requests. Once `stop` resolves, the
+/// connection finishes the response in progress and closes; an idle one closes at once.
 ///
 /// # Errors
 /// When the socket option fails or the connection ends in an error; an agent hanging up
 /// mid-response is a `hyper::Error` with `is_incomplete_message()` inside the I/O error.
-pub async fn serve_connection<S, B>(stream: TcpStream, service: S) -> io::Result<()>
+pub async fn serve_connection<S, B>(
+    stream: TcpStream,
+    service: S,
+    stop: impl Future<Output = ()>,
+) -> io::Result<()>
 where
     S: Service<Request<Incoming>, Response = Response<B>>,
     S::Error: Into<Box<dyn Error + Send + Sync>>,
@@ -392,11 +401,17 @@ where
     B::Error: Into<Box<dyn Error + Send + Sync>>,
 {
     stream.set_nodelay(true)?;
-    hyper::server::conn::http1::Builder::new()
+    let connection = hyper::server::conn::http1::Builder::new()
         .max_buf_size(MAX_BUF_SIZE)
         .half_close(false)
+        .timer(TokioTimer::new())
+        .header_read_timeout(HEADERS_TIMEOUT)
         .serve_connection(TokioIo::new(stream), service)
-        .with_upgrades()
-        .await
-        .map_err(io::Error::other)
+        .with_upgrades();
+    let mut connection = std::pin::pin!(connection);
+    tokio::select! {
+        served = connection.as_mut() => return served.map_err(io::Error::other),
+        () = stop => connection.as_mut().graceful_shutdown(),
+    }
+    connection.await.map_err(io::Error::other)
 }
