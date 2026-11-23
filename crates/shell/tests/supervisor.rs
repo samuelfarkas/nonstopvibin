@@ -89,7 +89,7 @@ impl Fake {
 
 fn start(data: &Path, bounds: Option<Value>) -> Value {
     let mut start = json!({"type": "Start", "origin": "http://127.0.0.1:4100",
-        "view": {"window": "main"}, "dataDirectory": data});
+        "view": {"window": "main"}, "dataDirectory": data, "updates": false});
     if let Some(bounds) = bounds {
         start["bounds"] = bounds;
     }

@@ -9,13 +9,18 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64.workspace = true
+minisign-verify.workspace = true
 nsv-domain.workspace = true
+nsv-net.workspace = true
 nsv-store.workspace = true
 png.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 url.workspace = true
 
 # Linux links no GUI library: the tray is a StatusNotifierItem on the session bus.
@@ -25,6 +30,7 @@ zbus.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true
+nsv-core.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["NSButton", "NSControl", "NSStatusBarButton", "NSStatusItem", "NSView"] }
 objc2-foundation.workspace = true

@@ -15,7 +15,7 @@ use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tokio::sync::mpsc;
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use super::{Action, Entry, Icon, Look, MENU, rgba};
+use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};
 use crate::log;
 
 /// `kAEOpenApplication`, `keyAEPropData` and `keyAELaunchedAsLogInItem`.
@@ -25,6 +25,8 @@ const LAUNCHED_AS_LOGIN_ITEM: u32 = u32::from_be_bytes(*b"lgit");
 
 enum MainEvent {
     Look(Look),
+    /// The app can update itself: "Check for updates…" turns on.
+    Updates,
     Tray(TrayIconEvent),
     Menu(MenuEvent),
     Exit(i32),
@@ -132,6 +134,7 @@ struct StatusItem {
     stopped: tray_icon::Icon,
     /// The menu items' ids, in [`MENU`] order.
     ids: Vec<(MenuId, Action)>,
+    updates: Option<MenuItem>,
     actions: mpsc::Sender<Action>,
     _menu: Menu,
 }
@@ -147,12 +150,15 @@ impl StatusItem {
         let stopped = icon(include_bytes!("../../../../public/tray/mac-stopped@2x.png"))?;
         let menu = Menu::new();
         let mut ids = Vec::new();
+        let mut updates = None;
         for entry in MENU {
             let appended = match entry {
                 Entry::Item { label, action } => {
-                    let item = MenuItem::new(label, action.is_some(), None);
-                    if let Some(action) = action {
-                        ids.push((item.id().clone(), action));
+                    // The daemon turns "Check for updates…" on once it knows it can update.
+                    let item = MenuItem::new(label, enabled(action, false), None);
+                    ids.push((item.id().clone(), action));
+                    if action == Action::CheckUpdates {
+                        updates = Some(item.clone());
                     }
                     menu.append(&item)
                 }
@@ -171,6 +177,7 @@ impl StatusItem {
             ball,
             stopped,
             ids,
+            updates,
             actions,
             _menu: menu,
         })
@@ -190,6 +197,11 @@ impl StatusItem {
                     log(format_args!(
                         "could not change the menu bar tooltip: {error}"
                     ));
+                }
+            }
+            MainEvent::Updates => {
+                if let Some(item) = &self.updates {
+                    item.set_enabled(true);
                 }
             }
             MainEvent::Tray(TrayIconEvent::Click {
@@ -245,11 +257,15 @@ pub(crate) struct Tray {
 }
 
 impl Tray {
-    pub(crate) async fn start(link: TrayLink, look: Look) -> Self {
+    /// `updates` enables "Check for updates…".
+    pub(crate) async fn start(link: TrayLink, look: Look, updates: bool) -> Self {
         let tray = Self {
             proxy: link.proxy,
             actions: link.actions,
         };
+        if updates && tray.proxy.send_event(MainEvent::Updates).is_err() {
+            log(format_args!("the menu bar item is gone"));
+        }
         tray.show(look).await;
         tray
     }

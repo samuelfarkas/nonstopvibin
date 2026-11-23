@@ -90,6 +90,10 @@ pub enum DialogKind {
     UpdateFailed,
     MoveToApplications,
     CouldNotStart,
+    /// The daemon could not stop for "Restart to update".
+    CouldNotRestart,
+    /// The update could not be swapped in or started.
+    CouldNotInstall,
 }
 
 /// What the daemon asks the helper to show.
@@ -153,6 +157,8 @@ pub enum ToHelper {
         bounds: Option<Rect>,
         /// The data directory; Linux keeps the webview's storage in `<it>/webview`.
         data_directory: PathBuf,
+        /// The app can update itself: the macOS app menu enables "Check for updates…".
+        updates: bool,
     },
     /// Opens a view, or focuses it when it is open.
     Show { view: View },
@@ -318,10 +324,11 @@ mod tests {
                     },
                     bounds: None,
                     data_directory: PathBuf::from("/data"),
+                    updates: true,
                 }),
                 json!({"type": "Start", "origin": "http://127.0.0.1:4100",
                        "view": {"window": "main", "profile": profile.as_str()},
-                       "dataDirectory": "/data"}),
+                       "dataDirectory": "/data", "updates": true}),
             ),
             (
                 wire(&ToHelper::Show {

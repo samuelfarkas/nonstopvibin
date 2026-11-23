@@ -70,38 +70,39 @@ pub(crate) enum Action {
     /// Linux tray host reported; `None` keeps the last one.
     ToggleQuota(Option<Rect>),
     OpenMain,
+    CheckUpdates,
     Quit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Entry {
-    /// An item; without an action it shows disabled.
-    Item {
-        label: &'static str,
-        action: Option<Action>,
-    },
+    Item { label: &'static str, action: Action },
     Separator,
+}
+
+/// "Check for updates…" is enabled only where the app can update itself.
+pub(crate) fn enabled(action: Action, updates: bool) -> bool {
+    action != Action::CheckUpdates || updates
 }
 
 /// The tray menu, as main.ts built it.
 pub(crate) const MENU: [Entry; 5] = [
     Entry::Item {
         label: "Open NonstopVibin",
-        action: Some(Action::OpenMain),
+        action: Action::OpenMain,
     },
     Entry::Item {
         label: "Subscription quotas",
-        action: Some(Action::ToggleQuota(None)),
+        action: Action::ToggleQuota(None),
     },
-    // Disabled until the app updater gives it an action.
     Entry::Item {
         label: "Check for updates…",
-        action: None,
+        action: Action::CheckUpdates,
     },
     Entry::Separator,
     Entry::Item {
         label: "Quit NonstopVibin",
-        action: Some(Action::Quit),
+        action: Action::Quit,
     },
 ];
 
@@ -190,24 +191,26 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_is_main_ts_menu_with_updates_disabled() {
-        let shown: Vec<(&str, bool)> = MENU
-            .iter()
-            .map(|entry| match entry {
-                Entry::Item { label, action } => (*label, action.is_some()),
-                Entry::Separator => ("---", false),
-            })
-            .collect();
-        assert_eq!(
-            shown,
-            [
-                ("Open NonstopVibin", true),
-                ("Subscription quotas", true),
-                ("Check for updates…", false),
-                ("---", false),
-                ("Quit NonstopVibin", true),
-            ]
-        );
+    fn the_menu_is_main_ts_menu_with_updates_enabled_only_where_possible() {
+        for updates in [false, true] {
+            let shown: Vec<(&str, bool)> = MENU
+                .iter()
+                .map(|entry| match entry {
+                    Entry::Item { label, action } => (*label, enabled(*action, updates)),
+                    Entry::Separator => ("---", false),
+                })
+                .collect();
+            assert_eq!(
+                shown,
+                [
+                    ("Open NonstopVibin", true),
+                    ("Subscription quotas", true),
+                    ("Check for updates…", updates),
+                    ("---", false),
+                    ("Quit NonstopVibin", true),
+                ]
+            );
+        }
     }
 
     #[test]

@@ -687,4 +687,8 @@ impl<F: Fetch + Clone + 'static> ShellHost for Daemon<F> {
     fn shutdown(&self) {
         self.stop();
     }
+
+    async fn close(&self) -> Result<(), String> {
+        Daemon::close(self).await.map_err(|error| error.to_string())
+    }
 }

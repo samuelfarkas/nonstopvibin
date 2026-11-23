@@ -61,6 +61,18 @@ pub(crate) fn dialog_text(kind: DialogKind) -> DialogText {
             &["OK"],
             true,
         ),
+        DialogKind::CouldNotRestart => (
+            "Could not restart for update",
+            "Please reopen NonstopVibin and try again.",
+            &["OK"],
+            true,
+        ),
+        DialogKind::CouldNotInstall => (
+            "Could not install update",
+            "Please reopen NonstopVibin and try again.",
+            &["OK"],
+            true,
+        ),
     };
     DialogText {
         message,

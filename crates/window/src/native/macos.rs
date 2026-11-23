@@ -141,8 +141,16 @@ fn item(action: MenuAction, label: &str, modifiers: Modifiers, key: Option<Code>
 }
 
 /// Electron's application menu (`desktop/main.ts`). Menu events arrive as `UserEvent::Menu`.
-pub(crate) fn install_menu(proxy: &Proxy) -> muda::Result<Menu> {
+/// "Check for updates…" is enabled when the app can update itself (`updates`).
+pub(crate) fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
     let command = Modifiers::META;
+    let check_updates = item(
+        MenuAction::CheckUpdates,
+        "Check for updates…",
+        command,
+        None,
+    );
+    check_updates.set_enabled(updates);
     let app = Submenu::with_items(
         "NonstopVibin",
         true,
@@ -155,12 +163,7 @@ pub(crate) fn install_menu(proxy: &Proxy) -> muda::Result<Menu> {
                     ..AboutMetadata::default()
                 }),
             ),
-            &item(
-                MenuAction::CheckUpdates,
-                "Check for updates…",
-                command,
-                None,
-            ),
+            &check_updates,
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::hide(None),
             &PredefinedMenuItem::hide_others(None),

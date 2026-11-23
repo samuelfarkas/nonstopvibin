@@ -96,6 +96,9 @@ pub(crate) struct Boot {
     /// The secret the bridge script signs its messages with, so a message from any other
     /// script or frame is dropped.
     pub(crate) nonce: String,
+    /// The app can update itself: the app menu enables "Check for updates…".
+    #[cfg(target_os = "macos")]
+    pub(crate) updates: bool,
 }
 
 /// Where a close request for the main window stands.
@@ -139,6 +142,8 @@ struct App {
     regular: bool,
     #[cfg(target_os = "macos")]
     zoom_level: f64,
+    #[cfg(target_os = "macos")]
+    updates: bool,
 }
 
 pub(crate) fn run(boot: Boot) -> ! {
@@ -174,13 +179,15 @@ pub(crate) fn run(boot: Boot) -> ! {
         regular: false,
         #[cfg(target_os = "macos")]
         zoom_level: 0.0,
+        #[cfg(target_os = "macos")]
+        updates: boot.updates,
     };
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
                 #[cfg(target_os = "macos")]
-                match native::install_menu(&app.proxy) {
+                match native::install_menu(&app.proxy, app.updates) {
                     Ok(menu) => app.menu = Some(menu),
                     Err(error) => log(format_args!("could not build the menu: {error}")),
                 }

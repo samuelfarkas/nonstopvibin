@@ -34,6 +34,7 @@ fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
         view,
         bounds,
         data_directory,
+        updates,
     }) = helper::read(input)?
     else {
         return Err(invalid("the first message must be Start"));
@@ -42,6 +43,9 @@ fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
         .and_then(|line| String::from_utf8(line).ok())
         .filter(|token| !token.is_empty())
         .ok_or_else(|| invalid("the session token must follow Start on its own line"))?;
+    // Linux has no app menu.
+    #[cfg(not(target_os = "macos"))]
+    let _: bool = updates;
     let mut nonce = [0u8; 16];
     getrandom::fill(&mut nonce).map_err(io::Error::other)?;
     Ok(app::Boot {
@@ -51,6 +55,8 @@ fn boot(input: &mut impl BufRead) -> io::Result<app::Boot> {
         bounds,
         web_data: web_data(&data_directory)?,
         nonce: format!("{:032x}", u128::from_le_bytes(nonce)),
+        #[cfg(target_os = "macos")]
+        updates,
     })
 }
 
