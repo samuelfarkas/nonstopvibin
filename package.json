@@ -39,7 +39,7 @@
     "server:open": "bun scripts/server-remote.mjs open",
     "format": "oxfmt src tests scripts *.json *.ts index.html .github .vscode .oxlintrc.json .oxfmtrc.json",
     "lint": "oxlint . --max-warnings 0",
-    "quality": "bun run check && bun run lint && bun run format:check && bun run registry:check && bun scripts/verify-release.mjs && cargo fmt --all --check && sh scripts/cargo.sh clippy --all-targets --locked -- -D warnings && bun run wire:check",
+    "quality": "bun run check && bun run lint && bun run format:check && bun run registry:check && bun scripts/verify-release.mjs && cargo fmt --all --check && sh scripts/cargo.sh clippy --all-targets --locked -- -D warnings && RUSTDOCFLAGS='-D warnings' sh scripts/cargo.sh doc --no-deps --locked && bun run wire:check",
     "security:deps": "bun audit --audit-level=high",
     "security:scan": "bun run --cwd .deepsec scan",
     "security:report": "bun run --cwd .deepsec report",

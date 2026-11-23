@@ -56,7 +56,7 @@ reload shows the new UI without a restart.
 ## Checks and builds
 
 ```sh
-bun run quality       # The static gate: TypeScript, Oxlint, Oxfmt, cargo fmt, clippy, registry and wire drift
+bun run quality       # The static gate: TypeScript, Oxlint, Oxfmt, cargo fmt, clippy, rustdoc, registry and wire drift
 bun run format        # Format TypeScript sources, tests, scripts and configuration
 bun test              # TypeScript tests; add --watch to rerun while editing
 cargo test -p nsv-domain --locked   # One crate's tests
