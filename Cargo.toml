@@ -26,6 +26,7 @@ getrandom = "0.4.3"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+proptest = "1.12.0"
 rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "cache"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
