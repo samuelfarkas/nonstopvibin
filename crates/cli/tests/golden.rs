@@ -4,8 +4,12 @@
 //! `GET /api/state` for one token, and nothing on 24399.
 //!
 //! Every case must match, or be listed in [`DIFFERENCES`] and still differ.
+//!
+//! Linux only: the recording is the Linux headless CLI. Its `status` names the systemd unit and
+//! its `service` commands drive systemd, and on macOS a bare launch opens the desktop app.
 // Marks the whole binary as test code for the workspace's test-only lint exceptions.
 #![cfg(test)]
+#![cfg(target_os = "linux")]
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -182,13 +186,10 @@ fn the_cli_answers_as_the_typescript_cli_did() {
 
     let mut total = 0;
     let mut differing = Vec::new();
-    for case in cases.iter().filter(|case| {
-        let name = case["name"].as_str().unwrap();
-        // On macOS a bare launch is the desktop app (main.rs `opens_desktop`): the case would
-        // open it and wait. main.rs `the_legacy_background_flag_starts_the_desktop_app_without_a_display`
-        // covers which bare commands open it.
-        name.starts_with("cli ") && !(cfg!(target_os = "macos") && name == "cli no arguments")
-    }) {
+    for case in cases
+        .iter()
+        .filter(|case| case["name"].as_str().unwrap().starts_with("cli "))
+    {
         total += 1;
         let name = case["name"].as_str().unwrap();
         prepare(name, &root.0, &units);
