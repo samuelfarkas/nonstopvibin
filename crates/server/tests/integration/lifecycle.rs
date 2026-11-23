@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_agents::AgentDirectories;
+use nsv_core::install::CoreSource;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
@@ -54,13 +55,8 @@ fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Ru
     }
 }
 
-fn core(binary: PathBuf, pinned: bool, allow_missing: bool) -> CoreOptions {
-    CoreOptions {
-        binary,
-        pinned,
-        feed: None,
-        allow_missing,
-    }
+fn core(binary: PathBuf, source: CoreSource) -> CoreOptions {
+    CoreOptions { binary, source }
 }
 
 async fn start(run: Run) -> Daemon {
@@ -105,7 +101,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
     let message = refused(options(
         &root,
         &root.path().join("strict"),
-        core(missing.clone(), false, false),
+        core(missing.clone(), CoreSource::Checkout),
         *TIMING,
     ))
     .await;
@@ -130,7 +126,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
     let message = refused(options(
         &root,
         &root.path().join("pinned"),
-        core(swapped.join("cli-proxy-api"), true, false),
+        core(swapped.join("cli-proxy-api"), CoreSource::Checkout),
         *TIMING,
     ))
     .await;
@@ -144,7 +140,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
     let mut busy = options(
         &root,
         &root.path().join("bind"),
-        core(pinned_core(), true, false),
+        core(pinned_core(), CoreSource::Checkout),
         *TIMING,
     );
     busy.options.port = port;
@@ -155,7 +151,7 @@ async fn a_start_that_fails_leaves_the_data_directory_free() {
     let lenient = start(options(
         &root,
         &root.path().join("lenient"),
-        core(missing, false, true),
+        core(missing, CoreSource::Development),
         *TIMING,
     ))
     .await;
@@ -179,7 +175,7 @@ async fn unhashed_assets_revalidate_across_launches_and_edits_but_management_is_
         options(
             &root,
             &root.path().join(name),
-            core(root.path().join("no-core"), false, true),
+            core(root.path().join("no-core"), CoreSource::Development),
             *TIMING,
         )
     };
@@ -269,7 +265,12 @@ async fn an_idle_core_stops_after_its_last_request_keeps_its_usage_and_starts_ag
         idle: Duration::from_millis(400),
         ..*TIMING
     };
-    let options = options(&root, &data, core(pinned_core(), true, false), timing);
+    let options = options(
+        &root,
+        &data,
+        core(pinned_core(), CoreSource::Checkout),
+        timing,
+    );
     let upstream = provider().await;
     let store = Store::open(&options.data, Vault::open(&options.data).unwrap())
         .await

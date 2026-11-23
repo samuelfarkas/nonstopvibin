@@ -12,6 +12,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use nsv_agents::AgentDirectories;
+use nsv_core::install::CoreSource;
 use nsv_files::DataDir;
 use nsv_server::{Boundaries, CoreOptions, Daemon, Options};
 use nsv_testkit::TempDir;
@@ -234,9 +235,7 @@ async fn launch(root: &Path) -> (Daemon, Placeholders) {
         client: root.join("client"),
         core: CoreOptions {
             binary: root.join("no-core"),
-            pinned: false,
-            feed: None,
-            allow_missing: true,
+            source: CoreSource::Development,
         },
         agents,
     };

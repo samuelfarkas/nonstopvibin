@@ -16,6 +16,7 @@ use nsv_accounts::pricing::UsagePrices;
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
+use nsv_core::install::CoreSource;
 use nsv_core::pool::{Backend, Processes, READY};
 use nsv_domain::endpoint::{self, Origin};
 use nsv_domain::error::AppError;
@@ -97,14 +98,7 @@ impl Boundaries {
 pub struct CoreOptions {
     /// The core this build bundles.
     pub binary: PathBuf,
-    /// Its hash must also match the pin compiled into this build: headless releases.
-    pub pinned: bool,
-    /// Where an installed build reads the reviewed core pin (`NONSTOPVIBIN_CORE_FEED`). With
-    /// one, a core update installed over the bundled one runs instead; a development run has
-    /// none, and never selects or deletes installed cores.
-    pub feed: Option<String>,
-    /// A development run starts without it; each profile start then reports it missing.
-    pub allow_missing: bool,
+    pub source: CoreSource,
 }
 
 /// What kept the daemon from starting or restoring.
@@ -307,9 +301,7 @@ impl Daemon {
                 ready: READY,
                 timing,
                 outside: Arc::clone(&outside),
-                feed: options.core.feed,
-                require_pinned_core: options.core.pinned,
-                allow_missing_core: options.core.allow_missing,
+                source: options.core.source,
                 app: AppVersion::current(),
                 clock,
                 report: Arc::new(move |message| reported.errors.report(message)),

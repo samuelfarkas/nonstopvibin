@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use nsv_core::install::CoreSource;
 use nsv_core::pool::{BoxFuture, Phase, Pool, PoolState};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
@@ -44,14 +45,8 @@ pub struct CoresOptions {
     /// Provider requests (quota, model discovery, identity checks), the pin feed and release
     /// archives.
     pub outside: Arc<dyn Outside>,
-    /// The reviewed pin feed of an installed build; `None` in development runs. See
-    /// [`UpdateOptions::feed`].
-    pub feed: Option<String>,
-    /// Whether the bundled core must also match the pin compiled in (headless releases).
-    pub require_pinned_core: bool,
-    /// A development run starts without its bundled core; each profile start then reports it
-    /// missing.
-    pub allow_missing_core: bool,
+    /// Where the bundled core comes from.
+    pub source: CoreSource,
     /// Milliseconds since the epoch: quota check times and sign-in expiry.
     pub clock: fn() -> i64,
     pub report: Report,
@@ -73,9 +68,7 @@ pub struct Cores {
     resets: CodexResets,
     updates: CoreUpdates,
     store: Store,
-    binary: PathBuf,
     backends: Backends,
-    allow_missing_core: bool,
 }
 
 /// A profile as the API, the tray and the credential socket show it.
@@ -176,9 +169,7 @@ impl Cores {
             ready,
             timing,
             outside,
-            feed,
-            require_pinned_core,
-            allow_missing_core,
+            source: core_source,
             clock,
             report,
             sign_in_accepted,
@@ -241,9 +232,8 @@ impl Cores {
             credentials.clone(),
             UpdateOptions {
                 outside,
-                feed,
-                bundled: binary.clone(),
-                require_pinned_core,
+                source: core_source,
+                bundled: binary,
                 backends: Arc::clone(&backends),
                 ready,
                 report,
@@ -263,9 +253,7 @@ impl Cores {
             sign_in,
             updates,
             store,
-            binary,
             backends,
-            allow_missing_core,
         })
     }
 
@@ -624,20 +612,16 @@ impl Cores {
         self.resets.consume(profile, account, credit_id).await
     }
 
-    /// At startup: profiles start from the selected installed core, or the bundled one once it
-    /// passes its integrity check (a development run may lack it). Cores a dead earlier instance left are stopped (the
-    /// profiles' and the pending sign-ins'), pending sign-ins and core checks are deleted, the
-    /// profiles start and scheduling begins. An installed build then checks for a core update
+    /// At startup: profiles start from the core [`CoreUpdates::select`] picks. Cores a dead
+    /// earlier instance left are stopped (the profiles' and the pending sign-ins'), pending
+    /// sign-ins and core checks are deleted, the profiles start and scheduling begins. An installed build then checks for a core update
     /// in the background; offline stays quiet, as Settings checks again.
     ///
     /// # Errors
     /// A bundled core that is missing or fails its check, a ledger or file-system error, or
     /// the scheduler's.
     pub async fn launch(&self) -> Result<(), AppError> {
-        let missing = self.allow_missing_core && !self.binary.exists();
-        if !self.updates.select().await? && !missing {
-            self.updates.verify_bundled().await?;
-        }
+        self.updates.select().await?;
         // Orphans first: if the pending sign-ins cannot be removed, startup fails without
         // leaving one running.
         self.pool.reap_orphans().await.map_err(AppError::internal)?;

@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
+use nsv_core::install::CoreSource;
 use nsv_files::{DataDir, LockError, ServerLock};
 use nsv_server::{AllowedHost, Boundaries, CoreOptions, Daemon, Options, Session, panic};
 use nsv_shell::{Failure, Install};
@@ -42,18 +43,23 @@ fn options(mode: Mode, install: &Install) -> Result<Options, CliError> {
     let development = matches!(mode, Mode::Serve { .. })
         && !install.packaged
         && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
-    let (port, allow_hosts, desktop, pinned, allow_missing) = match mode {
-        // `core:install` writes the pinned core, which development may replace by hand.
-        Mode::Serve { port, allow_hosts } => (port, allow_hosts, None, !development, development),
-        // Desktop signing rewrites the core and refreshes its manifest, and a development run
-        // without its core still opens.
-        Mode::Desktop(desktop) => (
-            desktop_port()?,
-            Vec::new(),
-            Some(desktop),
-            false,
-            !install.packaged,
-        ),
+    let source = match (&mode, install.packaged) {
+        (Mode::Serve { .. }, true) => CoreSource::Package {
+            feed: core_feed(),
+            pinned: true,
+        },
+        // Desktop signing rewrites the core and refreshes its manifest.
+        (Mode::Desktop(_), true) => CoreSource::Package {
+            feed: core_feed(),
+            pinned: false,
+        },
+        (Mode::Serve { .. }, false) if !development => CoreSource::Checkout,
+        // A development run without its core still opens.
+        (_, false) => CoreSource::Development,
+    };
+    let (port, allow_hosts, desktop) = match mode {
+        Mode::Serve { port, allow_hosts } => (port, allow_hosts, None),
+        Mode::Desktop(desktop) => (desktop_port()?, Vec::new(), Some(desktop)),
     };
     let (core, client) = if install.packaged {
         (
@@ -74,10 +80,7 @@ fn options(mode: Mode, install: &Install) -> Result<Options, CliError> {
         client,
         core: CoreOptions {
             binary: core.join(BINARY),
-            pinned,
-            // A source checkout shares the data folder: an installed core would shadow its pin.
-            feed: install.packaged.then(core_feed),
-            allow_missing,
+            source,
         },
         agents: AgentDirectories::from_environment().map_err(CliError::from_display)?,
     })

@@ -19,7 +19,8 @@ use std::time::Duration;
 
 use nsv_core::binary::{BINARY, CorePin, CoreTarget, bundled_pin, verify_core};
 use nsv_core::install::{
-    ActiveCore, CORE_ARCHIVES, Staging, fetch_pin, install_core, prune, select_installed_core,
+    ActiveCore, CORE_ARCHIVES, CoreSource, Staging, fetch_pin, install_core, prune,
+    select_installed_core,
 };
 use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
@@ -37,14 +38,9 @@ use crate::task::{blocking, detached};
 
 pub struct UpdateOptions {
     pub outside: Arc<dyn Outside>,
-    /// The reviewed pin feed of an installed build: [`nsv_core::install::CORE_FEED`], or
-    /// `NONSTOPVIBIN_CORE_FEED`. `None` in development runs, which never select, install or
-    /// delete installed cores.
-    pub feed: Option<String>,
+    pub source: CoreSource,
     /// The bundled core, which profiles start from unless an update is selected.
     pub bundled: PathBuf,
-    /// Whether the bundled core must also match the pin compiled in (headless releases).
-    pub require_pinned_core: bool,
     pub backends: Backends,
     /// How long the new core gets to answer its check.
     pub ready: Duration,
@@ -127,7 +123,7 @@ impl CoreUpdates {
     /// Whether this run installs reviewed core updates.
     #[must_use]
     pub fn enabled(&self) -> bool {
-        self.0.options.feed.is_some()
+        matches!(self.0.options.source, CoreSource::Package { .. })
     }
 
     /// The version of the core profiles start from (`state.coreVersion`).
@@ -152,27 +148,29 @@ impl CoreUpdates {
         }
     }
 
-    /// At startup, before any core runs: profiles start from the newest intact installed core
-    /// above the bundled one, if any, and every other entry of `cores/` is deleted. Answers
-    /// whether one was selected; development runs select none and delete nothing.
+    /// At startup, before any core runs: a packaged build's profiles start from the newest
+    /// intact installed core above the bundled one, if any, and every other entry of `cores/`
+    /// is deleted. Otherwise they start from the bundled core once it passes its check, which
+    /// a development run skips when the core is missing.
     ///
     /// # Errors
-    /// A file-system error other than an unreadable entry.
-    pub async fn select(&self) -> Result<bool, AppError> {
-        if !self.enabled() {
-            return Ok(false);
-        }
-        let (cores, bundled, target) =
-            (self.0.cores.clone(), self.0.bundled.version, self.0.target);
-        let selected =
-            blocking(move || Ok(select_installed_core(&cores, bundled, target)?)).await?;
-        match selected {
-            Some(core) => {
-                self.0.activate(core).await?;
-                Ok(true)
+    /// A file-system error other than an unreadable entry, or a bundled core that is missing
+    /// or fails its check.
+    pub(crate) async fn select(&self) -> Result<(), AppError> {
+        match &self.0.options.source {
+            CoreSource::Package { .. } => {
+                let (cores, bundled, target) =
+                    (self.0.cores.clone(), self.0.bundled.version, self.0.target);
+                let selected =
+                    blocking(move || Ok(select_installed_core(&cores, bundled, target)?)).await?;
+                if let Some(core) = selected {
+                    return self.0.activate(core).await;
+                }
             }
-            None => Ok(false),
+            CoreSource::Development if !self.0.bundled.binary.exists() => return Ok(()),
+            CoreSource::Checkout | CoreSource::Development => {}
         }
+        self.0.verify_bundled().await
     }
 
     /// `POST /core/check`: reads the feed. A check already under way, such as the one at
@@ -192,8 +190,8 @@ impl CoreUpdates {
                 let inner = Arc::clone(&self.0);
                 tokio::spawn(async move {
                     let checked = Arc::clone(&inner)
-                        .run(CorePhase::Checking, |inner| async move {
-                            let pin = inner.fetch_pin().await?;
+                        .run(CorePhase::Checking, |inner, feed| async move {
+                            let pin = inner.fetch_pin(&feed).await?;
                             inner.status().pin = Some(pin);
                             Ok(())
                         })
@@ -223,8 +221,8 @@ impl CoreUpdates {
         self.0.after_check().await;
         let version = version.to_owned();
         Arc::clone(&self.0)
-            .run(CorePhase::Checking, |inner| async move {
-                inner.install(&version).await
+            .run(CorePhase::Checking, |inner, feed| async move {
+                inner.install(&feed, &version).await
             })
             .await
     }
@@ -238,7 +236,7 @@ impl CoreUpdates {
     pub async fn use_bundled(&self) -> Result<(), AppError> {
         self.0.after_check().await;
         Arc::clone(&self.0)
-            .run(CorePhase::Restarting, |inner| async move {
+            .run(CorePhase::Restarting, |inner, _feed| async move {
                 if inner.status().active == inner.bundled {
                     return Err(AppError::new(
                         "NonstopVibin already runs its bundled core.",
@@ -257,14 +255,6 @@ impl CoreUpdates {
             .await
     }
 
-    /// Checks the bundled core, which profiles start from unless an update is selected.
-    ///
-    /// # Errors
-    /// A bundled core that is missing or fails its integrity check.
-    pub(crate) async fn verify_bundled(&self) -> Result<(), AppError> {
-        self.0.verify_bundled().await
-    }
-
     /// Aborts a download or start check, then waits for the operation in progress to end.
     pub async fn shutdown(&self) {
         self.0.closing.send_replace(true);
@@ -275,14 +265,19 @@ impl CoreUpdates {
 }
 
 impl Inner {
-    /// Checks the bundled core, and in a headless release that it is the pin compiled in.
+    /// Checks the bundled core, and where the source requires it that it is the pin compiled
+    /// in.
     async fn verify_bundled(&self) -> Result<(), AppError> {
         let binary = self.bundled.binary.clone();
-        let pinned = if self.options.require_pinned_core {
-            Some(bundled_pin().map_err(AppError::internal)?)
-        } else {
-            None
+        let pinned = match self.options.source {
+            CoreSource::Package { pinned, .. } => pinned,
+            CoreSource::Checkout => true,
+            CoreSource::Development => false,
         };
+        let pinned = pinned
+            .then(bundled_pin)
+            .transpose()
+            .map_err(AppError::internal)?;
         blocking(move || Ok(verify_core(&binary, pinned)?)).await
     }
 
@@ -316,18 +311,20 @@ impl Inner {
 
     /// Runs `action` as the one operation in progress, starting in `phase`, to its end even if
     /// the caller stops waiting.
+    /// `action` gets the feed, which only a packaged build has.
     async fn run<T, A>(
         self: Arc<Self>,
         phase: CorePhase,
-        action: impl FnOnce(Arc<Self>) -> A,
+        action: impl FnOnce(Arc<Self>, String) -> A,
     ) -> Result<T, AppError>
     where
         T: Send + 'static,
         A: Future<Output = Result<T, AppError>> + Send + 'static,
     {
-        if self.options.feed.is_none() {
+        let CoreSource::Package { feed, .. } = &self.options.source else {
             return Err(AppError::new("Only installed builds update the core.", 409));
-        }
+        };
+        let feed = feed.clone();
         if self.pool.state().closing || *self.closing.borrow() {
             return Err(AppError::shutting_down());
         }
@@ -343,7 +340,7 @@ impl Inner {
         }
         let ended = Arc::clone(&self);
         // Boxed: a whole install would otherwise sit in each caller's future.
-        let work = Box::pin(action(self));
+        let work = Box::pin(action(self, feed));
         detached((), async move {
             let result = work.await;
             ended.phase.send_replace(None);
@@ -364,14 +361,13 @@ impl Inner {
         }
     }
 
-    async fn fetch_pin(&self) -> Result<CorePin, AppError> {
-        let feed = self.options.feed.as_deref().unwrap_or_default();
+    async fn fetch_pin(&self, feed: &str) -> Result<CorePin, AppError> {
         self.abortable(fetch_pin(&*self.options.outside, feed))
             .await
     }
 
-    async fn install(self: &Arc<Self>, version: &str) -> Result<(), AppError> {
-        let pin = self.fetch_pin().await?;
+    async fn install(self: &Arc<Self>, feed: &str, version: &str) -> Result<(), AppError> {
+        let pin = self.fetch_pin(feed).await?;
         let offered = {
             let mut status = self.status();
             status.pin = Some(pin.clone());

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::bundled_pin;
+use nsv_core::install::CoreSource;
 use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
 use nsv_domain::id::ProfileId;
@@ -50,9 +51,10 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
         client: root.path().join("client"),
         core: CoreOptions {
             binary: bundled_core(root.path()),
-            pinned: false,
-            feed: feed.map(str::to_owned),
-            allow_missing: false,
+            source: feed.map_or(CoreSource::Development, |feed| CoreSource::Package {
+                feed: feed.to_owned(),
+                pinned: false,
+            }),
         },
         agents: AgentDirectories::new(root.path().join("home")),
     };

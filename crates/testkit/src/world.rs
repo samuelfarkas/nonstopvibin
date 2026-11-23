@@ -19,7 +19,7 @@ use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::{Outside, Request};
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::binary::{CoreManifest, CoreTarget, Sha256Digest, bundled_pin};
-use nsv_core::install::Releases;
+use nsv_core::install::{CoreSource, Releases};
 use nsv_core::pool::{Backend, BoxFuture};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -306,9 +306,10 @@ impl World {
                 ready: Duration::from_secs(5),
                 timing,
                 outside: Arc::<StubFetch>::clone(&fetch),
-                feed: feed.map(str::to_owned),
-                require_pinned_core: false,
-                allow_missing_core: false,
+                source: feed.map_or(CoreSource::Development, |feed| CoreSource::Package {
+                    feed: feed.to_owned(),
+                    pinned: false,
+                }),
                 clock,
                 report: Arc::new(move |message| reported.lock().unwrap().push(message)),
                 sign_in_accepted: Arc::new(move || {

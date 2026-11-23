@@ -3,6 +3,7 @@
 //! running because its core starts on the next request.
 
 use nsv_agents::AgentDirectories;
+use nsv_core::install::CoreSource;
 use nsv_desktop::HostEvent;
 use nsv_domain::secret::{ApiKey, SessionToken};
 use nsv_domain::wire::ApiAccount;
@@ -50,9 +51,7 @@ async fn daemon(root: &TempDir, desktop: Option<Desktop>) -> Daemon {
         client: root.path().join("client"),
         core: CoreOptions {
             binary: root.path().join("no-core"),
-            pinned: false,
-            feed: None,
-            allow_missing: true,
+            source: CoreSource::Development,
         },
         agents: AgentDirectories::new(root.path().join("home")),
     };

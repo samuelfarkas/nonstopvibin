@@ -44,6 +44,25 @@ pub const ARCHIVE_HOSTS: &[&str] = &[
 /// The reviewed pin on `main`, which installed builds read; `NONSTOPVIBIN_CORE_FEED` replaces
 /// it. Archives always come from [`CORE_ARCHIVES`].
 pub const CORE_FEED: &str = "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/crates/core/core-release.json";
+/// Where the bundled core comes from, which decides how it is checked and whether reviewed
+/// updates replace it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreSource {
+    /// A packaged build. Reviewed updates from `feed` ([`CORE_FEED`], or
+    /// `NONSTOPVIBIN_CORE_FEED`) run instead of the bundled core once installed. A headless
+    /// release's core must also match the pin compiled in; the desktop app's signing rewrites
+    /// its core and refreshes the manifest, so it is not `pinned`.
+    Package { feed: String, pinned: bool },
+    /// A checkout's `serve`, whose core `core:install` wrote from the pin compiled in and must
+    /// still match it. A checkout shares the data folder, where an installed core would shadow
+    /// its pin, so none is selected, installed or deleted.
+    Checkout,
+    /// A development run (`bun run dev`, or the desktop app from a checkout): the core may be
+    /// replaced by hand or missing, and each profile start then reports it missing. Installed
+    /// cores are left alone, as in a checkout.
+    Development,
+}
+
 /// GitHub serves raw files from this host only.
 const FEED_HOSTS: &[&str] = &["raw.githubusercontent.com"];
 const FEED_TIMEOUT: Duration = Duration::from_secs(15);
