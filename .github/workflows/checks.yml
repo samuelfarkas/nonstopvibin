@@ -43,6 +43,8 @@ jobs:
       # Dependencies and the pinned core, which the integration tests run.
       - run: bun run setup
       - run: bun run quality
+      # The package tests read the built interface's dist/licenses/THIRD-PARTY.txt.
+      - run: bun run build:client
       - run: bun test
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

@@ -78,6 +78,10 @@ mod imp {
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     }
 
+    #[expect(
+        clippy::unused_self,
+        reason = "the Linux twin acts through its X connection; System Events needs none"
+    )]
     impl Desktop {
         pub(crate) fn open() -> Self {
             Self
