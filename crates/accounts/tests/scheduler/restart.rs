@@ -650,16 +650,20 @@ async fn a_start_that_succeeds_while_the_last_automatic_starts_quota_check_is_pe
             world.launches(&profile) == 3
         })
         .await;
-    // From here on quota checks wait: the limit's fourth core's stays pending.
+    // From here on quota checks wait. A started core skips its check while an earlier one's
+    // runs, and the third core's may begin after this, so the check left pending when the
+    // limit's fourth core is up is that core's or the third's: either way an automatic
+    // start's check is in flight.
     open.send_replace(false);
     world
         .until(
-            "the fourth core's check",
+            "an automatic start's pending check",
             Duration::from_secs(60),
             |world| {
                 world.launches(&profile) == 4
                     && world.pool().usable(&profile)
-                    && world.host.quota_checks.lock().unwrap().len() >= 4
+                    && world.host.quota_checks.lock().unwrap().len()
+                        > world.host.quota_stored.lock().unwrap().len()
             },
         )
         .await;
