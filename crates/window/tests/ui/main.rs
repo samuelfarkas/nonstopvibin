@@ -133,10 +133,12 @@ fn check(name: &str, site: &Site, view: View, token: &str, data: &Path) -> Value
     result
 }
 
-/// What reached the daemon's end of the bridge, and what the helper refused.
+/// What reached the daemon's end of the bridge, what the helper refused, and the helper's
+/// own requests (its menu's, on macOS).
 #[derive(Default)]
 struct Bridge {
     forwarded: Vec<String>,
+    sent: Vec<String>,
     logged: usize,
     closed: bool,
 }
@@ -151,7 +153,7 @@ impl Bridge {
                     view: ViewKind::Main,
                     ..
                 } => self.closed = true,
-                _ => {}
+                other => self.sent.push(format!("{other:?}")),
             }
         }
         self.closed
@@ -180,6 +182,15 @@ fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Val
         // Long enough for the helper to have answered or dropped what the page posted.
         common::pause(Duration::from_millis(300));
         return bridge.since(helper);
+    }
+    if action["sent"] == true {
+        common::pause(Duration::from_millis(300));
+        bridge.watch(helper);
+        return json!({ "sent": std::mem::take(&mut bridge.sent) });
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(answer) = desktop.mac_action(action) {
+        return answer;
     }
     if let Some(key) = action["key"].as_str() {
         desktop.key(key);
@@ -219,6 +230,17 @@ fn focus_rings_follow_the_keyboard_not_the_mouse() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("focus.html"), "focus");
     check_once("focus", &site, View::Main { profile: None }, TOKEN);
+}
+
+/// The application menu the helper installs on macOS: Edit's shortcuts in a text field
+/// through the system pasteboard, View's accelerators, and Quit.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
+fn the_app_menu_edits_text_and_reaches_the_daemon() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let site = Site::start(fixtures("focus.html"), "app-menu");
+    check_once("app-menu", &site, View::Main { profile: None }, TOKEN);
 }
 
 #[test]

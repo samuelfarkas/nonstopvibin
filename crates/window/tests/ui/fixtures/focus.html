@@ -2,6 +2,13 @@
 <meta charset="utf-8" />
 <title>focus fixture</title>
 <!-- Markup with the components' class names; tests/ui/checks/focus.js drives it. -->
+<!-- The macOS main window draws its traffic lights over the page's top-left corner, which the
+     app leaves clear (styles.css, `.desktop .sidebar`): a click there would hit them. -->
+<style>
+  body {
+    padding-top: 44px;
+  }
+</style>
 <button id="first">Refresh</button>
 <details>
   <summary class="tray-profile">Profile</summary>
