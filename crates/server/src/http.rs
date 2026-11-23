@@ -255,7 +255,8 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         let Some(host) = host else { return false };
         host.strip_prefix("127.0.0.1:")
             .or_else(|| host.strip_prefix("localhost:"))
-            .is_some_and(|port| port == self.port.to_string())
+            // The port's exact decimal text: `parse` would also take a sign or leading zeros.
+            .is_some_and(|port| port.parse() == Ok(self.port) && !port.starts_with(['+', '0']))
             || (self.development && host == DEV_HOST)
             || self.allowed_host(Some(host))
     }
@@ -318,7 +319,6 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             return Err(Failure::status(403, "Unrecognized host."));
         }
         let allowed = self.allowed_host(host);
-        let host = host.map(str::to_owned);
         // The path as WHATWG URL parsing sees it, as `new URL(req.url, origin)` did.
         let url = self
             .base

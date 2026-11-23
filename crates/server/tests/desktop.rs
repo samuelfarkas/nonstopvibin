@@ -107,12 +107,28 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
         daemon.port(),
         "POST",
         "/api/desktop/show",
-        &[("Authorization".to_owned(), token)],
+        &[("Authorization".to_owned(), token.clone())],
         b"",
     )
     .await;
     assert_eq!(shown.status, 200);
     assert_eq!(events.try_recv().unwrap(), HostEvent::ShowMain);
+    // The Host names the port exactly: no sign or leading zero.
+    let port = daemon.port();
+    for host in [format!("127.0.0.1:0{port}"), format!("localhost:+{port}")] {
+        let refused = send(
+            port,
+            "POST",
+            "/api/desktop/show",
+            &[
+                ("Host".to_owned(), host),
+                ("Authorization".to_owned(), token.clone()),
+            ],
+            b"",
+        )
+        .await;
+        assert_eq!(refused.status, 403);
+    }
     // The sleeping profile serves, so the tray shows it running.
     assert_eq!(daemon.tray_status().borrow().running, ["Sleeper"]);
     assert!(!daemon.tray_status().borrow().streaming);
