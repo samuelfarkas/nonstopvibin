@@ -196,8 +196,13 @@ fn a_failed_quit_shows_its_reason_until_dismissed_then_exits_1() {
     app.signal("TERM");
     dismiss_error(&x, &mut app);
     let stderr = app.stderr();
+    // A line of its own; what else the app logged first depends on timing (a tray without a
+    // StatusNotifierWatcher reports it, unless the quit comes first).
     assert!(
-        stderr.contains("\nserver.json must be an owner-only ordinary file you own (chmod 600).\n"),
+        stderr
+            .lines()
+            .any(|line| line
+                == "server.json must be an owner-only ordinary file you own (chmod 600)."),
         "{stderr}"
     );
 }
