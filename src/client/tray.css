@@ -1,4 +1,4 @@
-/* The fixed-width menu-bar panel (main.ts trayWidth) uses a smaller scale than the main window. */
+/* The fixed-width menu-bar panel (`QUOTA_WIDTH` in crates/window/src/layout.rs) uses a smaller scale than the main window. */
 .tray-view {
   --text-caption: 0.75rem;
   --text-body: 0.875rem;

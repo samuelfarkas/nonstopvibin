@@ -2,7 +2,7 @@ import { agents, type Agent } from "./agents.ts";
 import type { Protocol } from "./generated/domain/Protocol.ts";
 
 export type { Protocol };
-/** Server rules an API-key preset can name: see `modelProtocols` (api-accounts.ts) and `upstreamHeaders` (config.ts). */
+/** Server rules an API-key preset can name: see `model_protocol` (crates/accounts/src/api_accounts.rs) and `upstream_headers` (crates/core/src/config.rs). */
 export type Upstream = "opencode-go";
 
 interface ProviderFields {

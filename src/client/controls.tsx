@@ -8,8 +8,8 @@ import { useEffect, useState } from "react";
 import { copy, desktop } from "./api.ts";
 import { messageOf } from "./action.ts";
 
-// Main can only hold a deferred close after a guard vetoed an unload.
-// The other half: will-prevent-unload and releaseWindow in desktop/main.ts.
+// The window helper only holds a deferred close after a guard vetoed an unload.
+// The other half: `ask_to_close_main` and `releaseWindow` in crates/window/src/app.rs.
 let closeVetoed = false;
 export function useKeepDraft(needed: boolean) {
   useEffect(() => {
