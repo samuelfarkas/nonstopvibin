@@ -1,9 +1,18 @@
-//! What the webview cannot do: the clipboard, the folder picker and message dialogs. Each
-//! platform module offers `copy`, `choose_folder` and `show_dialog`; answers come back as
-//! events on the loop. The dialogs' text, buttons and what each button means are written here
-//! once.
+//! What each platform does its own way: the windows' chrome, the webview's container, the
+//! clipboard, the folder picker, message dialogs, the work area and, on macOS, the app menu and
+//! the Dock icon. [`Native`] states it once; `linux.rs` (GTK) and `macos.rs` (AppKit) implement
+//! it, and answers come back as events on the loop. The dialogs' text, buttons and what each
+//! button means are written here once.
 
-use nsv_desktop::pipe::{Choice, DialogKind, Failure, Reason};
+use std::io;
+use std::path::PathBuf;
+
+use nsv_desktop::pipe::{Anchor, Choice, DialogKind, Failure, Reason, Rect};
+use tao::event_loop::EventLoop;
+use tao::window::{Window, WindowBuilder};
+use wry::{WebView, WebViewBuilder};
+
+use crate::app::{Proxy, Target, Ticket};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -11,12 +20,55 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{choose_folder, copy, present, set_icon, show_dialog, work_area};
+pub(crate) use linux::Gtk as Os;
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{
-    MenuAction, choose_folder, copy, drag, install_menu, menu_action, present, show_dialog,
-    work_area,
-};
+pub(crate) use macos::AppKit as Os;
+
+pub(crate) trait Native {
+    /// What the platform keeps for the whole process.
+    type State: Default;
+
+    /// The quota popup hangs below the tray icon, in the menu bar, instead of standing on the
+    /// bottom of the work area.
+    const POPUP_BELOW_ANCHOR: bool;
+    /// The main window has no title bar, so the page's drag regions move it.
+    const MAIN_DRAG_REGIONS: bool;
+
+    fn event_loop<T: 'static>() -> EventLoop<T>;
+    /// Once the loop runs. `updates` enables "Check for updates…".
+    fn start(state: &mut Self::State, proxy: &Proxy, updates: bool);
+    /// After each event; `main_on_screen` tells whether the main window shows.
+    fn settle(state: &mut Self::State, target: &Target, main_on_screen: impl FnOnce() -> bool);
+    /// A press at page point (`x`, `y`) in a drag region of the main window.
+    fn drag(state: &Self::State, window: &Window, x: i32, y: i32);
+
+    /// Where WebKit keeps its storage, made from the data directory's `path`; `None` keeps the
+    /// platform's default.
+    ///
+    /// # Errors
+    /// When the directory cannot be made the owner's alone.
+    fn web_data(path: PathBuf) -> io::Result<Option<PathBuf>>;
+    fn main_window(builder: WindowBuilder) -> WindowBuilder;
+    fn quota_window(builder: WindowBuilder) -> WindowBuilder;
+    /// The main window has been built.
+    fn main_opened(window: &Window);
+    /// The webview inside `window`.
+    ///
+    /// # Errors
+    /// What failed to build it.
+    fn webview(builder: WebViewBuilder<'_>, window: &Window) -> Result<WebView, String>;
+    /// Shows `window` and gives it the focus.
+    fn present(window: &Window);
+    /// # Errors
+    /// The message the page's promise rejects with.
+    fn copy(text: &str) -> Result<(), String>;
+    /// A folder picker over the main window; answers with `FolderChosen`.
+    fn choose_folder(parent: &Window, proxy: &Proxy, ticket: Ticket);
+    /// A message dialog; calls `answered` once with the user's choice.
+    fn show_dialog(text: &Dialog<'_>, answered: impl FnOnce(Choice) + 'static);
+    /// The work area of the display that holds `anchor`, or of the nearest one.
+    fn work_area(anchor: Anchor) -> Option<Rect>;
+}
 
 pub(crate) const FOLDER_TITLE: &str = "Connect Claude Code in a project";
 pub(crate) const FOLDER_BUTTON: &str = "Choose project";
