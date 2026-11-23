@@ -176,6 +176,12 @@
       "env": {
         "browser": true
       }
+    },
+    {
+      "files": ["crates/window/tests/common/page.js"],
+      "env": {
+        "browser": true
+      }
     }
   ]
 }
