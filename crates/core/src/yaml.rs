@@ -113,23 +113,24 @@ mod tests {
         let map = document.as_object().unwrap();
         assert_eq!(
             to_yaml(map),
+            // Keys keep their insertion order, as the TypeScript `YAML.stringify` wrote them.
             concat!(
-                "\"debug\": false\n",
-                "\"empty-list\": []\n",
-                "\"empty-map\": {}\n",
-                "\"entries\":\n",
-                "  - \"headers\": {}\n",
-                "    \"models\":\n",
-                "      - \"alias\": \"m\"\n",
-                "        \"name\": \"m\"\n",
-                "    \"name\": \"n\"\n",
                 "\"host\": \"127.0.0.1\"\n",
+                "\"port\": 8317\n",
+                "\"debug\": false\n",
                 "\"keys\":\n",
                 "  - \"a\"\n",
                 "  - \"b\"\n",
+                "\"empty-list\": []\n",
+                "\"empty-map\": {}\n",
                 "\"nested\":\n",
                 "  \"inner\": \"x\"\n",
-                "\"port\": 8317\n",
+                "\"entries\":\n",
+                "  - \"name\": \"n\"\n",
+                "    \"models\":\n",
+                "      - \"name\": \"m\"\n",
+                "        \"alias\": \"m\"\n",
+                "    \"headers\": {}\n",
             )
         );
     }

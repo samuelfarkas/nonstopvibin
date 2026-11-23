@@ -11,6 +11,16 @@ repository.workspace = true
 [dependencies]
 nsv-domain.workspace = true
 nsv-store.workspace = true
+rustix.workspace = true
+# preserve_order: the user's Claude settings keep their key order when merged, as JSON.parse and
+# JSON.stringify keep it. Cargo unifies the feature for the whole workspace.
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [lints]
 workspace = true

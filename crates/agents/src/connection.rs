@@ -1,0 +1,137 @@
+//! What every agent connection shares, and the one definition per agent that `AgentSetup` runs
+//! the same flow with.
+
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+
+use nsv_domain::registry::Agent;
+use nsv_domain::wire::{AgentSetupInput, Profile};
+
+use crate::error::{AgentError, conflict};
+use crate::manifest::Manifest;
+use crate::{claude, codex, opencode, pi};
+
+/// Starts every provider name a connected agent lists; pi's controls recognise ours by it.
+pub(crate) const PROVIDER_PREFIX: &str = "nonstopvibin-";
+
+/// How generated pi and `OpenCode` code asks `GET /v1/models` for its curated catalog. Codex's
+/// own requests carry the header `x-nonstopvibin-agent` instead.
+pub const CATALOG_QUERY: &str = "nonstopvibin";
+pub const CATALOG_HEADER: &str = "x-nonstopvibin-agent";
+
+/// The provider a connected agent lists for a profile.
+#[must_use]
+pub fn native_provider(profile: &Profile) -> String {
+    format!("{PROVIDER_PREFIX}{}", profile.slug)
+}
+
+/// The gateway's route for one profile; Anthropic clients add `/v1` themselves.
+#[must_use]
+pub fn profile_base(port: u16, slug: &str) -> String {
+    format!("http://127.0.0.1:{port}/p/{slug}")
+}
+
+/// The OpenAI-style base URL of one profile on the gateway.
+#[must_use]
+pub fn profile_endpoint(port: u16, slug: &str) -> String {
+    format!("{}/v1", profile_base(port, slug))
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// A path as the generated text names it.
+pub(crate) fn text(path: &Path) -> Cow<'_, str> {
+    path.to_string_lossy()
+}
+
+pub(crate) struct Context<'a> {
+    pub profile: &'a Profile,
+    pub input: &'a AgentSetupInput,
+    pub port: u16,
+    pub helper: &'a Path,
+    /// The credential socket, for `OpenCode`'s plugin, which asks it directly.
+    pub socket: &'a Path,
+    /// Where pi's extensions remember each repository's profile.
+    pub pi_preferences: &'a Path,
+}
+
+/// Where an agent reads its configuration: `$variable`, `$XDG_CONFIG_HOME/<xdg>`, or `~/<home>`.
+pub(crate) struct ConfigDirectory {
+    pub variable: &'static str,
+    pub xdg: Option<&'static str>,
+    pub home: &'static [&'static str],
+}
+
+type Merge = fn(Option<&str>, Option<&str>, Option<&str>) -> Result<Option<String>, AgentError>;
+
+type ProjectRoot = fn(&Path) -> Result<PathBuf, AgentError>;
+type Retain = fn(Option<&str>, &str) -> Result<Option<String>, AgentError>;
+type LaunchSettings = fn(&Manifest) -> Result<Option<String>, AgentError>;
+
+pub(crate) struct Definition {
+    /// Manifest version a connection made now records; older ones are migrated.
+    pub version: u8,
+    /// Whether a connection from an older version asks the user to reconnect even though
+    /// startup migrates its files: the agent must reload or launch differently.
+    pub older_needs_reconnect: bool,
+    pub directory: Option<ConfigDirectory>,
+    /// Agents connected per project: the project root the configuration belongs to.
+    pub project_root: Option<ProjectRoot>,
+    /// The configuration file, under the agent's directory or the project, by manifest version.
+    pub file: fn(&Profile, u8) -> Vec<String>,
+    /// Whether the connection installs a credential helper that asks the socket.
+    pub helper: bool,
+    pub configure: fn(&Context<'_>) -> String,
+    /// The configuration with `previous` (our last fields) replaced by `next`; `None` when
+    /// nothing is left. Only what this app installed is replaced or removed; a collision fails,
+    /// so existing credentials need no plaintext backup.
+    pub merge: Merge,
+    /// Whether the installed configuration still equals what merging our fields gives.
+    pub unchanged: fn(&str, Option<&str>) -> Result<bool, AgentError>,
+    /// Our settings already in the user's file before connecting, restored on disconnect.
+    pub retain: Option<Retain>,
+    /// A settings file the launch command passes, derived from the manifest.
+    pub launch_settings: Option<LaunchSettings>,
+    pub command: fn(&Profile, &str) -> String,
+    pub instructions: fn(&Profile) -> String,
+}
+
+pub(crate) const fn definition(agent: Agent) -> &'static Definition {
+    match agent {
+        Agent::Claude => &claude::DEFINITION,
+        Agent::Codex => &codex::DEFINITION,
+        Agent::Pi => &pi::DEFINITION,
+        Agent::Opencode => &opencode::DEFINITION,
+    }
+}
+
+/// Environment variables that move agent configuration; a service must forward them. In the
+/// order the TypeScript server listed them.
+pub const AGENT_ENVIRONMENT: [&str; 4] = [
+    "CODEX_HOME",
+    "OPENCODE_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "PI_CODING_AGENT_DIR",
+];
+
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the signature of `Definition::unchanged`"
+)]
+pub(crate) fn same_text(current: &str, expected: Option<&str>) -> Result<bool, AgentError> {
+    Ok(Some(current) == expected)
+}
+
+/// The rule for a file that is wholly ours: any other content is a conflict.
+pub(crate) fn owned_file(
+    current: Option<&str>,
+    previous: Option<&str>,
+    next: Option<&str>,
+) -> Result<Option<String>, AgentError> {
+    if current.is_some() && current != previous && current != next {
+        return Err(conflict());
+    }
+    Ok(next.map(str::to_owned))
+}
