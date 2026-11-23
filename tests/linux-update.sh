@@ -21,6 +21,8 @@ work=$(mktemp -d)
 log=$work/app.log
 apps=$work/Applications
 image=$apps/NonstopVibin.AppImage
+# The app gets its own HOME; the toolchain stays where it was installed.
+export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup} CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$work/target} DISPLAY=:99 HOME=$work/home
 export APPIMAGE_EXTRACT_AND_RUN=1 NONSTOPVIBIN_DATA_DIR=$work/data NONSTOPVIBIN_PORT=0
 mkdir -p "$work/src" "$work/feed" "$apps" "$HOME"
