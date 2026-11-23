@@ -736,13 +736,13 @@ async fn a_confirmation_outstanding_while_a_swap_replaces_the_core_leaves_the_su
                     return None;
                 }
                 if polls.fetch_add(1, Ordering::SeqCst) < 9 {
-                    return Some(Box::pin(async { serde_json::json!({}) }));
+                    return Some(Box::pin(async { Some(serde_json::json!({})) }));
                 }
                 held.store(true, Ordering::SeqCst);
                 let mut answered = answered.clone();
                 Some(Box::pin(async move {
                     let _answered = answered.wait_for(|answered| *answered).await;
-                    serde_json::json!({})
+                    Some(serde_json::json!({}))
                 }))
             }));
         });
@@ -804,7 +804,7 @@ async fn a_readiness_retry_of_one_core_keeps_its_activity_window() {
                 }
                 scheduler.activity(&id, false);
                 Some(Box::pin(async {
-                    serde_json::json!({ "files": "unreadable" })
+                    Some(serde_json::json!({ "files": "unreadable" }))
                 }))
             }));
         });
@@ -902,4 +902,148 @@ async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_
         "Ready",
         "polling continues while the UI reads"
     );
+}
+
+/// Queues `count` gateway requests on the profile's running core.
+async fn queue_requests(world: &World, profile: &ProfileId, count: usize) {
+    let port = world.pool().port(profile).unwrap();
+    for _ in 0..count {
+        assert_eq!(world.fake.request(port, "fixture-model"), 200);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_drains_of_one_profile_share_one_queue_read() {
+    let (world, profiles) = launched(timing(), &["Shared drain"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    queue_requests(&world, profile, 3).await;
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    let (release, holding) = hold(&world, "/usage-queue", |_| true);
+    let test = async {
+        // A finished request's drain, held at the core.
+        world.scheduler.activity(profile, false);
+        world
+            .until("the held drain", Duration::from_secs(1), |_| {
+                holding.load(Ordering::SeqCst) > 0
+            })
+            .await;
+        // A stop's final drain while the first is still reading.
+        let stop = world.pool().stop(profile);
+        let rest = async {
+            world.settle().await;
+            release.send_replace(true);
+        };
+        tokio::join!(stop, rest).0
+    };
+    world.run(test).await.unwrap();
+    assert_eq!(
+        world.fake.calls(profile, "/usage-queue").len() - before,
+        1,
+        "the overlapping drains read the queue once"
+    );
+    assert_eq!(
+        world.usage(profile).await.len(),
+        3,
+        "every queued row is stored"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_account_maintenance_does_not_hold_up_usage_collection() {
+    let timing = Timing {
+        accounts: Duration::from_millis(500),
+        watch: Duration::from_secs(10),
+        ..timing()
+    };
+    let (world, profiles) = launched(timing, &["Slow maintenance"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    // The read that resumes polling syncs at once; the maintenance pass after it is held.
+    let syncs = Arc::new(AtomicUsize::new(0));
+    let (release, holding) = hold(&world, "/auth-files", move |_| {
+        syncs.fetch_add(1, Ordering::SeqCst) > 0
+    });
+    world.scheduler.watch().await;
+    world
+        .until("the held maintenance", Duration::from_secs(5), |_| {
+            holding.load(Ordering::SeqCst) > 0
+        })
+        .await;
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    queue_requests(&world, profile, 1).await;
+    world.scheduler.activity(profile, false);
+    world.pass(Duration::from_secs(1)).await;
+    assert!(
+        world.fake.calls(profile, "/usage-queue").len() > before,
+        "a finished request is drained while maintenance waits"
+    );
+    assert_eq!(world.usage(profile).await.len(), 1);
+    release.send_replace(true);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_completes_when_the_core_exits_during_its_final_drain() {
+    let (world, profiles) = launched(timing(), &["Exit in drain"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    {
+        let (fake, id) = (world.fake.clone(), profile.clone());
+        // The next queue read is the stop's: the core exits as it arrives.
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if !path.starts_with("/usage-queue") {
+                    return None;
+                }
+                fake.kill(&id);
+                Some(Box::pin(async { None }))
+            }));
+        });
+    }
+    let started = Instant::now();
+    world.run(world.pool().stop(profile)).await.unwrap();
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    assert!(
+        started.elapsed() <= KILL_GRACE,
+        "stopped after {:?}",
+        started.elapsed()
+    );
+    assert!(!world.pool().alive(profile));
+}
+
+#[tokio::test(start_paused = true)]
+async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
+    let (world, profiles) = launched(timing(), &["Drain pages"]).await;
+    let profile = &profiles[0];
+    world.pass(Duration::from_secs(3)).await;
+    // Two full pages and a short one.
+    queue_requests(&world, profile, 2 * 500 + 3).await;
+    let before = world.fake.calls(profile, "/usage-queue").len();
+    let refused = Arc::new(AtomicUsize::new(0));
+    {
+        let (pool, id, refused) = (world.pool().clone(), profile.clone(), Arc::clone(&refused));
+        world.fake.knobs(|knobs| {
+            knobs.intercept = Some(Arc::new(move |_, path| {
+                if path.starts_with("/usage-queue") && pool.port(&id).is_err() {
+                    refused.fetch_add(1, Ordering::SeqCst);
+                }
+                None
+            }));
+        });
+    }
+    let (first, second) = world
+        .run(async { tokio::join!(world.pool().stop(profile), world.pool().stop(profile)) })
+        .await;
+    world.fake.knobs(|knobs| knobs.intercept = None);
+    first.unwrap();
+    second.unwrap();
+    let reads = world.fake.calls(profile, "/usage-queue").len() - before;
+    assert_eq!(reads, 3, "only the stop reads a stopping core's queue");
+    assert_eq!(
+        refused.load(Ordering::SeqCst),
+        3,
+        "the gateway is refused during the stop"
+    );
+    assert_eq!(world.usage(profile).await.len(), 2 * 500 + 3);
+    assert!(!world.pool().alive(profile));
 }

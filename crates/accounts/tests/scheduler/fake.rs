@@ -78,12 +78,12 @@ pub(crate) struct Knobs {
     /// A model the upstream answers 429.
     pub(crate) limited: Option<String>,
     /// Sees each management call (the core and its path) before the core does; an answer it
-    /// gives replaces the core's.
+    /// gives replaces the core's, and `None` from it breaks the connection.
     pub(crate) intercept: Option<Intercept>,
 }
 
 pub(crate) type Intercept =
-    Arc<dyn Fn(&Core, &str) -> Option<BoxFuture<'static, Value>> + Send + Sync>;
+    Arc<dyn Fn(&Core, &str) -> Option<BoxFuture<'static, Option<Value>>> + Send + Sync>;
 
 pub(crate) struct Core {
     pub(crate) profile: ProfileId,
@@ -358,7 +358,14 @@ impl Fake {
             .knobs(|knobs| knobs.intercept.clone())
             .and_then(|intercept| intercept(&core, &path));
         if let Some(answer) = intercepted {
-            return Ok(respond(200, &answer.await));
+            return answer.await.map_or_else(
+                || {
+                    Err(NetError::Connect(io::Error::from(
+                        io::ErrorKind::ConnectionReset,
+                    )))
+                },
+                |answer| Ok(respond(200, &answer)),
+            );
         }
         let hold = self.knobs(|knobs| {
             knobs.hold.as_ref().and_then(|hold| {
