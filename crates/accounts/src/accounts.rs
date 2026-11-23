@@ -1,6 +1,6 @@
 //! A profile's OAuth accounts as its core lists them in `/auth-files`, with the seat identity
-//! read from Claude credential files. A port of `accounts.ts` (sync and credential reads) and
-//! `identity.ts` (`claudeIdentity`, `sameSeat`).
+//! read from Claude credential files (`crate::identity`). A port of `accounts.ts` (sync and
+//! credential reads).
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,7 +12,7 @@ use std::time::SystemTime;
 
 use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
-use nsv_domain::id::{AccountId, ProfileId, is_uuid};
+use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::{Provider, Registry, registry};
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
 use nsv_net::Method;
@@ -20,51 +20,8 @@ use nsv_store::Store;
 use nsv_store::layout::credential_directory;
 use serde_json::{Map, Value};
 
-use crate::js::{defined, number, or, record, string, text, truthy};
-
-/// Who a Claude credential belongs to. Missing identity never matches another seat.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SeatIdentity {
-    pub account_uuid: Option<String>,
-    pub organization_uuid: Option<String>,
-    pub organization_name: Option<String>,
-}
-
-/// `claudeIdentity`: the trimmed, lowercased UUIDs and a trimmed name of 1–200 UTF-16 units
-/// without control characters, each only when valid.
-#[must_use]
-pub fn claude_identity(value: &Value) -> SeatIdentity {
-    let raw = record(Some(value));
-    let uuid = |key: &str| {
-        let value = js_trim(text(raw.get(key))?);
-        is_uuid(value).then(|| value.to_lowercase())
-    };
-    let name = text(raw.get("organization_name"))
-        .map(js_trim)
-        .filter(|name| {
-            let length = name.encode_utf16().count();
-            (1..=200).contains(&length) && !name.chars().any(char::is_control)
-        });
-    SeatIdentity {
-        account_uuid: uuid("account_uuid"),
-        organization_uuid: uuid("organization_uuid"),
-        organization_name: name.map(str::to_owned),
-    }
-}
-
-/// `sameSeat`: both UUIDs present and equal.
-#[must_use]
-pub fn same_seat(a: &SeatIdentity, b: &SeatIdentity) -> bool {
-    a.account_uuid.is_some()
-        && a.organization_uuid.is_some()
-        && a.account_uuid == b.account_uuid
-        && a.organization_uuid == b.organization_uuid
-}
-
-/// JavaScript's `trim`: white space, line terminators and the byte order mark.
-fn js_trim(value: &str) -> &str {
-    value.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-}
+use crate::identity::{SeatIdentity, claude_identity};
+use crate::js::{nullish, number, or, record, string, text, truthy};
 
 /// A profile's credential file `name`.
 ///
@@ -253,9 +210,12 @@ fn entry<'a>(
 
 /// `String(file.provider ?? file.type ?? fallback)`.
 fn provider(file: &Map<String, Value>, fallback: &str) -> String {
-    defined(file.get("provider"))
-        .or_else(|| defined(file.get("type")))
-        .map_or_else(|| fallback.to_owned(), string)
+    nullish(file.get("provider"))
+        .or_else(|| nullish(file.get("type")))
+        .map_or_else(
+            || fallback.to_owned(),
+            |value| string(Some(value)).into_owned(),
+        )
 }
 
 /// `providerLabel`: the registry's label, else a compatible provider's, else the id.
@@ -282,9 +242,9 @@ fn oauth_account(
     if truthy(file.get("runtime_only")) || text(file.get("account_type")) == Some("api_key") {
         return None;
     }
-    let id = defined(file.get("name"))
-        .or_else(|| defined(file.get("id")))
-        .map_or_else(String::new, string);
+    let id = nullish(file.get("name"))
+        .or_else(|| nullish(file.get("id")))
+        .map_or_else(String::new, |value| string(Some(value)).into_owned());
     let id = AccountId::parse(&id).ok()?;
     let provider = provider(file, "unknown");
     let identity = identities.get(id.as_str()).cloned().unwrap_or_default();
@@ -293,8 +253,8 @@ fn oauth_account(
     let status = if truthy(file.get("disabled")) {
         AccountStatus::Paused
     } else if text(file.get("status")) == Some("error") {
-        let message = defined(file.get("status_message"))
-            .map_or_else(String::new, string)
+        let message = nullish(file.get("status_message"))
+            .map_or_else(String::new, |value| string(Some(value)).into_owned())
             .to_ascii_lowercase();
         if message.contains("invalid grant") || message.contains("unauthorized") {
             AccountStatus::ReconnectNeeded
@@ -313,7 +273,10 @@ fn oauth_account(
     let priority = number(file.get("priority")).unwrap_or(0.0) as i64;
     Some(Account {
         id,
-        name: or(file.get("note"), None).map_or_else(|| label(registry, &provider), string),
+        name: or(file.get("note"), None).map_or_else(
+            || label(registry, &provider),
+            |value| string(Some(value)).into_owned(),
+        ),
         account_uuid: identity.account_uuid,
         organization_uuid: identity.organization_uuid,
         organization_name: identity.organization_name,
@@ -323,7 +286,10 @@ fn oauth_account(
         disabled: file.get("disabled") == Some(&Value::Bool(true)),
         status,
         priority,
-        auth_index: Some(defined(file.get("auth_index")).map_or_else(String::new, string)),
+        auth_index: Some(
+            nullish(file.get("auth_index"))
+                .map_or_else(String::new, |value| string(Some(value)).into_owned()),
+        ),
         quota: None,
         prefix: None,
         model_count: None,

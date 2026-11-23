@@ -10,7 +10,7 @@ use nsv_domain::wire::{PricingTokens, UsageRecord};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::js::{defined, number, or, record, string, stringify, text};
+use crate::js::{nullish, number, or, record, string, stringify, text, truthy};
 
 /// Usage records per page of the core's queue; a full page means more are waiting.
 pub const PAGE: usize = 500;
@@ -60,27 +60,30 @@ fn usage_record(profile: &ProfileId, entry: &Value, now: i64) -> UsageRecord {
                 hex
             })
         },
-        string,
+        |value| string(Some(value)).into_owned(),
     );
     let failed = r.get("failed");
     let status = number(fail.get("status_code"))
         .filter(|status| *status != 0.0)
-        .unwrap_or(if crate::js::truthy(failed) {
-            502.0
-        } else {
-            200.0
-        });
+        .unwrap_or(if truthy(failed) { 502.0 } else { 200.0 });
     UsageRecord {
         id: format!("{}:{request}", profile.as_str()),
         profile_id: profile.clone(),
         timestamp: text(r.get("timestamp")).map_or_else(|| iso_string(now), str::to_owned),
-        provider: defined(r.get("provider")).map_or_else(|| "unknown".to_owned(), string),
+        provider: nullish(r.get("provider")).map_or_else(
+            || "unknown".to_owned(),
+            |value| string(Some(value)).into_owned(),
+        ),
         model: or(r.get("alias"), r.get("model"))
-            .filter(|model| crate::js::truthy(Some(model)))
-            .map_or_else(|| "unknown".to_owned(), string),
+            .filter(|model| truthy(Some(model)))
+            .map_or_else(
+                || "unknown".to_owned(),
+                |value| string(Some(value)).into_owned(),
+            ),
         upstream_model: text(r.get("model")).map(str::to_owned),
         pricing_tokens: Some(pricing_tokens(r.get("token_breakdown"))),
-        account: defined(r.get("auth_index")).map_or_else(String::new, string),
+        account: nullish(r.get("auth_index"))
+            .map_or_else(String::new, |value| string(Some(value)).into_owned()),
         input_tokens: counter("input_tokens"),
         output_tokens: counter("output_tokens"),
         cached_tokens: whole(

@@ -1,16 +1,16 @@
-//! tests/golden/usage.json's usage queue cases and tests/golden/accounts.json's account list,
-//! identity and credential path cases, recorded from the TypeScript server. Quota, reset,
-//! API-account, pricing and catalog cases belong to the modules that port them.
+//! tests/golden/usage.json's usage queue cases and tests/golden/accounts.json's account list
+//! and credential path cases, recorded from the TypeScript server. Identity, quota, reset,
+//! API-account, pricing and catalog cases are replayed in tests/features.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
-use nsv_accounts::accounts::{SeatIdentity, claude_identity, credential_path, same_seat};
+use nsv_accounts::accounts::credential_path;
 use nsv_accounts::usage::parse_page;
 use nsv_domain::id::ProfileId;
 use nsv_store::layout::credential_directory;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::common::{World, short};
 
@@ -129,53 +129,10 @@ async fn usage_queue_pages_are_stored_as_the_typescript_server_stored_them() {
     assert_eq!(replayed, 42);
 }
 
-/// `SeatIdentity` as the recorder wrote `claudeIdentity`'s answer.
-fn identity_json(identity: &SeatIdentity) -> Value {
-    let mut map = Map::new();
-    for (key, value) in [
-        ("accountUuid", &identity.account_uuid),
-        ("organizationUuid", &identity.organization_uuid),
-        ("organizationName", &identity.organization_name),
-    ] {
-        if let Some(value) = value {
-            map.insert(key.to_owned(), json!(value));
-        }
-    }
-    Value::Object(map)
-}
-
-fn seat(value: &Value) -> SeatIdentity {
-    let text = |key: &str| value[key].as_str().map(str::to_owned);
-    SeatIdentity {
-        account_uuid: text("accountUuid"),
-        organization_uuid: text("organizationUuid"),
-        organization_name: text("organizationName"),
-    }
-}
-
 #[test]
-fn claude_identities_seats_and_credential_paths_match_the_recorded_cases() {
+fn credential_paths_match_the_recorded_cases() {
     let cases = cases("accounts.json");
     let mut replayed = 0;
-    for case in named(&cases, "claudeIdentity ") {
-        let name = case["name"].as_str().unwrap();
-        assert_eq!(
-            identity_json(&claude_identity(&case["input"])),
-            case["output"],
-            "{name}"
-        );
-        replayed += 1;
-    }
-    for case in named(&cases, "sameSeat ") {
-        let input = case["input"].as_array().unwrap();
-        let name = case["name"].as_str().unwrap();
-        assert_eq!(
-            json!(same_seat(&seat(&input[0]), &seat(&input[1]))),
-            case["output"],
-            "{name}"
-        );
-        replayed += 1;
-    }
     let data = std::path::Path::new("/data");
     let profile = ProfileId::parse("00000000-0000-4000-8000-000000000001").unwrap();
     for case in named(&cases, "credentialPath ") {
@@ -195,7 +152,7 @@ fn claude_identities_seats_and_credential_paths_match_the_recorded_cases() {
         }
         replayed += 1;
     }
-    assert_eq!(replayed, 12 + 4 + 7);
+    assert_eq!(replayed, 7);
 }
 
 #[tokio::test(start_paused = true)]

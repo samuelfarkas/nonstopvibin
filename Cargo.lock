@@ -1569,12 +1569,15 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nsv-accounts"
 version = "0.2.0"
 dependencies = [
+ "getrandom 0.4.3",
  "nsv-core",
  "nsv-domain",
  "nsv-net",
  "nsv-store",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
+ "thiserror 2.0.21",
  "tokio",
 ]
 

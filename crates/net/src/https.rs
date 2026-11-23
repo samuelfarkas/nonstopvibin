@@ -165,7 +165,7 @@ async fn download(
             .map_err(NetError::File)?;
         let mut hash = Sha256::new();
         let mut size = 0_usize;
-        wire.read(&mut body, async |data: Bytes| {
+        while let Some(data) = wire.next(&mut body).await? {
             if too_large(size, data.len(), request.limit) {
                 return Err(NetError::TooLarge {
                     limit: request.limit,
@@ -173,9 +173,8 @@ async fn download(
             }
             size = size.saturating_add(data.len());
             hash.update(&data);
-            file.write_all(&data).await.map_err(NetError::File)
-        })
-        .await?;
+            file.write_all(&data).await.map_err(NetError::File)?;
+        }
         file.flush().await.map_err(NetError::File)?;
         Ok(Download {
             sha256: hash.finalize().into(),
@@ -252,6 +251,7 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+    use crate::LoopbackRequest;
 
     /// Plain TCP to a local stub per host name.
     struct Plain(HashMap<&'static str, u16>);
@@ -506,5 +506,31 @@ mod tests {
             let _ = write!(text, "{byte:02x}");
             text
         })
+    }
+
+    /// Background refreshes spawn their requests, which needs `Send` futures.
+    #[test]
+    fn requests_can_be_spawned() {
+        fn spawnable<T: Send>(_: &T) {}
+        let https = Https::new().unwrap();
+        let get = Get {
+            url: "https://example.com/",
+            headers: &[("Accept", "application/json")],
+            timeout: Duration::from_secs(1),
+            limit: 1,
+            redirects: Redirects::Refuse,
+        };
+        spawnable(&https.get(&get));
+        spawnable(&https.download(&get, Path::new("unused"), 0o600));
+        let loopback = LoopbackRequest {
+            to: crate::Loopback::v4(1),
+            method: &crate::Method::GET,
+            target: "/",
+            headers: &[],
+            body: None,
+            timeout: Duration::from_secs(1),
+            limit: 1,
+        };
+        spawnable(&crate::loopback(loopback));
     }
 }
