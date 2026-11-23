@@ -21,6 +21,10 @@ use tokio::sync::{Notify, watch};
 use url::Url;
 
 /// What the fake cores do, changed by the test as it goes.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches a test flips one at a time"
+)]
 pub(crate) struct Knobs {
     /// The `redirect_uri` of each sign-in link; `None` makes links without one.
     pub(crate) redirect: Option<String>,

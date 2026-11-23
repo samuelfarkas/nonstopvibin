@@ -369,7 +369,7 @@ async fn refresh_answers_a_failed_start_and_keeps_the_last_good_check() {
     assert!(!world.cores.pool().alive(&empty));
 }
 
-/// Gives the profile an OpenCode Go key, whose quota is asked of the provider with the key and
+/// Gives the profile an `OpenCode` Go key, whose quota is asked of the provider with the key and
 /// no core; answers how many times the provider was asked.
 async fn go_account(world: &World, profile: &ProfileId) -> impl Fn() -> usize {
     world.fetch.answer(|url| {

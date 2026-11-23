@@ -905,7 +905,7 @@ async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_
 }
 
 /// Queues `count` gateway requests on the profile's running core.
-async fn queue_requests(world: &World, profile: &ProfileId, count: usize) {
+fn queue_requests(world: &World, profile: &ProfileId, count: usize) {
     let port = world.pool().port(profile).unwrap();
     for _ in 0..count {
         assert_eq!(world.fake.request(port, "fixture-model"), 200);
@@ -917,7 +917,7 @@ async fn concurrent_drains_of_one_profile_share_one_queue_read() {
     let (world, profiles) = launched(timing(), &["Shared drain"]).await;
     let profile = &profiles[0];
     world.pass(Duration::from_secs(3)).await;
-    queue_requests(&world, profile, 3).await;
+    queue_requests(&world, profile, 3);
     let before = world.fake.calls(profile, "/usage-queue").len();
     let (release, holding) = hold(&world, "/usage-queue", |_| true);
     let test = async {
@@ -971,7 +971,7 @@ async fn slow_account_maintenance_does_not_hold_up_usage_collection() {
         })
         .await;
     let before = world.fake.calls(profile, "/usage-queue").len();
-    queue_requests(&world, profile, 1).await;
+    queue_requests(&world, profile, 1);
     world.scheduler.activity(profile, false);
     world.pass(Duration::from_secs(1)).await;
     assert!(
@@ -1017,7 +1017,7 @@ async fn concurrent_stops_drain_every_queued_page_and_refuse_the_gateway() {
     let profile = &profiles[0];
     world.pass(Duration::from_secs(3)).await;
     // Two full pages and a short one.
-    queue_requests(&world, profile, 2 * 500 + 3).await;
+    queue_requests(&world, profile, 2 * 500 + 3);
     let before = world.fake.calls(profile, "/usage-queue").len();
     let refused = Arc::new(AtomicUsize::new(0));
     {
