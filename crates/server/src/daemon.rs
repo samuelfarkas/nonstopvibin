@@ -17,7 +17,7 @@ use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Fetch;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
-use nsv_accounts::scheduler::{Scheduler, TIMING};
+use nsv_accounts::scheduler::{Scheduler, Timing};
 use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::install::Releases;
@@ -63,6 +63,8 @@ pub struct Options<F> {
     pub fetch: F,
     /// Milliseconds since the epoch, for usage periods, pricing and retention.
     pub clock: fn() -> i64,
+    /// The scheduler's periods: [`nsv_accounts::scheduler::TIMING`] outside tests.
+    pub timing: Timing,
 }
 
 /// Each data directory's cores run as processes of the core binary.
@@ -329,7 +331,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             binary: options.core.binary,
             backends: options.backends,
             ready: READY,
-            timing: TIMING,
+            timing: options.timing,
             fetch: options.fetch.clone(),
             releases: options.fetch.clone(),
             feed: options.core.feed,

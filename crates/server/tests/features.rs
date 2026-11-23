@@ -41,7 +41,7 @@ use nsv_core::pool::Backend;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_net::{Loopback, NetError, Response};
-use nsv_server::{CoreOptions, Daemon, Options};
+use nsv_server::{CoreOptions, Daemon, Options, TIMING};
 use nsv_shell::{HostEvent, ShellHost};
 use nsv_store::ServerLock;
 use nsv_store::layout::credential_directory;
@@ -135,6 +135,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
         }),
         fetch: outside.clone(),
         clock: now,
+        timing: TIMING,
     };
     let lock = ServerLock::acquire(&data).unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();

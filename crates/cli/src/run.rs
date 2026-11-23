@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_net::Https;
-use nsv_server::{CoreOptions, Daemon, Options, Session, panic, processes};
+use nsv_server::{CoreOptions, Daemon, Options, Session, TIMING, panic, processes};
 use nsv_store::{LockError, ServerLock};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -197,6 +197,7 @@ pub(crate) async fn serve(
         backends: processes(),
         fetch: https()?,
         clock: now,
+        timing: TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
@@ -283,6 +284,7 @@ async fn desktop_daemon(
         backends: processes(),
         fetch: https()?,
         clock: now,
+        timing: TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);

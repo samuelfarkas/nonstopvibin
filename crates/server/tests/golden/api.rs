@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use nsv_agents::{AgentDirectories, AgentSetup};
-use nsv_server::{CoreOptions, Daemon, Options, processes};
+use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
 use nsv_store::ServerLock;
 use serde_json::{Value, json};
 
@@ -248,6 +248,7 @@ async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
         backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,
+        timing: TIMING,
     };
     let lock = ServerLock::acquire(&data).unwrap();
     let daemon = Daemon::start(options, lock).await.unwrap();
