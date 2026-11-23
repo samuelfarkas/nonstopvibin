@@ -7,23 +7,25 @@ use std::time::Duration;
 
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
+use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use nsv_accounts::accounts::listed;
 use nsv_accounts::fetch::Fetch;
 use nsv_agents::offered_models;
 use nsv_core::install::Releases;
 use nsv_domain::endpoint::{profile_endpoint, profile_path};
+use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{AppState, ClientKeyResponse, Profile, ProfileState, Runtime};
-use nsv_gateway::Body;
+use nsv_gateway::{Body, Refusal};
 use nsv_net::{Loopback, LoopbackRequest, loopback};
 use serde_json::{Value, json};
 
 use crate::daemon::{App, VERSION};
-use crate::http::{Failure, enrich, json};
+use crate::http::{enrich, json};
 use crate::parse;
 
 /// The largest management request body.
@@ -200,44 +202,57 @@ impl Call<'_> {
             .map(|(_, value)| value.into_owned())
     }
 
-    fn profile(&self) -> Result<ProfileId, Failure> {
+    fn profile(&self) -> Result<ProfileId, AppError> {
         self.profile
             .clone()
-            .ok_or_else(|| Failure::Internal("the route has no profile".to_owned()))
+            .ok_or_else(|| AppError::internal("the route has no profile"))
     }
 
     /// The account parameter; no profile lists an id longer than an account id may be.
-    fn account(&self) -> Result<AccountId, Failure> {
+    fn account(&self) -> Result<AccountId, AppError> {
         AccountId::parse(&self.account)
-            .map_err(|_| Failure::status(404, "Account not found in this profile."))
+            .map_err(|_| AppError::new("Account not found in this profile.", 404))
     }
 }
 
 /// `jsonBody`: a JSON content type, at most 2 MB, parsed.
-async fn body(request: Request<Incoming>) -> Result<Value, Failure> {
+async fn body(request: Request<Incoming>) -> Result<Value, AppError> {
     let json = request
         .headers()
-        .get(hyper::header::CONTENT_TYPE)
+        .get(header::CONTENT_TYPE)
         .is_some_and(|value| value.as_bytes().starts_with(b"application/json"));
     if !json {
-        return Err(Failure::status(
-            415,
-            "Content-Type must be application/json.",
-        ));
+        return Err(AppError::new("Content-Type must be application/json.", 415));
     }
     let mut incoming = request.into_body();
     let mut bytes = Vec::new();
     while let Some(frame) = incoming.frame().await {
-        let frame = frame.map_err(|_| Failure::Aborted)?;
+        // The client hung up: nothing failed in the app, and no one reads the answer.
+        let frame = frame.map_err(|_| AppError::new("", 400))?;
         if let Ok(data) = frame.into_data() {
             if bytes.len() + data.len() > BODY_LIMIT {
-                return Err(Failure::status(413, "Payload exceeds 2 MB."));
+                return Err(AppError::new("Payload exceeds 2 MB.", 413));
             }
             bytes.extend_from_slice(&data);
         }
     }
     serde_json::from_str(&String::from_utf8_lossy(&bytes))
-        .map_err(|_| Failure::status(400, "Invalid JSON."))
+        .map_err(|_| AppError::new("Invalid JSON.", 400))
+}
+
+/// A 405 that lists the methods the path does serve (RFC 9110), ahead of the error JSON's
+/// headers as `server.ts` sent them.
+fn not_allowed(methods: &str) -> Response<Body> {
+    let mut response =
+        Refusal::new(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed.").into_response();
+    if let Ok(allow) = HeaderValue::from_str(methods) {
+        let rest = std::mem::replace(
+            response.headers_mut(),
+            HeaderMap::from_iter([(header::ALLOW, allow)]),
+        );
+        response.headers_mut().extend(rest);
+    }
+    response
 }
 
 fn ok() -> Value {
@@ -249,7 +264,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         &self,
         request: Request<Incoming>,
         url: &url::Url,
-    ) -> Result<Response<Body>, Failure> {
+    ) -> Result<Response<Body>, AppError> {
         let raw = url.path();
         // Split on the raw "/" first, so an encoded slash stays inside its segment.
         let segments: Vec<String> = raw
@@ -257,13 +272,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             .filter(|segment| !segment.is_empty())
             .map(parse::decode_component)
             .collect::<Option<_>>()
-            .ok_or_else(|| Failure::status(400, "Malformed request path."))?;
+            .ok_or_else(|| AppError::new("Malformed request path.", 400))?;
         // Any profile path names a real profile before its route is chosen.
         let profile = match segments.get(1..3) {
             Some([profiles, id]) if profiles == "profiles" => {
                 parse::uuid(id)?;
-                let id = ProfileId::parse(id)
-                    .map_err(|_| Failure::Invalid(": Invalid UUID".to_owned()))?;
+                let id = ProfileId::parse(id).map_err(|_| AppError::new(": Invalid UUID", 400))?;
                 let found = id.clone();
                 self.store.call(move |db| db.profile(&found)).await?;
                 Some(id)
@@ -289,9 +303,9 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             allowed.push(method.as_str());
         }
         if allowed.is_empty() {
-            Err(Failure::status(404, "Not found."))
+            Err(AppError::new("Not found.", 404))
         } else {
-            Err(Failure::NotAllowed(allowed.join(", ")))
+            Ok(not_allowed(&allowed.join(", ")))
         }
     }
 
@@ -304,7 +318,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         route: Route,
         request: Request<Incoming>,
         call: &Call<'_>,
-    ) -> Result<Response<Body>, Failure> {
+    ) -> Result<Response<Body>, AppError> {
         let cores = &self.cores;
         match route {
             Route::State => {
@@ -338,7 +352,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 let imports = Arc::clone(&self.imports);
                 let sources = tokio::task::spawn_blocking(move || locked(&imports).scan())
                     .await
-                    .map_err(|error| Failure::Internal(error.to_string()))?;
+                    .map_err(AppError::internal)?;
                 json(StatusCode::OK, &sources)
             }
             Route::CreateProfile => {
@@ -448,10 +462,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 self.cores.scheduler.wake(&id).await?;
                 let models = self.cores.scheduler.pool().models(&id).await?;
                 if models.is_empty() {
-                    return Err(Failure::status(
-                        400,
-                        "This profile has no available models.",
-                    ));
+                    return Err(AppError::new("This profile has no available models.", 400));
                 }
                 let enriched = if registry().curated(input.agent) {
                     None
@@ -467,8 +478,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 .await?;
                 // Only an agent with a native vendor can be left without models.
                 if offered.is_empty() {
-                    return Err(Failure::status(
-                        400,
+                    return Err(AppError::new(
                         format!(
                             "This profile has no {} models. Add one, or offer models from other providers.",
                             registry()
@@ -478,6 +488,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                                 .as_deref()
                                 .unwrap_or("")
                         ),
+                        400,
                     ));
                 }
                 let profile = self.profile(call).await?;
@@ -542,7 +553,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 let imports = Arc::clone(&self.imports);
                 let contents = tokio::task::spawn_blocking(move || locked(&imports).contents(&id))
                     .await
-                    .map_err(|error| Failure::Internal(error.to_string()))??;
+                    .map_err(AppError::internal)??;
                 cores.credentials.import(&call.profile()?, contents).await?;
                 self.state_reply().await
             }
@@ -600,20 +611,20 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         }
     }
 
-    async fn profile(&self, call: &Call<'_>) -> Result<Profile, Failure> {
+    async fn profile(&self, call: &Call<'_>) -> Result<Profile, AppError> {
         let id = call.profile()?;
         Ok(self.store.call(move |db| db.profile(&id)).await?)
     }
 
     /// The scheduler and the tray read profiles again.
-    async fn profiles_changed(&self) -> Result<(), Failure> {
+    async fn profiles_changed(&self) -> Result<(), AppError> {
         self.cores.scheduler.changed().await?;
         self.refresh_names().await?;
         Ok(())
     }
 
     /// Asks the profile's own gateway endpoint for its models, as an agent would.
-    async fn agent_check(&self, call: &Call<'_>) -> Result<Response<Body>, Failure> {
+    async fn agent_check(&self, call: &Call<'_>) -> Result<Response<Body>, AppError> {
         let id = call.profile()?;
         let profile = self.profile(call).await?;
         let key = self.store.call(move |db| db.client_key(&id)).await?;
@@ -630,15 +641,14 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             limit: 16 << 20,
         })
         .await
-        .map_err(|error| Failure::Internal(error.to_string()))?;
+        .map_err(AppError::internal)?;
         if !response.ok() {
-            return Err(Failure::status(
-                502,
+            return Err(AppError::new(
                 "The profile connection failed. Check that this profile is running.",
+                502,
             ));
         }
-        let catalog: Value = serde_json::from_slice(&response.body)
-            .map_err(|error| Failure::Internal(error.to_string()))?;
+        let catalog: Value = serde_json::from_slice(&response.body).map_err(AppError::internal)?;
         let listed = catalog
             .get("data")
             .and_then(Value::as_array)
@@ -647,21 +657,21 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                     .any(|entry| entry.get("id").is_some_and(Value::is_string))
             });
         if !listed {
-            return Err(Failure::status(
-                400,
+            return Err(AppError::new(
                 "No models are available. Refresh the profile catalog.",
+                400,
             ));
         }
         json(StatusCode::OK, &ok())
     }
 
-    async fn state_reply(&self) -> Result<Response<Body>, Failure> {
+    async fn state_reply(&self) -> Result<Response<Body>, AppError> {
         let state = self.state().await?;
         json(StatusCode::OK, &state)
     }
 
     /// `Application.state()`.
-    pub(crate) async fn state(&self) -> Result<AppState, Failure> {
+    pub(crate) async fn state(&self) -> Result<AppState, AppError> {
         let (stored, retention) = self
             .store
             .call(|db| {

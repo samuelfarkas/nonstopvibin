@@ -11,11 +11,11 @@ use hyper::{Request, Response, StatusCode};
 use nsv_accounts::fetch::Fetch;
 use nsv_core::install::Releases;
 use nsv_domain::endpoint::CSP;
+use nsv_domain::error::AppError;
 use nsv_domain::wire::JsNumber;
 use nsv_gateway::Body;
 
 use crate::daemon::App;
-use crate::http::Failure;
 use crate::parse::decode_component;
 
 const UNBUILT: &str = "Build the interface with bun run build before opening this page.";
@@ -147,9 +147,9 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         request: &Request<Incoming>,
         pathname: &str,
         head: bool,
-    ) -> Result<Response<Body>, Failure> {
+    ) -> Result<Response<Body>, AppError> {
         let requested =
-            decode_component(pathname).ok_or_else(|| Failure::status(404, "Not found."))?;
+            decode_component(pathname).ok_or_else(|| AppError::new("Not found.", 404))?;
         let relative = if requested == "/" || extname(&requested).is_empty() {
             "index.html"
         } else {
@@ -158,13 +158,13 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         let root = resolve(&self.client, "");
         let path = resolve(&root, relative);
         if path == root || !path.starts_with(&root) {
-            return Err(Failure::status(404, "Not found."));
+            return Err(AppError::new("Not found.", 404));
         }
         let metadata = tokio::fs::metadata(&path)
             .await
             .ok()
             .filter(std::fs::Metadata::is_file)
-            .ok_or_else(|| Failure::status(404, UNBUILT))?;
+            .ok_or_else(|| AppError::new(UNBUILT, 404))?;
         let modified = metadata
             .modified()
             .ok()
@@ -191,7 +191,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         } else {
             let bytes = tokio::fs::read(&path)
                 .await
-                .map_err(|_| Failure::status(404, UNBUILT))?;
+                .map_err(|_| AppError::new(UNBUILT, 404))?;
             Body::full(bytes)
         };
         let mut response = Response::new(body);

@@ -570,7 +570,7 @@ fn connection_source(
             let snapshot = auth.borrow();
             snapshot
                 .profile(profile)
-                .map_err(|error| AppError::new(error.to_string(), 500))?
+                .map_err(AppError::internal)?
                 .map(|entry| entry.client_key.clone())
         }
         .ok_or_else(|| AppError::new("Profile not found.", 404))?;

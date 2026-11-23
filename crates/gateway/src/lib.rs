@@ -1,11 +1,11 @@
 //! The agent gateway: key extraction, routing, header rewrite, and HTTP, SSE and WebSocket
 //! pass-through. A port of `src/server/gateway.ts` and the upgrade path of `server.ts`.
 //!
-//! The server owns the listener, the Host and Origin checks and the rendering of errors. It
-//! serves each agent connection with [`serve_connection`] and hands an agent request to
-//! [`Gateway::proxy`], or a WebSocket handshake to [`Gateway::upgrade`]. The gateway reaches the
-//! rest of the daemon only through [`Host`], whose answers carry no management key, so a
-//! profile key cannot reach the management API.
+//! The server owns the listener and the Host and Origin checks. It serves each agent connection
+//! with [`serve_connection`] and hands an agent request to [`Gateway::proxy`], or a WebSocket
+//! handshake to [`Gateway::upgrade`]. A [`Refusal`] renders the error JSON, which the server's
+//! API answers with too. The gateway reaches the rest of the daemon only through [`Host`], whose
+//! answers carry no management key, so a profile key cannot reach the management API.
 //!
 //! Bodies are never parsed or buffered: they pass through as hyper frames, with hyper's buffers
 //! capped at `MAX_BUF_SIZE`. Each request opens its own upstream connection, which hyper
@@ -134,8 +134,7 @@ pub trait Host: Send + Sync + 'static {
     fn activity(&self, profile: &ProfileId, activity: Activity);
 }
 
-/// A request turned down by the gateway or its host, with the status and message the agent
-/// gets.
+/// A request turned down, with the status and message the client gets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refusal {
     status: StatusCode,
@@ -163,6 +162,31 @@ impl Refusal {
 
     fn unavailable() -> Self {
         Self::new(StatusCode::BAD_GATEWAY, UNAVAILABLE)
+    }
+
+    /// The error JSON (`json<ApiError>` in `server.ts`), never cached or sniffed. A 429 adds
+    /// `Retry-After: 2`.
+    #[must_use]
+    pub fn into_response(self) -> Response<Body> {
+        let body = serde_json::json!({ "error": {
+            "message": self.message, "type": "nonstopvibin_error", "code": self.status.as_u16(),
+        }});
+        let mut response = Response::new(Body::full(body.to_string()));
+        *response.status_mut() = self.status;
+        let headers = response.headers_mut();
+        if self.status == StatusCode::TOO_MANY_REQUESTS {
+            headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
+        }
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        headers.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+        response
     }
 }
 
@@ -227,8 +251,7 @@ impl<H: Host> Gateway<H> {
     /// response passed through.
     ///
     /// # Errors
-    /// A refusal the server renders as its JSON error, adding `Retry-After: 2` to a 429 as it
-    /// does for every 429.
+    /// A refusal, which the server answers with [`Refusal::into_response`].
     pub async fn proxy(&self, request: Request<Incoming>) -> Result<Response<Body>, Refusal> {
         let (parts, body) = request.into_parts();
         let route = self.route(&parts.method, &parts.uri, &parts.headers)?;

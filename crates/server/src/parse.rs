@@ -7,6 +7,7 @@
 
 use std::fmt::Display;
 
+use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, is_uuid};
 use nsv_domain::js;
 use nsv_domain::registry::{
@@ -21,6 +22,12 @@ use serde_json::{Map, Value};
 /// A refused input; its message is the 400's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Invalid(pub(crate) String);
+
+impl From<Invalid> for AppError {
+    fn from(error: Invalid) -> Self {
+        Self::new(error.0, 400)
+    }
+}
 
 #[derive(Debug, Default)]
 struct Issues {

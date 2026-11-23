@@ -10,6 +10,7 @@
 mod api;
 mod assets;
 mod daemon;
+mod failure;
 mod http;
 pub mod panic;
 mod parse;

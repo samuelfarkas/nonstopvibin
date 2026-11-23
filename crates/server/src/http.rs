@@ -1,6 +1,5 @@
 //! The listener and the checks every request passes before its handler: shutdown, Host, the
-//! upgrade path, Origin and the session token for `/api`, the loopback-only agent gateway, and
-//! the error JSON every refusal is rendered as.
+//! upgrade path, Origin and the session token for `/api`, and the loopback-only agent gateway.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -9,17 +8,14 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hyper::body::{Bytes, Incoming};
+use hyper::body::Incoming;
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
-use nsv_accounts::catalog::{CatalogError, ModelCatalog, profile_models};
+use nsv_accounts::catalog::{ModelCatalog, profile_models};
 use nsv_accounts::fetch::Fetch;
-use nsv_accounts::imports::ImportError;
-use nsv_accounts::pricing::PricingError;
-use nsv_accounts::quota::QuotaError;
 use nsv_accounts::scheduler::Scheduler;
-use nsv_agents::{AgentError, catalog_entries, offered_models};
+use nsv_agents::{catalog_entries, offered_models};
 use nsv_core::install::Releases;
 use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
@@ -29,18 +25,15 @@ use nsv_domain::secret::KeyDigest;
 use nsv_domain::sync::locked;
 use nsv_domain::wire::{CatalogModel, Model};
 use nsv_gateway::{Activity, Body, Catalog, Host, ProfileAuth, Refusal, serve_connection};
-use nsv_store::{AuthSnapshot, Store, StoreError};
+use nsv_store::{AuthSnapshot, Store};
 use serde::Serialize;
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
 use crate::daemon::{App, Shared};
-use crate::panic;
-use crate::parse::Invalid;
+use crate::{failure, panic};
 
-/// The text of every 500: the cause goes to the error list, not to the client.
-const OPERATION_FAILED: &str = "The operation failed. Check the profile status and try again.";
 /// The Vite development server, whose Host and Origin a development run accepts.
 pub const DEV_HOST: &str = "127.0.0.1:5173";
 
@@ -75,102 +68,15 @@ pub fn valid_allow_host(host: &str) -> bool {
             .is_some_and(|top| top.starts_with(|c: char| c.is_ascii_lowercase()))
 }
 
-/// Why a request was refused: rendered as the error JSON.
-#[derive(Debug)]
-pub(crate) enum Failure {
-    /// Its message and status are the user's.
-    App(AppError),
-    /// Input that failed validation: 400.
-    Invalid(String),
-    /// Anything else: 500 with a fixed text, and the cause in the error list.
-    Internal(String),
-    /// 405 on a path that serves these methods.
-    NotAllowed(String),
-    /// The client hung up before its body arrived; nothing failed in the app.
-    Aborted,
-}
-
-impl Failure {
-    pub(crate) fn status(status: u16, message: impl Into<String>) -> Self {
-        Self::App(AppError::new(message, status))
-    }
-}
-
-impl From<AppError> for Failure {
-    fn from(error: AppError) -> Self {
-        Self::App(error)
-    }
-}
-
-impl From<Invalid> for Failure {
-    fn from(error: Invalid) -> Self {
-        Self::Invalid(error.0)
-    }
-}
-
-impl From<StoreError> for Failure {
-    fn from(error: StoreError) -> Self {
-        match error {
-            StoreError::App(error) => Self::App(error),
-            other => Self::Internal(other.to_string()),
-        }
-    }
-}
-
-impl From<AgentError> for Failure {
-    fn from(error: AgentError) -> Self {
-        match error {
-            AgentError::App(error) => Self::App(error),
-            AgentError::Invalid(message) => Self::Invalid(message),
-            AgentError::Io(error) => Self::Internal(error.to_string()),
-        }
-    }
-}
-
-impl From<CatalogError> for Failure {
-    fn from(error: CatalogError) -> Self {
-        match error {
-            CatalogError::App(error) => Self::App(error),
-            CatalogError::Store(error) => error.into(),
-        }
-    }
-}
-
-impl From<PricingError> for Failure {
-    fn from(error: PricingError) -> Self {
-        match error {
-            PricingError::Store(error) => error.into(),
-            PricingError::Closed => Self::Internal(PricingError::Closed.to_string()),
-        }
-    }
-}
-
-impl From<ImportError> for Failure {
-    fn from(error: ImportError) -> Self {
-        match error {
-            ImportError::App(error) => Self::App(error),
-            other => Self::Internal(other.to_string()),
-        }
-    }
-}
-
-impl From<QuotaError> for Failure {
-    fn from(error: QuotaError) -> Self {
-        Self::App(error.into())
-    }
-}
-
-/// Management and error responses: JSON, never cached, never sniffed.
-pub(crate) fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Response<Body>, Failure> {
-    let body = serde_json::to_vec(value).map_err(|error| Failure::Internal(error.to_string()))?;
-    Ok(json_bytes(status, body.into(), HeaderMap::new()))
-}
-
-fn json_bytes(status: StatusCode, body: Bytes, first: HeaderMap) -> Response<Body> {
+/// Management responses: JSON, never cached, never sniffed.
+pub(crate) fn json<T: Serialize>(
+    status: StatusCode,
+    value: &T,
+) -> Result<Response<Body>, AppError> {
+    let body = serde_json::to_vec(value).map_err(AppError::internal)?;
     let mut response = Response::new(Body::full(body));
     *response.status_mut() = status;
     let headers = response.headers_mut();
-    *headers = first;
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
@@ -180,15 +86,7 @@ fn json_bytes(status: StatusCode, body: Bytes, first: HeaderMap) -> Response<Bod
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    response
-}
-
-fn error_json(status: StatusCode, message: &str, mut first: HeaderMap) -> Response<Body> {
-    if status == StatusCode::TOO_MANY_REQUESTS {
-        first.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
-    }
-    let body = json!({ "error": { "message": message, "type": "nonstopvibin_error", "code": status.as_u16() } });
-    json_bytes(status, body.to_string().into(), first)
+    Ok(response)
 }
 
 /// Every header value of a request as text; one that is not text reads as absent.
@@ -261,28 +159,6 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         host.is_some_and(|host| self.allow_hosts.iter().any(|allowed| allowed == host))
     }
 
-    pub(crate) fn render(&self, failure: Failure) -> Response<Body> {
-        let mut first = HeaderMap::new();
-        let (status, message): (u16, Cow<'_, str>) = match failure {
-            Failure::App(error) => (error.status, error.message.into()),
-            Failure::Invalid(message) => (400, message.into()),
-            Failure::Internal(cause) => {
-                self.shared.errors.report(cause);
-                (500, OPERATION_FAILED.into())
-            }
-            Failure::NotAllowed(methods) => {
-                // RFC 9110: a 405 lists the methods the path does serve.
-                if let Ok(value) = HeaderValue::from_str(&methods) {
-                    first.insert(header::ALLOW, value);
-                }
-                (405, "Method not allowed.".into())
-            }
-            Failure::Aborted => (400, "".into()),
-        };
-        let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        error_json(status, &message, first)
-    }
-
     async fn dispatch(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
         match switch(request.headers()) {
             Switch::None => {}
@@ -293,7 +169,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         }
         match self.handle(request).await {
             Ok(response) => response,
-            Err(failure) => self.render(failure),
+            Err(error) => failure::refusal(error, &self.shared.errors).into_response(),
         }
     }
 
@@ -306,20 +182,20 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         self.gateway.upgrade(request).await
     }
 
-    async fn handle(&self, request: Request<Incoming>) -> Result<Response<Body>, Failure> {
+    async fn handle(&self, request: Request<Incoming>) -> Result<Response<Body>, AppError> {
         if self.shared.closing() {
-            return Err(Failure::status(503, "nonstopvibin is shutting down."));
+            return Err(AppError::shutting_down());
         }
         let host = text(&request, header::HOST);
         if !self.valid_host(host) {
-            return Err(Failure::status(403, "Unrecognized host."));
+            return Err(AppError::new("Unrecognized host.", 403));
         }
         let allowed = self.allowed_host(host);
         // The path as WHATWG URL parsing sees it, as `new URL(req.url, origin)` did.
         let url = self
             .base
             .join(&request.uri().to_string())
-            .map_err(|_| Failure::status(400, "Malformed request path."))?;
+            .map_err(|_| AppError::new("Malformed request path.", 400))?;
         let path = url.path();
         if path.starts_with("/api/") {
             if let Some(origin) = origin(&request) {
@@ -330,9 +206,9 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                         || (self.development && origin == format!("http://{DEV_HOST}"))
                 };
                 if !accepted {
-                    return Err(Failure::status(
-                        403,
+                    return Err(AppError::new(
                         "Cross-origin management requests are not allowed.",
+                        403,
                     ));
                 }
             }
@@ -340,43 +216,39 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 .and_then(|presented| presented.strip_prefix("Bearer "))
                 .is_some_and(|presented| self.token.matches(presented));
             if !authorized {
-                return Err(Failure::status(
-                    401,
+                return Err(AppError::new(
                     "Open NonstopVibin from the desktop app, or run nonstopvibin url on the server for a new session link.",
+                    401,
                 ));
             }
             return self.api(request, &url).await;
         }
         if path.starts_with("/v1") || path.starts_with(PROFILE_ROUTES) {
             if allowed {
-                return Err(Failure::status(
-                    403,
+                return Err(AppError::new(
                     "The agent API is only available on the loopback address.",
+                    403,
                 ));
             }
             if origin(&request).is_some() {
-                return Err(Failure::status(
-                    403,
+                return Err(AppError::new(
                     "The agent API accepts local agent clients, not browser origins.",
+                    403,
                 ));
             }
             return Ok(self
                 .gateway
                 .proxy(request)
                 .await
-                .unwrap_or_else(|refusal| refused(&refusal)));
+                .unwrap_or_else(Refusal::into_response));
         }
         if request.method() != hyper::Method::GET && request.method() != hyper::Method::HEAD {
-            return Err(Failure::status(405, "Method not allowed."));
+            return Err(AppError::new("Method not allowed.", 405));
         }
         let head = request.method() == hyper::Method::HEAD;
         let path = path.to_owned();
         self.asset(&request, &path, head).await
     }
-}
-
-fn refused(refusal: &Refusal) -> Response<Body> {
-    error_json(refusal.status(), refusal.message(), HeaderMap::new())
 }
 
 /// Accepts until shutdown begins; each connection serves its requests in a task of its own.
@@ -465,27 +337,8 @@ pub(crate) struct GatewayHost<F> {
     pub(crate) store: Store,
 }
 
-impl<F> GatewayHost<F> {
-    /// An error the agent sees; a 500's cause goes to the error list instead.
-    fn refusal(&self, failure: Failure) -> Refusal {
-        let (status, message) = match failure {
-            Failure::App(error) => (error.status, Cow::Owned(error.message)),
-            Failure::Invalid(message) => (400, Cow::Owned(message)),
-            Failure::NotAllowed(_) | Failure::Aborted => (400, Cow::Borrowed("")),
-            Failure::Internal(cause) => {
-                self.shared.errors.report(cause);
-                (500, Cow::Borrowed(OPERATION_FAILED))
-            }
-        };
-        Refusal::new(
-            StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            message,
-        )
-    }
-}
-
 impl<F: Fetch + Clone + 'static> GatewayHost<F> {
-    async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, Failure> {
+    async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, AppError> {
         let models = self.scheduler.pool().models(profile).await?;
         let enriched = if registry().curated(agent) {
             None
@@ -526,7 +379,7 @@ pub(crate) async fn enrich<F: Fetch + 'static>(
     store: &Store,
     profile: &ProfileId,
     models: &[Model],
-) -> Result<Vec<CatalogModel>, Failure> {
+) -> Result<Vec<CatalogModel>, AppError> {
     Ok(profile_models(catalog, store, profile, models).await?)
 }
 
@@ -548,19 +401,19 @@ impl<F: Fetch + Clone + 'static> Host for GatewayHost<F> {
         self.scheduler
             .wake(profile)
             .await
-            .map_err(|error| self.refusal(error.into()))?;
+            .map_err(|error| failure::refusal(error, &self.shared.errors))?;
         let port = self
             .scheduler
             .pool()
             .port(profile)
-            .map_err(|error| self.refusal(error.into()))?;
+            .map_err(|error| failure::refusal(error, &self.shared.errors))?;
         Ok(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
     }
 
     async fn catalog(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, Refusal> {
         self.curated(profile, agent)
             .await
-            .map_err(|failure| self.refusal(failure))
+            .map_err(|error| failure::refusal(error, &self.shared.errors))
     }
 
     fn activity(&self, profile: &ProfileId, activity: Activity) {

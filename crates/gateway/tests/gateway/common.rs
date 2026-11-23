@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hyper::body::Incoming;
-use hyper::header::{self, HeaderValue};
+use hyper::header;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use nsv_domain::id::{ProfileId, ProfileSlug};
@@ -93,29 +93,6 @@ impl Host for TestHost {
     }
 }
 
-/// The server's error JSON (`json<ApiError>` in `server.ts`), with `Retry-After: 2` on 429.
-pub(crate) fn render(refusal: &Refusal) -> Response<Body> {
-    let body = serde_json::json!({ "error": {
-        "message": refusal.message(), "type": "nonstopvibin_error", "code": refusal.status().as_u16(),
-    }});
-    let mut response = Response::new(Body::full(body.to_string()));
-    *response.status_mut() = refusal.status();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        "x-content-type-options",
-        HeaderValue::from_static("nosniff"),
-    );
-    if refusal.status() == 429 {
-        headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
-    }
-    response
-}
-
 async fn dispatch(gateway: Gateway<TestHost>, request: Request<Incoming>) -> Response<Body> {
     if request.headers().contains_key(header::UPGRADE) {
         gateway.upgrade(request).await
@@ -123,7 +100,7 @@ async fn dispatch(gateway: Gateway<TestHost>, request: Request<Incoming>) -> Res
         gateway
             .proxy(request)
             .await
-            .unwrap_or_else(|refusal| render(&refusal))
+            .unwrap_or_else(Refusal::into_response)
     }
 }
 
