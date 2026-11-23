@@ -282,12 +282,6 @@ fn quota_view() -> View {
             width: 24,
             height: 24,
         },
-        work_area: Rect {
-            x: 0,
-            y: 0,
-            width: 1280,
-            height: 800,
-        },
     }
 }
 

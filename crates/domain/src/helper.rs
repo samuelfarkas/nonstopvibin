@@ -101,11 +101,11 @@ pub enum View {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<ProfileId>,
     },
-    /// The quota popup, placed beside the tray icon `anchor` inside the display's work area.
-    #[serde(rename_all = "camelCase")]
+    /// The quota popup, placed beside `anchor` inside the work area of the display that holds
+    /// it: the tray icon's bounds, or on Linux the point the tray host reported for the click.
+    /// The helper looks the work area up, since the daemon links no GUI library.
     Quota {
         anchor: Rect,
-        work_area: Rect,
     },
     Dialog {
         kind: DialogKind,
@@ -161,6 +161,8 @@ pub enum ToHelper {
         #[serde(flatten)]
         outcome: Outcome,
     },
+    /// Closes the quota popup when it is open: a tray click toggles it.
+    CloseQuota,
     /// Closes every window without asking the page, then exits.
     Quit,
 }
@@ -323,15 +325,12 @@ mod tests {
             ),
             (
                 wire(&ToHelper::Show {
-                    view: View::Quota {
-                        anchor,
-                        work_area: anchor,
-                    },
+                    view: View::Quota { anchor },
                 }),
                 json!({"type": "Show", "view": {"window": "quota",
-                       "anchor": {"x": 1800, "y": 0, "width": 24, "height": 24},
-                       "workArea": {"x": 1800, "y": 0, "width": 24, "height": 24}}}),
+                       "anchor": {"x": 1800, "y": 0, "width": 24, "height": 24}}}),
             ),
+            (wire(&ToHelper::CloseQuota), json!({"type": "CloseQuota"})),
             (
                 wire(&ToHelper::Reply {
                     id: 7,

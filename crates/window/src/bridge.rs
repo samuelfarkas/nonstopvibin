@@ -61,6 +61,8 @@ const SCRIPT: &str = r#"(() => {
       event.stopImmediatePropagation();
       send({ nonce, id: 0, method: "escape" });
     }, true);
+  // Electron showed no context menu; WebKit's offers Reload, Back and Inspect.
+  window.addEventListener("contextmenu", (event) => event.preventDefault(), true);
 })();"#;
 
 /// The draft guard: a cancelable `beforeunload` that `useKeepDraft` (client/controls.tsx)
