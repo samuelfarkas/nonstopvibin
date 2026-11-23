@@ -396,3 +396,152 @@ mod tests {
         assert_eq!(tunnel_command("1 2 3", "u", 4320), None);
     }
 }
+
+/// `tests/golden/cli.json`'s function-level cases: unit text, tunnels, links, host names and
+/// data directories.
+#[cfg(test)]
+mod golden {
+    use std::path::Path;
+
+    use nsv_domain::secret::SessionToken;
+    use serde_json::Value;
+
+    use super::{tunnel_command, url_text, user};
+    use crate::service::{render_unit, update_unit};
+    use nsv_server::{Session, valid_allow_host};
+
+    fn cases(prefix: &str) -> Vec<Value> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/cli.json");
+        let all: Vec<Value> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let chosen: Vec<Value> = all
+            .into_iter()
+            .filter(|case| case["name"].as_str().unwrap().starts_with(prefix))
+            .collect();
+        assert!(!chosen.is_empty(), "no {prefix} cases");
+        chosen
+    }
+
+    fn strings(value: &Value) -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    fn environment(value: &Value) -> Vec<(String, String)> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pair| {
+                (
+                    pair[0].as_str().unwrap().to_owned(),
+                    pair[1].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// The outcome as the recorder wrote it: the output, or the error's message.
+    fn outcome(result: Result<String, crate::CliError>) -> (Option<String>, Option<String>) {
+        match result {
+            Ok(text) => (Some(text), None),
+            Err(error) => (None, Some(error.message)),
+        }
+    }
+
+    fn expected(case: &Value) -> (Option<String>, Option<String>) {
+        (
+            case["output"].as_str().map(str::to_owned),
+            case["error"]["message"].as_str().map(str::to_owned),
+        )
+    }
+
+    #[test]
+    fn units_render_and_update_as_the_typescript_cli_wrote_them() {
+        for case in cases("renderUnit ") {
+            let input = &case["input"];
+            let rendered = render_unit(
+                input["executable"].as_str().unwrap(),
+                &strings(&input["args"]),
+                &environment(&input["environment"]),
+            );
+            assert_eq!(outcome(rendered), expected(&case), "{}", case["name"]);
+        }
+        for case in cases("updateUnit ") {
+            let input = &case["input"];
+            let hosts = input["allowHosts"]
+                .as_array()
+                .map(|_| strings(&input["allowHosts"]));
+            let port = input["port"]
+                .as_u64()
+                .map(|port| u16::try_from(port).unwrap());
+            let updated = update_unit(
+                input["previous"].as_str().unwrap(),
+                port,
+                hosts.as_deref(),
+                &environment(&input["environment"]),
+            );
+            assert_eq!(outcome(updated), expected(&case), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn tunnels_and_links_read_as_before() {
+        for case in cases("tunnelCommand ") {
+            let input = &case["input"];
+            let port = u16::try_from(input["port"].as_u64().unwrap()).unwrap();
+            let command = tunnel_command(
+                input["sshConnection"].as_str().unwrap(),
+                input["user"].as_str().unwrap(),
+                port,
+            );
+            assert_eq!(
+                command.as_deref(),
+                case["output"].as_str(),
+                "{}",
+                case["name"]
+            );
+        }
+        for case in cases("urlText ") {
+            let stored = &case["input"]["session"];
+            let session = Session {
+                pid: u32::try_from(stored["pid"].as_u64().unwrap()).unwrap(),
+                port: u16::try_from(stored["port"].as_u64().unwrap()).unwrap(),
+                token: SessionToken::new(stored["token"].as_str().unwrap()),
+                allow_hosts: strings(&stored["allowHosts"]),
+                version: stored["version"].as_str().unwrap().to_owned(),
+                started_at: stored["startedAt"].as_str().unwrap().to_owned(),
+            };
+            let text = url_text(&session, case["input"]["sshConnection"].as_str())
+                .replace(&format!("{}@", user()), "<user>@");
+            assert_eq!(text, case["output"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn allowed_hosts_and_data_directories_resolve_as_before() {
+        for case in cases("validAllowHost ") {
+            let host = case["input"].as_str().unwrap();
+            assert_eq!(
+                Value::Bool(valid_allow_host(host)),
+                case["output"],
+                "{}",
+                case["name"]
+            );
+        }
+        let home = std::env::home_dir().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        for case in cases("dataDirectory ") {
+            let chosen = case["input"]["override"].as_str().map(std::ffi::OsStr::new);
+            let resolved = nsv_store::layout::data_directory_from(chosen).unwrap();
+            let text = resolved
+                .to_string_lossy()
+                .replacen(&*cwd.to_string_lossy(), "<repository>", 1)
+                .replacen(&*home.to_string_lossy(), "<home>", 1);
+            assert_eq!(text, case["output"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+}
