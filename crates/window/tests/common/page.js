@@ -35,7 +35,9 @@ async function main() {
     bootstrap: await settle(bridge.bootstrap()),
     copy: await settle(bridge.copy("copied by the bridge ✓")),
     releaseWindow: await settle(bridge.releaseWindow()),
-    showWindow: await settle(bridge.showWindow("0b6f4f5e-6a7b-4c8d-9e0f-1a2b3c4d5e6f")),
+    showWindow: await settle(
+      bridge.showWindow("0b6f4f5e-6a7b-4c8d-9e0f-1a2b3c4d5e6f"),
+    ),
     getLoginItem: await settle(bridge.getLoginItem()),
     setLoginItem: await settle(bridge.setLoginItem(true)),
     revealData: await settle(bridge.revealData()),
@@ -79,7 +81,8 @@ async function guard() {
   await report("guarded");
   for (;;) {
     const command = await next();
-    if (command === "release") await report("released", await settle(bridge.releaseWindow()));
+    if (command === "release")
+      await report("released", await settle(bridge.releaseWindow()));
     if (command === "finish") {
       removeEventListener("beforeunload", veto);
       await bridge.releaseWindow();
@@ -91,7 +94,9 @@ async function probe() {
   const frame = new Promise((resolve) =>
     addEventListener("message", (event) => resolve(event.data), { once: true }),
   );
-  const iframe = Object.assign(document.createElement("iframe"), { src: "/sandboxed" });
+  const iframe = Object.assign(document.createElement("iframe"), {
+    src: "/sandboxed",
+  });
   iframe.sandbox = "allow-scripts";
   document.body.append(iframe);
   await report("frame", await frame);
@@ -109,14 +114,23 @@ async function sandboxed() {
   }
   const forged = forge("getLoginItem");
   window.parent.postMessage(
-    { bridge: typeof window.nonstopvibin, parentBridge, forged, origin: self.origin },
+    {
+      bridge: typeof window.nonstopvibin,
+      parentBridge,
+      forged,
+      origin: self.origin,
+    },
     "*",
   );
 }
 
 async function stray() {
   const forged = forge("getLoginItem");
-  await report("stray", { origin: location.origin, bridge: typeof window.nonstopvibin, forged });
+  await report("stray", {
+    origin: location.origin,
+    bridge: typeof window.nonstopvibin,
+    forged,
+  });
 }
 
 const run =
@@ -130,8 +144,13 @@ const run =
           ? probe
           : profile
             ? async () => {
-                await report("profile", { profile, token: (await bridge.bootstrap()).token });
+                await report("profile", {
+                  profile,
+                  token: (await bridge.bootstrap()).token,
+                });
                 await guard();
               }
             : main;
-run().catch((error) => report("failed", { error: String(error), stack: error.stack }));
+run().catch((error) =>
+  report("failed", { error: String(error), stack: error.stack }),
+);

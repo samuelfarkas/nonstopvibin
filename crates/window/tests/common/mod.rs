@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nsv_domain::helper::{self, DaemonCall, FromHelper, Origin, Outcome, ToHelper, View};
+use nsv_domain::helper::{self, DaemonCall, FromHelper, Origin, Outcome, Rect, ToHelper, View};
 use serde_json::{Value, json};
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
@@ -218,6 +218,17 @@ pub(crate) struct Helper {
 
 impl Helper {
     pub(crate) fn start(binary: &Path, origin: &Origin, view: View, directory: &Path) -> Self {
+        Self::start_at(binary, origin, view, None, directory)
+    }
+
+    /// Starts the helper with the main window's last `bounds`.
+    pub(crate) fn start_at(
+        binary: &Path,
+        origin: &Origin,
+        view: View,
+        bounds: Option<Rect>,
+        directory: &Path,
+    ) -> Self {
         let home = directory.join("home");
         fs::create_dir_all(home.join("Downloads")).unwrap();
         let mut child = Command::new(binary)
@@ -232,7 +243,7 @@ impl Helper {
         let start = ToHelper::Start {
             origin: origin.clone(),
             view,
-            bounds: None,
+            bounds,
             data_directory: directory.to_owned(),
         };
         helper::write(&mut input, &start).unwrap();

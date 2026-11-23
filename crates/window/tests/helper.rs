@@ -9,6 +9,7 @@ mod common;
 
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -425,13 +426,25 @@ fn update_dialog_defaults_to_later() {
 }
 
 #[test]
-fn helper_exits_when_the_daemon_closes_the_pipe() {
+fn main_window_restores_its_bounds_and_exits_when_the_daemon_closes_the_pipe() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let x = X::open();
     let mut server = Server::start();
+    let data = directory("pipe");
+    let bounds = Rect {
+        x: 40,
+        y: 30,
+        width: 900,
+        height: 700,
+    };
     let view = View::Main { profile: None };
-    let mut helper = Helper::start(binary(), &server.origin(), view, &directory("pipe"));
+    let mut helper = Helper::start_at(binary(), &server.origin(), view, Some(bounds), &data);
     assert_eq!(helper.next(), FromHelper::Ready);
     server.result("loaded");
+    let main = shown_window(&x, "NonstopVibin");
+    assert_eq!(x.geometry(main), (40, 30, 900, 700));
+    let webview_data = fs::symlink_metadata(data.join("webview")).unwrap();
+    assert_eq!(webview_data.permissions().mode() & 0o777, 0o700);
     let ran = tree(helper.pid());
     helper.close_stdin();
     assert!(helper.wait().success());
