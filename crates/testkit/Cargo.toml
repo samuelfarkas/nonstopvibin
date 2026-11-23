@@ -10,7 +10,7 @@ repository.workspace = true
 
 # A crate's tests enable only what builds on crates they already build.
 [features]
-# The fake cores behind the pool's `Backend`.
+# The fake cores behind the pool's `Backend`, and a store under tokio's paused clock.
 core = ["dep:nsv-core", "dep:nsv-domain", "dep:nsv-net", "dep:nsv-store", "dep:serde_json", "dep:tokio", "dep:url"]
 # The account features assembled as the daemon assembles them, over the fake cores.
 accounts = ["core", "dep:nsv-accounts"]
@@ -22,7 +22,7 @@ nsv-domain = { workspace = true, optional = true }
 nsv-net = { workspace = true, optional = true }
 nsv-store = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, optional = true, features = ["macros", "rt", "sync", "test-util", "time"] }
 url = { workspace = true, optional = true }
 
 [lints]

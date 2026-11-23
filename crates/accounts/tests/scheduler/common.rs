@@ -1,8 +1,7 @@
 //! A daemon's store, accounts, scheduler and pool on fake cores, under a clock that moves only
 //! when a test moves it.
 
-use std::fs;
-use std::path::PathBuf;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,12 +11,7 @@ use nsv_accounts::scheduler::{Host, Scheduler, TIMING, Timing};
 use nsv_core::pool::{BoxFuture, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_domain::secret::ApiKey;
-use nsv_domain::wire::{Account, ApiAccount};
-use nsv_store::{Store, Vault};
-use nsv_testkit::TempDir;
-use nsv_testkit::fake::FakeCores;
-use serde_json::json;
+use nsv_testkit::paused::Paused;
 use tokio::sync::watch;
 
 /// The host: reports are kept, quota checks recorded and answered as a test says.
@@ -87,111 +81,52 @@ pub(crate) fn short(idle: Duration) -> Timing {
     }
 }
 
+/// The scheduler and its pool over [`Paused`]'s store and fake cores.
 pub(crate) struct World {
-    _root: TempDir,
-    pub(crate) data: PathBuf,
-    pub(crate) store: Store,
-    pub(crate) fake: FakeCores,
+    paused: Paused,
     pub(crate) host: Arc<TestHost>,
     pub(crate) accounts: Arc<Accounts>,
     pub(crate) scheduler: Scheduler,
-    hold: std::sync::mpsc::Sender<()>,
 }
 
-impl Drop for World {
-    fn drop(&mut self) {
-        let _ = self.hold.send(());
+impl Deref for World {
+    type Target = Paused;
+
+    fn deref(&self) -> &Paused {
+        &self.paused
     }
 }
 
 impl World {
-    /// Must run on a runtime with a paused clock (`start_paused`). Auto-advance stays off for
-    /// the world's life: only [`World::pass`] moves the clock.
+    /// Must run on a runtime with a paused clock (`start_paused`); see [`Paused::new`].
     pub(crate) async fn new(timing: Timing) -> Self {
         Self::with_ready(timing, nsv_core::pool::READY).await
     }
 
     pub(crate) async fn with_ready(timing: Timing, ready: Duration) -> Self {
-        let (hold, release) = std::sync::mpsc::channel::<()>();
-        // A running blocking task keeps the paused clock from jumping while the store thread
-        // answers: time moves only when a test moves it.
-        tokio::task::spawn_blocking(move || {
-            let _ = release.recv();
-        });
-        let root = TempDir::new("world");
-        let data = root.path().join("data");
-        nsv_store::files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
-        let store = Store::open(&data, Vault::open(&data).unwrap())
-            .await
-            .unwrap();
-        let binary = root.path().join("cli-proxy-api");
-        fs::write(&binary, "fake").unwrap();
-        let fake = FakeCores::default();
+        let paused = Paused::new().await;
         let host = Arc::new(TestHost::default());
         let shared: Arc<dyn Host> = Arc::<TestHost>::clone(&host);
-        let accounts = Arc::new(Accounts::new(store.clone()));
+        let accounts = Arc::new(Accounts::new(paused.store.clone()));
         let scheduler = Scheduler::new(
-            store.clone(),
-            binary,
-            Arc::new(fake.clone()),
+            paused.store.clone(),
+            paused.binary.clone(),
+            Arc::new(paused.fake.clone()),
             ready,
             Arc::clone(&accounts),
             shared,
             timing,
         );
         Self {
-            _root: root,
-            data,
-            store,
-            fake,
+            paused,
             host,
             accounts,
             scheduler,
-            hold,
         }
     }
 
     pub(crate) fn pool(&self) -> &Pool {
         self.scheduler.pool()
-    }
-
-    /// A profile; `enabled` as a run that started it left it, with an API-key account and an
-    /// OAuth subscription as asked.
-    pub(crate) async fn profile(
-        &self,
-        name: &str,
-        enabled: bool,
-        api: bool,
-        oauth: bool,
-    ) -> ProfileId {
-        let name = name.to_owned();
-        self.store
-            .call(move |db| {
-                let mut profile = db.create_profile(&name)?;
-                profile.enabled = enabled;
-                db.save_profile(&profile)?;
-                if api {
-                    // Account ids are unique across profiles.
-                    let account: ApiAccount = serde_json::from_value(json!({
-                        "id": format!("key-{}", profile.id.as_str()), "name": "lazy-key", "provider": "custom",
-                        "baseUrl": "http://127.0.0.1:9/v1", "prefix": "",
-                        "models": [{ "id": "fixture-model", "protocol": "openai" }],
-                        "disabled": false,
-                    }))?;
-                    db.save_api_account(&profile.id, &account, Some(&ApiKey::new("lazy-key")))?;
-                }
-                if oauth {
-                    let account: Account = serde_json::from_value(json!({
-                        "id": "claude.json", "name": "Claude", "provider": "claude",
-                        "kind": "oauth", "disabled": false, "status": "Ready",
-                        "priority": 0, "authIndex": "1",
-                    }))?;
-                    db.save_account_metadata(&profile.id, &[account])?;
-                }
-                Ok(profile.id)
-            })
-            .await
-            .unwrap()
     }
 
     /// Asserts the only wakeup ahead is the daily history cleanup, about a day away.
@@ -209,33 +144,6 @@ impl World {
         );
     }
 
-    /// Lets every task run until nothing moves without the clock. Work on the blocking pool,
-    /// such as an account sync's credential scan, may still be running after it.
-    pub(crate) async fn settle(&self) {
-        for _ in 0..24 {
-            for _ in 0..16 {
-                tokio::task::yield_now().await;
-            }
-            let _ = self.store.call(|_| Ok(())).await;
-        }
-    }
-
-    /// Moves the clock by `total` in steps of at most `step`, settling after each.
-    pub(crate) async fn pass_by(&self, total: Duration, step: Duration) {
-        let mut left = total;
-        self.settle().await;
-        while !left.is_zero() {
-            let now = step.min(left);
-            tokio::time::advance(now).await;
-            self.settle().await;
-            left -= now;
-        }
-    }
-
-    pub(crate) async fn pass(&self, total: Duration) {
-        self.pass_by(total, Duration::from_millis(50)).await;
-    }
-
     /// Moves the clock until `condition` holds; panics after `limit`.
     pub(crate) async fn until(
         &self,
@@ -243,28 +151,7 @@ impl World {
         limit: Duration,
         condition: impl Fn(&Self) -> bool,
     ) {
-        let started = tokio::time::Instant::now();
-        self.settle().await;
-        while !condition(self) {
-            assert!(started.elapsed() <= limit, "timed out waiting for {what}");
-            tokio::time::advance(Duration::from_millis(50)).await;
-            self.settle().await;
-        }
-    }
-
-    /// Moves the clock while `future` runs, and answers what it answered.
-    pub(crate) async fn run<T>(&self, future: impl Future<Output = T>) -> T {
-        let mut future = std::pin::pin!(future);
-        loop {
-            tokio::select! {
-                biased;
-                value = &mut future => return value,
-                () = async {
-                    self.settle().await;
-                    tokio::time::advance(Duration::from_millis(50)).await;
-                } => {}
-            }
-        }
+        self.paused.until(what, limit, || condition(self)).await;
     }
 
     /// A gateway request through the scheduler: counted in, its dormant core woken, served by
