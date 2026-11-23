@@ -21,6 +21,14 @@ running as the same OS user can read both and decrypt them. The upstream core al
 requires plaintext OAuth/config files in owner-only directories. See
 [storage documentation](docs/architecture.md) for storage locations.
 
+The Rust daemon enforces these boundaries. The gateway crate cannot name the
+management client, so a profile key cannot reach management endpoints. The
+listener checks Host, Origin and the session token. Only the window helper links
+WebKit. It accepts bridge calls only from the main frame of a page on the daemon's
+origin, denies other navigation, new windows and downloads, and receives the
+session token on its standard input. The daemon validates the arguments of the
+four calls the helper forwards to it again.
+
 ## Reporting
 
 Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/samuelfarkas/nonstopvibin/security/advisories/new).
@@ -35,7 +43,8 @@ checks in [checks.yml](.github/workflows/checks.yml) and the dependency, tooling
 secret scans in [security.yml](.github/workflows/security.yml). To run them locally,
 follow the checklist in [releases](docs/releases.md#first-release-020); if DeepSec is
 installed, also run `bun run security:tooling`. Dependency audits fail
-at high severity; inspect moderate findings too. Secret scans redact output.
+at high severity, and `cargo deny check` and `cargo audit` check the Rust
+workspace against `deny.toml` and RustSec; inspect moderate findings too. Secret scans redact output.
 The directory scan excludes generated local state through `.gitleaks-source.toml`;
 the history scan uses `.gitleaks.toml` and has no directory exclusions. The only
 fixture exception is the exact public RFC 6455 example WebSocket nonce, constrained
@@ -55,12 +64,12 @@ profile routing, credential import/refresh, gateway forwarding, IPC, storage, an
 packaging with the threat context in `.deepsec/data/nonstopvibin/INFO.md`.
 Validate findings with synthetic reproducers and regression tests before fixing or
 publishing them. Review the bundled CLIProxyAPI release separately: scanning this
-TypeScript wrapper does not audit the upstream Go implementation or binary.
+Rust host does not audit the upstream Go implementation or binary.
 
 ## Core updates
 
 Installed builds offer the CLIProxyAPI core that the reviewed pin on `main`
-(`src/server/core-release.json`) names. They download it only from the upstream
+(`crates/core/core-release.json`) names. They download it only from the upstream
 release URL for that version and install it only when the archive and the
 extracted executable match the pin's SHA-256 for their platform and architecture.
 Merging a pin therefore ships its core to installed users: review it as a release.
@@ -115,7 +124,7 @@ Software running as the same OS user can replace the app directly.
 - Build from a reviewed revision with clean, frozen dependency installs. Record its
   source revision, core version and hashes, target OS/architecture, and artifact hash.
   The reviewed core pins are the archive and binary hashes in
-  `src/server/core-release.json`; the packaged manifest is derived data.
+  `crates/core/core-release.json`; the packaged manifest is derived data.
 - Inspect the actual archive: include only built app code, production dependencies,
   reviewed assets/licenses, and the verified core. Exclude `.deepsec`, `.agents`,
   runtime data, environment files, signing keys, local review material, and raw scan
