@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nsv_domain::id::AccountId;
+use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::ResetResultCode;
 use nsv_domain::wire::{AccountPatch, AccountStatus, ApiAccountInput};
 use nsv_net::Method;
@@ -369,11 +369,9 @@ async fn refresh_answers_a_failed_start_and_keeps_the_last_good_check() {
     assert!(!world.cores.pool().alive(&empty));
 }
 
-#[tokio::test]
-async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
-    let world = World::new("changes-refresh-go").await;
-    let profile = world.profile("Go fixture").await;
-    // OpenCode Go quota is asked of the provider with the key; no core is involved.
+/// Gives the profile an OpenCode Go key, whose quota is asked of the provider with the key and
+/// no core; answers how many times the provider was asked.
+async fn go_account(world: &World, profile: &ProfileId) -> impl Fn() -> usize {
     world.fetch.answer(|url| {
         Ok(if url.ends_with("/usage") {
             response(200, r#"{"usage":{"rolling":{"usagePercent":40}}}"#)
@@ -381,16 +379,6 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
             response(404, "{}")
         })
     });
-    let go_checks = || {
-        world
-            .fetch
-            .seen
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|seen| seen.request.url.ends_with("/usage"))
-            .count()
-    };
     let go: ApiAccountInput = serde_json::from_value(json!({
         "name": "Go", "provider": "opencode-go", "baseUrl": "https://opencode.ai/zen/go/v1",
         "apiKey": "synthetic-go-key", "prefix": "",
@@ -400,9 +388,55 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
     world
         .cores
         .credentials
-        .add_api_account(&profile, go)
+        .add_api_account(profile, go)
         .await
         .unwrap();
+    let fetch = Arc::clone(&world.fetch);
+    move || {
+        fetch
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| seen.request.url.ends_with("/usage"))
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_that_shutdown_interrupts_asks_no_provider() {
+    let world = World::new("changes-refresh-shutdown").await;
+    let profile = world.profile("Interrupted").await;
+    let go_checks = go_account(&world, &profile).await;
+    let added = go_checks();
+    world.cores.pool().stop(&profile).await.unwrap();
+    // The core never answers, so the Refresh's start waits for it.
+    world.fake.knobs(|knobs| knobs.silent = true);
+    let launches = world.fake.launches().len();
+    let refresh = tokio::spawn({
+        let (cores, profile) = (Arc::clone(&world.cores), profile.clone());
+        async move { cores.refresh(&profile).await }
+    });
+    while world.fake.launches().len() == launches {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    world.cores.shutdown().await.unwrap();
+    let failed = refresh.await.unwrap().unwrap_err();
+    assert_eq!(failed.status, 503, "{failed:?}");
+    assert!(
+        failed.message.contains("shutting down"),
+        "{}",
+        failed.message
+    );
+    assert_eq!(go_checks(), added, "no provider is asked");
+    assert_eq!(*world.reports.lock().unwrap(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
+    let world = World::new("changes-refresh-go").await;
+    let profile = world.profile("Go fixture").await;
+    let go_checks = go_account(&world, &profile).await;
     assert!(world.cores.pool().running(&profile));
     // Adding the account checked it once already.
     let added = go_checks();

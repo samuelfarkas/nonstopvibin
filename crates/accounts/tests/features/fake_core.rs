@@ -40,6 +40,8 @@ pub(crate) struct Knobs {
     pub(crate) upstream_gate: Option<(Arc<Notify>, watch::Receiver<bool>)>,
     /// Each core exits with code 1 as soon as it is launched, before it answers.
     pub(crate) exits_on_launch: bool,
+    /// Cores run but answer no call, as one that never becomes ready.
+    pub(crate) silent: bool,
     /// Runs before each sign-in link is answered, given the profile of the core asked.
     pub(crate) auth_url_hook:
         Option<Arc<dyn Fn(ProfileId) -> BoxFuture<'static, ()> + Send + Sync>>,
@@ -59,6 +61,7 @@ impl Default for Knobs {
             ),
             upstream_gate: None,
             exits_on_launch: false,
+            silent: false,
             auth_url_hook: None,
         }
     }
@@ -185,6 +188,7 @@ impl FakeCores {
         reason = "one arm per management route, as the core's router"
     )]
     async fn answer(&self, call: Call) -> Result<Response, NetError> {
+        let silent = self.knobs(|knobs| knobs.silent);
         let core = self
             .0
             .lock()
@@ -193,6 +197,7 @@ impl FakeCores {
             .iter()
             .find(|core| core.port == call.port && core.alive())
             .cloned()
+            .filter(|_| !silent)
             .ok_or_else(|| NetError::Connect(io::ErrorKind::ConnectionRefused.into()))?;
         if call.target == "/v1/models" {
             return Ok(
