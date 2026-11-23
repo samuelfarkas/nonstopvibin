@@ -67,7 +67,7 @@ export const product = {
   minimumMacOS: "13.0",
 } as const;
 
-/** Installers per platform. The update payload is the one electron-updater downloads. */
+/** Installers per platform, and the payload electron-updater downloads on each. */
 export const desktopTargets = {
   mac: ["dmg", "zip"],
   linux: ["AppImage", "deb"],
