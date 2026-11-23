@@ -102,6 +102,28 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
     daemon.close().await.unwrap();
 }
 
+/// The shell reports a tray open for a profile that no longer exists ("Profile not found.",
+/// supervisor.rs); the UI shows it from the state's errors, as `Application.report` did.
+#[tokio::test]
+async fn a_failed_open_reaches_the_errors_the_ui_shows() {
+    let root = TempDir::new("desktop-report");
+    let daemon = daemon(&root, true).await;
+    daemon.report("Profile not found.");
+    let token = format!("Bearer {}", daemon.session_token().expose_secret());
+    let state = send(
+        daemon.port(),
+        "GET",
+        "/api/state",
+        &[("Authorization".to_owned(), token)],
+        b"",
+    )
+    .await;
+    assert_eq!(state.status, 200);
+    let state: serde_json::Value = serde_json::from_slice(&state.body).unwrap();
+    assert_eq!(state["errors"], json!(["Profile not found."]));
+    daemon.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn the_headless_server_has_no_desktop_route() {
     let root = TempDir::new("headless-show");
