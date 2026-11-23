@@ -6,20 +6,19 @@ change for later.
 
 ## How ad-hoc builds update
 
-`mac.identity` is `-` in `package.json`, so electron-builder signs every build ad-hoc
-through `scripts/sign-mac.cjs`. Squirrel.Mac, which installs app updates on macOS,
-accepts a new app only when it satisfies the running app's designated requirement.
-An ad-hoc signature's own requirement is its code hash, and no later build has that
-hash. The sign script therefore gives the app bundle this requirement:
+Without signing secrets, `scripts/package-mac.ts` signs every build ad-hoc. The
+updater accepts a new app only when it satisfies the running app's designated
+requirement. Squirrel.Mac, which installed Electron builds use, applies the same
+rule. An ad-hoc signature's own requirement is its code hash, and no later build has
+that hash. The package script therefore gives the app bundle this requirement:
 
 ```text
 designated => identifier "app.nonstopvibin.desktop"
 ```
 
 Any later build with that identifier and a valid signature can replace the app. The
-Rust updater applies the same rule: it checks the unpacked bundle against the running
-bundle's designated requirement before it swaps it in. The requirement does not
-identify the publisher. The update's authenticity comes from HTTPS to GitHub Releases
+updater checks the unpacked bundle against the running bundle's designated
+requirement before it swaps it in. The requirement does not identify the publisher. The update's authenticity comes from HTTPS to GitHub Releases
 and the SHA-512 of the zip in `latest-mac.yml`, as for the AppImage, and in the Rust
 app from the signed `SHA256SUMS` once the release key is committed
 ([SECURITY.md](../SECURITY.md#app-updates)). Users can check a download with
@@ -27,14 +26,14 @@ app from the signed `SHA256SUMS` once the release key is committed
 
 macOS also recognizes the app by this requirement in privacy permissions and keychain
 access, so any ad-hoc code with that identifier counts as NonstopVibin there. The app
-uses neither today. Cookie encryption, which would add a keychain item, waits for a
-Developer ID.
+uses neither today.
 
-Ad-hoc code has no Team ID, so hardened Electron processes would fail library
-validation. `build/entitlements.mac.plist` gives Electron's binaries
-`com.apple.security.cs.disable-library-validation` with the JIT and executable-memory
-entitlements. The core and the tray click helper keep the empty
-`build/entitlements.mac.minimal.plist`.
+Every executable (the daemon, the window helper, the core and the relaunch helper)
+gets the hardened runtime and the empty `build/entitlements.mac.minimal.plist`: no JIT,
+executable-memory or library-validation exceptions. WebKit's JIT runs in Apple's
+WebContent process, and both Rust executables link only system libraries, which
+library validation accepts. `scripts/verify-rust-package.ts` fails the package if an
+executable links anything outside `/System/Library` or `/usr/lib`.
 
 macOS blocks the first launch of a downloaded app that Apple has not notarized. Users
 open **System Settings → Privacy & Security** and click **Open Anyway** once. Updates
@@ -43,15 +42,18 @@ are not quarantined, so the updated app opens without that step.
 Do not re-sign an installed app. `codesign --force` replaces the requirement with the
 new code hash, and the app can no longer update.
 
-`bun run dist:built`, which CI runs, sets `CSC_FOR_PULL_REQUEST`. electron-builder
-otherwise skips signing in pull request builds, and those builds could not update.
+Pull request builds are signed the same way, so they can update and be updated.
+On every pull request and release, `bun run test:update:mac` updates an Electron build
+to the packaged app, and `tests/mac-update-rust.mjs` updates an older Rust build.
 
-`bun run test:update:mac` updates an older build to the packaged one on every pull
-request and release.
+Signing rewrites the bundled core binary. `scripts/package-mac.ts` checks the
+unsigned core against the reviewed pin, signs it, and then writes the signed binary's
+hash into the packaged manifest. The desktop app checks the core against that
+manifest at launch.
 
-Signing rewrites the bundled core binary. `scripts/sign-mac.cjs` refreshes the packaged
-manifest hash during signing. This happens after `scripts/verify-package.cjs` compares
-the unsigned copy with the reviewed input.
+The bundle also holds a minimal `Squirrel.framework`. Squirrel.Mac in an Electron
+build relaunches the updated app by running ShipIt from the new bundle, and
+`scripts/squirrel-relaunch.c` is that ShipIt: it only opens the bundle.
 
 ## Switch to a Developer ID
 
@@ -91,20 +93,14 @@ Keep the `.p12` file and its password out of the repository. Rotate the certific
 
 ### Change the build
 
-The Rust app needs no change: `scripts/package-mac.ts` signs with the Developer ID, notarizes
-and staples when all five secrets are set, and `.github/workflows/rust.yml` passes them only
-to release builds. Its executables already use the empty entitlements. The steps below are
-for the Electron build.
+`scripts/package-mac.ts` signs with the Developer ID, notarizes and staples when all
+five secrets are set, and `.github/workflows/checks.yml` passes them to its macOS
+**Package** step only in releases. Pull requests do not receive them. The executables
+already use the empty entitlements. The remaining steps are:
 
-1. In `package.json`, remove `"identity": "-"` and set `"notarize": true`. The sign
-   script then keeps the requirement codesign derives from the certificate. Remove
-   `com.apple.security.cs.disable-library-validation` from
-   `build/entitlements.mac.plist`.
-2. Pass the five secrets from `.github/workflows/release.yml` to `checks.yml`, and give
-   them to its macOS `Package` step only in releases. Pull requests must not receive
-   them.
-3. Make `tests/mac-update.mjs` expect a Developer ID signature instead of an ad-hoc one.
-4. Remove the **Open Anyway** instructions from the release notes in
+1. Make `tests/mac-update.mjs` expect a Developer ID signature instead of an ad-hoc
+   one.
+2. Remove the **Open Anyway** instructions from the release notes in
    `.github/workflows/release.yml`, the README's Install section, and step 6 of the
    first-release checklist in [releases](releases.md).
 
@@ -127,7 +123,8 @@ The `spctl` result should say `accepted, source=Notarized Developer ID`. Notariz
 
 ### After the first signed release
 
-Re-enable the `onlyLoadAppFromAsar` and `enableEmbeddedAsarIntegrityValidation` fuses. Enable cookie encryption. Test packaging, launch, updates, credential access, and agent connections before release.
+Test packaging, launch, updates, credential access, and agent connections before the
+next release.
 
 ## Sign updates for the Rust updater
 
