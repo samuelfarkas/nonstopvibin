@@ -1836,7 +1836,6 @@ dependencies = [
  "getrandom 0.4.3",
  "http-body-util",
  "hyper",
- "hyper-util",
  "nsv-accounts",
  "nsv-agents",
  "nsv-core",

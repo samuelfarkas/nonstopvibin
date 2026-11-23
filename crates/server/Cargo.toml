@@ -13,7 +13,6 @@ base64.workspace = true
 getrandom = { workspace = true, features = ["std"] }
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server"] }
-hyper-util = { workspace = true, features = ["server"] }
 nsv-accounts.workspace = true
 nsv-agents.workspace = true
 nsv-core.workspace = true
