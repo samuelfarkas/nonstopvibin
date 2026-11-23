@@ -109,6 +109,21 @@ impl Releases for Https {
     }
 }
 
+/// One source shared, as tests share theirs.
+impl<T: Releases> Releases for std::sync::Arc<T> {
+    fn feed(&self, url: &str) -> impl Future<Output = Result<Response, NetError>> + Send {
+        T::feed(self, url)
+    }
+
+    fn download(
+        &self,
+        url: &str,
+        path: &Path,
+    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send {
+        T::download(self, url, path)
+    }
+}
+
 /// The reviewed pin the feed at `url` serves.
 ///
 /// # Errors

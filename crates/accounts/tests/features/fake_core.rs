@@ -4,7 +4,7 @@
 //! real core does. A browser sign-in finishes when its callback arrives, and leaves the scripted
 //! credential behind. No provider is ever contacted.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
@@ -34,10 +34,10 @@ pub(crate) struct Knobs {
     /// Holds each ending of a pending authorization until the receiver turns true; the notify
     /// tells that one arrived.
     pub(crate) cancel_gate: Option<(Arc<Notify>, watch::Receiver<bool>)>,
-    /// Executables that fail to start.
-    pub(crate) broken: HashSet<PathBuf>,
-    /// The `/api-call` answer.
-    pub(crate) upstream: Value,
+    /// Answers `/api-call` from its request.
+    pub(crate) upstream: Arc<dyn Fn(&Value) -> Value + Send + Sync>,
+    /// Holds each `/api-call` until the receiver turns true; the notify tells that one arrived.
+    pub(crate) upstream_gate: Option<(Arc<Notify>, watch::Receiver<bool>)>,
 }
 
 impl Default for Knobs {
@@ -49,8 +49,10 @@ impl Default for Knobs {
             auth_fails: false,
             cancel_fails: false,
             cancel_gate: None,
-            broken: HashSet::new(),
-            upstream: json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } }),
+            upstream: Arc::new(
+                |_| json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } }),
+            ),
+            upstream_gate: None,
         }
     }
 }
@@ -61,7 +63,7 @@ pub(crate) struct Core {
     pub(crate) binary: PathBuf,
     port: u16,
     management_key: String,
-    core_key: String,
+    client_key: String,
     auth: PathBuf,
     config: PathBuf,
     exited: watch::Sender<Option<i32>>,
@@ -133,13 +135,22 @@ impl FakeCores {
         self.0.lock().unwrap().reaped.clone()
     }
 
-    fn launch_core(&self, binary: &Path, data: &Path, profile: &ProfileId) -> io::Result<Arc<Core>> {
+    fn launch_core(
+        &self,
+        binary: &Path,
+        data: &Path,
+        profile: &ProfileId,
+    ) -> io::Result<Arc<Core>> {
         let config = core_config_path(data, profile);
         let settings = yaml(&std::fs::read_to_string(&config)?);
-        let mut cores = self.0.lock().unwrap();
-        if cores.knobs.broken.contains(binary) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "broken core"));
+        // An executable whose bytes say so cannot start.
+        if std::fs::read(binary).is_ok_and(|bytes| bytes.starts_with(b"broken")) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "broken core",
+            ));
         }
+        let mut cores = self.0.lock().unwrap();
         let core = Arc::new(Core {
             profile: profile.clone(),
             data: data.to_owned(),
@@ -149,7 +160,7 @@ impl FakeCores {
                 .as_str()
                 .unwrap()
                 .to_owned(),
-            core_key: settings["api-keys"][0].as_str().unwrap().to_owned(),
+            client_key: settings["api-keys"][0].as_str().unwrap().to_owned(),
             auth: PathBuf::from(settings["auth-dir"].as_str().unwrap()),
             config,
             exited: watch::Sender::new(None),
@@ -159,6 +170,10 @@ impl FakeCores {
         Ok(core)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per management route, as the core's router"
+    )]
     async fn answer(&self, call: Call) -> Result<Response, NetError> {
         let core = self
             .0
@@ -170,27 +185,35 @@ impl FakeCores {
             .cloned()
             .ok_or_else(|| NetError::Connect(io::ErrorKind::ConnectionRefused.into()))?;
         if call.target == "/v1/models" {
-            return Ok(if call.authorization == format!("Bearer {}", core.core_key) {
-                respond(200, &json!({ "data": [{ "id": "fixture-model", "owned_by": "fixture" }] }))
-            } else {
-                respond(401, &json!({ "error": "unauthorized" }))
-            });
+            return Ok(
+                if call.authorization == format!("Bearer {}", core.client_key) {
+                    respond(
+                        200,
+                        &json!({ "data": [{ "id": "fixture-model", "owned_by": "fixture" }] }),
+                    )
+                } else {
+                    respond(401, &json!({ "error": "unauthorized" }))
+                },
+            );
         }
         if call.authorization != format!("Bearer {}", core.management_key) {
             return Ok(respond(401, &json!({ "error": "invalid management key" })));
         }
-        let target = call.target.strip_prefix("/v0/management").unwrap().to_owned();
-        self.0
-            .lock()
+        let target = call
+            .target
+            .strip_prefix("/v0/management")
             .unwrap()
-            .calls
-            .push((core.profile.clone(), call.method.clone(), target.clone()));
+            .to_owned();
+        self.0.lock().unwrap().calls.push((
+            core.profile.clone(),
+            call.method.clone(),
+            target.clone(),
+        ));
         let url = Url::parse(&format!("http://core{target}")).unwrap();
         let query = |key: &str| {
             url.query_pairs()
                 .find(|(name, _)| name == key)
-                .map(|(_, value)| value.into_owned())
-                .unwrap_or_default()
+                .map_or_else(String::new, |(_, value)| value.into_owned())
         };
         let body: Value = call
             .body
@@ -202,14 +225,18 @@ impl FakeCores {
                 respond(200, &yaml(&std::fs::read_to_string(&core.config).unwrap()))
             }
             (Method::GET, "/auth-files") => respond(200, &listing(&core.auth)),
+            // Nothing is proxied through these cores, so their usage queue stays empty.
+            (_, "/usage-queue") => respond(200, &json!([])),
             (Method::POST, "/auth-files") => {
                 write_credential(&core.auth.join(query("name")), &body);
                 respond(200, &json!({ "status": "ok" }))
             }
-            (Method::DELETE, "/auth-files") => match std::fs::remove_file(core.auth.join(query("name"))) {
-                Ok(()) => respond(200, &json!({ "status": "ok" })),
-                Err(_) => respond(404, &json!({ "error": "not found" })),
-            },
+            (Method::DELETE, "/auth-files") => {
+                match std::fs::remove_file(core.auth.join(query("name"))) {
+                    Ok(()) => respond(200, &json!({ "status": "ok" })),
+                    Err(_) => respond(404, &json!({ "error": "not found" })),
+                }
+            }
             (Method::PATCH, "/auth-files/status" | "/auth-files/fields") => {
                 let file = core.auth.join(body["name"].as_str().unwrap());
                 let mut credential: Value =
@@ -236,7 +263,8 @@ impl FakeCores {
                 let mut link = Url::parse("https://auth.example.invalid/authorize").unwrap();
                 link.query_pairs_mut().append_pair("state", &state);
                 if let Some(redirect) = redirect {
-                    link.query_pairs_mut().append_pair("redirect_uri", &redirect);
+                    link.query_pairs_mut()
+                        .append_pair("redirect_uri", &redirect);
                 }
                 let mut answer = json!({ "url": link.as_str(), "state": state });
                 if let Some(expires) = expires {
@@ -260,8 +288,7 @@ impl FakeCores {
                 let state = redirect
                     .query_pairs()
                     .find(|(name, _)| name == "state")
-                    .map(|(_, value)| value.into_owned())
-                    .unwrap_or_default();
+                    .map_or_else(String::new, |(_, value)| value.into_owned());
                 let known = core.pending.lock().unwrap().insert(state, true).is_some();
                 if !known {
                     return Ok(respond(404, &json!({ "error": "unknown state" })));
@@ -287,7 +314,15 @@ impl FakeCores {
                 core.pending.lock().unwrap().remove(&query("state"));
                 respond(200, &json!({}))
             }
-            (Method::POST, "/api-call") => respond(200, &self.knobs(|knobs| knobs.upstream.clone())),
+            (Method::POST, "/api-call") => {
+                let gate = self.knobs(|knobs| knobs.upstream_gate.clone());
+                if let Some((entered, mut released)) = gate {
+                    entered.notify_one();
+                    let _released = released.wait_for(|released| *released).await;
+                }
+                let upstream = self.knobs(|knobs| Arc::clone(&knobs.upstream));
+                respond(200, &upstream(&body))
+            }
             _ => respond(404, &json!({ "error": "not found" })),
         })
     }
@@ -302,21 +337,25 @@ fn write_credential(path: &Path, credential: &Value) {
         .mode(0o600)
         .open(path)
         .unwrap();
-    std::io::Write::write_all(&mut file, credential.to_string().as_bytes()).unwrap();
+    io::Write::write_all(&mut file, credential.to_string().as_bytes()).unwrap();
 }
 
 /// `/auth-files`: each credential file of the directory, with a stable auth index.
 fn listing(auth: &Path) -> Value {
     let mut files = Vec::new();
-    let mut names: Vec<String> = std::fs::read_dir(auth)
-        .map(|listing| {
+    let mut names: Vec<String> = std::fs::read_dir(auth).map_or_else(
+        |_| Vec::new(),
+        |listing| {
             listing
                 .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
                 .collect()
-        })
-        .unwrap_or_default();
+        },
+    );
     names.sort();
-    for name in names.into_iter().filter(|name| name.ends_with(".json")) {
+    for name in names
+        .into_iter()
+        .filter(|name| Path::new(name).extension() == Some("json".as_ref()))
+    {
         let Ok(credential) =
             serde_json::from_slice::<Value>(&std::fs::read(auth.join(&name)).unwrap())
         else {
@@ -327,7 +366,10 @@ fn listing(auth: &Path) -> Value {
         entry.insert("type".to_owned(), credential["type"].clone());
         entry.insert("provider".to_owned(), credential["type"].clone());
         entry.insert("auth_index".to_owned(), json!(format!("index-{name}")));
-        entry.insert("disabled".to_owned(), json!(credential["disabled"] == json!(true)));
+        entry.insert(
+            "disabled".to_owned(),
+            json!(credential["disabled"] == json!(true)),
+        );
         for key in ["email", "note", "priority", "id_token"] {
             if let Some(value) = credential.get(key) {
                 entry.insert(key.to_owned(), value.clone());

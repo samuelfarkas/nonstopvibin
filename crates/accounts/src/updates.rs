@@ -174,7 +174,8 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
         if !self.enabled() {
             return Ok(false);
         }
-        let (cores, bundled, target) = (self.0.cores.clone(), self.0.bundled.version, self.0.target);
+        let (cores, bundled, target) =
+            (self.0.cores.clone(), self.0.bundled.version, self.0.target);
         let selected =
             blocking(move || Ok(select_installed_core(&cores, bundled, target)?)).await?;
         match selected {
@@ -352,7 +353,10 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
     }
 
     /// `work`, or 503 once shutdown begins.
-    async fn abortable<T>(&self, work: impl Future<Output = Result<T, AppError>>) -> Result<T, AppError> {
+    async fn abortable<T>(
+        &self,
+        work: impl Future<Output = Result<T, AppError>>,
+    ) -> Result<T, AppError> {
         let mut closing = self.closing.subscribe();
         tokio::select! {
             result = work => result,
@@ -362,7 +366,8 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
 
     async fn fetch_pin(&self) -> Result<CorePin, AppError> {
         let feed = self.options.feed.as_deref().unwrap_or_default();
-        self.abortable(fetch_pin(&self.options.releases, feed)).await
+        self.abortable(fetch_pin(&self.options.releases, feed))
+            .await
     }
 
     async fn install(self: &Arc<Self>, version: &str) -> Result<(), AppError> {
@@ -380,7 +385,8 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
         }
         self.phase.send_replace(Some(CorePhase::Downloading));
         let cores = self.cores.clone();
-        let staging = blocking(move || Staging::create(&cores).map_err(|error| io_error(&error))).await?;
+        let staging =
+            blocking(move || Staging::create(&cores).map_err(|error| io_error(&error))).await?;
         self.abortable(async {
             Ok(install_core(
                 &self.options.releases,
@@ -394,7 +400,8 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
         })
         .await?;
         self.phase.send_replace(Some(CorePhase::Testing));
-        self.preflight(&staging.path().join(BINARY), pin.version).await?;
+        self.preflight(&staging.path().join(BINARY), pin.version)
+            .await?;
         self.phase.send_replace(Some(CorePhase::Restarting));
         let core = ActiveCore {
             version: pin.version,

@@ -122,7 +122,9 @@ async fn serve(stream: TcpStream, stop: Arc<watch::Sender<Stop>>, handler: Handl
         }
     });
     let mut builder = http1::Builder::new();
-    builder.timer(TokioTimer::new()).header_read_timeout(HEAD_TIMEOUT);
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(HEAD_TIMEOUT);
     let connection = builder.serve_connection(TokioIo::new(stream), service);
     tokio::pin!(connection);
     // A stop sent between the accept and this subscription is already seen.

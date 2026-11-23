@@ -351,9 +351,9 @@ impl<F: Fetch + 'static> SignIn<F> {
     pub async fn callback(&self, profile: &ProfileId, redirect: &str) -> Result<(), AppError> {
         let (profile, redirect) = (profile.clone(), redirect.to_owned());
         self.0
-            .run(move |inner, state| async move {
-                inner.forward(&state, &profile, &redirect).await
-            })
+            .run(
+                move |inner, state| async move { inner.forward(&state, &profile, &redirect).await },
+            )
             .await
     }
 
@@ -805,7 +805,8 @@ impl<F: Fetch + 'static> Inner<F> {
         }
         self.close_callback(None, false);
         self.session.send_replace(None);
-        Ok(())
+        // Its profile's core may stop for being idle again.
+        self.scheduler.changed().await
     }
 
     async fn authorization(
@@ -853,6 +854,7 @@ impl<F: Fetch + 'static> Inner<F> {
         self.close_callback(None, false);
         if matches!(authorization, Authorization::Error) {
             self.accounts.sync(pool, profile).await?;
+            self.scheduler.changed().await?;
             return Ok(failed());
         }
         let provider = session.provider.as_str();

@@ -168,7 +168,10 @@ impl<F: Fetch + 'static> Credentials<F> {
         let of_provider =
             |file: &CredentialFile| text(file.raw.get("type")) == Some(provider.as_str());
         let seat = |file: &CredentialFile| {
-            same_seat(&identity, &claude_identity(&Value::Object(file.raw.clone())))
+            same_seat(
+                &identity,
+                &claude_identity(&Value::Object(file.raw.clone())),
+            )
         };
         if let Some(reconnect) = reconnect {
             let Some(target) = files
@@ -191,9 +194,10 @@ impl<F: Fetch + 'static> Credentials<F> {
             .collect();
         Ok(match matches.as_slice() {
             [] => SeatMatch::Add,
-            [existing] => SeatMatch::Reconnect(AccountId::parse(&existing.id).map_err(|_| {
-                AppError::new("Unsupported credential filename.", 400)
-            })?),
+            [existing] => SeatMatch::Reconnect(
+                AccountId::parse(&existing.id)
+                    .map_err(|_| AppError::new("Unsupported credential filename.", 400))?,
+            ),
             _ => SeatMatch::Blocked(
                 "This profile already has multiple copies of this seat. Remove the extra copies before reconnecting.",
             ),
@@ -510,7 +514,10 @@ impl<F: Fetch + 'static> Credentials<F> {
             pool.management(
                 profile,
                 &Method::DELETE,
-                &format!("/auth-files?name={}", encode_uri_component(account.as_str())),
+                &format!(
+                    "/auth-files?name={}",
+                    encode_uri_component(account.as_str())
+                ),
                 None,
                 MANAGEMENT_TIMEOUT,
             )
