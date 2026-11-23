@@ -10,8 +10,34 @@ repository.workspace = true
 
 [dependencies]
 nsv-domain.workspace = true
-nsv-net.workspace = true
-nsv-server.workspace = true
+nsv-store.workspace = true
+png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync"] }
+url.workspace = true
+
+# Linux links no GUI library: the tray is a StatusNotifierItem on the session bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni.workspace = true
+zbus.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["NSButton", "NSControl", "NSStatusBarButton", "NSStatusItem", "NSView"] }
+objc2-foundation.workspace = true
+objc2-service-management.workspace = true
+tao.workspace = true
+tray-icon.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+ksni.workspace = true
+zbus.workspace = true
 
 [lints]
 workspace = true
