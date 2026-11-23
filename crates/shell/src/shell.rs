@@ -19,7 +19,7 @@ use crate::login::{Login, UNPACKAGED};
 use crate::platform::{LoginItem, Opener, Os, SystemTray};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
 use crate::update::{Staged, Updates};
-use crate::{ShellHost, UpdateFailed, external, log};
+use crate::{ShellHost, UpdateFailed, external};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -83,7 +83,7 @@ pub async fn run(
     if shell.options.install.packaged
         && let Err(error) = shell.options.login.follow()
     {
-        log(format_args!("could not update the login item: {error}"));
+        tracing::warn!("could not update the login item: {error}");
     }
     if open_window {
         shell.show(View::Main { profile: None }).await;
@@ -205,13 +205,13 @@ impl<H: ShellHost> Shell<'_, H> {
         self.helper_gone(None);
         let failure = match self.host.close().await {
             Err(error) => {
-                log(format_args!("could not stop for the update: {error}"));
+                tracing::warn!("could not stop for the update: {error}");
                 DialogKind::CouldNotRestart
             }
             Ok(()) => match update.install() {
                 Ok(()) => return Step::Stop,
                 Err(error) => {
-                    log(format_args!("could not install the update: {error}"));
+                    tracing::warn!("could not install the update: {error}");
                     DialogKind::CouldNotInstall
                 }
             },
@@ -279,7 +279,7 @@ impl<H: ShellHost> Shell<'_, H> {
         match Helper::spawn(&self.options.helper, start, self.host.session_token()).await {
             Ok(helper) => self.helper = Some(helper),
             Err(error) => {
-                log(format_args!("could not start the window helper: {error}"));
+                tracing::warn!("could not start the window helper: {error}");
                 self.fall_back();
                 self.helper_gone(None);
             }
@@ -313,7 +313,7 @@ impl<H: ShellHost> Shell<'_, H> {
         }
         let link = session_link(self.host.origin().as_str(), self.host.session_token());
         if let Err(error) = external::open(&link) {
-            log(format_args!("could not open the browser either: {error}"));
+            tracing::warn!("could not open the browser either: {error}");
         }
     }
 
@@ -321,7 +321,7 @@ impl<H: ShellHost> Shell<'_, H> {
         if let Some(helper) = &mut self.helper
             && let Err(error) = helper.send(message).await
         {
-            log(format_args!("the window helper stopped listening: {error}"));
+            tracing::warn!("the window helper stopped listening: {error}");
         }
     }
 
@@ -340,12 +340,10 @@ impl<H: ShellHost> Shell<'_, H> {
                     return Step::Continue;
                 };
                 if !helper.ready() {
-                    log(format_args!(
-                        "the window helper could not start ({status:?})"
-                    ));
+                    tracing::warn!("the window helper could not start ({status:?})");
                     self.fall_back();
                 } else if !status.is_some_and(|status| status.success()) {
-                    log(format_args!("the window helper stopped ({status:?})"));
+                    tracing::warn!("the window helper stopped ({status:?})");
                 }
                 self.helper_gone(None);
             }

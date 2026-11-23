@@ -111,8 +111,6 @@ pub(crate) struct Checks {
 }
 
 impl Checks {
-    /// # Errors
-    /// When `origin` is not a URL.
     pub(crate) fn new(
         port: u16,
         origin: Origin,
@@ -120,16 +118,21 @@ impl Checks {
         development: bool,
         token: SessionToken,
         phase: watch::Receiver<Phase>,
-    ) -> Result<Self, url::ParseError> {
-        Ok(Self {
+    ) -> Self {
+        #[expect(
+            clippy::expect_used,
+            reason = "an Origin is http://<loopback host>:<port>, which is a URL"
+        )]
+        let base = url::Url::parse(origin.as_str()).expect("an origin is a URL");
+        Self {
             port,
-            base: url::Url::parse(origin.as_str())?,
             origin,
+            base,
             allow_hosts,
             development,
             token,
             phase,
-        })
+        }
     }
 
     pub(crate) fn token(&self) -> &SessionToken {

@@ -13,7 +13,6 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
 
 use crate::install::Install;
-use crate::log;
 
 /// The helper at `program`, reading the pipe on its stdin and logging to the daemon's stderr.
 fn command(program: &Path, stdout: Stdio) -> process::Command {
@@ -56,12 +55,10 @@ pub fn alert(install: &Install, failure: Failure, reason: &str) {
         Ok(status) => format!("it exited with {status}"),
         Err(error) => error.to_string(),
     };
-    log(format_args!(
-        "the window helper could not show the error: {failed}"
-    ));
+    tracing::warn!("the window helper could not show the error: {failed}");
     #[cfg(target_os = "linux")]
     if let Err(error) = notify(failure, &reason) {
-        log(format_args!("no desktop notification either: {error}"));
+        tracing::warn!("no desktop notification either: {error}");
     }
 }
 
@@ -169,11 +166,9 @@ async fn read(mut child: Child, stdout: ChildStdout, sender: mpsc::Sender<Event>
             }
             Ok(None) => break,
             Err(error) => {
-                log(format_args!(
-                    "the window helper broke the protocol: {error}"
-                ));
+                tracing::warn!("the window helper broke the protocol: {error}");
                 if let Err(error) = child.start_kill() {
-                    log(format_args!("could not stop the window helper: {error}"));
+                    tracing::warn!("could not stop the window helper: {error}");
                 }
                 break;
             }
@@ -182,7 +177,7 @@ async fn read(mut child: Child, stdout: ChildStdout, sender: mpsc::Sender<Event>
     let status = child
         .wait()
         .await
-        .inspect_err(|error| log(format_args!("lost the window helper: {error}")))
+        .inspect_err(|error| tracing::warn!("lost the window helper: {error}"))
         .ok();
     // A shell that let this helper go no longer listens, and needs no answer.
     drop(sender.send(Event::Exited(status)).await);

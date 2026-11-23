@@ -323,7 +323,7 @@ impl Db {
     pub fn profile(&self, id: &ProfileId) -> Result<Profile, StoreError> {
         self.value::<Json<Profile>>("SELECT body FROM profiles WHERE id=?", [id.as_str()])?
             .map(|Json(profile)| profile)
-            .ok_or_else(|| AppError::new("Profile not found.", 404).into())
+            .ok_or_else(|| AppError::profile_not_found().into())
     }
 
     /// Creates a disabled fill-first profile with a unique slug and new client, core and

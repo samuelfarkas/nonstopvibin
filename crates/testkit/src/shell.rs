@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nsv_desktop::{HostEvent, TrayStatus};
-use nsv_domain::endpoint::{Origin, loopback_origin};
+use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use nsv_files::DataDir;
@@ -41,7 +41,7 @@ impl Host {
     pub fn new(port: u16, data: &Path) -> Arc<Self> {
         let (events, first) = broadcast::channel(8);
         Arc::new(Self {
-            origin: Origin::parse(&loopback_origin(port)).unwrap(),
+            origin: Origin::loopback(port),
             token: SessionToken::new(TOKEN),
             data: DataDir::new(data),
             status: watch::channel(TrayStatus::default()).0,

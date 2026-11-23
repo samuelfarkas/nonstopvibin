@@ -220,7 +220,6 @@ mod macos {
     use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
     use crate::install::Install;
-    use crate::log;
     use crate::platform::LoginItem;
 
     /// `SMAppService.mainApp`: the app bundle itself. Electron registered the same service
@@ -264,7 +263,7 @@ mod macos {
                 unsafe { service.unregisterAndReturnError() }
             };
             if let Err(error) = changed {
-                log(format_args!("the login item did not change: {error:?}"));
+                tracing::warn!("the login item did not change: {error:?}");
             }
             if self.enabled() == enabled {
                 Ok(enabled)

@@ -9,12 +9,12 @@
 use std::net::SocketAddr;
 
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use nsv_domain::endpoint::PROFILE_HEADER;
+use nsv_domain::endpoint::{OPENCODE_SESSION_HEADER, PROFILE_HEADER};
 use nsv_domain::random::request_uuid;
 
 use crate::route::{AGENT_HEADER, joined};
 
-const SESSION: HeaderName = HeaderName::from_static("x-opencode-session");
+const SESSION: HeaderName = HeaderName::from_static(OPENCODE_SESSION_HEADER);
 /// The caller's session, first header present wins; it keeps Go prompt caching per session.
 const SESSION_SOURCES: [HeaderName; 4] = [
     SESSION,

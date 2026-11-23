@@ -488,7 +488,7 @@ impl Pool {
             .borrow()
             .core(profile)
             .cloned()
-            .ok_or_else(|| AppError::new("Start this profile first.", 409))?;
+            .ok_or_else(AppError::not_started)?;
         self.call(&core, method, path, body).await
     }
 

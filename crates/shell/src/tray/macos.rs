@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use super::{Action, Entry, Icon, Look, MENU, rgba};
-use crate::log;
 use crate::platform::SystemTray;
 use crate::process::MainEvent;
 
@@ -86,12 +85,10 @@ impl StatusItem {
                     Icon::Stopped => self.stopped.clone(),
                 };
                 if let Err(error) = self.tray.set_icon(Some(icon)) {
-                    log(format_args!("could not change the menu bar icon: {error}"));
+                    tracing::warn!("could not change the menu bar icon: {error}");
                 }
                 if let Err(error) = self.tray.set_tooltip(Some(look.tooltip)) {
-                    log(format_args!(
-                        "could not change the menu bar tooltip: {error}"
-                    ));
+                    tracing::warn!("could not change the menu bar tooltip: {error}");
                 }
             }
             MainEvent::Updates => {
@@ -121,9 +118,7 @@ impl StatusItem {
 
     pub(crate) fn send(&self, action: Action) {
         if self.actions.try_send(action).is_err() {
-            log(format_args!(
-                "dropped a menu bar click: the shell is busy or gone"
-            ));
+            tracing::warn!("dropped a menu bar click: the shell is busy or gone");
         }
     }
 
@@ -161,7 +156,7 @@ impl SystemTray for Tray {
             actions: link.actions,
         };
         if updates && tray.proxy.send_event(MainEvent::Updates).is_err() {
-            log(format_args!("the menu bar item is gone"));
+            tracing::warn!("the menu bar item is gone");
         }
         tray.show(look).await;
         tray
@@ -174,7 +169,7 @@ impl SystemTray for Tray {
     /// The main thread draws it.
     fn show(&self, look: Look) -> impl Future<Output = ()> {
         if self.proxy.send_event(MainEvent::Look(look)).is_err() {
-            log(format_args!("the menu bar item is gone"));
+            tracing::warn!("the menu bar item is gone");
         }
         std::future::ready(())
     }

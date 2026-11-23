@@ -18,7 +18,7 @@ use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::install::CoreSource;
 use nsv_core::pool::{Backend, Processes, READY};
-use nsv_domain::endpoint::{self, Origin};
+use nsv_domain::endpoint::Origin;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
@@ -121,9 +121,6 @@ pub enum StartError {
     /// No entropy for the session token or the interface's version.
     #[error(transparent)]
     Entropy(io::Error),
-    /// The port's origin did not parse.
-    #[error("The daemon's origin is not valid: {0}")]
-    Origin(String),
     /// The cores could not be set up, or the core could not be selected and checked.
     #[error(transparent)]
     Cores(AppError),
@@ -260,8 +257,7 @@ impl Daemon {
         store.call(move |db| db.prune_usage(now)).await?;
         let listener = listener::bind(options.port)?;
         let port = listener.local_addr().map_err(StartError::Listen)?.port();
-        let origin = Origin::parse(&endpoint::loopback_origin(port))
-            .map_err(|error| StartError::Origin(error.to_string()))?;
+        let origin = Origin::loopback(port);
         let phase = watch::Sender::new(Phase::Serving);
         let checks = Checks::new(
             port,
@@ -270,8 +266,7 @@ impl Daemon {
             options.development,
             SessionToken::generate().map_err(StartError::Entropy)?,
             phase.subscribe(),
-        )
-        .map_err(|error| StartError::Origin(error.to_string()))?;
+        );
         let shared = Arc::new(Shared {
             port,
             origin,
@@ -474,7 +469,7 @@ fn connection_source(
                 .map_err(AppError::internal)?
                 .map(|entry| entry.client_key.clone())
         }
-        .ok_or_else(|| AppError::new("Profile not found.", 404))?;
+        .ok_or_else(AppError::profile_not_found)?;
         if *phase.borrow() >= Phase::Draining || !cores.status(profile).serving {
             return Err(AppError::new(
                 "Start this profile before connecting an agent.",

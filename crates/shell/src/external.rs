@@ -69,9 +69,7 @@ impl Opener for Os {
         match show_items(uri.as_str()).await {
             Ok(()) => Ok(()),
             Err(error) => {
-                crate::log(format_args!(
-                    "no FileManager1 ({error}); opening the folder"
-                ));
+                tracing::warn!("no FileManager1 ({error}); opening the folder");
                 let folder = file.parent().unwrap_or(file);
                 launch(Command::new(Self::OPEN).arg(folder))
             }

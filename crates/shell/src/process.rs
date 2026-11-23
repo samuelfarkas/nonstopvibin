@@ -32,6 +32,8 @@ mod macos {
     use std::panic::{self, AssertUnwindSafe};
     use std::process::ExitCode;
 
+    use crate::platform::{Os, Threads};
+    use crate::tray::{Action, Link, Look, StatusItem, TrayLink};
     use muda::MenuEvent;
     use nsv_desktop::Command;
     use objc2_foundation::NSAppleEventManager;
@@ -40,10 +42,6 @@ mod macos {
     use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
     use tokio::sync::mpsc;
     use tray_icon::TrayIconEvent;
-
-    use crate::log;
-    use crate::platform::{Os, Threads};
-    use crate::tray::{Action, Link, Look, StatusItem, TrayLink};
 
     /// `kAEOpenApplication`, `keyAEPropData` and `keyAELaunchedAsLogInItem`.
     const OPEN_APPLICATION: u32 = u32::from_be_bytes(*b"oapp");
@@ -89,7 +87,7 @@ mod macos {
                         let login_launch = launched_at_login();
                         let (sender, actions) = mpsc::channel(8);
                         item = StatusItem::build(sender)
-                            .inspect_err(|error| log(format_args!("no menu bar item: {error}")))
+                            .inspect_err(|error| tracing::warn!("no menu bar item: {error}"))
                             .ok();
                         let link = TrayLink {
                             login_launch,
@@ -138,7 +136,7 @@ mod macos {
                 drop(proxy.send_event(MainEvent::Exit(i32::from(code))));
             });
         if let Err(error) = spawned {
-            log(format_args!("could not start the daemon thread: {error}"));
+            tracing::warn!("could not start the daemon thread: {error}");
         }
     }
 

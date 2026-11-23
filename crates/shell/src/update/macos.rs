@@ -11,7 +11,6 @@ use tokio::process::Command;
 
 use super::Detected;
 use crate::install::{BUNDLE_RESOURCES, Install};
-use crate::log;
 use crate::platform::UpdateTarget;
 /// The bundle the release zip holds at its root.
 const BUNDLE: &str = "NonstopVibin.app";
@@ -135,10 +134,10 @@ fn writable(path: &Path) -> bool {
         Ok(()) => true,
         Err(Errno::ACCESS | Errno::PERM | Errno::ROFS) => false,
         Err(error) => {
-            log(format_args!(
+            tracing::warn!(
                 "could not check whether {} is writable: {error}",
                 path.display()
-            ));
+            );
             false
         }
     }

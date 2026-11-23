@@ -38,6 +38,24 @@ impl AppError {
         Self::new("nonstopvibin is shutting down.", 503)
     }
 
+    /// A profile id that names no profile.
+    #[must_use]
+    pub fn profile_not_found() -> Self {
+        Self::new("Profile not found.", 404)
+    }
+
+    /// An account id that names none of the profile's accounts.
+    #[must_use]
+    pub fn account_not_found() -> Self {
+        Self::new("Account not found in this profile.", 404)
+    }
+
+    /// An operation that needs the profile's core while it has had none.
+    #[must_use]
+    pub fn not_started() -> Self {
+        Self::new("Start this profile first.", 409)
+    }
+
     /// Whether the user gets [`OPERATION_FAILED`] instead of the message.
     #[must_use]
     pub const fn hidden(&self) -> bool {

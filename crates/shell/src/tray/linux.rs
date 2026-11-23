@@ -10,7 +10,6 @@ use nsv_desktop::pipe::Anchor;
 use tokio::sync::mpsc;
 
 use super::{Action, Entry, Icon, Look, MENU, rgba};
-use crate::log;
 use crate::platform::SystemTray;
 
 /// Nothing on Linux: the tray joins the daemon's runtime when [`crate::run`] starts.
@@ -54,9 +53,7 @@ struct Item {
 impl Item {
     fn send(&self, action: Action) {
         if self.actions.try_send(action).is_err() {
-            log(format_args!(
-                "dropped a tray click: the shell is busy or gone"
-            ));
+            tracing::warn!("dropped a tray click: the shell is busy or gone");
         }
     }
 }
@@ -138,11 +135,11 @@ impl SystemTray for Tray {
                 };
                 item.spawn()
                     .await
-                    .inspect_err(|error| log(format_args!("no tray: {error}")))
+                    .inspect_err(|error| tracing::warn!("no tray: {error}"))
                     .ok()
             }
             Err(error) => {
-                log(format_args!("no tray: the icons do not decode: {error}"));
+                tracing::warn!("no tray: the icons do not decode: {error}");
                 None
             }
         };

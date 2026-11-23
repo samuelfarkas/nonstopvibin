@@ -100,7 +100,7 @@ fn query(url: &url::Url, name: &str) -> Option<String> {
 
 /// The account parameter; no profile lists an id longer than an account id may be.
 fn account_id(account: &str) -> Result<AccountId, AppError> {
-    AccountId::parse(account).map_err(|_| AppError::new("Account not found in this profile.", 404))
+    AccountId::parse(account).map_err(|_| AppError::account_not_found())
 }
 
 /// Management responses: JSON, never cached, never sniffed.

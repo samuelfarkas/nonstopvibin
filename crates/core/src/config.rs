@@ -7,6 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use nsv_domain::endpoint::OPENCODE_SESSION_HEADER;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{Protocol, Provider, Strategy, registry};
@@ -70,7 +71,10 @@ fn upstream_headers(upstream: Provider) -> BTreeMap<&'static str, String> {
                 "User-Agent",
                 format!("{} (coding-agent-gateway)", nsv_net::USER_AGENT),
             ),
-            ("x-opencode-session", "$x-opencode-session".to_owned()),
+            (
+                OPENCODE_SESSION_HEADER,
+                format!("${OPENCODE_SESSION_HEADER}"),
+            ),
         ]),
         _ => BTreeMap::new(),
     }
@@ -81,7 +85,7 @@ impl CoreConfiguration {
     /// `api_key` answers an account's upstream key.
     ///
     /// # Errors
-    /// What `api_key` returns, or [`StoreError::Registry`].
+    /// What `api_key` returns, or [`StoreError::Json`] when a model list does not serialize.
     pub fn new(
         profile: &Profile,
         port: u16,

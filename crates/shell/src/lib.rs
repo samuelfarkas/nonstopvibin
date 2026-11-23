@@ -60,8 +60,3 @@ pub trait ShellHost {
 /// failure after the error dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateFailed;
-
-/// A shell warning in the daemon's log, through the subscriber the CLI installs.
-fn log(message: std::fmt::Arguments<'_>) {
-    tracing::warn!("{message}");
-}

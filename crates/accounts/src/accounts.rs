@@ -37,13 +37,17 @@ pub fn credential_path(
     credential_file(&data.credentials(profile), name)
 }
 
+pub(crate) fn unsupported_filename() -> AppError {
+    AppError::new("Unsupported credential filename.", 400)
+}
+
 #[expect(
     clippy::case_sensitive_file_extension_comparisons,
     reason = "accounts.ts refused `x.JSON`, and the core reads only `.json`"
 )]
 fn credential_file(directory: &Path, name: &str) -> Result<PathBuf, AppError> {
     if !name.ends_with(".json") || name.contains(['/', '\\']) || name == ".json" {
-        return Err(AppError::new("Unsupported credential filename.", 400));
+        return Err(unsupported_filename());
     }
     Ok(directory.join(name))
 }

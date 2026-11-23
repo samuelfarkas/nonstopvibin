@@ -26,15 +26,13 @@ use nsv_store::Store;
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
-use crate::accounts::{Accounts, CredentialFile, credential_path};
+use crate::accounts::{Accounts, CredentialFile, credential_path, unsupported_filename};
 use crate::api_accounts::api_account;
 use crate::fetch::Outside;
 use crate::identity::{claude_identity, same_seat};
 use crate::quota::Quotas;
 use crate::source::PoolSource;
 use crate::task::detached;
-
-const NOT_FOUND: &str = "Account not found in this profile.";
 
 /// A non-empty token field of a credential.
 fn token_of<'a>(credential: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
@@ -176,8 +174,7 @@ impl Credentials {
         Ok(match matches.as_slice() {
             [] => SeatMatch::Add,
             [existing] => SeatMatch::Reconnect(
-                AccountId::parse(&existing.id)
-                    .map_err(|_| AppError::new("Unsupported credential filename.", 400))?,
+                AccountId::parse(&existing.id).map_err(|_| unsupported_filename())?,
             ),
             _ => SeatMatch::Blocked(
                 "This profile already has multiple copies of this seat. Remove the extra copies before reconnecting.",
@@ -424,7 +421,7 @@ impl Credentials {
         self.listed(profile, account).await?;
         // A stopped or exited core keeps its record and port; nothing answers there.
         if !pool.state().usable(profile) {
-            return Err(AppError::new("Start this profile first.", 409));
+            return Err(AppError::not_started());
         }
         if let Some(disabled) = patch.disabled {
             let body = json!({ "name": account.as_str(), "disabled": disabled });
@@ -500,6 +497,6 @@ impl Credentials {
             .await?
             .into_iter()
             .find(|listed| listed.id == *account)
-            .ok_or_else(|| AppError::new(NOT_FOUND, 404))
+            .ok_or_else(AppError::account_not_found)
     }
 }

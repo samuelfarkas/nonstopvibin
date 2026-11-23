@@ -36,7 +36,6 @@ use self::feed::{Rejected, Sums};
 use self::machine::{Checked, Command, Machine};
 use self::source::Source;
 use crate::install::Install;
-use crate::log;
 use crate::platform::UpdateTarget;
 
 const FIRST_CHECK: Duration = Duration::from_secs(30);
@@ -179,7 +178,7 @@ impl Updater {
                         Ok(None) => Checked::UpToDate,
                         Err(error) => {
                             // Generic: remote bodies never reach the log.
-                            log(format_args!("app update failed: {error}"));
+                            tracing::warn!("app update failed: {error}");
                             remove(&staging(&target));
                             Checked::Failed
                         }
@@ -290,9 +289,7 @@ impl Staged {
             .map_err(|error| format!("could not replace the app: {error}"))?;
         if let Err(error) = relaunch(&self.executable) {
             if let Err(undo) = swapped.undo() {
-                log(format_args!(
-                    "could not put the running version back: {undo}"
-                ));
+                tracing::warn!("could not put the running version back: {undo}");
             }
             return Err(format!("could not start the updated app: {error}"));
         }
@@ -394,7 +391,7 @@ fn remove(path: &Path) {
         Err(error) => Err(error),
     };
     if let Err(error) = removed {
-        log(format_args!("could not remove {}: {error}", path.display()));
+        tracing::warn!("could not remove {}: {error}", path.display());
     }
 }
 

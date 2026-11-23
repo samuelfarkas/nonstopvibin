@@ -129,14 +129,14 @@ impl<S: QuotaSource, Q: RefreshQuota> CodexResets<S, Q> {
     ) -> Result<Subscription, QuotaError> {
         let source = &self.source;
         if !source.usable(profile) {
-            return Err(AppError::new("Start this profile first.", 409).into());
+            return Err(AppError::not_started().into());
         }
         let account = source
             .accounts(profile)
             .await?
             .into_iter()
             .find(|account| account.kind == AccountKind::OAuth && &account.id == account_id)
-            .ok_or_else(|| AppError::new("Account not found in this profile.", 404))?;
+            .ok_or_else(AppError::account_not_found)?;
         let banked = match Provider::from_id(&account.provider) {
             Some(provider) => registry().providers.get(provider).banked_resets,
             None => false,

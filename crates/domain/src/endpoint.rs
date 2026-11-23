@@ -50,6 +50,9 @@ pub const CATALOG_QUERY: &str = "nonstopvibin";
 pub const CATALOG_HEADER: &str = "x-nonstopvibin-agent";
 /// The response header that names the profile a catalog answer belongs to.
 pub const PROFILE_HEADER: &str = "x-nonstopvibin-profile";
+/// The `OpenCode` session header, which the gateway sets on Go requests and the core forwards
+/// upstream so Go caches prompts per session.
+pub const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
 /// The content security policy of every page the daemon serves, byte-identical to the
 /// TypeScript server's.
@@ -67,6 +70,12 @@ pub struct Origin(String);
 pub struct InvalidOrigin;
 
 impl Origin {
+    /// `http://127.0.0.1:<port>`, the daemon's own; `port` is a bound one, never 0.
+    #[must_use]
+    pub fn loopback(port: u16) -> Self {
+        Self(loopback_origin(port))
+    }
+
     /// # Errors
     /// When `value` is not exactly `http://<127.0.0.1|localhost|[::1]>:<port>`.
     pub fn parse(value: &str) -> Result<Self, InvalidOrigin> {
@@ -180,8 +189,8 @@ mod tests {
 
     #[test]
     fn links_name_the_loopback_origin() {
-        let origin = Origin::parse(&loopback_origin(4320)).unwrap();
-        assert_eq!(origin.as_str(), "http://127.0.0.1:4320");
+        let origin = Origin::loopback(4320);
+        assert_eq!(Origin::parse("http://127.0.0.1:4320"), Ok(origin.clone()));
         assert_eq!(
             session_link(origin.as_str(), &SessionToken::new("t")),
             "http://127.0.0.1:4320/#session=t"
