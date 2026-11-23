@@ -23,6 +23,7 @@ use nsv_net::USER_AGENT;
 use nsv_store::{Store, StoreError};
 use serde_json::{Map, Value, json};
 
+use crate::accounts::PoolSource;
 use crate::fetch::{Fetch, Request};
 use crate::js;
 
@@ -664,6 +665,18 @@ impl QuotaError {
     }
 }
 
+/// What the API answers for a failed check.
+impl From<QuotaError> for AppError {
+    fn from(error: QuotaError) -> Self {
+        let status = error.status();
+        match error {
+            QuotaError::App(error) => error,
+            QuotaError::Store(error) => error.into(),
+            QuotaError::Registry(error) => Self::new(error.to_string(), status),
+        }
+    }
+}
+
 /// Refreshes one account's quota.
 pub trait RefreshQuota: Send + Sync {
     fn refresh(
@@ -713,6 +726,12 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
     #[must_use]
     pub fn source(&self) -> &S {
         &self.source
+    }
+
+    /// The outgoing requests' client, which model discovery and identity checks share.
+    #[must_use]
+    pub fn fetch(&self) -> &F {
+        &self.fetch
     }
 
     /// Asks one account's quota and stores it. A check already running for the account answers
@@ -914,6 +933,30 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
             ));
         }
         serde_json::from_slice(&response.body).map_err(|_| NOT_JSON.to_owned())
+    }
+}
+
+impl<F: Fetch> Quotas<PoolSource, F> {
+    /// Reads the profile's accounts from its core again, then refreshes the quota of each
+    /// account `wanted` picks, in order, asking `wanted` as each one's turn comes
+    /// (`Quotas.refreshAccounts`). Dropping the future abandons the check in flight: nothing is
+    /// stored after.
+    ///
+    /// # Errors
+    /// The sync's error, or the first check's that fails; see [`Quotas::refresh`].
+    pub async fn refresh_accounts(
+        &self,
+        profile: &ProfileId,
+        wanted: impl Fn(&Account) -> bool + Send,
+    ) -> Result<(), AppError> {
+        let source = self.source();
+        source.accounts.sync(&source.pool, profile).await?;
+        for account in source.accounts.list(profile).await? {
+            if wanted(&account) {
+                self.refresh(profile, &account.id).await?;
+            }
+        }
+        Ok(())
     }
 }
 

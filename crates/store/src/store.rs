@@ -56,6 +56,16 @@ pub struct Store {
     vault: Vault,
 }
 
+/// What the API answers for a store failure: its own error, or a 500.
+impl From<StoreError> for AppError {
+    fn from(error: StoreError) -> Self {
+        match error {
+            StoreError::App(error) => error,
+            other => Self::new(other.to_string(), 500),
+        }
+    }
+}
+
 impl Store {
     /// Makes `directory` owner-only, opens (or creates) its database with mode 0600 and the
     /// schema, and starts the store thread. A sandbox store passes its parent's vault.

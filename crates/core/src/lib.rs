@@ -28,3 +28,14 @@ pub enum CoreError {
     #[error(transparent)]
     Store(#[from] StoreError),
 }
+
+/// What the API answers for a core failure: its own error, or a 500.
+impl From<CoreError> for AppError {
+    fn from(error: CoreError) -> Self {
+        match error {
+            CoreError::App(error) => error,
+            CoreError::Store(error) => error.into(),
+            other => Self::new(other.to_string(), 500),
+        }
+    }
+}

@@ -4,6 +4,11 @@
 #![cfg(test)]
 
 mod behaviour;
+mod changes;
 mod common;
+mod fake_core;
 mod golden_accounts;
 mod golden_usage;
+mod signin;
+mod updates;
+mod world;

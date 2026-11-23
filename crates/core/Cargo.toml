@@ -9,7 +9,6 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
-getrandom = { workspace = true, features = ["std"] }
 nsv-domain.workspace = true
 nsv-net.workspace = true
 nsv-store.workspace = true

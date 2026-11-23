@@ -1,12 +1,21 @@
-//! The Claude seat a credential file belongs to (`claudeIdentity` and `sameSeat` of
-//! `src/server/identity.ts`). Files may predate organization metadata, and a missing identity
-//! never matches another seat.
+//! The Claude seat a credential file belongs to (`src/server/identity.ts`): read from the file,
+//! or asked of Claude for a signed-in token. Files may predate organization metadata, and a
+//! missing identity never matches another seat.
 
+use std::time::Duration;
+
+use nsv_domain::error::AppError;
 use nsv_domain::id::is_uuid;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
+use crate::fetch::{Fetch, Request};
 use crate::js;
+use crate::quota::CLAUDE_OAUTH_BETA;
+
+const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+const PROFILE_TIMEOUT: Duration = Duration::from_secs(15);
+const PROFILE_LIMIT: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,17 +39,100 @@ pub fn claude_identity(value: &Value) -> SeatIdentity {
             .filter(|text| is_uuid(text))
             .map(str::to_ascii_lowercase)
     };
-    let organization_name = js::text(js::field(raw, "organization_name"))
-        .map(js::trim)
-        .filter(|name| {
-            (1..=200).contains(&js::utf16_len(name)) && !name.chars().any(char::is_control)
-        })
-        .map(str::to_owned);
     SeatIdentity {
         account_uuid: uuid("account_uuid"),
         organization_uuid: uuid("organization_uuid"),
-        organization_name,
+        organization_name: label(js::field(raw, "organization_name")),
     }
+}
+
+/// A display label: trimmed, 1–200 UTF-16 units, no control characters.
+fn label(value: Option<&Value>) -> Option<String> {
+    js::text(value)
+        .map(js::trim)
+        .filter(|text| {
+            (1..=200).contains(&js::utf16_len(text)) && !text.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+}
+
+/// Asks Claude whose token `raw` holds (`verifyClaudeIdentity`): a copy of the credential with
+/// that seat, and that email when Claude names a valid one. The seat comes from the token,
+/// never from imported labels or the browser's active organization.
+///
+/// # Errors
+/// 502 for a credential without an access token, a failed or refused request, an unreadable
+/// profile, or one without both UUIDs.
+pub async fn verify_claude_identity(
+    fetch: &impl Fetch,
+    raw: &Map<String, Value>,
+) -> Result<Map<String, Value>, AppError> {
+    let token = js::text(raw.get("access_token"))
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            AppError::new(
+                "Claude did not return a usable credential. Sign in again.",
+                502,
+            )
+        })?;
+    let response = fetch
+        .https(Request {
+            url: PROFILE_URL.to_owned(),
+            headers: vec![
+                ("Authorization", format!("Bearer {token}")),
+                ("anthropic-beta", CLAUDE_OAUTH_BETA.to_owned()),
+            ],
+            timeout: PROFILE_TIMEOUT,
+            limit: PROFILE_LIMIT,
+        })
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "Could not verify your Claude organization. Check your connection and try again.",
+                502,
+            )
+        })?;
+    if !response.ok() {
+        return Err(AppError::new(
+            format!(
+                "Claude could not verify this organization (HTTP {}). Sign in again.",
+                response.status.as_u16()
+            ),
+            502,
+        ));
+    }
+    let profile: Value = serde_json::from_slice(&response.body).map_err(|_| {
+        AppError::new(
+            "Claude returned an unreadable account profile. Try again.",
+            502,
+        )
+    })?;
+    let account = js::field(Some(&profile), "account");
+    let organization = js::field(Some(&profile), "organization");
+    let identity = claude_identity(&json!({
+        "account_uuid": js::field(account, "uuid"),
+        "organization_uuid": js::field(organization, "uuid"),
+        "organization_name": js::field(organization, "name"),
+    }));
+    let (Some(account_uuid), Some(organization_uuid)) =
+        (identity.account_uuid, identity.organization_uuid)
+    else {
+        return Err(AppError::new(
+            "Claude did not identify the account and organization. Sign in again and select your subscription.",
+            502,
+        ));
+    };
+    let mut verified = raw.clone();
+    verified.insert("account_uuid".to_owned(), account_uuid.into());
+    verified.insert("organization_uuid".to_owned(), organization_uuid.into());
+    match identity.organization_name {
+        Some(name) => verified.insert("organization_name".to_owned(), name.into()),
+        None => verified.shift_remove("organization_name"),
+    };
+    if let Some(email) = label(js::field(account, "email")) {
+        verified.insert("email".to_owned(), email.into());
+    }
+    Ok(verified)
 }
 
 /// Whether both name the same account in the same organization; unknown fields never match.

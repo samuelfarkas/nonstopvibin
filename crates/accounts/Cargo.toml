@@ -9,6 +9,9 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server"] }
 nsv-domain.workspace = true
 nsv-store.workspace = true
 nsv-net.workspace = true
@@ -20,7 +23,8 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+url.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

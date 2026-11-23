@@ -89,6 +89,8 @@ pub struct Core {
     pub id: CoreId,
     pub port: u16,
     pub phase: Phase,
+    /// The executable it was launched from.
+    pub binary: Arc<Path>,
     keys: Arc<CoreKeys>,
 }
 
@@ -512,7 +514,7 @@ impl Pool {
     ) -> Result<crate::config::CoreConfiguration, AppError> {
         write_config(&self.context.store, profile.clone(), port)
             .await
-            .map_err(app_error)
+            .map_err(AppError::from)
     }
 
     /// A management request to the profile's latest core, which may have exited.
@@ -702,13 +704,6 @@ impl StopPermit {
 
 fn gone() -> AppError {
     AppError::new(SHUTTING_DOWN, 503)
-}
-
-fn app_error(error: nsv_store::StoreError) -> AppError {
-    match error {
-        nsv_store::StoreError::App(error) => error,
-        other => AppError::new(other.to_string(), 500),
-    }
 }
 
 /// `http://127.0.0.1:<port>/v0/management<path>` with the management key, as `httpManagement`.

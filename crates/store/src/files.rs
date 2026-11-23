@@ -30,6 +30,32 @@ pub fn owner_only_directory<E: From<io::Error>>(
     Ok(())
 }
 
+/// `mkdtemp`'s suffix characters.
+const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/// Creates a new owner-only directory `<prefix><six random characters>` in `parent`, as
+/// `mkdtemp` does; `parent` must exist.
+///
+/// # Errors
+/// A file-system error.
+pub fn unique_directory(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+    loop {
+        let mut random = [0_u8; 6];
+        getrandom::fill(&mut random)?;
+        let suffix: String = random
+            .iter()
+            .filter_map(|byte| ALPHABET.get(usize::from(*byte) % ALPHABET.len()))
+            .map(|&byte| char::from(byte))
+            .collect();
+        let path = parent.join(format!("{prefix}{suffix}"));
+        match DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     File,
