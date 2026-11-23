@@ -1,6 +1,6 @@
 # Screenshot capture notes
 
-The README screenshots show the real React renderer and local server running
+The README screenshots show the real React interface and the TypeScript server running
 with isolated sample data from [scripts/preview.ts](https://github.com/samuelfarkas/nonstopvibin/blob/caeab18/scripts/preview.ts),
 which left with the TypeScript server.
 No real credentials or provider accounts were used.
@@ -15,9 +15,11 @@ Captured September 14, 2026 at 2880 × 1620 from source
 An ignored preview copy used ports 4521/4522 and distinct sample model IDs for
 Claude and Codex to demonstrate provider selection.
 
-These are browser preview captures, not native Electron window captures. Live
+These are browser preview captures, not captures of the app window. Live
 inference, quota retrieval, reset redemption, and menu-bar behavior are outside
 their scope.
 
-To refresh them, run `bun run preview`, open the printed local session link in
-an isolated browser, and capture each view at a 1440 × 810 viewport with 2× scale.
+The Rust daemon has no sample-data simulator, so `bun run preview` no longer
+exists. To refresh the captures, run the app with a separate
+`NONSTOPVIBIN_DATA_DIR` and synthetic accounts, open the session link in an
+isolated browser, and capture each view at a 1440 × 810 viewport with 2× scale.
