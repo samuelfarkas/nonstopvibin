@@ -20,6 +20,7 @@ use nsv_core::pool::{
 use nsv_core::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
 };
+use nsv_core::upstream;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::registry;
@@ -99,17 +100,6 @@ pub trait Host: Send + Sync + 'static {
         pool: Pool,
         profile: ProfileId,
     ) -> BoxFuture<'static, Result<(), AppError>>;
-}
-
-/// How long the pinned core (`CLIProxyAPI` 8.1.0, `conductor_cooldown.go`) keeps a key or model
-/// from requests after an upstream status, at most. It keeps this only in memory, so a core
-/// that stops forgets it. Other failures cool down for a minute, which no idle period outlasts.
-fn cooldown(status: u16) -> Option<Duration> {
-    match status {
-        401 | 402 | 403 | 429 => Some(Duration::from_mins(30)),
-        404 => Some(Duration::from_hours(12)),
-        _ => None,
-    }
 }
 
 /// When a profile's queue is drained next.
@@ -1026,10 +1016,9 @@ impl Shared {
             let now = Instant::now();
             let track = state.track(profile);
             // A new core would send the next request to a key or model this one cools down.
-            let cooling = track
-                .outcomes
-                .values()
-                .any(|(status, at)| cooldown(*status).is_some_and(|period| now < *at + period));
+            let cooling = track.outcomes.values().any(|(status, at)| {
+                upstream::cooldown(*status).is_some_and(|period| now < *at + period)
+            });
             if cooling {
                 track.last_used = Some(now);
                 return Ok(());
