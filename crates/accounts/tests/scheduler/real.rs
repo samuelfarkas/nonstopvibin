@@ -109,6 +109,16 @@ impl Host for Reports {
 }
 
 /// PIDs recorded in the data directory's core ledger.
+/// A process's command line from ps, not /proc, which macOS lacks. No argument the core gets
+/// holds a space.
+fn command_line(pid: u32) -> String {
+    let output = Command::new("ps")
+        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 fn ledger(data: &Path) -> Vec<u32> {
     std::fs::read_dir(core_ledger_directory(data)).map_or_else(
         |_| Vec::new(),
@@ -228,12 +238,7 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
 
     // Embedded models only, and the pinned core's own Claude fingerprint is left alone.
     let running = ledger(&data);
-    // ps, not /proc: macOS has no /proc. No argument the core gets holds a space.
-    let arguments = std::process::Command::new("ps")
-        .args(["-ww", "-o", "command=", "-p", &running[0].to_string()])
-        .output()
-        .unwrap();
-    let arguments = String::from_utf8_lossy(&arguments.stdout).into_owned();
+    let arguments = command_line(running[0]);
     assert!(arguments.contains("cli-proxy-api"), "{arguments}");
     assert!(
         !arguments
