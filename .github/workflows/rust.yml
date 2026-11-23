@@ -125,8 +125,8 @@ jobs:
         run: bun run test:update:mac
       - if: runner.os == 'macOS'
         name: Update an installed Rust build in place
-        # This checkout rebuilt as 0.0.1 refuses a forged bundle, then installs the packaged
-        # zip from a local feed signed with a throwaway key and relaunches it.
+        # This checkout rebuilt as 0.0.1 refuses a forged bundle and a foreign signature, then
+        # installs the packaged zip from a local feed signed with a throwaway key and relaunches it.
         timeout-minutes: 25
         run: bun tests/mac-update-rust.mjs
       - if: runner.os == 'macOS' && (failure() || cancelled())

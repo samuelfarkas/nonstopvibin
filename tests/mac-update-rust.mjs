@@ -2,9 +2,9 @@
 // `bun scripts/package-mac.ts`: an installed Rust build updates itself in place to the packaged
 // release. It builds this checkout again as 0.0.1 with a test feed on 127.0.0.1
 // (NONSTOPVIBIN_TEST_UPDATE_FEED) and a throwaway release key, serves the packaged release with a
-// SHA256SUMS signed by that key, and checks that the old app first refuses a bundle signed with
-// another identifier, then installs the real one through "Restart to update" and relaunches it
-// from the same path, on the same data folder.
+// SHA256SUMS signed by that key, and checks that the old app refuses a bundle signed with another
+// identifier and a SHA256SUMS signed by another key, then installs the real release through
+// "Restart to update" and relaunches it from the same path, on the same data folder.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
@@ -108,18 +108,20 @@ const rawPublic = Buffer.from(
   publicKey.export({ format: "jwk" }).x,
   "base64url",
 );
-function minisign(file) {
+/** Another key, whose signatures the old app must refuse. */
+const foreign = { keyId: randomBytes(8), ...generateKeyPairSync("ed25519") };
+function minisign(file, key = { keyId, privateKey }) {
   const message = createHash("blake2b512").update(readFileSync(file)).digest();
-  const signature = sign(null, message, privateKey);
+  const signature = sign(null, message, key.privateKey);
   const trusted = `NonstopVibin ${version} SHA256SUMS`;
   const global = sign(
     null,
     Buffer.concat([signature, Buffer.from(trusted)]),
-    privateKey,
+    key.privateKey,
   );
   writeFileSync(
     `${file}.minisig`,
-    `untrusted comment: test signature\n${Buffer.concat([Buffer.from("ED"), keyId, signature]).toString("base64")}\ntrusted comment: ${trusted}\n${global.toString("base64")}\n`,
+    `untrusted comment: test signature\n${Buffer.concat([Buffer.from("ED"), key.keyId, signature]).toString("base64")}\ntrusted comment: ${trusted}\n${global.toString("base64")}\n`,
   );
 }
 
@@ -151,8 +153,8 @@ function publish(directory, names) {
   for (const name of [...names, "SHA256SUMS", "SHA256SUMS.minisig"])
     files.set(`releases/download/v${version}/${name}`, join(directory, name));
 }
-/** SHA256SUMS as release.yml writes it, signed with the test key. */
-function sums(directory, names) {
+/** SHA256SUMS as release.yml writes it, signed with the test key or `key`. */
+function sums(directory, names, key) {
   const lines = names.map(
     (name) =>
       `${createHash("sha256")
@@ -160,7 +162,7 @@ function sums(directory, names) {
         .digest("hex")}  ${name}`,
   );
   writeFileSync(join(directory, "SHA256SUMS"), `${lines.join("\n")}\n`);
-  minisign(join(directory, "SHA256SUMS"));
+  minisign(join(directory, "SHA256SUMS"), key);
 }
 
 let app;
@@ -286,13 +288,24 @@ try {
     "A bundle signed with another identifier is refused; the app is unchanged.",
   );
 
-  // The packaged release.
+  // The packaged release, first signed by another key.
   const real = join(work, "release");
   mkdirSync(real);
   for (const name of [zip, "latest-mac.yml"])
     copyFileSync(join(release, name), join(real, name));
-  sums(real, [zip, "latest-mac.yml"]);
+  sums(real, [zip, "latest-mac.yml"], foreign);
   publish(real, [zip, "latest-mac.yml"]);
+  exited = launch();
+  await waitFor("the foreign signature to be refused", 90_000, () =>
+    logged("SHA256SUMS is not signed by the release key"),
+  );
+  await stop(exited);
+  assert.equal(plistVersion(installed), old);
+  console.log(
+    "SHA256SUMS signed by another key is refused; the app is unchanged.",
+  );
+
+  sums(real, [zip, "latest-mac.yml"]);
   exited = launch();
   const helper = join(installed, "Contents/MacOS/nonstopvibin-window");
   // UI scripting needs Accessibility access, which GitHub's macOS runners grant osascript.
