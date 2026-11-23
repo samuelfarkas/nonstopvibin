@@ -5,6 +5,7 @@
 #![cfg(test)]
 #![cfg(target_os = "linux")]
 
+#[expect(dead_code, reason = "the pointer is the UI checks'")]
 mod common;
 
 use std::collections::HashSet;

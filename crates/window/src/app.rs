@@ -624,10 +624,10 @@ impl App {
                     .main
                     .as_ref()
                     .is_some_and(|main| !main.window.is_visible());
+                self.answer(ticket, &done);
+                // As Electron's close(): another draft on the page may still veto.
                 if ticket.pane == Pane::Main && self.main_closing == Closing::Deferred && hidden {
-                    self.close_main();
-                } else {
-                    self.answer(ticket, &done);
+                    self.ask_to_close_main();
                 }
             }
             Call::ChooseProject => match &self.main {
