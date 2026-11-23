@@ -58,7 +58,6 @@ pub trait Identify {
     fn identify(&self, pid: u32) -> impl Future<Output = io::Result<Option<String>>> + Send;
 }
 
-/// The real lookup through `ps`.
 #[derive(Debug, Clone)]
 pub struct Ps {
     program: OsString,

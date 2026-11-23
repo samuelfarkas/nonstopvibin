@@ -1,5 +1,3 @@
-//! Helpers shared by the core crate's integration tests.
-
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;

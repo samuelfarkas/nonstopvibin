@@ -1,6 +1,6 @@
 [package]
 name = "nsv-core"
-description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, pool, management client and updates."
+description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, pool, management client and release installs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

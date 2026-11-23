@@ -1,4 +1,4 @@
-//! `CLIProxyAPI` cores: binary pins, config, spawn, watchdog, ledger, pool, management client and updates.
+//! `CLIProxyAPI` cores: binary pins, config, spawn, watchdog, ledger, pool, management client and release installs.
 #![forbid(unsafe_code)]
 
 pub mod binary;
