@@ -19,6 +19,12 @@ use crate::app::{Proxy, Ticket, UserEvent, log, post};
 /// can read.
 const PLAIN_TEXT: &str = "public.utf8-plain-text";
 
+/// Shows `window`, brings the helper to the front and gives the window the focus.
+pub(crate) fn present(window: &Window) {
+    window.set_visible(true);
+    window.set_focus();
+}
+
 /// The pasteboard server keeps the text after this process exits.
 pub(crate) fn copy(text: &str) -> Result<(), String> {
     let pasteboard = NSPasteboard::generalPasteboard();

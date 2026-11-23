@@ -10,9 +10,11 @@ mod linux;
 mod macos;
 
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{choose_folder, copy, show_dialog};
+pub(crate) use linux::{choose_folder, copy, present, show_dialog};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{MenuAction, choose_folder, copy, install_menu, menu_action, show_dialog};
+pub(crate) use macos::{
+    MenuAction, choose_folder, copy, install_menu, menu_action, present, show_dialog,
+};
 
 pub(crate) const FOLDER_TITLE: &str = "Connect Claude Code in a project";
 pub(crate) const FOLDER_BUTTON: &str = "Choose project";

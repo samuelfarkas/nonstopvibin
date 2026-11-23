@@ -196,7 +196,9 @@ pub(crate) fn run(boot: Boot) -> ! {
         }
         #[cfg(target_os = "macos")]
         app.sync_activation_policy(target);
-        let idle = app.main.is_none() && app.quota.is_none() && app.dialogs.is_empty();
+        // Before Init has opened the first view, an empty helper is starting, not done.
+        let idle =
+            first.is_none() && app.main.is_none() && app.quota.is_none() && app.dialogs.is_empty();
         if let Some(code) = app.exit.or(idle.then_some(0)) {
             *control_flow = ControlFlow::ExitWithCode(code);
         }
@@ -319,8 +321,7 @@ impl App {
                 log(format_args!("could not open the profile: {error}"));
             }
             self.main_closing = Closing::No;
-            main.window.set_visible(true);
-            main.window.set_focus();
+            native::present(&main.window);
             return;
         }
         let (width, height) = layout::MAIN_SIZE;
@@ -355,7 +356,7 @@ impl App {
 
     fn show_quota(&mut self, target: &Target, anchor: Rect, work_area: Rect) {
         if let Some(quota) = &self.quota {
-            quota.window.set_focus();
+            native::present(&quota.window);
             return;
         }
         let bounds = layout::quota_bounds(anchor, work_area, cfg!(target_os = "macos"));
@@ -556,8 +557,7 @@ impl App {
             return;
         }
         surface.shown = true;
-        surface.window.set_visible(true);
-        surface.window.set_focus();
+        native::present(&surface.window);
         self.mark_ready();
     }
 

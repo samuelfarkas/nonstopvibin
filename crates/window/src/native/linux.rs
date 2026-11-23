@@ -13,6 +13,15 @@ use crate::app::{Proxy, Ticket, UserEvent, post};
 
 const NON_UTF8_FOLDER: &str = "The project folder's path is not valid UTF-8.";
 
+/// Shows `window` and gives it the focus. tao queues `set_visible` and ignores `set_focus`
+/// until the window is visible, and GTK's `present` only shows a hidden window; so show it
+/// here, then present the visible window, which focuses it.
+pub(crate) fn present(window: &Window) {
+    let window = window.gtk_window();
+    window.show_all();
+    window.present();
+}
+
 #[expect(clippy::unnecessary_wraps, reason = "the macOS twin can fail")]
 pub(crate) fn copy(text: &str) -> Result<(), String> {
     let clipboard = gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD);
@@ -57,7 +66,8 @@ pub(crate) fn choose_folder(parent: &Window, proxy: &Proxy, ticket: Ticket) {
         post(&proxy, UserEvent::FolderChosen { ticket, result });
         dialog.close();
     });
-    dialog.show();
+    dialog.show_all();
+    dialog.present();
 }
 
 /// A message dialog of its own; answers with `DialogAnswered`.
@@ -91,5 +101,6 @@ pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
         post(&proxy, UserEvent::DialogAnswered { kind, restart });
         dialog.close();
     });
+    dialog.show_all();
     dialog.present();
 }
