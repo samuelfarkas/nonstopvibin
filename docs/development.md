@@ -144,11 +144,12 @@ an identifier operand. It remains excluded from linting and formatting.
 
 ## Wire types and the registry
 
-The interface's wire types in `src/shared` have Rust twins in `nsv-domain`.
-`bun run wire:export` writes the `ts-rs` output to `tests/types/generated`,
-`bun run check` asserts that each pair is mutually assignable, and `bun run quality`
-(`bun run wire:check`) fails while the committed files differ from the export.
-Commit the generated files. Provider, agent and vocabulary data stays in TypeScript. After
+The interface's wire types, the API's route keys and the wire vocabularies it lists come
+from `nsv-domain`, and the desktop bridge's method names from `nsv-desktop`.
+`bun run wire:export` writes them to `src/shared/generated/domain` (the types through
+`ts-rs`) and `src/shared/generated/desktop`, `src/shared` re-exports them, and
+`bun run quality` (`bun run wire:check`) fails while the committed files differ from the
+export. Commit the generated files. Provider, agent and vocabulary data stays in TypeScript. After
 changing it, run `bun run registry:export`, which writes the fields Rust reads to
 `crates/domain/data/registry.json` and fails when relations Rust cannot type disagree (an
 agent's native vendor and the providers' `nativeAgent`); `bun run quality` fails while the

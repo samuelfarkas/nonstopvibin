@@ -1,5 +1,6 @@
-//! Route bodies and the small responses of `src/shared/api.ts`. Request bodies reject unknown
-//! fields like the TypeScript routes' `.strict()` schemas; the server checks their values.
+//! The routes of `src/shared/api.ts`, their bodies and small responses. Request bodies reject
+//! unknown fields like the TypeScript routes' `.strict()` schemas; the server checks their
+//! values.
 
 use serde::{Deserialize, Serialize};
 
@@ -164,10 +165,7 @@ pub struct CallbackBody {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ImportBody {
-    #[cfg_attr(
-        test,
-        ts(type = "Record<string, import(\"../../../src/shared/types.ts\").Json>")
-    )]
+    #[cfg_attr(test, ts(type = "Record<string, import(\"../../types.ts\").Json>"))]
     pub contents: serde_json::Map<String, serde_json::Value>,
 }
 
@@ -194,3 +192,125 @@ pub struct ImportSourceBody {
 pub struct CreditBody {
     pub credit_id: String,
 }
+
+/// A route under `/api`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    State,
+    Retention,
+    CoreCheck,
+    CoreInstall,
+    CoreBundled,
+    ImportSources,
+    CreateProfile,
+    PatchProfile,
+    Start,
+    Refresh,
+    Key,
+    Models,
+    Usage,
+    AgentStatus,
+    AgentInstall,
+    AgentRemove,
+    AgentCheck,
+    SignIn,
+    SignInStatus,
+    SignInCancel,
+    SignInConfirm,
+    SignInSession,
+    Callback,
+    Import,
+    ImportSource,
+    SetAccount,
+    RemoveAccount,
+    ResetCredits,
+    ConsumeReset,
+    ApiAccount,
+    DesktopShow,
+}
+
+/// `server.ts`'s route table, in its order: a 405 lists methods in this order. Each entry is
+/// `(method, path, route)`; `:name` path segments are parameters. `src/shared/api.ts` types
+/// every key (`bun run wire:check`).
+pub const ROUTES: &[(&str, &str, Route)] = &[
+    ("GET", "/state", Route::State),
+    ("PUT", "/usage-retention", Route::Retention),
+    ("POST", "/core/check", Route::CoreCheck),
+    ("POST", "/core/install", Route::CoreInstall),
+    ("DELETE", "/core/install", Route::CoreBundled),
+    ("GET", "/import-sources", Route::ImportSources),
+    ("POST", "/profiles", Route::CreateProfile),
+    ("PATCH", "/profiles/:profileId", Route::PatchProfile),
+    ("POST", "/profiles/:profileId/start", Route::Start),
+    ("POST", "/profiles/:profileId/refresh", Route::Refresh),
+    ("GET", "/profiles/:profileId/key", Route::Key),
+    ("GET", "/profiles/:profileId/models", Route::Models),
+    ("GET", "/profiles/:profileId/usage", Route::Usage),
+    (
+        "GET",
+        "/profiles/:profileId/agent-setup",
+        Route::AgentStatus,
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/agent-setup",
+        Route::AgentInstall,
+    ),
+    (
+        "DELETE",
+        "/profiles/:profileId/agent-setup",
+        Route::AgentRemove,
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/agent-check",
+        Route::AgentCheck,
+    ),
+    ("POST", "/profiles/:profileId/oauth", Route::SignIn),
+    ("GET", "/profiles/:profileId/oauth", Route::SignInStatus),
+    ("DELETE", "/profiles/:profileId/oauth", Route::SignInCancel),
+    (
+        "POST",
+        "/profiles/:profileId/oauth-confirm",
+        Route::SignInConfirm,
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/oauth-session",
+        Route::SignInSession,
+    ),
+    ("POST", "/profiles/:profileId/callback", Route::Callback),
+    ("POST", "/profiles/:profileId/import", Route::Import),
+    (
+        "POST",
+        "/profiles/:profileId/import-source",
+        Route::ImportSource,
+    ),
+    (
+        "PATCH",
+        "/profiles/:profileId/accounts/:accountId",
+        Route::SetAccount,
+    ),
+    (
+        "DELETE",
+        "/profiles/:profileId/accounts/:accountId",
+        Route::RemoveAccount,
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/accounts/:accountId/reset-credits",
+        Route::ResetCredits,
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/accounts/:accountId/reset-credits",
+        Route::ConsumeReset,
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/api-account",
+        Route::ApiAccount,
+    ),
+    // A second desktop launch; only the desktop app serves it.
+    ("POST", "/desktop/show", Route::DesktopShow),
+];

@@ -3,4 +3,4 @@
 /**
  * `POST /profiles/:profileId/import`: credential files by name.
  */
-export type ImportBody = { contents: Record<string, import("../../../src/shared/types.ts").Json>, };
+export type ImportBody = { contents: Record<string, import("../../types.ts").Json>, };

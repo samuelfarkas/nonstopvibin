@@ -19,7 +19,9 @@ use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
-use nsv_domain::wire::{AppState, ClientKeyResponse, Profile, ProfileState, Runtime};
+use nsv_domain::wire::{
+    AppState, ClientKeyResponse, Profile, ProfileState, ROUTES, Route, Runtime,
+};
 use nsv_gateway::{Body, Refusal};
 use nsv_net::{Loopback, LoopbackRequest, loopback};
 use serde_json::{Value, json};
@@ -30,137 +32,6 @@ use crate::parse;
 
 /// The largest management request body.
 const BODY_LIMIT: usize = 2_097_152;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Route {
-    State,
-    Retention,
-    CoreCheck,
-    CoreInstall,
-    CoreBundled,
-    ImportSources,
-    CreateProfile,
-    PatchProfile,
-    Start,
-    Refresh,
-    Key,
-    Models,
-    Usage,
-    AgentStatus,
-    AgentInstall,
-    AgentRemove,
-    AgentCheck,
-    SignIn,
-    SignInStatus,
-    SignInCancel,
-    SignInConfirm,
-    SignInSession,
-    Callback,
-    Import,
-    ImportSource,
-    SetAccount,
-    RemoveAccount,
-    ResetCredits,
-    ConsumeReset,
-    ApiAccount,
-    DesktopShow,
-}
-
-/// `server.ts`'s route table, in its order: a 405 lists methods in this order.
-const ROUTES: &[(Method, &str, Route)] = &[
-    (Method::GET, "/state", Route::State),
-    (Method::PUT, "/usage-retention", Route::Retention),
-    (Method::POST, "/core/check", Route::CoreCheck),
-    (Method::POST, "/core/install", Route::CoreInstall),
-    (Method::DELETE, "/core/install", Route::CoreBundled),
-    (Method::GET, "/import-sources", Route::ImportSources),
-    (Method::POST, "/profiles", Route::CreateProfile),
-    (Method::PATCH, "/profiles/:profileId", Route::PatchProfile),
-    (Method::POST, "/profiles/:profileId/start", Route::Start),
-    (Method::POST, "/profiles/:profileId/refresh", Route::Refresh),
-    (Method::GET, "/profiles/:profileId/key", Route::Key),
-    (Method::GET, "/profiles/:profileId/models", Route::Models),
-    (Method::GET, "/profiles/:profileId/usage", Route::Usage),
-    (
-        Method::GET,
-        "/profiles/:profileId/agent-setup",
-        Route::AgentStatus,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/agent-setup",
-        Route::AgentInstall,
-    ),
-    (
-        Method::DELETE,
-        "/profiles/:profileId/agent-setup",
-        Route::AgentRemove,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/agent-check",
-        Route::AgentCheck,
-    ),
-    (Method::POST, "/profiles/:profileId/oauth", Route::SignIn),
-    (
-        Method::GET,
-        "/profiles/:profileId/oauth",
-        Route::SignInStatus,
-    ),
-    (
-        Method::DELETE,
-        "/profiles/:profileId/oauth",
-        Route::SignInCancel,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/oauth-confirm",
-        Route::SignInConfirm,
-    ),
-    (
-        Method::GET,
-        "/profiles/:profileId/oauth-session",
-        Route::SignInSession,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/callback",
-        Route::Callback,
-    ),
-    (Method::POST, "/profiles/:profileId/import", Route::Import),
-    (
-        Method::POST,
-        "/profiles/:profileId/import-source",
-        Route::ImportSource,
-    ),
-    (
-        Method::PATCH,
-        "/profiles/:profileId/accounts/:accountId",
-        Route::SetAccount,
-    ),
-    (
-        Method::DELETE,
-        "/profiles/:profileId/accounts/:accountId",
-        Route::RemoveAccount,
-    ),
-    (
-        Method::GET,
-        "/profiles/:profileId/accounts/:accountId/reset-credits",
-        Route::ResetCredits,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/accounts/:accountId/reset-credits",
-        Route::ConsumeReset,
-    ),
-    (
-        Method::POST,
-        "/profiles/:profileId/api-account",
-        Route::ApiAccount,
-    ),
-    // A second desktop launch; only the desktop app serves it.
-    (Method::POST, "/desktop/show", Route::DesktopShow),
-];
 
 /// A route without parameters matches the raw path exactly; one with parameters matches the
 /// decoded segments, which skip empty ones. Answers the account parameter, empty if none.
@@ -292,7 +163,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             let Some(account) = matches(pattern, raw, &segments) else {
                 continue;
             };
-            if method == request.method() {
+            if *method == request.method().as_str() {
                 let call = Call {
                     profile,
                     account,
@@ -300,7 +171,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 };
                 return self.route(*route, request, &call).await;
             }
-            allowed.push(method.as_str());
+            allowed.push(*method);
         }
         if allowed.is_empty() {
             Err(AppError::new("Not found.", 404))

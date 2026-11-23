@@ -5,7 +5,8 @@
 //! module embeds and parses once, and fails when relations it cannot type disagree. Every
 //! registry type denies unknown fields, so an exported field Rust does not model fails the parse
 //! test. The closed enums below are hand-written; the provider and agent tables must list
-//! exactly their keys, in their order, and the generated TypeScript twins tie their values.
+//! exactly their keys, in their order, and the UI imports the other enums as `ts-rs` exports
+//! them to `src/shared/generated/domain`.
 
 use std::fmt;
 use std::marker::PhantomData;

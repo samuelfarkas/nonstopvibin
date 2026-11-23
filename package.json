@@ -50,8 +50,8 @@
     "icons": "bun scripts/icons.mjs",
     "registry:export": "bun scripts/export-registry.ts",
     "registry:check": "bun scripts/export-registry.ts --check",
-    "wire:export": "cargo test -p nsv-domain --locked --lib wire::tests::write_generated_typescript_twins -- --ignored",
-    "wire:check": "cargo test -p nsv-domain --locked --lib wire::tests::generated_typescript_twins_match_the_wire_types",
+    "wire:export": "cargo test -p nsv-domain -p nsv-desktop --locked --lib write_generated_typescript -- --ignored",
+    "wire:check": "cargo test -p nsv-domain -p nsv-desktop --locked --lib generated_typescript_matches",
     "format:check": "bun run format --check"
   },
   "dependencies": {

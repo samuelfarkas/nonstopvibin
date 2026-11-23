@@ -109,9 +109,9 @@ lists each crate's direct workspace dependencies:
 - Raw `hyper` 1 serves and calls HTTP. There is no `axum`, `reqwest`, `clap`, `regex`, YAML
   crate or WebSocket crate. The core config is written by a small emitter and proved by loading
   it into the real core in the integration test.
-- Wire types derive `ts-rs` in tests, and a TypeScript type test asserts that each generated
-  type and its hand-written twin in `src/shared` are mutually assignable. Provider, agent and
-  vocabulary data stays in TypeScript, and a script exports it to
+- Wire types derive `ts-rs` in tests, and `src/shared` imports the generated types, route keys
+  and bridge method names; `bun run wire:check` fails while the committed export drifts.
+  Provider, agent and vocabulary data stays in TypeScript, and a script exports it to
   `crates/domain/data/registry.json`, with a CI drift check.
 
 ### Runtime

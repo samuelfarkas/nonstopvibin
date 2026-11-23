@@ -1,10 +1,8 @@
 // Limits, values and rules the server and the renderer must agree on. Data and pure
-// functions only: the renderer loads this module, so it imports nothing at run time.
+// functions only: the renderer loads this module, so it imports only generated data.
 
-export const strategies = ["round-robin", "fill-first"] as const;
-/** Days of usage history kept; 0 keeps everything. */
-export const retentionDays = [0, 30, 90, 365] as const;
-export type RetentionDays = (typeof retentionDays)[number];
+export { retentionDays, strategies } from "./generated/domain/vocabulary.ts";
+export type { RetentionDays } from "./generated/domain/RetentionDays.ts";
 /** Profile and account names. */
 export const nameLength = 60;
 /** API-key model prefixes. */
@@ -29,10 +27,3 @@ export const quotaRefreshMs = 120_000;
 /** How often the UI polls the state; the server keeps polling cores for three missed polls. */
 export const pollMs = 4000;
 export const quotaStaleMs = 2 * quotaRefreshMs + 60_000;
-export const resetResultCodes = [
-  "reset",
-  "already_redeemed",
-  "nothing_to_reset",
-  "no_credit",
-] as const;
-export type ResetResultCode = (typeof resetResultCodes)[number];

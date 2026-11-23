@@ -1,83 +1,62 @@
-// The management API under /api: one entry per route, types only. The server's
-// route table and the client's `api()` are both checked against it.
-import type { Provider, Protocol, OAuthProvider } from "./providers.ts";
-import type { RetentionDays } from "./vocabulary.ts";
+// The management API under /api, types only. Its keys are the server's route table (`ROUTES`
+// in crates/domain/src/wire/api.rs), and its bodies and responses are the server's wire types,
+// both as `bun run wire:export` writes them to ./generated/domain.
+import type { AccountPatch } from "./generated/domain/AccountPatch.ts";
+import type { AgentSelection } from "./generated/domain/AgentSelection.ts";
+import type { ApiAccountInput } from "./generated/domain/ApiAccountInput.ts";
+import type { CallbackBody } from "./generated/domain/CallbackBody.ts";
+import type { ClientKeyResponse } from "./generated/domain/ClientKeyResponse.ts";
+import type { CoreInstallBody } from "./generated/domain/CoreInstallBody.ts";
+import type { CreateProfileBody } from "./generated/domain/CreateProfileBody.ts";
+import type { CreditBody } from "./generated/domain/CreditBody.ts";
+import type { ImportBody } from "./generated/domain/ImportBody.ts";
+import type { ImportSourceBody } from "./generated/domain/ImportSourceBody.ts";
+import type { OAuthStartBody } from "./generated/domain/OAuthStartBody.ts";
+import type { Ok } from "./generated/domain/Ok.ts";
+import type { ProfilePatch } from "./generated/domain/ProfilePatch.ts";
+import type { RetentionBody } from "./generated/domain/RetentionBody.ts";
+import type { RouteKey } from "./generated/domain/RouteKey.ts";
+import type { StateBody } from "./generated/domain/StateBody.ts";
+import type { UsageHistory } from "./generated/domain/UsageHistory.ts";
 import type {
   AgentSetup,
   AgentSetupInput,
   AppState,
   CatalogModel,
   ImportSource,
-  Json,
   OAuthSession,
   OAuthStatus,
   Profile,
   ResetCredits,
   ResetResult,
-  UsagePricing,
-  UsageRecord,
-  UsageSummary,
 } from "./types.ts";
 
-export interface Ok {
-  ok: true;
-}
-export interface ClientKey {
-  key: string;
-}
-export interface UsageHistory {
-  records: UsageRecord[];
-  summary: UsageSummary;
-  pricing: UsagePricing;
-}
-/** Which connection of an agent: Claude Code also takes a project. */
-export type AgentSelection = Pick<
-  AgentSetupInput,
-  "agent" | "projectDirectory"
->;
-export type ProfilePatch = Partial<
-  Pick<Profile, "name" | "strategy" | "sessionAffinity">
->;
-export interface AccountPatch {
-  disabled?: boolean;
-  priority?: number;
-  name?: string;
-}
-export interface ApiAccountInput {
-  name: string;
-  provider: Provider;
-  baseUrl: string;
-  apiKey: string;
-  protocol: Protocol;
-  prefix: string;
-  /** Empty asks the server to discover the provider's models. */
-  models: Array<{ id: string; protocol: Protocol }>;
-}
+export type { AccountPatch, RouteKey };
 
 /**
  * Keyed "METHOD /path" below /api; `:name` segments are path parameters.
  * Routes answering `AppState` return the whole state after their change.
  */
-export interface Routes {
+interface RouteTypes {
   /** `watch=1`: a UI that shows this state, so the cores' status is polled and dormant ones start. */
   "GET /state": { query: { watch?: "1" }; response: AppState };
   "PUT /usage-retention": {
-    body: { days: RetentionDays };
+    body: RetentionBody;
     response: AppState;
   };
   /** Reads the reviewed core pin; `core.available` names a newer core this app may run. */
   "POST /core/check": { response: AppState };
   /** Installs the offered core `version` and restarts running profiles on it. */
-  "POST /core/install": { body: { version: string }; response: AppState };
+  "POST /core/install": { body: CoreInstallBody; response: AppState };
   /** Deletes installed core updates and restarts running profiles on the bundled core. */
   "DELETE /core/install": { response: AppState };
   "GET /import-sources": { response: ImportSource[] };
-  "POST /profiles": { body: { name: string }; response: Profile };
+  "POST /profiles": { body: CreateProfileBody; response: Profile };
   "PATCH /profiles/:profileId": { body: ProfilePatch; response: AppState };
   "POST /profiles/:profileId/start": { response: AppState };
   /** Re-reads the accounts, then the quota of every enabled account. */
   "POST /profiles/:profileId/refresh": { response: AppState };
-  "GET /profiles/:profileId/key": { response: ClientKey };
+  "GET /profiles/:profileId/key": { response: ClientKeyResponse };
   /** `metadata=1` adds the models.dev limits and prices. */
   "GET /profiles/:profileId/models": {
     query: { metadata?: "1" };
@@ -106,29 +85,29 @@ export interface Routes {
     response: Ok;
   };
   "POST /profiles/:profileId/oauth": {
-    body: { provider: OAuthProvider; reconnectAccountId?: string };
+    body: OAuthStartBody;
     response: OAuthSession;
   };
   "GET /profiles/:profileId/oauth": {
-    query: { state: string };
+    query: StateBody;
     response: OAuthStatus;
   };
   "DELETE /profiles/:profileId/oauth": {
-    query: { state: string };
+    query: StateBody;
     response: Ok;
   };
   "POST /profiles/:profileId/oauth-confirm": {
-    body: { state: string };
+    body: StateBody;
     response: OAuthStatus;
   };
   "GET /profiles/:profileId/oauth-session": { response: OAuthSession | null };
-  "POST /profiles/:profileId/callback": { body: { url: string }; response: Ok };
+  "POST /profiles/:profileId/callback": { body: CallbackBody; response: Ok };
   "POST /profiles/:profileId/import": {
-    body: { contents: Record<string, Json> };
+    body: ImportBody;
     response: AppState;
   };
   "POST /profiles/:profileId/import-source": {
-    body: { sourceId: string };
+    body: ImportSourceBody;
     response: AppState;
   };
   "PATCH /profiles/:profileId/accounts/:accountId": {
@@ -140,15 +119,18 @@ export interface Routes {
     response: ResetCredits;
   };
   "POST /profiles/:profileId/accounts/:accountId/reset-credits": {
-    body: { creditId: string };
+    body: CreditBody;
     response: ResetResult;
   };
   "POST /profiles/:profileId/api-account": {
     body: ApiAccountInput;
     response: AppState;
   };
+  /** A second desktop launch; only the desktop app serves it. */
+  "POST /desktop/show": { response: Ok };
 }
-export type RouteKey = keyof Routes;
+/** One entry per route: a missing entry fails to index `RouteTypes`, and an extra one is no key. */
+export type Routes = { [K in RouteKey]: RouteTypes[K] };
 type ParamNames<Path extends string> =
   Path extends `${string}/:${infer Name}/${infer Rest}`
     ? Name | ParamNames<`/${Rest}`>
@@ -169,10 +151,6 @@ export type RouteQuery<K extends RouteKey> = Routes[K] extends {
   : undefined;
 export type RouteResponse<K extends RouteKey> = Routes[K]["response"];
 
-/** The body of every error this server answers, under /api and elsewhere. */
-export interface ApiError {
-  error: { message: string; type: "nonstopvibin_error"; code: number };
-}
 /**
  * A missing or stale session token, or a profile key. Checked before routing,
  * so every route can answer it and nothing else under /api does. Its message

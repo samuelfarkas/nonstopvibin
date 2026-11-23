@@ -90,7 +90,7 @@ export async function api<K extends RouteKey>(
       new Error(data.error?.message || `Request failed (${response.status}).`),
       { status: response.status },
     );
-  // The server's route table is type-checked against the same contract.
+  // Unchecked: the route's response type is the server's wire type for it.
   return data;
 }
 const sessionRefused: SessionRefused = 401;

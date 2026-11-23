@@ -1,7 +1,7 @@
 import { agents, type Agent } from "./agents.ts";
+import type { Protocol } from "./generated/domain/Protocol.ts";
 
-export const protocols = ["openai", "anthropic", "responses"] as const;
-export type Protocol = (typeof protocols)[number];
+export type { Protocol };
 /** Server rules an API-key preset can name: see `modelProtocols` (api-accounts.ts) and `upstreamHeaders` (config.ts). */
 export type Upstream = "opencode-go";
 

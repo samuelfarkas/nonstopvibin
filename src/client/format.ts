@@ -1,5 +1,11 @@
-import type { Account, SeatIdentity } from "../shared/types.ts";
+import type { Account } from "../shared/types.ts";
 import { providerLabel } from "../shared/providers.ts";
+
+/** The organization fields an account and an import source share. */
+type SeatIdentity = Pick<
+  Account,
+  "accountUuid" | "organizationUuid" | "organizationName"
+>;
 
 export function groupAccountsByProvider(
   accounts: Account[],

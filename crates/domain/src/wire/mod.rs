@@ -1,7 +1,6 @@
 //! The JSON the management API answers and accepts, and the bodies the store keeps in SQLite.
-//! Each type mirrors its twin in `src/shared/types.ts` or `src/shared/api.ts`: field names,
-//! enum strings and optionality are the TypeScript ones, and a type test proves the two stay
-//! mutually assignable (`tests/types/wire.ts`).
+//! Field names, enum strings and optionality are the TypeScript server's. The UI imports these
+//! types as `ts-rs` exports them to `src/shared/generated/domain` (`bun run wire:export`).
 //!
 //! # Shape rules
 //!
@@ -45,7 +44,7 @@ pub use agent::{AgentSelection, AgentSetup, AgentSetupInput};
 pub use api::{
     AccountPatch, ApiAccountInput, ApiError, ApiErrorBody, ApiErrorType, ApiModelInput,
     CallbackBody, ClientKeyResponse, CoreInstallBody, CreateProfileBody, CreditBody, ImportBody,
-    ImportSourceBody, OAuthStartBody, Ok, ProfilePatch, RetentionBody, StateBody,
+    ImportSourceBody, OAuthStartBody, Ok, ProfilePatch, ROUTES, RetentionBody, Route, StateBody,
 };
 pub use model::{
     CatalogModel, ContextTier, Cost, CostTier, Modality, Model, ModelMetadata, TierType,

@@ -17,7 +17,7 @@
     "tests/golden/record.ts",
     "tests/golden/lib.ts",
     "tests/golden/areas/",
-    "tests/types/generated/"
+    "src/shared/generated/"
   ],
   "jsPlugins": [
     {

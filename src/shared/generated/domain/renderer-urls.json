@@ -1,0 +1,34 @@
+[
+  {
+    "url": "http://127.0.0.1:4100",
+    "opened": {
+      "tray": false,
+      "profile": null,
+      "session": null
+    }
+  },
+  {
+    "url": "http://127.0.0.1:4100/?profile=6f1c1a52-6d1f-4b5e-9c55-0a4b0c7e1d2f",
+    "opened": {
+      "tray": false,
+      "profile": "6f1c1a52-6d1f-4b5e-9c55-0a4b0c7e1d2f",
+      "session": null
+    }
+  },
+  {
+    "url": "http://127.0.0.1:4100/?view=tray",
+    "opened": {
+      "tray": true,
+      "profile": null,
+      "session": null
+    }
+  },
+  {
+    "url": "http://127.0.0.1:4100/#session=sample-session-token",
+    "opened": {
+      "tray": false,
+      "profile": null,
+      "session": "sample-session-token"
+    }
+  }
+]

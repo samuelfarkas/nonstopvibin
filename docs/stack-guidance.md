@@ -121,11 +121,11 @@ types with `any` or non-null assertions to bypass an unresolved boundary.
 [TypeScript narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html),
 [Zod parsing](https://zod.dev/basics).
 
-The UI's wire types in `src/shared` have Rust twins in `nsv-domain`.
-`bun run wire:export` regenerates `tests/types/generated` with `ts-rs`, and
-`bun run check` asserts that each pair is mutually assignable. Provider, agent and
-vocabulary data stays in TypeScript: after changing it, run `bun run registry:export`
-to rewrite `crates/domain/data/registry.json`. `bun run quality` fails on drift.
+The UI's wire types, route keys and desktop bridge method names are generated from Rust:
+`bun run wire:export` rewrites `src/shared/generated`, which `src/shared` re-exports.
+Provider, agent and vocabulary data stays in TypeScript: after changing it, run
+`bun run registry:export` to rewrite `crates/domain/data/registry.json`.
+`bun run quality` fails on drift.
 
 ## Vite and build tooling
 
