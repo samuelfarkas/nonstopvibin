@@ -2,51 +2,19 @@
 //! inventory's untested cases: a switch refused while a sign-in is pending, and shutdown
 //! during a download.
 
-use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 use nsv_accounts::scheduler::TIMING;
-use nsv_core::binary::{CoreTarget, Sha256Digest, Version, bundled_pin};
+use nsv_core::binary::{CoreTarget, Version, bundled_pin};
 use nsv_core::install::CORE_ARCHIVES;
 use nsv_domain::registry::OAuthProvider;
 use nsv_domain::wire::CorePhase;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::Notify;
 
-use crate::world::{World, names};
+use crate::world::{UPDATE, World, names, release};
 
-const UPDATE: &str = "99.0.0";
 const FEED: &str = "https://feed.example.invalid/core-release.json";
-
-/// `bytes` released as core `UPDATE`: its archive and a pin naming it for this target.
-fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
-    let stage = work.join(format!("stage-{}", bytes.len()));
-    std::fs::create_dir_all(&stage).unwrap();
-    std::fs::write(stage.join("cli-proxy-api"), bytes).unwrap();
-    let archive = stage.join("release.tar.gz");
-    let packed = Command::new("tar")
-        .arg("-czf")
-        .arg(&archive)
-        .arg("-C")
-        .arg(&stage)
-        .arg("cli-proxy-api")
-        .status()
-        .unwrap();
-    assert!(packed.success());
-    let target = CoreTarget::current().unwrap();
-    let key = format!("{}_{}", target.platform(), target.arch());
-    let mut pin: Value =
-        serde_json::from_str(include_str!("../../../../src/server/core-release.json")).unwrap();
-    pin["version"] = json!(UPDATE);
-    pin["checksums"][&key] = json!(Sha256Digest::of_file(&archive).unwrap().to_string());
-    pin["binaries"][&key] = json!(
-        Sha256Digest::of_file(&stage.join("cli-proxy-api"))
-            .unwrap()
-            .to_string()
-    );
-    (std::fs::read(&archive).unwrap(), pin)
-}
 
 fn bundled_version() -> String {
     bundled_pin().unwrap().version.to_string()

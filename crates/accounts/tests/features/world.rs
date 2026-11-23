@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::future::{Future, ready};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -77,6 +78,38 @@ pub(crate) struct World {
     pub(crate) reports: Arc<Mutex<Vec<String>>>,
     pub(crate) accepted: Arc<AtomicUsize>,
     pub(crate) bundled: PathBuf,
+}
+
+/// The version of the core update a test releases.
+pub(crate) const UPDATE: &str = "99.0.0";
+
+/// `bytes` released as core `UPDATE`: its archive and a pin naming it for this target.
+pub(crate) fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
+    let stage = work.join(format!("stage-{}", bytes.len()));
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("cli-proxy-api"), bytes).unwrap();
+    let archive = stage.join("release.tar.gz");
+    let packed = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&stage)
+        .arg("cli-proxy-api")
+        .status()
+        .unwrap();
+    assert!(packed.success());
+    let target = CoreTarget::current().unwrap();
+    let key = format!("{}_{}", target.platform(), target.arch());
+    let mut pin: Value =
+        serde_json::from_str(include_str!("../../../../src/server/core-release.json")).unwrap();
+    pin["version"] = json!(UPDATE);
+    pin["checksums"][&key] = json!(Sha256Digest::of_file(&archive).unwrap().to_string());
+    pin["binaries"][&key] = json!(
+        Sha256Digest::of_file(&stage.join("cli-proxy-api"))
+            .unwrap()
+            .to_string()
+    );
+    (std::fs::read(&archive).unwrap(), pin)
 }
 
 /// A bundled core of this test's own: a file with its manifest.
