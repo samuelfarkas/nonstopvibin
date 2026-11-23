@@ -50,9 +50,10 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - if: runner.os == 'macOS'
         run: cargo test --workspace --locked
+      # The window helper's placement tests assume the 1280x800 screen gui.sh also uses.
       - if: runner.os == 'Linux'
         name: cargo test --workspace (display and session bus)
-        run: xvfb-run -a dbus-run-session -- cargo test --workspace --locked
+        run: xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- cargo test --workspace --locked
       - if: runner.os == 'Linux'
         name: Shell tests that drive a real window helper
         run: sh crates/shell/tests/gui.sh --locked
