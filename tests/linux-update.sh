@@ -160,11 +160,29 @@ wait "$app" || fail "the old app exited with $?"
 echo "ok: $old accepted the update and quit with 0"
 [ "$(sha256sum <"$image")" = "$(sha256sum <"$work/new/$payload")" ] || fail "the AppImage was not replaced"
 [ -x "$image" ] || fail "the update is not executable"
+# The authenticated probe `url` makes, read from the data folder: running the AppImage to ask
+# would extract it again (APPIMAGE_EXTRACT_AND_RUN) while the relaunch extracts it, and the
+# relaunch then fails with "Text file busy".
 running() {
-  "$image" url --json >"$work/url.json" 2>/dev/null && grep -q "\"version\":\"$new\"" "$work/url.json"
+  python3 - "$NONSTOPVIBIN_DATA_DIR/server.json" "$new" "$work/pid" <<'EOF'
+import json, sys, urllib.request
+path, version, out = sys.argv[1:]
+try:
+    session = json.load(open(path))
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{session['port']}/api/state",
+        headers={"Authorization": f"Bearer {session['token']}"},
+    )
+    state = json.load(urllib.request.urlopen(request, timeout=2))
+except (OSError, ValueError, KeyError):
+    sys.exit(1)
+if session["version"] != version or state["version"] != version:
+    sys.exit(1)
+open(out, "w").write(str(session["pid"]))
+EOF
 }
 wait_for "$new to serve the data folder" 60 running
-pid=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["pid"])' "$work/url.json")
+pid=$(cat "$work/pid")
 pids="$pids $pid"
 gone() { [ ! -e "$apps/.NonstopVibin.AppImage.update" ]; }
 wait_for "the staging folder to be removed" 30 gone
