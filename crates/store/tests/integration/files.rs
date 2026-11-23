@@ -3,7 +3,6 @@ use std::io;
 use std::os::unix::fs::symlink;
 
 use nsv_store::files::{EntryKind, own_entry, owner_only_directory, read_own_file, write_atomic};
-use rustix::fs::{CWD, FileType, Mode, mknodat};
 
 use crate::common::{TempDir, mode, set_mode};
 
@@ -50,7 +49,14 @@ fn checked_reads_accept_only_this_users_ordinary_files() {
 
     // A FIFO neither blocks the open nor passes as a file.
     let fifo = temp.path().join("fifo");
-    mknodat(CWD, &fifo, FileType::Fifo, Mode::from_raw_mode(0o600), 0).unwrap();
+    // mkfifo(1) exists on Linux and macOS; rustix's mknodat does not build for macOS.
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
     assert!(matches!(read(&fifo, 0o077, 64), Err(ReadError::Refused)));
 
     // Invalid UTF-8 reads as U+FFFD, as Node's readFile(path, "utf8") did.

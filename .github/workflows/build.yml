@@ -12,3 +12,5 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/checks.yml
+  rust:
+    uses: ./.github/workflows/rust.yml

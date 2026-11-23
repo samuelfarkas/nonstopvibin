@@ -74,7 +74,9 @@ Find the Team ID under **Membership details** in the Apple Developer account.
 
 Create an app-specific password at [account.apple.com](https://account.apple.com). Open **Sign-In and Security → App-Specific Passwords**.
 
-Open the GitHub repository. Go to **Settings → Secrets and variables → Actions**. Add these repository secrets:
+Open the GitHub repository. Go to **Settings → Environments** and open the `release`
+environment (see [Sign updates](#sign-updates-for-the-rust-updater)). Add these environment
+secrets:
 
 - `CSC_LINK`: the base64 text from the `.p12` file
 - `CSC_KEY_PASSWORD`: the `.p12` export password
@@ -85,6 +87,11 @@ Open the GitHub repository. Go to **Settings → Secrets and variables → Actio
 Keep the `.p12` file and its password out of the repository. Rotate the certificate in the Apple portal if it leaks. Anyone with repository admin access can replace workflows and use the `.p12` stored in GitHub secrets to sign as you.
 
 ### Change the build
+
+The Rust app needs no change: `scripts/package-mac.ts` signs with the Developer ID, notarizes
+and staples when all five secrets are set, and `.github/workflows/rust.yml` passes them only
+to release builds. Its executables already use the empty entitlements. The steps below are
+for the Electron build.
 
 1. In `package.json`, remove `"identity": "-"` and set `"notarize": true`. The sign
    script then keeps the requirement codesign derives from the certificate. Remove
@@ -118,3 +125,26 @@ The `spctl` result should say `accepted, source=Notarized Developer ID`. Notariz
 ### After the first signed release
 
 Re-enable the `onlyLoadAppFromAsar` and `enableEmbeddedAsarIntegrityValidation` fuses. Enable cookie encryption. Test packaging, launch, updates, credential access, and agent connections before release.
+
+## Sign updates for the Rust updater
+
+Release CI signs `SHA256SUMS` with [minisign](https://jedisct1.github.io/minisign/) into
+`SHA256SUMS.minisig`, and the Rust updater accepts an update only when that signature and
+the checksum verify. Until the key exists, releases publish unsigned with a warning.
+
+1. Install minisign 0.12 and create the key pair with a password:
+
+   ```sh
+   minisign -G -p update-signing.pub -s update-signing.key
+   ```
+
+2. In **Settings → Environments**, create the `release` environment. Under **Deployment
+   branches and tags**, choose **Selected branches and tags** and add the tag rule `v*`.
+3. Add environment secrets: `MINISIGN_SECRET_KEY`, the contents of `update-signing.key`,
+   and `MINISIGN_PASSWORD`, its password.
+4. Commit `update-signing.pub` as `build/update-signing.pub`. From then on a release
+   without the secret fails, and `scripts/sign-release.ts` checks each signature against
+   that key.
+5. Keep `update-signing.key` and its password in a password manager, off the repository.
+   A lost or leaked key needs a new pair and an app release that ships the new public key
+   before releases can switch to it.

@@ -7,10 +7,11 @@ import { readFile, readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { releaseChannel } from "../src/shared/release-channel.ts";
-import { serverArchiveName, serverArchitectures } from "./distribution.ts";
-
-// The file electron-updater downloads on each platform with an update feed.
-const updatePayload = { mac: "zip", linux: "AppImage" };
+import {
+  serverArchiveName,
+  serverArchitectures,
+  updatePayload,
+} from "./distribution.ts";
 
 export function verifyReleaseTag(tag, manifest, repository) {
   const channel = tag.startsWith("v") && releaseChannel(tag.slice(1));
