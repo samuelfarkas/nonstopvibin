@@ -19,30 +19,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { z } from "zod";
-import cases from "./golden/agents.json" with { type: "json" };
-
-/** A scenario's steps as the golden records them: the files each step changed. */
-const stepsSchema = z.array(
-  z.object({
-    changes: z
-      .record(
-        z.string(),
-        z.object({ content: z.string().optional() }).nullable(),
-      )
-      .optional(),
-  }),
-);
+import { fill, firstWrite, goldenText } from "./support/agents-golden.ts";
 
 const execute = promisify(execFile);
 const profileId = "11111111-1111-4111-8111-111111111111";
 const providerID = "nonstopvibin-work";
-
-function golden(name: string) {
-  const found = cases.find((entry) => entry.name === name);
-  assert.ok(found, `golden case ${name}`);
-  return found.output;
-}
 
 /** The content a scenario's first step wrote to `path`, with the golden's placeholders filled. */
 function written(
@@ -50,13 +31,7 @@ function written(
   path: string,
   places: Record<string, string>,
 ): string {
-  const [first] = stepsSchema.parse(golden(scenario));
-  const content = first.changes?.[path]?.content;
-  assert.ok(content, `${scenario} writes ${path}`);
-  return Object.entries(places).reduce(
-    (text, [placeholder, value]) => text.replaceAll(placeholder, value),
-    content,
-  );
+  return fill(firstWrite(scenario, path), Object.entries(places));
 }
 
 interface Bridge {
@@ -280,7 +255,7 @@ test("pi profile controls preserve session routing across selection, restore, fa
     const source = join(directory, "controls.mjs");
     await writeFile(
       source,
-      `${z.string().parse(golden("pi profile controls source"))}\nexport { connectProfileControls };`,
+      `${goldenText("pi profile controls source")}\nexport { connectProfileControls };`,
     );
     const { connectProfileControls } = await import(pathToFileURL(source).href);
     const result: Promise<void> = runInNewContext(

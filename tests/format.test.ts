@@ -1,7 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupAccountsByProvider } from "../src/client/format.ts";
-import { count, dateLabel } from "../src/client/Activity.tsx";
+import {
+  count,
+  dateLabel,
+  groupAccountsByProvider,
+} from "../src/client/format.ts";
 
 test("reused formatters preserve number boundaries and local date output", () => {
   for (const [n, expected] of [
