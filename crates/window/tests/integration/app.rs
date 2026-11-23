@@ -4,12 +4,13 @@
 
 use std::collections::HashSet;
 use std::io::Read as _;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, fs, thread};
+
+use nsv_testkit::Port;
 
 use crate::common::x11::{self, Window, X};
 use crate::common::{pause, processes, tree, wait_until};
@@ -23,14 +24,6 @@ fn app_binary() -> PathBuf {
         "{binary:?} is missing; build it first with `cargo build -p nsv-cli`"
     );
     binary
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// The desktop app on a data directory of its own, as a launcher starts it: the display and
@@ -55,7 +48,7 @@ impl App {
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", root.join("home"))
             .env("NONSTOPVIBIN_DATA_DIR", &data)
-            .env("NONSTOPVIBIN_PORT", free_port().to_string())
+            .env("NONSTOPVIBIN_PORT", Port::reserve().release().to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());

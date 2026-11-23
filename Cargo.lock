@@ -1937,6 +1937,7 @@ dependencies = [
  "gtk",
  "muda",
  "nsv-domain",
+ "nsv-testkit",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

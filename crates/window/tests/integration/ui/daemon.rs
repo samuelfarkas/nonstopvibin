@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
+use nsv_testkit::Port;
 use serde_json::{Value, json};
 
 use crate::common::{TIMEOUT, pause, wait_until};
@@ -31,14 +32,6 @@ fn binary() -> PathBuf {
         "{binary:?} is missing; build it first with `cargo build -p nsv-cli`"
     );
     binary
-}
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// An OpenAI-compatible upstream that lists one model and answers anything else with an
@@ -72,7 +65,7 @@ impl Daemon {
         let root = env::temp_dir().join(format!("nsv-ui-{name}-{}", std::process::id()));
         fs::remove_dir_all(&root).unwrap_or_default();
         fs::create_dir_all(root.join("home")).unwrap();
-        let port = free_port();
+        let port = Port::reserve().release();
         let child = Command::new(binary())
             .args(["serve", "--port", &port.to_string()])
             .env_clear()
