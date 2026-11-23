@@ -756,12 +756,80 @@ async fn profile_keys_never_manage_or_cross_profiles() {
         own.header("x-nonstopvibin-profile"),
         Some(first.slug.as_str())
     );
+    // A key created after the gateway served a request is known at once.
+    let authorization = format!("Bearer {}", daemon.token);
+    let created = send(
+        daemon.port,
+        "POST",
+        "/api/profiles",
+        &[
+            ("Authorization", &authorization),
+            ("Content-Type", "application/json"),
+        ],
+        r#"{"name":"Later"}"#,
+    )
+    .await;
+    assert_eq!(created.status, 201, "{}", created.body);
+    let later = created.json()["id"].as_str().unwrap().to_owned();
+    let later_key = daemon
+        .api("GET", &format!("/api/profiles/{later}/key"))
+        .await
+        .json()["key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let later_bearer = format!("Bearer {later_key}");
+    let mismatched = send(
+        daemon.port,
+        "POST",
+        &format!("/p/{}/v1/chat/completions", first.slug),
+        &[("Authorization", &later_bearer)],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(mismatched.status, 403, "{}", mismatched.body);
     let state = daemon.api("GET", "/api/state").await.json();
     assert_eq!(runtime(&state, &first.slug), "running");
     assert_eq!(runtime(&state, &second.slug), "stopped");
     // A UI poll with watch starts the dormant ones, so it shows them running.
     let watched = daemon.api("GET", "/api/state?watch=1").await.json();
     assert_eq!(runtime(&watched, &second.slug), "running");
+    daemon.signal("TERM");
+    assert_eq!(daemon.exited().await.0, 0);
+}
+
+#[tokio::test]
+async fn only_a_websocket_switch_takes_the_upgrade_path() {
+    let upstream = stub_upstream().await.port;
+    let root = Root::new("switch");
+    let seeded = seed(&root.data(), 1, upstream).await;
+    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let bearer = format!("Bearer {}", seeded[0].key);
+    // An Upgrade without `Connection: upgrade` is an ordinary request; a switch to anything
+    // but WebSocket is refused rather than sent on as a bodiless GET.
+    let ignored = send(
+        daemon.port,
+        "POST",
+        "/v1/chat/completions",
+        &[("Authorization", &bearer), ("Upgrade", "websocket")],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(ignored.status, 200, "{}", ignored.body);
+    let h2c = send(
+        daemon.port,
+        "POST",
+        "/v1/chat/completions",
+        &[
+            ("Authorization", &bearer),
+            ("Connection", "Upgrade, HTTP2-Settings"),
+            ("Upgrade", "h2c"),
+            ("HTTP2-Settings", "AAMAAABkAAQCAAAAAAIAAAAA"),
+        ],
+        &chat(false),
+    )
+    .await;
+    assert_eq!(h2c.status, 400);
     daemon.signal("TERM");
     assert_eq!(daemon.exited().await.0, 0);
 }

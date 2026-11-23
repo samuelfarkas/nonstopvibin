@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, Permissions};
-use std::os::unix::fs::PermissionsExt;
+use std::io;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,7 +25,7 @@ use tokio::sync::watch;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
-use crate::files::owner_only_directory;
+use crate::files::{EntryKind, own_entry, owner_only_directory};
 use crate::layout::database_path;
 use crate::store::StoreError;
 use crate::vault::Vault;
@@ -109,13 +110,13 @@ impl AuthSnapshot {
             .filter(|entry| entry.client_key.matches(presented)))
     }
 
-    /// The entry the index files under `digest`. Its live key still has to be compared with
+    /// Every entry by its client-key digest. An entry's live key still has to be compared with
     /// the presented one.
     ///
     /// # Errors
     /// The error that kept the store from reading the keys.
-    pub fn get(&self, digest: &KeyDigest) -> Result<Option<&AuthEntry>, &StoreError> {
-        Ok(self.0.as_ref().map_err(|error| &**error)?.get(digest))
+    pub fn entries(&self) -> Result<&HashMap<KeyDigest, AuthEntry>, &StoreError> {
+        self.0.as_ref().map_err(|error| &**error)
     }
 
     /// The profile's entry: its live client key.
@@ -163,6 +164,14 @@ impl Db {
     ) -> Result<(Self, watch::Receiver<Arc<AuthSnapshot>>), StoreError> {
         owner_only_directory(directory, || Ok::<(), StoreError>(()))?;
         let path = database_path(directory);
+        // chmod and SQLite follow a symbolic link, so refuse one before either runs.
+        match fs::symlink_metadata(&path) {
+            Ok(status) if !own_entry(&status, EntryKind::File, 0) || status.nlink() != 1 => {
+                return Err(StoreError::UnsafeDatabase);
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
         let connection = Connection::open(&path)?;
         fs::set_permissions(&path, Permissions::from_mode(0o600))?;
         connection.execute_batch(SCHEMA)?;
@@ -221,8 +230,11 @@ impl Db {
             self.connection.execute_batch("COMMIT")?;
             Ok(value)
         });
-        if result.is_err() {
-            self.connection.execute_batch("ROLLBACK")?;
+        if result.is_err()
+            && let Err(error) = self.connection.execute_batch("ROLLBACK")
+        {
+            // The caller gets the failure that caused the rollback.
+            tracing::error!(%error, "a store transaction could not roll back");
         }
         result
     }
@@ -802,7 +814,22 @@ fn milliseconds(time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::slug_stem;
+    use super::*;
+
+    #[test]
+    fn a_failed_rollback_keeps_the_transaction_s_own_error() {
+        let directory = std::env::temp_dir().join(format!("nsv-rollback-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let vault = Vault::open(&directory).unwrap();
+        let (mut db, _auth) = Db::open(&directory, vault).unwrap();
+        let failed = db.transaction(|db| -> Result<(), StoreError> {
+            // Ends the transaction, so the store's own ROLLBACK fails.
+            db.connection.execute_batch("ROLLBACK")?;
+            Err(StoreError::Closed)
+        });
+        assert!(matches!(failed, Err(StoreError::Closed)));
+        fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn slugs_follow_the_typescript_derivation() {

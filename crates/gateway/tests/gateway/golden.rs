@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use nsv_domain::registry::Agent;
 use nsv_domain::secret::KeyDigest;
@@ -194,7 +195,7 @@ fn golden_host(core: SocketAddr, cases: &[Value]) -> TestHost {
         .map(|&(slug, letter, id)| (KeyDigest::of(&key(letter)), profile(id, slug, &key(letter))))
         .collect();
     let rotated = profile("44444444-4444-4444-8444-444444444444", "rotated", &key('e'));
-    index.insert(KeyDigest::of(&key('d')), rotated.clone());
+    index.insert(KeyDigest::of(&key('d')), Arc::clone(&rotated));
     index.insert(KeyDigest::of(&key('e')), rotated);
     let recorded = |name: &str| {
         let case = cases.iter().find(|case| case["name"] == name).unwrap();
@@ -232,7 +233,7 @@ fn golden_host(core: SocketAddr, cases: &[Value]) -> TestHost {
         index,
         wake: Wake::At(core),
         catalogs,
-        activity: std::sync::Arc::default(),
+        activity: Arc::default(),
     }
 }
 

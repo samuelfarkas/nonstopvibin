@@ -10,7 +10,6 @@ use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
-use nsv_domain::secret::CoreKey;
 
 use crate::route::{AGENT_HEADER, joined};
 
@@ -59,7 +58,7 @@ const HOP_BY_HOP: [HeaderName; 8] = [
 /// never is.
 pub(crate) fn forwarded(
     mut headers: HeaderMap,
-    core_key: &CoreKey,
+    authorization: HeaderValue,
     core: SocketAddr,
     upgrade: Option<HeaderValue>,
 ) -> Option<HeaderMap> {
@@ -77,9 +76,6 @@ pub(crate) fn forwarded(
     {
         headers.remove(name);
     }
-    let mut authorization =
-        HeaderValue::try_from(format!("Bearer {}", core_key.expose_secret())).ok()?;
-    authorization.set_sensitive(true);
     headers.insert(header::HOST, HeaderValue::try_from(core.to_string()).ok()?);
     headers.insert(header::AUTHORIZATION, authorization);
     headers.insert(SESSION, session);
@@ -162,7 +158,7 @@ mod tests {
             HeaderValue::from_static("chunked"),
         );
         let core: SocketAddr = "127.0.0.1:9".parse().unwrap();
-        let out = forwarded(headers, &CoreKey::new("k"), core, None).unwrap();
+        let out = forwarded(headers, HeaderValue::from_static("Bearer k"), core, None).unwrap();
         assert!(!out.contains_key("x-hop"));
         assert!(!out.contains_key(header::TRANSFER_ENCODING));
         assert_eq!(out["x-kept"], "2");

@@ -39,7 +39,7 @@ use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
 use tokio::net::TcpStream;
 
 pub use body::Body;
-use flight::{Counts, InFlight, Release};
+use flight::{Counts, InFlight, LIMIT, Release};
 
 /// The cap on hyper's read buffer in both directions. A request or response head must fit;
 /// bodies stream through in pieces no larger.
@@ -47,14 +47,43 @@ pub const MAX_BUF_SIZE: usize = 256 * 1024;
 
 const UNAVAILABLE: &str = "The profile proxy is unavailable. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin.";
 
-/// A profile as the gateway sees it. It holds no management key.
-#[derive(Debug, Clone)]
+/// A profile as the gateway sees it. It holds no management key. The host builds it once per
+/// key change and shares it, so a request copies no secret: the header values it sends are
+/// ready here.
+#[derive(Debug)]
 pub struct ProfileAuth {
     pub id: ProfileId,
     pub slug: ProfileSlug,
     /// The live key, which the presented key must equal.
     pub client_key: ClientKey,
-    pub core_key: CoreKey,
+    /// `Bearer <core key>`, marked sensitive, for the core.
+    authorization: HeaderValue,
+    /// The slug, for `x-nonstopvibin-profile`.
+    slug_header: HeaderValue,
+}
+
+impl ProfileAuth {
+    /// `None` when the core key or slug cannot be a header value, which a key the store made
+    /// and a validated slug never are.
+    #[must_use]
+    pub fn new(
+        id: ProfileId,
+        slug: ProfileSlug,
+        client_key: ClientKey,
+        core_key: &CoreKey,
+    ) -> Option<Self> {
+        let mut authorization =
+            HeaderValue::try_from(format!("Bearer {}", core_key.expose_secret())).ok()?;
+        authorization.set_sensitive(true);
+        let slug_header = HeaderValue::from_str(slug.as_str()).ok()?;
+        Some(Self {
+            id,
+            slug,
+            client_key,
+            authorization,
+            slug_header,
+        })
+    }
 }
 
 /// A curated model catalog for an agent, serialised to JSON by the host.
@@ -80,7 +109,7 @@ pub trait Host: Send + Sync + 'static {
     /// The profile whose client key the index maps `digest` to, if any. The gateway compares
     /// the presented key with the returned live key in constant time, so a stale index entry
     /// fails closed.
-    fn profile(&self, digest: &KeyDigest) -> Option<ProfileAuth>;
+    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>>;
 
     /// Wakes the profile's core if it is dormant, and returns its loopback address. The
     /// gateway drops this future when the agent hangs up, so a core start must not depend on
@@ -166,7 +195,7 @@ impl<H: Host> Release for Inner<H> {
 
 /// A routed request's profile, counted in, with its core awake.
 struct Lease {
-    auth: ProfileAuth,
+    auth: Arc<ProfileAuth>,
     core: SocketAddr,
     flight: InFlight,
 }
@@ -213,9 +242,13 @@ impl<H: Host> Gateway<H> {
         let mut upstream = Request::new(body);
         *upstream.method_mut() = parts.method;
         *upstream.uri_mut() = route.target;
-        *upstream.headers_mut() =
-            headers::forwarded(parts.headers, &lease.auth.core_key, lease.core, None)
-                .ok_or_else(Refusal::unavailable)?;
+        *upstream.headers_mut() = headers::forwarded(
+            parts.headers,
+            lease.auth.authorization.clone(),
+            lease.core,
+            None,
+        )
+        .ok_or_else(Refusal::unavailable)?;
         let response = sender
             .send_request(upstream)
             .await
@@ -225,7 +258,7 @@ impl<H: Host> Gateway<H> {
         let mut reply = Response::new(Body::upstream(body, lease.flight));
         *reply.status_mut() = head.status;
         *reply.headers_mut() = head.headers;
-        headers::rewrite_response(reply.headers_mut(), slug_value(&lease.auth)?, false);
+        headers::rewrite_response(reply.headers_mut(), lease.auth.slug_header.clone(), false);
         Ok(reply)
     }
 
@@ -250,7 +283,7 @@ impl<H: Host> Gateway<H> {
         *upstream.uri_mut() = route.target;
         *upstream.headers_mut() = headers::forwarded(
             std::mem::take(request.headers_mut()),
-            &lease.auth.core_key,
+            lease.auth.authorization.clone(),
             lease.core,
             protocol,
         )
@@ -265,7 +298,7 @@ impl<H: Host> Gateway<H> {
         let mut reply = Response::new(Body::empty());
         *reply.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
         *reply.headers_mut() = std::mem::take(response.headers_mut());
-        headers::rewrite_response(reply.headers_mut(), slug_value(&lease.auth)?, true);
+        headers::rewrite_response(reply.headers_mut(), lease.auth.slug_header.clone(), true);
         let agent = hyper::upgrade::on(request);
         let core = hyper::upgrade::on(response);
         let flight = lease.flight;
@@ -296,11 +329,11 @@ impl<H: Host> Gateway<H> {
 
     /// Counts the request in before waking the core: the wait is in flight, and keeps a dormant
     /// core from an idle stop.
-    async fn lease(&self, auth: ProfileAuth) -> Result<Lease, Refusal> {
+    async fn lease(&self, auth: Arc<ProfileAuth>) -> Result<Lease, Refusal> {
         let first = self.inner.counts.open(&auth.id).ok_or_else(|| {
             Refusal::new(
                 StatusCode::TOO_MANY_REQUESTS,
-                "This profile has 32 requests in flight. Retry shortly.",
+                format!("This profile has {LIMIT} requests in flight. Retry shortly."),
             )
         })?;
         self.inner
@@ -327,14 +360,10 @@ impl<H: Host> Gateway<H> {
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         if labelled {
-            headers.insert("x-nonstopvibin-profile", slug_value(&lease.auth)?);
+            headers.insert("x-nonstopvibin-profile", lease.auth.slug_header.clone());
         }
         Ok(response)
     }
-}
-
-fn slug_value(auth: &ProfileAuth) -> Result<HeaderValue, Refusal> {
-    HeaderValue::from_str(auth.slug.as_str()).map_err(|_| Refusal::unavailable())
 }
 
 /// One fresh connection to the core, with Nagle off and hyper's buffer capped.

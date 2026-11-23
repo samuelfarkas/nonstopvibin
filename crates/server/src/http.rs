@@ -3,9 +3,10 @@
 //! the error JSON every refusal is rendered as.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hyper::body::{Bytes, Incoming};
@@ -23,7 +24,7 @@ use nsv_core::install::Releases;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::{Agent, RegistryError, registry};
-use nsv_domain::secret::{KeyDigest, same_secret};
+use nsv_domain::secret::KeyDigest;
 use nsv_domain::wire::{CatalogModel, Model};
 use nsv_gateway::{Activity, Body, Catalog, Host, ProfileAuth, Refusal, serve_connection};
 use nsv_store::{AuthSnapshot, Store, StoreError};
@@ -32,7 +33,7 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use crate::daemon::{App, Shared};
+use crate::daemon::{App, Shared, locked};
 use crate::panic;
 use crate::parse::Invalid;
 
@@ -203,6 +204,43 @@ fn text(request: &Request<Incoming>, name: header::HeaderName) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
+/// What a request asks to switch to. Node's `upgrade` event fired for `Connection: upgrade`
+/// with an `Upgrade` header; without the token the `Upgrade` header is ignored.
+enum Switch {
+    None,
+    WebSocket,
+    Other,
+}
+
+fn switch(headers: &HeaderMap) -> Switch {
+    let tokens = |name| {
+        headers
+            .get_all(name)
+            .into_iter()
+            .flat_map(|value| value.as_bytes().split(|&byte| byte == b','))
+            .map(<[u8]>::trim_ascii)
+    };
+    let requested = headers.contains_key(header::UPGRADE)
+        && tokens(header::CONNECTION).any(|token| token.eq_ignore_ascii_case(b"upgrade"));
+    if !requested {
+        Switch::None
+    } else if tokens(header::UPGRADE).any(|token| token.eq_ignore_ascii_case(b"websocket")) {
+        Switch::WebSocket
+    } else {
+        Switch::Other
+    }
+}
+
+/// An empty answer that closes the connection, as the upgrade path wrote to its socket.
+fn closed(status: StatusCode) -> Response<Body> {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+    response
+}
+
 /// A browser Origin: an empty header counts as none, as it did in Node.
 fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
     let value = request.headers().get(header::ORIGIN)?;
@@ -217,7 +255,8 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         let Some(host) = host else { return false };
         host.strip_prefix("127.0.0.1:")
             .or_else(|| host.strip_prefix("localhost:"))
-            .is_some_and(|port| port == self.port.to_string())
+            // The port's exact decimal text: `parse` would also take a sign or leading zeros.
+            .is_some_and(|port| port.parse() == Ok(self.port) && !port.starts_with(['+', '0']))
             || (self.development && host == DEV_HOST)
             || self.allowed_host(Some(host))
     }
@@ -249,8 +288,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
     }
 
     async fn dispatch(self: Arc<Self>, request: Request<Incoming>) -> Response<Body> {
-        if request.headers().contains_key(header::UPGRADE) {
-            return self.upgrade(request).await;
+        match switch(request.headers()) {
+            Switch::None => {}
+            Switch::WebSocket => return self.upgrade(request).await,
+            // The upgrade path sends a bodiless GET, which would drop this request's method
+            // and body; main's core answered it with an error too.
+            Switch::Other => return closed(StatusCode::BAD_REQUEST),
         }
         match self.handle(request).await {
             Ok(response) => response,
@@ -262,12 +305,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
     async fn upgrade(&self, request: Request<Incoming>) -> Response<Body> {
         let host = text(&request, header::HOST);
         if !self.valid_host(host) || self.allowed_host(host) || origin(&request).is_some() {
-            let mut response = Response::new(Body::empty());
-            *response.status_mut() = StatusCode::FORBIDDEN;
-            let headers = response.headers_mut();
-            headers.insert(header::CONNECTION, HeaderValue::from_static("close"));
-            headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
-            return response;
+            return closed(StatusCode::FORBIDDEN);
         }
         self.gateway.upgrade(request).await
     }
@@ -281,7 +319,6 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             return Err(Failure::status(403, "Unrecognized host."));
         }
         let allowed = self.allowed_host(host);
-        let host = host.map(str::to_owned);
         // The path as WHATWG URL parsing sees it, as `new URL(req.url, origin)` did.
         let url = self
             .base
@@ -303,9 +340,10 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                     ));
                 }
             }
-            let presented = text(&request, header::AUTHORIZATION).unwrap_or("");
-            let expected = format!("Bearer {}", self.token.expose_secret());
-            if !same_secret(presented, &expected) {
+            let authorized = text(&request, header::AUTHORIZATION)
+                .and_then(|presented| presented.strip_prefix("Bearer "))
+                .is_some_and(|presented| self.token.matches(presented));
+            if !authorized {
                 return Err(Failure::status(
                     401,
                     "Open NonstopVibin from the desktop app, or run nonstopvibin url on the server for a new session link.",
@@ -392,11 +430,40 @@ fn connection<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>, stream: 
     }));
 }
 
+/// One auth snapshot as the gateway takes it, shared per request instead of copied.
+pub(crate) struct GatewayProfiles {
+    source: Arc<AuthSnapshot>,
+    entries: HashMap<KeyDigest, Arc<ProfileAuth>>,
+}
+
+impl GatewayProfiles {
+    /// A store that could not read the keys has no entries: every key fails closed.
+    fn of(source: Arc<AuthSnapshot>) -> Self {
+        let entries = source
+            .entries()
+            .into_iter()
+            .flatten()
+            .filter_map(|(digest, entry)| {
+                let auth = ProfileAuth::new(
+                    entry.profile.clone(),
+                    entry.slug.clone(),
+                    entry.client_key.clone(),
+                    &entry.core_key,
+                )?;
+                Some((*digest, Arc::new(auth)))
+            })
+            .collect();
+        Self { source, entries }
+    }
+}
+
 /// The gateway's view of the daemon: the store's key snapshot, the scheduler's wake and the
 /// agents' curated catalogs. It holds no management key.
 pub(crate) struct GatewayHost<F> {
     pub(crate) shared: Arc<Shared>,
     pub(crate) auth: watch::Receiver<Arc<AuthSnapshot>>,
+    /// The gateway's entries for the store's latest snapshot, built when it changes.
+    pub(crate) profiles: Mutex<Option<GatewayProfiles>>,
     pub(crate) scheduler: Scheduler,
     pub(crate) catalog: Arc<ModelCatalog<F>>,
     pub(crate) store: Store,
@@ -469,16 +536,17 @@ pub(crate) async fn enrich<F: Fetch + 'static>(
 }
 
 impl<F: Fetch + Clone + 'static> Host for GatewayHost<F> {
-    fn profile(&self, digest: &KeyDigest) -> Option<ProfileAuth> {
-        let snapshot = self.auth.borrow();
-        // A store that could not read the keys fails every key closed.
-        let entry = snapshot.get(digest).ok().flatten()?;
-        Some(ProfileAuth {
-            id: entry.profile.clone(),
-            slug: entry.slug.clone(),
-            client_key: entry.client_key.clone(),
-            core_key: entry.core_key.clone(),
-        })
+    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
+        // The current snapshot on every request, so a deleted or rotated key fails at once.
+        let snapshot = Arc::clone(&self.auth.borrow());
+        let mut profiles = locked(&self.profiles);
+        if !profiles
+            .as_ref()
+            .is_some_and(|profiles| Arc::ptr_eq(&profiles.source, &snapshot))
+        {
+            *profiles = Some(GatewayProfiles::of(snapshot));
+        }
+        profiles.as_ref()?.entries.get(digest).cloned()
     }
 
     async fn wake(&self, profile: &ProfileId) -> Result<SocketAddr, Refusal> {

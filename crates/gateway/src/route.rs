@@ -9,6 +9,7 @@
 //! (`/v1/responses/./x`, `/v1/responses/a\b`) are refused instead.
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use hyper::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use hyper::{Method, StatusCode, Uri};
@@ -45,7 +46,7 @@ const SUBTREES: [&str; 3] = ["/v1/responses/", "/v1beta/models/", "/v1interactio
 /// A request the gateway accepted.
 #[derive(Debug)]
 pub(crate) struct Route {
-    pub(crate) auth: ProfileAuth,
+    pub(crate) auth: Arc<ProfileAuth>,
     /// What the core receives: the path without `/p/<slug>`, and the query unchanged.
     pub(crate) target: Uri,
     /// Set for `GET /v1/models` from an agent asking for its curated catalog.
@@ -59,7 +60,7 @@ pub(crate) fn route(
     uri: &Uri,
     headers: &HeaderMap,
     catalogs: &[(Agent, AgentCatalog)],
-    profile: impl FnOnce(&KeyDigest) -> Option<ProfileAuth>,
+    profile: impl FnOnce(&KeyDigest) -> Option<Arc<ProfileAuth>>,
 ) -> Result<Route, Refusal> {
     let key = presented_key(headers)?;
     // The live key decides, so deletion and rotation fail closed even past a stale index.
@@ -249,12 +250,17 @@ mod tests {
         (Agent::Opencode, AgentCatalog::Query),
     ];
 
-    fn work(digest: &KeyDigest) -> Option<ProfileAuth> {
-        (*digest == KeyDigest::of(WORK_KEY)).then(|| ProfileAuth {
-            id: ProfileId::parse("11111111-1111-4111-8111-111111111111").unwrap(),
-            slug: ProfileSlug::parse("work").unwrap(),
-            client_key: ClientKey::new(WORK_KEY),
-            core_key: CoreKey::new("core-work"),
+    fn work(digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
+        (*digest == KeyDigest::of(WORK_KEY)).then(|| {
+            Arc::new(
+                ProfileAuth::new(
+                    ProfileId::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+                    ProfileSlug::parse("work").unwrap(),
+                    ClientKey::new(WORK_KEY),
+                    &CoreKey::new("core-work"),
+                )
+                .unwrap(),
+            )
         })
     }
 

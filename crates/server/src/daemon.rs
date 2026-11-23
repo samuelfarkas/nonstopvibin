@@ -292,7 +292,10 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
                 serde_json::Value::String(host.clone()).to_string(),
             ));
         }
-        let vault = Vault::open(&options.directory)?;
+        let directory = options.directory.clone();
+        let vault = tokio::task::spawn_blocking(move || Vault::open(&directory))
+            .await
+            .map_err(|error| StartError::Other(error.to_string()))??;
         let store = Store::open(&options.directory, vault).await?;
         match Self::assemble(options, lock, store.clone()).await {
             Ok(daemon) => Ok(daemon),
@@ -346,6 +349,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
         let gateway = Gateway::new(GatewayHost {
             shared: Arc::clone(&shared),
             auth: store.auth(),
+            profiles: Mutex::default(),
             scheduler: cores.scheduler.clone(),
             catalog: Arc::clone(&catalog),
             store: store.clone(),

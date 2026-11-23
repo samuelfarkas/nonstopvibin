@@ -25,13 +25,16 @@ pub(crate) fn key(letter: char) -> String {
     format!("nv_{}", letter.to_string().repeat(43))
 }
 
-pub(crate) fn profile(id: &str, slug: &str, key: &str) -> ProfileAuth {
-    ProfileAuth {
-        id: ProfileId::parse(id).unwrap(),
-        slug: ProfileSlug::parse(slug).unwrap(),
-        client_key: ClientKey::new(key),
-        core_key: CoreKey::new(format!("core-{slug}")),
-    }
+pub(crate) fn profile(id: &str, slug: &str, key: &str) -> Arc<ProfileAuth> {
+    Arc::new(
+        ProfileAuth::new(
+            ProfileId::parse(id).unwrap(),
+            ProfileSlug::parse(slug).unwrap(),
+            ClientKey::new(key),
+            &CoreKey::new(format!("core-{slug}")),
+        )
+        .unwrap(),
+    )
 }
 
 /// How `wake` answers.
@@ -42,7 +45,7 @@ pub(crate) enum Wake {
 }
 
 pub(crate) struct TestHost {
-    pub(crate) index: HashMap<KeyDigest, ProfileAuth>,
+    pub(crate) index: HashMap<KeyDigest, Arc<ProfileAuth>>,
     pub(crate) wake: Wake,
     pub(crate) catalogs: HashMap<(String, Agent), Result<Catalog, Refusal>>,
     pub(crate) activity: Arc<Mutex<Vec<(String, Activity)>>>,
@@ -62,7 +65,7 @@ impl TestHost {
 }
 
 impl Host for TestHost {
-    fn profile(&self, digest: &KeyDigest) -> Option<ProfileAuth> {
+    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
         self.index.get(digest).cloned()
     }
 

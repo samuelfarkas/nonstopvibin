@@ -40,16 +40,22 @@ pub(crate) struct Server {
 }
 
 impl Server {
+    /// # Errors
+    /// When the socket file cannot be removed, or the accept task panicked. The panic hook
+    /// already logged where; re-raising it here would unwind the daemon's shutdown and skip
+    /// stopping the cores.
     pub(crate) async fn close(self) -> io::Result<()> {
         // The accept loop ends when its sender is dropped.
         drop(self.shutdown);
-        if let Err(error) = self.task.await
-            && error.is_panic()
-        {
-            std::panic::resume_unwind(error.into_panic());
-        }
+        let ended = self.task.await;
         // A closed listener no longer answers, so its file is ours to remove, as libuv did.
-        remove_file(&self.path)
+        let removed = remove_file(&self.path);
+        match ended {
+            Err(error) if error.is_panic() => {
+                Err(io::Error::other("the credential socket task panicked"))
+            }
+            _ => removed,
+        }
     }
 }
 
@@ -255,5 +261,25 @@ impl<'a> Request<'a> {
         }
         request.origin = origins.join(", ");
         Some(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panicked_accept_task_is_an_error_and_the_socket_file_is_removed() {
+        let path = std::env::temp_dir().join(format!("nsv-socket-panic-{}", std::process::id()));
+        drop(UnixListener::bind(&path).unwrap());
+        let (shutdown, _stopped) = oneshot::channel();
+        let server = Server {
+            shutdown,
+            task: tokio::spawn(async { panic!("accept failed") }),
+            path: path.clone(),
+        };
+        let error = server.close().await.unwrap_err();
+        assert_eq!(error.to_string(), "the credential socket task panicked");
+        assert!(!path.exists());
     }
 }
