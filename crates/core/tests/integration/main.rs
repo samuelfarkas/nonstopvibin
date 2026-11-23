@@ -6,5 +6,6 @@
 mod binary;
 mod common;
 mod config;
+mod core;
 mod install;
 mod restart;
