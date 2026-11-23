@@ -115,10 +115,6 @@ impl Broker {
         self.0.lock().unwrap().port = port;
     }
 
-    pub(crate) fn port(&self) -> u16 {
-        self.0.lock().unwrap().port
-    }
-
     pub(crate) fn source(&self) -> ConnectionSource {
         let state = Arc::clone(&self.0);
         Arc::new(move |id| {

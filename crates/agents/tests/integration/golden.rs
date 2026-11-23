@@ -67,8 +67,7 @@ fn short_hash(text: &str) -> String {
     Sha256::digest(text.as_bytes())
         .iter()
         .take(12)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::new(), |hex, byte| hex + &format!("{byte:02x}"))
 }
 
 #[derive(Clone, Copy)]
@@ -189,7 +188,9 @@ impl<'a> Scenario<'a> {
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().into_string().unwrap())
                 .find(|name| {
-                    name.starts_with("claude-") && name.len() == 36 && name.ends_with(".json")
+                    name.starts_with("claude-")
+                        && name.len() == 36
+                        && Path::new(name).extension().is_some_and(|e| e == "json")
                 })
                 .unwrap();
             path.replace("<claude-manifest>", manifest.trim_end_matches(".json"))

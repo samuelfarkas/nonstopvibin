@@ -145,6 +145,10 @@ fn agent(connection: &Value) -> Agent {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario in the order main's launch ran it"
+)]
 async fn typescript_connections_are_recognised_restored_and_removed() {
     let copy = Copy::new();
     let expected = expected();

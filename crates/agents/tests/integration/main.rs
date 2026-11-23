@@ -6,3 +6,5 @@
 mod common;
 mod fixture;
 mod golden;
+mod setup;
+mod socket;
