@@ -155,12 +155,14 @@ async fn read_head(stream: &mut UnixStream) -> io::Result<Head> {
             return Ok(Head::Closed);
         };
         head.extend_from_slice(bytes);
-        if let Some(end) = head.windows(4).position(|window| window == b"\r\n\r\n") {
-            head.truncate(end);
-            return Ok(Head::Complete(head));
-        }
-        if head.len() > HEAD_LIMIT {
-            return Ok(Head::TooLarge);
+        match head.windows(4).position(|window| window == b"\r\n\r\n") {
+            Some(end) if end <= HEAD_LIMIT => {
+                head.truncate(end);
+                return Ok(Head::Complete(head));
+            }
+            Some(_) => return Ok(Head::TooLarge),
+            None if head.len() > HEAD_LIMIT => return Ok(Head::TooLarge),
+            None => {}
         }
     }
 }
