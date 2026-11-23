@@ -201,11 +201,12 @@ mod linux {
                 .set(true)
                 .unwrap();
             renamed.follow().unwrap();
-            assert!(
-                fs::read_to_string(config.join("autostart/app.nonstopvibin.desktop"))
-                    .unwrap()
-                    .contains("Exec=\"/apps/NonstopVibin-0.3.0.AppImage\" --background")
-            );
+            let entry =
+                fs::read_to_string(config.join("autostart/app.nonstopvibin.desktop")).unwrap();
+            assert!(entry.contains("Exec=\"/apps/NonstopVibin-0.3.0.AppImage\" --background"));
+            assert!(!entry.contains("0.2.0"), "{entry}");
+            renamed.set(false).unwrap();
+            assert!(!renamed.enabled());
             fs::remove_dir_all(config).unwrap();
         }
     }
