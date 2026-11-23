@@ -144,6 +144,8 @@ impl Db {
         let connection = Connection::open(&path)?;
         fs::set_permissions(&path, Permissions::from_mode(0o600))?;
         connection.execute_batch(SCHEMA)?;
+        // Room for every statement below, so none is compiled again (the default keeps 16).
+        connection.set_prepared_statement_cache_capacity(32);
         let page_size = registry()?.usage_page_size;
         let (auth, receiver) = watch::channel(Arc::new(AuthSnapshot(Ok(HashMap::new()))));
         let mut db = Self {
