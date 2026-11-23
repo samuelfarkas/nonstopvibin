@@ -3,7 +3,7 @@
 //! as a reachable user manager with the unit inactive, a daemon stub on 24319 that answers
 //! `GET /api/state` for one token, and nothing on 24399.
 //!
-//! Every case must match, or be listed in [`DIFFERENCES`] and still differ.
+//! Every case must match.
 //!
 //! Linux only: the recording is the Linux headless CLI. Its `status` names the systemd unit and
 //! its `service` commands drive systemd, and on macOS a bare launch opens the desktop app.
@@ -24,9 +24,6 @@ const REPOSITORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const STATE_PORT: u16 = 24319;
 const STALE_PORT: u16 = 24399;
 const TOKEN: &str = "synthetic-session-token";
-
-/// Cases that differ from the TypeScript CLI on purpose.
-const DIFFERENCES: &[(&str, &str)] = &[];
 
 struct Root(PathBuf);
 
@@ -208,30 +205,16 @@ fn the_cli_answers_as_the_typescript_cli_did() {
             differing.push(format!("{name}: {output}"));
         }
     }
-    let listed: Vec<&str> = DIFFERENCES.iter().map(|(name, _)| *name).collect();
-    let unexpected: Vec<&String> = differing
-        .iter()
-        .filter(|line| {
-            !listed
-                .iter()
-                .any(|name| line.starts_with(&format!("{name}: ")))
-        })
-        .collect();
     #[expect(clippy::print_stderr, reason = "the replay's tally is its report")]
     {
         eprintln!(
-            "cli.json: {}/{total} command-line cases match, {} listed differences",
-            total - differing.len(),
-            listed.len()
+            "cli.json: {}/{total} command-line cases match",
+            total - differing.len()
         );
     }
     assert!(
-        unexpected.is_empty() && listed.len() == differing.len(),
+        differing.is_empty(),
         "unexpected differences:\n{}",
-        unexpected
-            .iter()
-            .map(|line| line.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
+        differing.join("\n")
     );
 }

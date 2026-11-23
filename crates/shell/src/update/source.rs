@@ -90,7 +90,7 @@ impl Source {
                     limit,
                     redirects: Redirects::Follow(ASSET_HOSTS),
                 };
-                https.download(&request, to, 0o600).await
+                https.download(&request, to).await
             }
             Self::Test(from) => {
                 let response = loopback(*from, path, &[], PAYLOAD, limit).await?;

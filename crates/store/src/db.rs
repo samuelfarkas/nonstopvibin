@@ -99,17 +99,6 @@ pub struct AuthEntry {
 pub struct AuthSnapshot(Result<HashMap<KeyDigest, AuthEntry>, Arc<StoreError>>);
 
 impl AuthSnapshot {
-    /// The profile `presented` belongs to, compared in constant time; `None` for any other key.
-    ///
-    /// # Errors
-    /// The error that kept the store from reading the keys: every key fails closed.
-    pub fn owner(&self, presented: &str) -> Result<Option<&AuthEntry>, &StoreError> {
-        let entries = self.0.as_ref().map_err(|error| &**error)?;
-        Ok(entries
-            .get(&KeyDigest::of(presented))
-            .filter(|entry| entry.client_key.matches(presented)))
-    }
-
     /// Every entry by its client-key digest. An entry's live key still has to be compared with
     /// the presented one.
     ///

@@ -79,12 +79,12 @@ export async function stageCore(
     await copyFile(join(core, file), join(destination, file));
 }
 
-/** Copies the Vite build (`bun run build`) to `destination`, the `client/` the daemon serves. */
+/** Copies the Vite build (`bun run build:client`) to `destination`, the `client/` the daemon serves. */
 export async function stageClient(destination: string): Promise<void> {
   const client = join(repo, clientDirectory);
   await stat(join(client, "index.html")).catch(() => {
     throw new Error(
-      `Missing ${clientDirectory}/index.html; run bun run build first.`,
+      `Missing ${clientDirectory}/index.html; run bun run build:client first.`,
     );
   });
   await cp(client, destination, { recursive: true });
@@ -98,7 +98,7 @@ export async function stageLicences(
   const ui = join(repo, "dist/licenses/THIRD-PARTY.txt");
   await stat(ui).catch(() => {
     throw new Error(
-      "Missing dist/licenses/THIRD-PARTY.txt; run bun run build first.",
+      "Missing dist/licenses/THIRD-PARTY.txt; run bun run build:client first.",
     );
   });
   await mkdir(destination, { recursive: true });

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use nsv_domain::id::{ProfileId, is_uuid};
+use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ClientKey;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
@@ -187,7 +187,6 @@ fn reply(head: &[u8], connection: &ConnectionSource) -> String {
             id.bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
         })
-        .filter(|id| is_uuid(id))
         .and_then(|id| ProfileId::parse(id).ok());
     let Some(id) = id.filter(|_| {
         request.method == "GET" && request.host == Some(HOST) && request.origin.is_empty()

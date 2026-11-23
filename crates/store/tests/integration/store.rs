@@ -15,7 +15,7 @@ use nsv_domain::wire::{ApiAccount, Profile, UsageRecord};
 use nsv_store::{Db, Store, StoreError, UsageCursor, UsageRange, Vault, VaultError};
 use serde_json::json;
 
-use crate::common::{TempDir, mode, open, raw, set_mode};
+use crate::common::{TempDir, mode, open, owner, raw, set_mode};
 
 const DAY: Duration = Duration::from_hours(24);
 
@@ -648,13 +648,13 @@ async fn the_auth_snapshot_is_current_when_a_write_returns_and_fails_closed() {
         .unwrap();
     {
         let snapshot = auth.borrow();
-        let entry = snapshot.owner(client.expose_secret()).unwrap().unwrap();
+        let entry = owner(&snapshot, client.expose_secret()).unwrap().unwrap();
         assert_eq!(entry.profile, profile.id);
         assert_eq!(entry.slug, profile.slug);
         assert_eq!(entry.core_key.expose_secret(), core.expose_secret());
-        assert!(snapshot.owner("nv_unknown").unwrap().is_none());
+        assert!(owner(&snapshot, "nv_unknown").unwrap().is_none());
         assert!(
-            snapshot.owner(core.expose_secret()).unwrap().is_none(),
+            owner(&snapshot, core.expose_secret()).unwrap().is_none(),
             "a core key is no client key"
         );
     }
@@ -668,7 +668,7 @@ async fn the_auth_snapshot_is_current_when_a_write_returns_and_fails_closed() {
         )
         .unwrap();
     store.call(move |db| db.save_profile(&other)).await.unwrap();
-    assert!(auth.borrow().owner(client.expose_secret()).is_err());
+    assert!(owner(&auth.borrow(), client.expose_secret()).is_err());
 }
 
 #[tokio::test]

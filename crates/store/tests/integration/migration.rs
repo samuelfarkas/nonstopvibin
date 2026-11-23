@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::common::{TempDir, mode, open, set_mode};
+use crate::common::{TempDir, mode, open, owner, set_mode};
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -225,11 +225,11 @@ async fn check(store: &Store, data: &Path, expected: &Value) {
             .as_str()
             .unwrap();
         let snapshot = auth.borrow();
-        let owner = snapshot.owner(client).unwrap().unwrap();
-        assert_eq!(owner.profile.as_str(), id);
-        assert_eq!(owner.slug.as_str(), entry["slug"].as_str().unwrap());
+        let found = owner(&snapshot, client).unwrap().unwrap();
+        assert_eq!(found.profile.as_str(), id);
+        assert_eq!(found.slug.as_str(), entry["slug"].as_str().unwrap());
         assert_eq!(
-            owner.core_key.expose_secret(),
+            found.core_key.expose_secret(),
             expected["secrets"][format!("{id}:core")].as_str().unwrap()
         );
     }

@@ -133,12 +133,6 @@ pub struct CoreInstallBody {
     pub version: String,
 }
 
-/// `POST /profiles/:profileId/agent-check`: `{}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(test, derive(ts_rs::TS), ts(type = "Record<string, never>"))]
-pub struct EmptyBody {}
-
 /// `POST /profiles/:profileId/oauth`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -1,6 +1,6 @@
 // Builds the macOS app from the Rust binaries for the host architecture:
 // release/mac-<arch>/NonstopVibin.app, release/NonstopVibin-<version>-mac-<arch>.zip and .dmg,
-// and latest-mac.yml for electron-updater. Run `bun run build` first.
+// and latest-mac.yml for electron-updater. Run `bun run build:client` first.
 //
 // Signing follows docs/release-signing.md. Without signing secrets the app is ad-hoc signed
 // with the requirement `identifier "app.nonstopvibin.desktop"`, which installed builds check

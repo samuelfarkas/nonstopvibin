@@ -108,5 +108,4 @@ Every secret is low-entropy and synthetic (`nv_` + 43 × one letter,
 
 `.oxfmtrc.json` ignores `tests/golden/*.json`, which keep one case per line and
 would otherwise be expanded by oxfmt. `record.ts`, `lib.ts` and `areas/*.ts` pass
-oxfmt, oxlint and `tsc`. `bun-clock.d.ts` declares Bun's `setSystemTime`, as
-`tests/bun-test.d.ts` does for the hooks.
+oxfmt, oxlint and `tsc`. `bun-clock.d.ts` declares Bun's `setSystemTime`.

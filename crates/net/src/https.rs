@@ -100,13 +100,8 @@ impl Https {
     /// As [`Https::get`], [`NetError::Status`] for a non-2xx response, and
     /// [`NetError::File`] when the file cannot be created or written (an existing file
     /// included).
-    pub async fn download(
-        &self,
-        request: &Get<'_>,
-        path: &Path,
-        mode: u32,
-    ) -> Result<Download, NetError> {
-        download(self, request, path, mode).await
+    pub async fn download(&self, request: &Get<'_>, path: &Path) -> Result<Download, NetError> {
+        download(self, request, path).await
     }
 }
 
@@ -144,7 +139,6 @@ async fn download(
     connector: &impl Connect,
     request: &Get<'_>,
     path: &Path,
-    mode: u32,
 ) -> Result<Download, NetError> {
     tokio::time::timeout(request.timeout, async {
         let (mut wire, response) = head(connector, request).await?;
@@ -156,11 +150,11 @@ async fn download(
         let mut file = tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(mode)
+            .mode(0o600)
             .open(path)
             .await
             .map_err(NetError::File)?;
-        file.set_permissions(Permissions::from_mode(mode))
+        file.set_permissions(Permissions::from_mode(0o600))
             .await
             .map_err(NetError::File)?;
         let mut hash = Sha256::new();
@@ -458,7 +452,7 @@ mod tests {
         let (origin, _heads) = stub(vec![ok("core"), ok("again")]).await;
         let connector = Plain(HashMap::from([("origin.example", origin)]));
         let get = request("https://origin.example/a", Redirects::Refuse);
-        let written = download(&connector, &get, &path, 0o640).await.unwrap();
+        let written = download(&connector, &get, &path).await.unwrap();
         // sha256("core"), as tests/core-updates.test.ts states it.
         assert_eq!(
             hex(&written.sha256),
@@ -471,9 +465,9 @@ mod tests {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o777, 0o640);
+        assert_eq!(mode & 0o777, 0o600);
         // An existing file is never overwritten.
-        let again = download(&connector, &get, &path, 0o640).await;
+        let again = download(&connector, &get, &path).await;
         assert!(matches!(again, Err(NetError::File(_))), "{again:?}");
         tokio::fs::remove_dir_all(&directory).await.unwrap();
     }
@@ -490,7 +484,6 @@ mod tests {
             &connector,
             &request("https://origin.example/a", Redirects::Refuse),
             &path,
-            0o600,
         )
         .await;
         assert!(
@@ -521,7 +514,7 @@ mod tests {
             redirects: Redirects::Refuse,
         };
         spawnable(&https.get(&get));
-        spawnable(&https.download(&get, Path::new("unused"), 0o600));
+        spawnable(&https.download(&get, Path::new("unused")));
         let loopback = LoopbackRequest {
             to: crate::Loopback::v4(1),
             method: &crate::Method::GET,

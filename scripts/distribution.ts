@@ -41,7 +41,7 @@ export const privateFilePattern =
 /** The built interface, relative to the checkout; packages ship it as `client/`. */
 export const clientDirectory = "dist/client";
 /** The headless CLI's default `--port` (crates/cli). */
-export const serverPort = 4320;
+const serverPort = 4320;
 /** The headless CLI's exit code for "no server is running" (`status`, `url`). */
 export const notRunningExit = 3;
 
@@ -78,7 +78,7 @@ export const desktopTargets = {
   linux: ["AppImage", "deb"],
 } as const;
 export const updatePayload = { mac: "zip", linux: "AppImage" } as const;
-export type DesktopPlatform = keyof typeof desktopTargets;
+type DesktopPlatform = keyof typeof desktopTargets;
 
 /** electron-builder's `${productName}-${version}-${os}-${arch}.${ext}` with its arch names. */
 export function desktopArtifact(
@@ -104,7 +104,7 @@ export function desktopArtifact(
  * glibc build links the build host's newest symbols (GLIBC_2.39 on ubuntu-24.04), which would
  * drop most distributions in docs/server.md. The helper links the system WebKitGTK, so glibc.
  */
-export const rustTargets = {
+const rustTargets = {
   macos: { x64: "x86_64-apple-darwin", arm64: "aarch64-apple-darwin" },
   linuxDaemon: {
     x64: "x86_64-unknown-linux-musl",

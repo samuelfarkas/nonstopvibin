@@ -44,7 +44,7 @@ export function tree(root: string, folder = root): string[] {
 }
 
 /** `files` plus each of their parent directories, sorted like a checked tree. */
-export function withDirectories(files: readonly string[]): string[] {
+function withDirectories(files: readonly string[]): string[] {
   const all = new Set(files);
   for (const file of files) {
     const parts = file.replace(/\/$/, "").split("/");
@@ -92,7 +92,7 @@ const PLATFORM_MACOS = 1;
 // LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB, LC_LOAD_UPWARD_DYLIB.
 const dylibCommands = new Set([0xc, 0x80000018, 0x8000001f, 0x80000023]);
 /** A thin 64-bit Mach-O file's CPU type, LC_BUILD_VERSION and linked libraries. */
-export interface MachO {
+interface MachO {
   cputype: number;
   platform?: number;
   minos?: number;
@@ -162,7 +162,7 @@ export function checkMacExecutable(path: string, arch: string): void {
 }
 
 /** The Linux daemon: static (no loader), so no glibc floor of its own. */
-export function checkLinuxDaemon(path: string, arch: string): void {
+function checkLinuxDaemon(path: string, arch: string): void {
   const binary = elf(path);
   assert.equal(
     binary.machine,
@@ -272,7 +272,7 @@ export function verifyServerTree(root: string, arch: string): void {
 }
 
 /** The Linux app folder (the AppImage root, /opt/NonstopVibin in the deb): what it must hold. */
-export const linuxApp = [
+const linuxApp = [
   product.executable,
   product.helper,
   ...coreEntries(coreLayout.packaged),
@@ -295,7 +295,7 @@ function checkLinuxApp(app: string, arch: string): void {
 
 export const desktopFile = `${product.executable}.desktop`;
 export const iconFile = `${product.executable}.png`;
-export const appImageExtras = ["AppRun", ".DirIcon", desktopFile, iconFile];
+const appImageExtras = ["AppRun", ".DirIcon", desktopFile, iconFile];
 export function verifyAppDir(root: string, arch: string): void {
   assertTree(
     root,
@@ -307,7 +307,7 @@ export function verifyAppDir(root: string, arch: string): void {
 
 /** Where the Electron deb installed the app; existing autostart entries run this path. */
 export const debApp = `opt/${product.name}`;
-export const debExtras = [
+const debExtras = [
   `usr/share/applications/${desktopFile}`,
   `usr/share/icons/hicolor/512x512/apps/${iconFile}`,
 ];

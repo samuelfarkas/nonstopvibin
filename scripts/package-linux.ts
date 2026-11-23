@@ -1,6 +1,6 @@
 // Builds the Linux desktop app from the Rust binaries: release/NonstopVibin-<version>-linux-*.AppImage
 // and .deb, and latest-linux.yml for electron-updater. Usage: bun scripts/package-linux.ts [x64|arm64]
-// (default: the host). Run `bun run build` first; needs WebKitGTK 4.1 and GTK 3 development
+// (default: the host). Run `bun run build:client` first; needs WebKitGTK 4.1 and GTK 3 development
 // files for the helper, musl-tools for the static daemon, and dpkg-deb.
 import {
   chmod,

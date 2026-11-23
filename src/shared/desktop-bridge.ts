@@ -15,24 +15,6 @@ export interface DesktopBridge {
   revealData(): Promise<void>;
   chooseProject(): Promise<string | null>;
 }
-export type BridgeMethod = keyof DesktopBridge;
-export type BridgeArgument<M extends BridgeMethod> = Parameters<
-  DesktopBridge[M]
->[0];
-export type BridgeResult<M extends BridgeMethod> = Awaited<
-  ReturnType<DesktopBridge[M]>
->;
-export const bridgeChannels = {
-  bootstrap: "nv:bootstrap",
-  openExternal: "nv:open-external",
-  copy: "nv:copy",
-  showWindow: "nv:show-window",
-  releaseWindow: "nv:release-window",
-  setLoginItem: "nv:login-item",
-  getLoginItem: "nv:get-login-item",
-  revealData: "nv:reveal-data",
-  chooseProject: "nv:choose-project",
-} as const satisfies Record<BridgeMethod, `nv:${string}`>;
 
 declare global {
   interface Window {

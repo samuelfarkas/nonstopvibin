@@ -63,7 +63,7 @@ pub async fn download(https: &Https, url: &str, path: &Path) -> Result<Sha256Dig
         limit: SIZE_LIMIT,
         redirects: Redirects::Follow(ARCHIVE_HOSTS),
     };
-    match https.download(&request, path, 0o600).await {
+    match https.download(&request, path).await {
         Ok(download) => Ok(download.sha256.into()),
         Err(NetError::Status(status)) => Err(AppError::new(
             format!("Could not download {name} (HTTP {}).", status.as_u16()),

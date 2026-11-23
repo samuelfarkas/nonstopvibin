@@ -1,9 +1,6 @@
-use std::cmp::Ordering;
 use std::fs;
 
-use nsv_core::binary::{
-    CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin, compare_versions,
-};
+use nsv_core::binary::{CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin};
 use nsv_core::{CoreError, check_core_directory, verify_core};
 
 use crate::common::{CORE_SHA256, LINUX_X64, TempDir, pin};
@@ -79,22 +76,6 @@ fn versions_are_canonical_x_y_z() {
         assert_eq!(Version::parse(refused), None, "{refused}");
     }
     assert!(Version::parse("8.10.0") > Version::parse("8.9.99"));
-}
-
-#[test]
-fn compare_versions_orders_numerically_with_prereleases_below_their_release() {
-    let cases = [
-        ("8.0.67", "8.1.0", Ordering::Less),
-        ("10.0.0", "9.9.9", Ordering::Greater),
-        ("1.2.3", "1.2.3", Ordering::Equal),
-        ("1.0.0-beta.1", "1.0.0", Ordering::Less),
-        ("1.0.0", "1.0.0-beta.1", Ordering::Greater),
-        ("1.0.1-beta.1", "1.0.0", Ordering::Greater),
-        ("1.0.0-beta.1", "1.0.0-beta.2", Ordering::Equal),
-    ];
-    for (a, b, expected) in cases {
-        assert_eq!(compare_versions(a, b), expected, "{a} vs {b}");
-    }
 }
 
 #[test]

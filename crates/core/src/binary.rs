@@ -2,7 +2,6 @@
 //! and the hash checks a core passes before it runs or ships. Every function that reads a
 //! file blocks: run it on a blocking thread.
 
-use std::cmp::Ordering;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read};
@@ -147,30 +146,6 @@ impl<'de> Deserialize<'de> for Version {
         let text = String::deserialize(deserializer)?;
         Self::parse(&text).ok_or_else(|| serde::de::Error::custom("not an X.Y.Z version"))
     }
-}
-
-/// Orders `X.Y.Z` versions numerically; a prerelease (`X.Y.Z-beta.N`) sorts below its
-/// `X.Y.Z`, and two prereleases of one release are equal. For the app's own version, which
-/// may be a prerelease; a part that is not a number counts as 0.
-#[must_use]
-pub fn compare_versions(a: &str, b: &str) -> Ordering {
-    fn parts(version: &str) -> Vec<u64> {
-        let (release, prerelease) = version
-            .split_once('-')
-            .map_or((version, None), |(release, rest)| (release, Some(rest)));
-        let mut parts: Vec<u64> = release
-            .split('.')
-            .map(|part| part.parse().unwrap_or(0))
-            .collect();
-        parts.push(u64::from(prerelease.is_none()));
-        parts
-    }
-    let (x, y) = (parts(a), parts(b));
-    x.iter()
-        .enumerate()
-        .map(|(index, part)| part.cmp(y.get(index).unwrap_or(&0)))
-        .find(|ordering| ordering.is_ne())
-        .unwrap_or(Ordering::Equal)
 }
 
 /// A platform and architecture a core is pinned for, by Node's names.

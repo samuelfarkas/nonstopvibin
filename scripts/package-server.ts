@@ -1,6 +1,6 @@
 // Builds release/nonstopvibin-server-<version>-linux-<arch>.tar.gz from the Rust daemon.
 // Usage: bun scripts/package-server.ts [x64|arm64 ...] (default: the host architecture).
-// Run `bun run build` first. Each architecture needs its Rust musl target and a C compiler
+// Run `bun run build:client` first. Each architecture needs its Rust musl target and a C compiler
 // for it (musl-tools on a native runner); CI builds each on its own runner.
 import {
   chmod,

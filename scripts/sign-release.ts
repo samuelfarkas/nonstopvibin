@@ -17,7 +17,7 @@ export const publicKey = resolve(
   "../build/update-signing.pub",
 );
 
-export async function signRelease(
+async function signRelease(
   directory: string,
   secretKey = process.env.MINISIGN_SECRET_KEY,
   password = process.env.MINISIGN_PASSWORD ?? "",

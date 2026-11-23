@@ -77,6 +77,11 @@ mod tests {
     }
 
     #[test]
+    fn the_package_version_parses() {
+        assert!(Version::parse(env!("CARGO_PKG_VERSION")).is_some());
+    }
+
+    #[test]
     fn parses_only_release_and_beta_versions() {
         for valid in [
             "0.0.0",

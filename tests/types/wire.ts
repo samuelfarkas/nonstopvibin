@@ -27,7 +27,6 @@ import type { ClientKeyResponse } from "./generated/ClientKeyResponse";
 import type { CoreInstallBody } from "./generated/CoreInstallBody";
 import type { CreateProfileBody } from "./generated/CreateProfileBody";
 import type { CreditBody } from "./generated/CreditBody";
-import type { EmptyBody } from "./generated/EmptyBody";
 import type { ImportBody } from "./generated/ImportBody";
 import type { ImportSource } from "./generated/ImportSource";
 import type { ImportSourceBody } from "./generated/ImportSourceBody";
@@ -76,7 +75,6 @@ export type WireTwins = [
   Holds<Mutual<CreateProfileBody, Body<"POST /profiles">>>,
   Holds<Mutual<RetentionBody, Body<"PUT /usage-retention">>>,
   Holds<Mutual<CoreInstallBody, Body<"POST /core/install">>>,
-  Holds<Mutual<EmptyBody, Body<"POST /profiles/:profileId/agent-check">>>,
   Holds<Mutual<OAuthStartBody, Body<"POST /profiles/:profileId/oauth">>>,
   Holds<Mutual<StateBody, Body<"POST /profiles/:profileId/oauth-confirm">>>,
   Holds<Mutual<StateBody, Query<"GET /profiles/:profileId/oauth">>>,

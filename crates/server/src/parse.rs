@@ -145,7 +145,7 @@ fn length(issues: &mut Issues, text: &str, path: &str, min: usize, max: usize) {
 }
 
 /// JavaScript's `String.prototype.trim` set: `WhiteSpace` and `LineTerminator`, not U+0085.
-pub(crate) const fn js_whitespace(c: char) -> bool {
+const fn js_whitespace(c: char) -> bool {
     matches!(
         c,
         '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
@@ -727,7 +727,7 @@ pub(crate) fn days(value: Option<&str>, all: u32) -> Result<Option<u32>, Invalid
 
 /// JavaScript's `Number(string)`: whitespace-trimmed decimal, hexadecimal, octal or binary,
 /// `Infinity`, `0` for an empty string, `NaN` otherwise.
-pub(crate) fn js_number(text: &str) -> f64 {
+fn js_number(text: &str) -> f64 {
     let text = text.trim_matches(js_whitespace);
     if text.is_empty() {
         return 0.0;

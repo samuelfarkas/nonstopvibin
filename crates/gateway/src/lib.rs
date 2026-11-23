@@ -8,7 +8,7 @@
 //! profile key cannot reach the management API.
 //!
 //! Bodies are never parsed or buffered: they pass through as hyper frames, with hyper's buffers
-//! capped at [`MAX_BUF_SIZE`]. Each request opens its own upstream connection, which hyper
+//! capped at `MAX_BUF_SIZE`. Each request opens its own upstream connection, which hyper
 //! closes when the core's response body or the pending response is dropped. hyper notices a
 //! hang-up during a silent stream: once a request is read, its connection keeps a read pending
 //! and fails on the agent's FIN, which drops the response body, closing the upstream connection
@@ -43,7 +43,7 @@ use flight::{Counts, InFlight, LIMIT, Release};
 
 /// The cap on hyper's read buffer in both directions. A request or response head must fit;
 /// bodies stream through in pieces no larger.
-pub const MAX_BUF_SIZE: usize = 256 * 1024;
+const MAX_BUF_SIZE: usize = 256 * 1024;
 
 const UNAVAILABLE: &str = "The profile proxy is unavailable. Restart the profile from the sidebar if NonstopVibin offers it; otherwise quit and reopen NonstopVibin.";
 
@@ -408,10 +408,10 @@ fn proxy_error(status: StatusCode) -> Response<Body> {
 }
 
 /// How long a client may take to send a request head, as Node's `headersTimeout`.
-pub const HEADERS_TIMEOUT: Duration = Duration::from_secs(60);
+const HEADERS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Serves one accepted connection the way the gateway needs it: Nagle off, hyper's buffer
-/// capped, a request head due within [`HEADERS_TIMEOUT`], upgrades enabled and half-closed
+/// capped, a request head due within `HEADERS_TIMEOUT`, upgrades enabled and half-closed
 /// connections refused, so an agent's FIN ends its requests. Once `stop` resolves, the
 /// connection finishes the response in progress and closes; an idle one closes at once.
 ///

@@ -63,7 +63,6 @@ fn export_typescript_twins() {
         CreateProfileBody,
         RetentionBody,
         CoreInstallBody,
-        EmptyBody,
         OAuthStartBody,
         StateBody,
         CallbackBody,
@@ -270,8 +269,6 @@ fn request_bodies_are_strict() {
     assert_eq!(input.api_key.expose_secret(), "sk-visible");
     assert!(!format!("{input:?}").contains("sk-visible"));
     assert!(serde_json::from_value::<ProfilePatch>(json!({ "enabled": true })).is_err());
-    assert!(serde_json::from_value::<EmptyBody>(json!({})).is_ok());
-    assert!(serde_json::from_value::<EmptyBody>(json!({ "a": 1 })).is_err());
     assert!(serde_json::from_value::<RetentionBody>(json!({ "days": 7 })).is_err());
     let selection: AgentSelection = serde_json::from_value(json!({ "agent": "pi" })).unwrap();
     assert_eq!(selection.agent, Agent::Pi);

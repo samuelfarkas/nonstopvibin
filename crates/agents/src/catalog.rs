@@ -94,7 +94,7 @@ pub fn catalog_entries(
 ) -> Result<Option<Vec<Value>>, AgentError> {
     let entry: fn(&Registry, &CatalogModel) -> Result<Value, AgentError> = match agent {
         Agent::Pi => pi_model,
-        Agent::Opencode => open_code_model,
+        Agent::Opencode => |_, model| open_code_model(model),
         Agent::Claude | Agent::Codex => return Ok(None),
     };
     models
@@ -128,7 +128,7 @@ fn listed_model(
 }
 
 /// `OpenCode`'s model entry, with the limits and prices it needs per model.
-fn open_code_model(_registry: &Registry, model: &CatalogModel) -> Result<Value, AgentError> {
+fn open_code_model(model: &CatalogModel) -> Result<Value, AgentError> {
     let (m, name) = listed_model(model, true)?;
     let mut limit = json::object([("context", m.context.into())]);
     if let Some(input) = m.input_limit {

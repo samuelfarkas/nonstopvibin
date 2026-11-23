@@ -18,7 +18,7 @@ use crate::http::Failure;
 use crate::parse::decode_component;
 
 /// Byte-identical to the TypeScript server's.
-pub(crate) const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
 const UNBUILT: &str = "Build the interface with bun run build before opening this page.";
 

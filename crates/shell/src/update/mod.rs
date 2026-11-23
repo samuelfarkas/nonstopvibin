@@ -95,9 +95,11 @@ struct Updater {
 impl Updates {
     /// What this installation allows. Leftovers of an earlier update are removed.
     pub(crate) fn detect(packaged: bool) -> Self {
-        let Some(current) = Version::parse(env!("CARGO_PKG_VERSION")) else {
-            return Self(Mode::Off);
-        };
+        #[expect(
+            clippy::expect_used,
+            reason = "the workspace version is X.Y.Z, which a version test parses"
+        )]
+        let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("an X.Y.Z version");
         if !packaged || !updates_enabled() {
             return Self(Mode::Off);
         }

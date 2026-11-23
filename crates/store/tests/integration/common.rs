@@ -5,8 +5,9 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use nsv_domain::secret::KeyDigest;
 use nsv_store::files::owner_only_directory;
-use nsv_store::{Store, Vault};
+use nsv_store::{AuthEntry, AuthSnapshot, Store, StoreError, Vault};
 
 /// A directory under the system temporary directory, removed on drop.
 pub(crate) struct TempDir(PathBuf);
@@ -34,6 +35,18 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// The entry whose live client key is `presented`, looked up by digest and compared in constant
+/// time as the gateway does; a snapshot the store could not read refuses every key.
+pub(crate) fn owner<'a>(
+    snapshot: &'a AuthSnapshot,
+    presented: &str,
+) -> Result<Option<&'a AuthEntry>, &'a StoreError> {
+    Ok(snapshot
+        .entries()?
+        .get(&KeyDigest::of(presented))
+        .filter(|entry| entry.client_key.matches(presented)))
 }
 
 /// Opens a data directory the way the server does: owner-only directory, vault, store.

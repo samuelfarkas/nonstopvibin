@@ -1078,17 +1078,13 @@ impl Shared {
                 pending
             }
         };
+        let ended = || AppError::new("The usage queue read ended without an answer.", 500);
         let answer = pending
             .wait_for(Option::is_some)
             .await
-            .map_err(|_| AppError::new("The usage queue read ended without an answer.", 500))?
+            .map_err(|_| ended())?
             .clone();
-        answer.unwrap_or_else(|| {
-            Err(AppError::new(
-                "The usage queue read ended without an answer.",
-                500,
-            ))
-        })
+        answer.unwrap_or_else(|| Err(ended()))
     }
 
     async fn read_page(&self, profile: &ProfileId) -> Result<usize, AppError> {

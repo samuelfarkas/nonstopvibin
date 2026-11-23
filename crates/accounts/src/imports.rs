@@ -52,17 +52,12 @@ impl ImportCatalog {
     /// `EasyCLIProxyAPI`'s macOS and Linux folders and `CLIProxyAPI`'s, under `home`.
     #[must_use]
     pub fn new(home: &Path) -> Self {
-        Self::with_directories(vec![
-            home.join("Library/Application Support/com.cpa.gui/oauth"),
-            home.join(".local/share/com.cpa.gui/oauth"),
-            home.join(".cli-proxy-api"),
-        ])
-    }
-
-    #[must_use]
-    pub fn with_directories(directories: Vec<PathBuf>) -> Self {
         Self {
-            directories,
+            directories: vec![
+                home.join("Library/Application Support/com.cpa.gui/oauth"),
+                home.join(".local/share/com.cpa.gui/oauth"),
+                home.join(".cli-proxy-api"),
+            ],
             files: HashMap::new(),
         }
     }
