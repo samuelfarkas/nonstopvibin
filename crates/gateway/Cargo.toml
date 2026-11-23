@@ -9,7 +9,16 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
+hyper.workspace = true
+hyper-util.workspace = true
 nsv-domain.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "time"] }
 
 [lints]
 workspace = true

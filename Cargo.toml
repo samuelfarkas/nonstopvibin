@@ -20,12 +20,16 @@ nsv-agents = { path = "crates/agents" }
 nsv-gateway = { path = "crates/gateway" }
 nsv-server = { path = "crates/server" }
 nsv-shell = { path = "crates/shell" }
+hyper = { version = "1.12.0", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
+proptest = "1.12.0"
 secrecy = "0.10.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 subtle = "2.6.1"
 thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["net", "rt", "io-util"] }
 ts-rs = { version = "12.0.1", default-features = false, features = ["no-serde-warnings", "serde-compat"] }
 
 [workspace.lints.rust]
