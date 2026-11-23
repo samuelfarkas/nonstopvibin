@@ -1,37 +1,21 @@
 //! A `StatusNotifierItem` over D-Bus (`ksni` on the daemon's tokio runtime): no GTK, and the
 //! tray host draws the icon and the menu.
 
-use std::process::ExitCode;
 use std::sync::Arc;
 
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Handle, ToolTip, TrayMethods};
-use nsv_desktop::pipe::Rect;
+use nsv_desktop::Command;
+use nsv_desktop::pipe::Anchor;
 use tokio::sync::mpsc;
 
-use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};
+use super::{Action, Entry, Icon, Look, MENU, rgba};
 use crate::log;
+use crate::platform::SystemTray;
 
 /// Nothing on Linux: the tray joins the daemon's runtime when [`crate::run`] starts.
 #[derive(Debug)]
-pub struct TrayLink(());
-
-impl TrayLink {
-    /// The autostart entry passes `--background` instead.
-    #[expect(
-        clippy::unused_self,
-        reason = "the macOS twin reads the launch's Apple event"
-    )]
-    pub(crate) fn login_launch(&self) -> bool {
-        false
-    }
-}
-
-/// Runs `daemon` on this thread and exits with its code. macOS needs the main thread for the
-/// menu bar item; Linux runs the tray on the daemon's runtime.
-pub fn run_desktop(daemon: impl FnOnce(TrayLink) -> u8) -> ExitCode {
-    ExitCode::from(daemon(TrayLink(())))
-}
+pub(crate) struct Link;
 
 /// The tray's ARGB32 pixmaps, decoded once.
 struct Pixmaps {
@@ -103,23 +87,24 @@ impl ksni::Tray for Item {
     /// A left click. Hosts that know where it happened pass the point; others pass 0, 0, and
     /// the popup then sits in the bottom-left corner, as Electron's did on Linux.
     fn activate(&mut self, x: i32, y: i32) {
-        self.send(Action::ToggleQuota(Some(Rect {
-            x,
-            y,
-            width: 0,
-            height: 0,
-        })));
+        self.send(Action {
+            command: Command::ToggleQuota,
+            anchor: Some(Anchor::point(x, y)),
+        });
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         MENU.iter()
             .map(|entry| match *entry {
-                Entry::Item { label, action } => StandardItem {
-                    label: label.to_owned(),
-                    enabled: enabled(action, self.updates),
+                Entry::Item(command) => StandardItem {
+                    label: command.label().to_owned(),
+                    enabled: command.enabled(self.updates),
                     activate: Box::new(move |item: &mut Self| {
-                        if enabled(action, item.updates) {
-                            item.send(action);
+                        if command.enabled(item.updates) {
+                            item.send(Action {
+                                command,
+                                anchor: None,
+                            });
                         }
                     }),
                     ..StandardItem::default()
@@ -136,11 +121,12 @@ pub(crate) struct Tray {
     actions: mpsc::Receiver<Action>,
 }
 
-impl Tray {
-    /// Registers the item with the `StatusNotifierWatcher`. Without a session bus or a tray host
-    /// the shell runs on without a tray, as Electron did.
-    /// `updates` enables "Check for updates…".
-    pub(crate) async fn start(_link: TrayLink, look: Look, updates: bool) -> Self {
+/// Registers the item with the `StatusNotifierWatcher`, which needs a session bus and a tray
+/// host.
+impl SystemTray for Tray {
+    type Link = Link;
+
+    async fn start(_link: Link, look: Look, updates: bool) -> Self {
         let (sender, actions) = mpsc::channel(8);
         let handle = match Pixmaps::decode() {
             Ok(pixmaps) => {
@@ -163,12 +149,11 @@ impl Tray {
         Self { handle, actions }
     }
 
-    /// `None` once no tray can report anything.
-    pub(crate) async fn next(&mut self) -> Option<Action> {
+    async fn next(&mut self) -> Option<Action> {
         self.actions.recv().await
     }
 
-    pub(crate) async fn show(&self, look: Look) {
+    async fn show(&self, look: Look) {
         if let Some(handle) = &self.handle {
             handle.update(|item| item.look = look).await;
         }

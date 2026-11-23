@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use nsv_desktop::pipe::{FromHelper, Rect, ToHelper, View};
+use nsv_desktop::pipe::{Anchor, FromHelper, ToHelper, View};
 use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use tao::event::Event;
@@ -45,7 +45,7 @@ fn directory(name: &str) -> PathBuf {
 
 fn quota() -> View {
     View::Quota {
-        anchor: Rect {
+        anchor: Anchor {
             x: 1200,
             y: 0,
             width: 24,

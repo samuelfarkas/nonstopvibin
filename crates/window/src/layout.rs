@@ -1,6 +1,6 @@
 //! Window geometry, in logical pixels.
 
-use nsv_desktop::pipe::Rect;
+use nsv_desktop::pipe::{Anchor, Rect};
 
 pub(crate) const MAIN_SIZE: (u32, u32) = (1240, 880);
 pub(crate) const MAIN_MIN_SIZE: (u32, u32) = (740, 580);
@@ -10,7 +10,7 @@ const QUOTA_WIDTH: u32 = 386;
 /// Where the quota popup goes, as `openTray` in `desktop/main.ts` placed it: centred under the
 /// tray icon and kept 8 px inside the work area, 7 px below the menu bar icon on macOS
 /// (`below_anchor`), 8 px above the bottom of the work area elsewhere.
-pub(crate) fn quota_bounds(anchor: Rect, work_area: Rect, below_anchor: bool) -> Rect {
+pub(crate) fn quota_bounds(anchor: Anchor, work_area: Rect, below_anchor: bool) -> Rect {
     let height = work_area.height.saturating_sub(24).min(640);
     let (area_x, area_width) = (f64::from(work_area.x), f64::from(work_area.width));
     let width = f64::from(QUOTA_WIDTH);
@@ -58,19 +58,28 @@ mod tests {
         }
     }
 
+    fn icon(x: i32, y: i32, width: u32, height: u32) -> Anchor {
+        Anchor {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
     #[test]
     fn places_the_popup_as_main_ts_did() {
         // Linux: a 27 px top panel, tray icon near the right edge; the popup hugs the bottom.
-        let linux = quota_bounds(rect(1800, 0, 24, 27), rect(0, 27, 1920, 1053), false);
+        let linux = quota_bounds(icon(1800, 0, 24, 27), rect(0, 27, 1920, 1053), false);
         assert_eq!(linux, rect(1526, 432, 386, 640));
         // macOS: under the menu bar icon, clamped 8 px inside the right edge.
-        let mac = quota_bounds(rect(1500, 0, 30, 24), rect(0, 25, 1512, 957), true);
+        let mac = quota_bounds(icon(1500, 0, 30, 24), rect(0, 25, 1512, 957), true);
         assert_eq!(mac, rect(1118, 31, 386, 640));
         // Centred under an icon in the middle; 819.5 rounds up as Math.round does.
-        let centred = quota_bounds(rect(1000, 0, 25, 24), rect(0, 25, 1920, 1055), true);
+        let centred = quota_bounds(icon(1000, 0, 25, 24), rect(0, 25, 1920, 1055), true);
         assert_eq!(centred, rect(820, 31, 386, 640));
         // A short work area: 24 px less than its height. Left edge: 8 px inside.
-        let short = quota_bounds(rect(-5, 0, 20, 20), rect(-100, 0, 1280, 500), false);
+        let short = quota_bounds(icon(-5, 0, 20, 20), rect(-100, 0, 1280, 500), false);
         assert_eq!(short, rect(-92, 16, 386, 476));
     }
 }

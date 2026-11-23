@@ -15,6 +15,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use crate::Command;
 use crate::bridge::{Method, OPEN_EXTERNAL_LIMIT};
 
 /// The longest line either side reads.
@@ -32,17 +33,40 @@ pub struct Rect {
     pub height: u32,
 }
 
-/// The native dialogs the daemon may ask for. Their text is the helper's, never the daemon's.
+/// Where the tray icon is, for the quota popup: logical pixels (points on macOS) on the
+/// desktop, with the origin at the top left of the first screen and y growing down. Each
+/// process converts its toolkit's coordinates at its own boundary. A Linux tray host reports
+/// only the point of the click: an anchor without a size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Anchor {
+    #[must_use]
+    pub const fn point(x: i32, y: i32) -> Self {
+        Self {
+            x,
+            y,
+            width: 0,
+            height: 0,
+        }
+    }
+}
+
+/// The native dialogs the daemon may ask for. Their text and buttons are the helper's, never
+/// the daemon's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DialogKind {
-    /// "Restart to update" or "Later"; Restart answers `RestartToUpdate`.
+    /// "Restart to update" ([`Choice::Accept`]) or "Later".
     UpdateReady,
     NoUpdates,
     UpdateFailed,
     MoveToApplications,
-    CouldNotStart,
-    CouldNotShutDown,
     /// The daemon could not stop for "Restart to update".
     CouldNotRestart,
     /// The update could not be swapped in or started.
@@ -58,21 +82,13 @@ pub enum Failure {
 }
 
 impl Failure {
-    /// The title main.ts gave the error box.
+    /// The title main.ts gave the error box: the helper's dialog, or the desktop notification
+    /// the daemon posts when no helper can show it.
     #[must_use]
     pub const fn title(self) -> &'static str {
         match self {
             Self::Start => "NonstopVibin could not start",
             Self::Shutdown => "Could not shut down cleanly",
-        }
-    }
-
-    /// The dialog the helper shows, with the reason in place of its text.
-    #[must_use]
-    pub const fn dialog(self) -> DialogKind {
-        match self {
-            Self::Start => DialogKind::CouldNotStart,
-            Self::Shutdown => DialogKind::CouldNotShutDown,
         }
     }
 }
@@ -130,14 +146,23 @@ pub enum View {
         profile: Option<ProfileId>,
     },
     /// The quota popup, placed beside `anchor` inside the work area of the display that holds
-    /// it: the tray icon's bounds, or on Linux the point the tray host reported for the click.
-    /// The helper looks the work area up, since the daemon links no GUI library.
+    /// it. The helper looks the work area up, since the daemon links no GUI library.
     Quota {
-        anchor: Rect,
+        anchor: Anchor,
     },
     Dialog {
         kind: DialogKind,
     },
+}
+
+/// What the user chose in a dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Choice {
+    /// The dialog's action: "Restart to update".
+    Accept,
+    /// Its other button, or the dialog closed without one.
+    Dismiss,
 }
 
 /// A window the helper reports closed.
@@ -146,7 +171,7 @@ pub enum View {
 pub enum ViewKind {
     Main,
     Quota,
-    Dialog { kind: DialogKind },
+    Dialog { kind: DialogKind, choice: Choice },
 }
 
 /// The bridge methods the daemon serves, named by [`Method`]. The daemon validates each
@@ -269,6 +294,9 @@ pub enum FromHelper {
         /// The main window's normal bounds, when it was neither maximized nor fullscreen.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bounds: Option<Rect>,
+        /// It was the helper's last window: the helper exits, and the next view needs a new
+        /// one. A helper that failed reports that by its exit status instead.
+        last: bool,
     },
     /// A page called a daemon method; answer with `Reply` and the same id.
     Bridge {
@@ -277,20 +305,14 @@ pub enum FromHelper {
         call: DaemonCall,
     },
     /// A page tried to open a new window; the daemon applies `openExternal`'s allowlist.
-    OpenExternal {
-        url: String,
-    },
-    /// `showWindow(profileId?)` or the "Open main window" menu item. The daemon checks the
-    /// profile and answers with `Show`.
+    OpenExternal { url: String },
+    /// `showWindow(profileId?)`. The daemon checks the profile and answers with `Show`.
     OpenMain {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<ProfileId>,
     },
-    ToggleQuota,
-    CheckUpdates,
-    QuitApp,
-    /// "Restart to update" in the update-ready dialog.
-    RestartToUpdate,
+    /// A command from the macOS app menu, which the daemon carries out as from the tray.
+    Command { command: Command },
 }
 
 /// One message as its line.
@@ -414,7 +436,7 @@ mod tests {
     #[test]
     fn messages_have_the_documented_wire_shape() {
         let profile = ProfileId::parse("0b6f4f5e-6a7b-4c8d-9e0f-1a2b3c4d5e6f").unwrap();
-        let anchor = Rect {
+        let anchor = Anchor {
             x: 1800,
             y: 0,
             width: 24,
@@ -475,12 +497,20 @@ mod tests {
                 wire(&FromHelper::Closed {
                     view: ViewKind::Dialog {
                         kind: DialogKind::UpdateReady,
+                        choice: Choice::Accept,
                     },
                     bounds: None,
+                    last: true,
                 }),
-                json!({"type": "Closed", "view": {"window": "dialog", "kind": "updateReady"}}),
+                json!({"type": "Closed", "view": {"window": "dialog", "kind": "updateReady",
+                       "choice": "accept"}, "last": true}),
             ),
-            (wire(&FromHelper::QuitApp), json!({"type": "QuitApp"})),
+            (
+                wire(&FromHelper::Command {
+                    command: Command::Quit,
+                }),
+                json!({"type": "Command", "command": "quit"}),
+            ),
             (
                 wire(&ToHelper::Alert {
                     failure: Failure::Start,
@@ -538,6 +568,7 @@ mod tests {
                     width: 1240,
                     height: 880,
                 }),
+                last: false,
             },
         ];
         let mut buffer = Vec::new();
@@ -566,6 +597,9 @@ mod tests {
             let input = format!("{line}\n");
             assert!(read::<ToHelper>(&mut input.as_bytes()).is_err(), "{line}");
         }
+        // The daemon acts on `last`, so a helper must say it.
+        let unsaid = "{\"type\":\"Closed\",\"view\":{\"window\":\"quota\"}}\n";
+        assert!(read::<FromHelper>(&mut unsaid.as_bytes()).is_err());
         let long = format!("\"{}\"\n", "a".repeat(MAX_LINE));
         assert!(read_line(&mut long.as_bytes()).is_err());
         assert!(read_line(&mut b"token-without-newline".as_slice()).is_err());

@@ -10,7 +10,8 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use nsv_desktop::pipe::{
-    DaemonCall, DialogKind, Failure, FromHelper, Reason, Rect, ToHelper, View, ViewKind,
+    Anchor, Choice, DaemonCall, DialogKind, Failure, FromHelper, Reason, Rect, ToHelper, View,
+    ViewKind,
 };
 use nsv_domain::id::ProfileId;
 use serde_json::{Value, json};
@@ -266,7 +267,8 @@ fn bridge_works_under_the_production_csp_and_the_draft_guard_defers_closing() {
         closed,
         FromHelper::Closed {
             view: ViewKind::Main,
-            bounds: Some(bounds)
+            bounds: Some(bounds),
+            last: true,
         }
     );
     assert!(helper.wait().success());
@@ -275,7 +277,7 @@ fn bridge_works_under_the_production_csp_and_the_draft_guard_defers_closing() {
 
 fn quota_view() -> View {
     View::Quota {
-        anchor: Rect {
+        anchor: Anchor {
             x: 1200,
             y: 0,
             width: 24,
@@ -313,7 +315,8 @@ fn quota_popup_sits_beside_the_tray_and_closes_on_escape() {
         helper.next_event(),
         FromHelper::Closed {
             view: ViewKind::Quota,
-            bounds: None
+            bounds: None,
+            last: true,
         }
     );
     assert!(helper.wait().success());
@@ -332,9 +335,36 @@ fn quota_popup_closes_when_it_loses_the_focus() {
         helper.next_event(),
         FromHelper::Closed {
             view: ViewKind::Quota,
-            bounds: None
+            bounds: None,
+            last: true,
         }
     );
+    assert!(helper.wait().success());
+    assert_all_gone(&ran);
+}
+
+/// The popup gives way to the main window in the same helper, which is not exiting.
+#[test]
+fn the_popup_gives_way_to_the_main_window() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let x = X::open();
+    let mut server = Server::start();
+    let data = directory("handover");
+    let mut helper = Helper::start(binary(), &server.origin(), quota_view(), &data);
+    let (_popup, ran) = focused_popup(&x, &mut server, &helper);
+    helper.send(&ToHelper::Show {
+        view: View::Main { profile: None },
+    });
+    assert_eq!(
+        helper.next_event(),
+        FromHelper::Closed {
+            view: ViewKind::Quota,
+            bounds: None,
+            last: false,
+        }
+    );
+    shown_window(&x, "NonstopVibin");
+    helper.send(&ToHelper::Quit);
     assert!(helper.wait().success());
     assert_all_gone(&ran);
 }
@@ -411,8 +441,12 @@ fn update_dialog_defaults_to_later() {
     assert_eq!(
         helper.next(),
         FromHelper::Closed {
-            view: ViewKind::Dialog { kind },
-            bounds: None
+            view: ViewKind::Dialog {
+                kind,
+                choice: Choice::Dismiss
+            },
+            bounds: None,
+            last: true,
         }
     );
     assert!(helper.wait().success());

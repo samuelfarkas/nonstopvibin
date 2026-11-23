@@ -2,7 +2,7 @@
 //! one at a time, a check while one is busy (a manual check during a download included) is
 //! dropped, and once an update is ready only a manual check shows it again.
 
-use nsv_desktop::pipe::DialogKind;
+use nsv_desktop::pipe::{Choice, DialogKind};
 
 /// What the shell must do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,19 +68,22 @@ impl<T> Machine<T> {
         }
     }
 
-    /// "Restart to update" in the update-ready dialog: the update to install.
-    pub(crate) fn restart(&mut self) -> Option<T> {
-        if self.busy == Busy::Dialog(DialogKind::UpdateReady) {
-            self.ready.take()
-        } else {
-            None
+    /// A dialog closed with the user's choice: the update to install when its dialog was
+    /// answered "Restart to update".
+    pub(crate) fn closed(&mut self, kind: DialogKind, choice: Choice) -> Option<T> {
+        if self.busy != Busy::Dialog(kind) {
+            return None;
         }
+        self.busy = Busy::Idle;
+        let restart = kind == DialogKind::UpdateReady && choice == Choice::Accept;
+        if restart { self.ready.take() } else { None }
     }
 
-    /// A dialog closed, or the helper exited with it (`None`: every dialog).
-    pub(crate) fn closed(&mut self, kind: Option<DialogKind>) {
+    /// The helper exited with its dialogs. `showing` was asked for after them: it goes to the
+    /// next helper and stays open.
+    pub(crate) fn helper_gone(&mut self, showing: Option<DialogKind>) {
         if let Busy::Dialog(open) = self.busy
-            && kind.is_none_or(|kind| kind == open)
+            && showing != Some(open)
         {
             self.busy = Busy::Idle;
         }
@@ -108,13 +111,14 @@ mod tests {
         assert_eq!(machine.checked(Checked::Ready("0.3.0")), READY);
         // While the dialog shows, nothing else starts.
         assert_eq!(machine.check(true), None);
-        machine.closed(Some(DialogKind::UpdateReady));
-        assert_eq!(machine.restart(), None, "Later was chosen");
+        let later = machine.closed(DialogKind::UpdateReady, Choice::Dismiss);
+        assert_eq!(later, None, "Later was chosen");
         // The timer no longer checks or asks; a manual check asks again.
         assert_eq!(machine.check(false), None);
         assert_eq!(machine.check(true), READY);
-        assert_eq!(machine.restart(), Some("0.3.0"));
-        assert_eq!(machine.restart(), None);
+        let restart = machine.closed(DialogKind::UpdateReady, Choice::Accept);
+        assert_eq!(restart, Some("0.3.0"));
+        assert_eq!(machine.check(true), Some(Command::Check));
     }
 
     #[test]
@@ -129,15 +133,18 @@ mod tests {
             machine.checked(Checked::UpToDate),
             Some(Command::Show(DialogKind::NoUpdates))
         );
-        machine.closed(Some(DialogKind::NoUpdates));
+        assert_eq!(machine.closed(DialogKind::NoUpdates, Choice::Dismiss), None);
         assert_eq!(machine.check(true), Some(Command::Check));
         assert_eq!(
             machine.checked(Checked::Failed),
             Some(Command::Show(DialogKind::UpdateFailed))
         );
         assert_eq!(machine.check(false), None);
+        // A helper that exits while this dialog is still to show leaves it open.
+        machine.helper_gone(Some(DialogKind::UpdateFailed));
+        assert_eq!(machine.check(false), None);
         // The helper exited with the dialog: checks resume.
-        machine.closed(None);
+        machine.helper_gone(None);
         assert_eq!(machine.check(false), Some(Command::Check));
     }
 
@@ -151,8 +158,11 @@ mod tests {
         );
         machine.check(true);
         machine.checked(Checked::Ready(2));
-        machine.closed(Some(DialogKind::NoUpdates));
+        assert_eq!(machine.closed(DialogKind::NoUpdates, Choice::Accept), None);
         assert_eq!(machine.check(true), None);
-        assert_eq!(machine.restart(), Some(2));
+        assert_eq!(
+            machine.closed(DialogKind::UpdateReady, Choice::Accept),
+            Some(2)
+        );
     }
 }

@@ -21,7 +21,7 @@ use std::{env, fs};
 
 use daemon::Daemon;
 use desktop::Desktop;
-use nsv_desktop::pipe::{FromHelper, Rect, ToHelper, View, ViewKind};
+use nsv_desktop::pipe::{Anchor, FromHelper, ToHelper, View, ViewKind};
 use serde_json::{Value, json};
 use site::{CHECK_TIMEOUT, Content, Event, Site};
 
@@ -53,7 +53,7 @@ fn data_directory(name: &str) -> PathBuf {
 
 fn quota_view() -> View {
     View::Quota {
-        anchor: Rect {
+        anchor: Anchor {
             x: 1200,
             y: 0,
             width: 24,

@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use nsv_desktop::bridge::fits_external;
 use nsv_desktop::pipe::{
-    self, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View, ViewKind,
+    self, Anchor, Choice, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View,
+    ViewKind,
 };
 use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
@@ -16,21 +17,20 @@ use nsv_domain::secret::SessionToken;
 use serde_json::{Value, json};
 use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
-use tao::event_loop::{
-    ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget,
-};
+use tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Window, WindowBuilder, WindowId};
 use wry::{
     NewWindowResponse, PageLoadEvent, PermissionResponse, WebContext, WebView, WebViewBuilder,
 };
 
 use crate::bridge::{self, Call, Rejected};
-use crate::{layout, native};
+use crate::layout;
+use crate::native::{Dialog, Native, Os};
 
 const BACKGROUND: (u8, u8, u8, u8) = (0x1c, 0x1b, 0x18, 0xff);
 
 pub(crate) type Proxy = EventLoopProxy<UserEvent>;
-type Target = EventLoopWindowTarget<UserEvent>;
+pub(crate) type Target = EventLoopWindowTarget<UserEvent>;
 
 pub(crate) enum UserEvent {
     Daemon(ToHelper),
@@ -55,8 +55,9 @@ pub(crate) enum UserEvent {
     },
     DialogAnswered {
         kind: DialogKind,
-        restart: bool,
+        choice: Choice,
     },
+    /// A click in the macOS app menu, the only app menu.
     #[cfg(target_os = "macos")]
     Menu(muda::MenuId),
 }
@@ -100,8 +101,7 @@ pub(crate) struct Boot {
     /// The secret the bridge script signs its messages with, so a message from any other
     /// script or frame is dropped.
     pub(crate) nonce: String,
-    /// The app can update itself: the app menu enables "Check for updates…".
-    #[cfg(target_os = "macos")]
+    /// The app can update itself: the macOS app menu enables "Check for updates…".
     pub(crate) updates: bool,
 }
 
@@ -125,6 +125,12 @@ struct Surface {
     focused: bool,
 }
 
+impl Surface {
+    fn on_screen(&self) -> bool {
+        self.shown && self.window.is_visible()
+    }
+}
+
 struct App {
     origin: Origin,
     token: SessionToken,
@@ -140,50 +146,34 @@ struct App {
     next_forward: u64,
     ready: bool,
     exit: Option<i32>,
-    #[cfg(target_os = "macos")]
-    menu: Option<muda::Menu>,
-    #[cfg(target_os = "macos")]
-    regular: bool,
-    #[cfg(target_os = "macos")]
-    zoom_level: f64,
-    #[cfg(target_os = "macos")]
-    updates: bool,
-}
-
-fn event_loop() -> EventLoop<UserEvent> {
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    #[cfg(target_os = "macos")]
-    let event_loop = {
-        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
-        let mut event_loop = event_loop;
-        event_loop.set_activation_policy(ActivationPolicy::Accessory);
-        event_loop
-    };
-    event_loop
+    native: <Os as Native>::State,
 }
 
 /// `failure`'s error dialog with `reason` as its text, then exit once it is dismissed.
 pub(crate) fn alert(failure: Failure, reason: Reason) -> ! {
-    let event_loop = event_loop();
+    let event_loop = Os::event_loop::<()>();
     let proxy = event_loop.create_proxy();
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                native::show_dialog(failure.dialog(), Some(&reason), &proxy);
+                let dismissed = proxy.clone();
+                Os::show_dialog(&Dialog::alert(failure, &reason), move |_| {
+                    // Fails only once the loop has ended.
+                    let _ = dismissed.send_event(());
+                });
             }
-            Event::UserEvent(UserEvent::DialogAnswered { .. }) => {
-                *control_flow = ControlFlow::ExitWithCode(0);
-            }
+            Event::UserEvent(()) => *control_flow = ControlFlow::ExitWithCode(0),
             _ => {}
         }
     })
 }
 
 pub(crate) fn run(boot: Boot) -> ! {
-    let event_loop = event_loop();
+    let event_loop = Os::event_loop();
     let proxy = event_loop.create_proxy();
     read_daemon(&proxy);
+    let updates = boot.updates;
     let mut first = Some(boot.view);
     let mut app = App {
         origin: boot.origin,
@@ -200,24 +190,13 @@ pub(crate) fn run(boot: Boot) -> ! {
         next_forward: 0,
         ready: false,
         exit: None,
-        #[cfg(target_os = "macos")]
-        menu: None,
-        #[cfg(target_os = "macos")]
-        regular: false,
-        #[cfg(target_os = "macos")]
-        zoom_level: 0.0,
-        #[cfg(target_os = "macos")]
-        updates: boot.updates,
+        native: <Os as Native>::State::default(),
     };
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                #[cfg(target_os = "macos")]
-                match native::install_menu(&app.proxy, app.updates) {
-                    Ok(menu) => app.menu = Some(menu),
-                    Err(error) => log(format_args!("could not build the menu: {error}")),
-                }
+                Os::start(&mut app.native, &app.proxy, updates);
                 if let Some(view) = first.take() {
                     app.show(target, view);
                 }
@@ -228,11 +207,11 @@ pub(crate) fn run(boot: Boot) -> ! {
             } => app.window_event(window_id, &event),
             _ => {}
         }
-        #[cfg(target_os = "macos")]
-        app.sync_activation_policy(target);
+        Os::settle(&mut app.native, target, || {
+            app.main.as_ref().is_some_and(Surface::on_screen)
+        });
         // Before Init has opened the first view, an empty helper is starting, not done.
-        let idle =
-            first.is_none() && app.main.is_none() && app.quota.is_none() && app.dialogs.is_empty();
+        let idle = first.is_none() && app.windowless();
         if let Some(code) = app.exit.or(idle.then_some(0)) {
             *control_flow = ControlFlow::ExitWithCode(code);
         }
@@ -296,6 +275,18 @@ impl App {
         }
     }
 
+    /// The helper exits with its last window.
+    fn windowless(&self) -> bool {
+        self.main.is_none() && self.quota.is_none() && self.dialogs.is_empty()
+    }
+
+    /// Tells the daemon `view` has closed, and whether the helper exits with it.
+    fn report_closed(&mut self, view: ViewKind, bounds: Option<Rect>) {
+        // A helper that failed tells by its exit status instead.
+        let last = self.windowless() && self.exit.is_none();
+        self.send(&FromHelper::Closed { view, bounds, last });
+    }
+
     fn send(&mut self, message: &FromHelper) {
         if let Err(error) = pipe::write(&mut io::stdout().lock(), message) {
             log(format_args!("the daemon stopped listening: {error}"));
@@ -332,15 +323,26 @@ impl App {
                 if !self.dialogs.contains(&kind) {
                     self.dialogs.push(kind);
                     self.mark_ready();
-                    native::show_dialog(kind, None, &self.proxy);
+                    let proxy = self.proxy.clone();
+                    Os::show_dialog(&Dialog::of(kind), move |choice| {
+                        post(&proxy, UserEvent::DialogAnswered { kind, choice });
+                    });
                 }
             }
         }
     }
 
+    /// As showMain did: the popup gives way to the main window. It is reported closed once the
+    /// main window stands in its place.
     fn show_main(&mut self, target: &Target, profile: Option<&ProfileId>) {
-        // As showMain did: the popup gives way to the main window.
-        self.close_quota();
+        let popup = self.quota.take().is_some();
+        self.open_main(target, profile);
+        if popup {
+            self.report_closed(ViewKind::Quota, None);
+        }
+    }
+
+    fn open_main(&mut self, target: &Target, profile: Option<&ProfileId>) {
         if let Some(main) = &self.main {
             if profile.is_some()
                 && let Err(error) = main.webview.load_url(&self.origin.main_url(profile))
@@ -348,7 +350,7 @@ impl App {
                 log(format_args!("could not open the profile: {error}"));
             }
             self.main_closing = Closing::No;
-            native::present(&main.window);
+            Os::present(&main.window);
             return;
         }
         let (width, height) = layout::MAIN_SIZE;
@@ -365,35 +367,25 @@ impl App {
                     bounds.height.max(min_height),
                 ));
         }
-        #[cfg(target_os = "macos")]
-        let builder = {
-            use tao::platform::macos::WindowBuilderExtMacOS;
-            builder
-                .with_titlebar_transparent(true)
-                .with_title_hidden(true)
-                .with_fullsize_content_view(true)
-                .with_traffic_light_inset(LogicalPosition::new(21.0, 17.0))
-        };
         let url = self.origin.main_url(profile);
-        match self.open(target, Pane::Main, builder, &url) {
+        match self.open(target, Pane::Main, Os::main_window(builder), &url) {
             Ok(surface) => {
-                #[cfg(target_os = "linux")]
-                native::set_icon(&surface.window);
+                Os::main_opened(&surface.window);
                 self.main = Some(surface);
             }
             Err(error) => self.failed("main window", &error),
         }
     }
 
-    fn show_quota(&mut self, target: &Target, anchor: Rect) {
+    fn show_quota(&mut self, target: &Target, anchor: Anchor) {
         if let Some(quota) = &self.quota {
-            native::present(&quota.window);
+            Os::present(&quota.window);
             return;
         }
-        let Some(work_area) = native::work_area(anchor) else {
+        let Some(work_area) = Os::work_area(anchor) else {
             return self.failed("quota popup", &"no display holds the tray icon");
         };
-        let bounds = layout::quota_bounds(anchor, work_area, cfg!(target_os = "macos"));
+        let bounds = layout::quota_bounds(anchor, work_area, Os::POPUP_BELOW_ANCHOR);
         let builder = WindowBuilder::new()
             .with_title("NonstopVibin quotas")
             .with_inner_size(LogicalSize::new(bounds.width, bounds.height))
@@ -401,13 +393,8 @@ impl App {
             .with_decorations(false)
             .with_resizable(false)
             .with_always_on_top(true);
-        #[cfg(target_os = "linux")]
-        let builder = {
-            use tao::platform::unix::WindowBuilderExtUnix;
-            builder.with_skip_taskbar(true)
-        };
         let url = self.origin.tray_url();
-        match self.open(target, Pane::Quota, builder, &url) {
+        match self.open(target, Pane::Quota, Os::quota_window(builder), &url) {
             Ok(surface) => self.quota = Some(surface),
             Err(error) => self.failed("quota popup", &error),
         }
@@ -430,7 +417,7 @@ impl App {
             &self.origin,
             &self.nonce,
             pane == Pane::Quota,
-            cfg!(target_os = "macos") && pane == Pane::Main,
+            Os::MAIN_DRAG_REGIONS && pane == Pane::Main,
         );
         let (ipc, loads, popup) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         let origin = self.origin.clone();
@@ -461,18 +448,7 @@ impl App {
                 let finished = matches!(event, PageLoadEvent::Finished);
                 post(&loads, UserEvent::PageLoad { pane, finished });
             });
-        #[cfg(target_os = "linux")]
-        let webview = {
-            use tao::platform::unix::WindowExtUnix;
-            use wry::WebViewBuilderExtUnix;
-            let container = window
-                .default_vbox()
-                .ok_or("the window has no GTK container")?;
-            builder.build_gtk(container)
-        };
-        #[cfg(not(target_os = "linux"))]
-        let webview = builder.build(&window);
-        let webview = webview.map_err(|error| error.to_string())?;
+        let webview = Os::webview(builder, &window)?;
         Ok(Surface {
             webview,
             window,
@@ -484,10 +460,7 @@ impl App {
 
     fn close_quota(&mut self) {
         if self.quota.take().is_some() {
-            self.send(&FromHelper::Closed {
-                view: ViewKind::Quota,
-                bounds: None,
-            });
+            self.report_closed(ViewKind::Quota, None);
         }
     }
 
@@ -498,11 +471,7 @@ impl App {
         }
         drop(main);
         self.main_closing = Closing::No;
-        let bounds = self.main_bounds;
-        self.send(&FromHelper::Closed {
-            view: ViewKind::Main,
-            bounds,
-        });
+        self.report_closed(ViewKind::Main, self.main_bounds);
     }
 
     /// The draft guard (`useKeepDraft`): the page may veto, as with Electron's
@@ -570,20 +539,19 @@ impl App {
                 };
                 self.answer(ticket, &outcome);
             }
-            UserEvent::DialogAnswered { kind, restart } => {
+            UserEvent::DialogAnswered { kind, choice } => {
                 if let Some(index) = self.dialogs.iter().position(|open| *open == kind) {
                     self.dialogs.swap_remove(index);
                 }
-                if restart {
-                    self.send(&FromHelper::RestartToUpdate);
-                }
-                self.send(&FromHelper::Closed {
-                    view: ViewKind::Dialog { kind },
-                    bounds: None,
-                });
+                self.report_closed(ViewKind::Dialog { kind, choice }, None);
             }
             #[cfg(target_os = "macos")]
-            UserEvent::Menu(id) => self.menu(&id),
+            UserEvent::Menu(id) => {
+                let main = self.main.as_ref().map(|main| &main.webview);
+                if let Some(command) = Os::menu(&mut self.native, &id, main) {
+                    self.send(&FromHelper::Command { command });
+                }
+            }
         }
     }
 
@@ -599,7 +567,7 @@ impl App {
             return;
         }
         surface.shown = true;
-        native::present(&surface.window);
+        Os::present(&surface.window);
         self.mark_ready();
     }
 
@@ -646,7 +614,7 @@ impl App {
                 self.answer(ticket, &Outcome::Result(token));
             }
             Call::Copy(text) => {
-                let outcome = native::copy(&text).map_or_else(Outcome::Error, |()| done);
+                let outcome = Os::copy(&text).map_or_else(Outcome::Error, |()| done);
                 self.answer(ticket, &outcome);
             }
             Call::ShowWindow(profile) => {
@@ -665,7 +633,7 @@ impl App {
                 }
             }
             Call::ChooseProject => match &self.main {
-                Some(main) => native::choose_folder(&main.window, &self.proxy, ticket),
+                Some(main) => Os::choose_folder(&main.window, &self.proxy, ticket),
                 None => self.answer(
                     ticket,
                     &Outcome::Error("Open the main window first.".to_owned()),
@@ -682,17 +650,12 @@ impl App {
                     self.close_quota();
                 }
             }
-            // Only the macOS main window's bridge script sends it.
-            #[cfg(target_os = "macos")]
+            // Only the bridge script of a main window with drag regions sends it.
             Call::DragWindow { x, y } => {
                 if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main) {
-                    // Page points are window points scaled by the page zoom (`menu`).
-                    let zoom = 1.2_f64.powf(self.zoom_level);
-                    native::drag(&main.window, f64::from(x) * zoom, f64::from(y) * zoom);
+                    Os::drag(&self.native, &main.window, x, y);
                 }
             }
-            #[cfg(not(target_os = "macos"))]
-            Call::DragWindow { .. } => {}
         }
     }
 
@@ -705,49 +668,6 @@ impl App {
             .evaluate_script(&bridge::reply(ticket.id, outcome))
         {
             log(format_args!("could not answer the page: {error}"));
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn menu(&mut self, id: &muda::MenuId) {
-        use native::MenuAction;
-        let zoom = match native::menu_action(id) {
-            Some(MenuAction::CheckUpdates) => return self.send(&FromHelper::CheckUpdates),
-            Some(MenuAction::QuitApp) => return self.send(&FromHelper::QuitApp),
-            Some(MenuAction::ToggleQuota) => return self.send(&FromHelper::ToggleQuota),
-            Some(MenuAction::OpenMain) => {
-                return self.send(&FromHelper::OpenMain { profile: None });
-            }
-            Some(MenuAction::ResetZoom) => 0.0,
-            Some(MenuAction::ZoomIn) => (self.zoom_level + 0.5).min(9.0),
-            Some(MenuAction::ZoomOut) => (self.zoom_level - 0.5).max(-8.0),
-            None => return,
-        };
-        self.zoom_level = zoom;
-        // Electron's zoom levels: each step of 0.5 scales by 1.2^0.5.
-        if let Some(main) = &self.main
-            && let Err(error) = main.webview.zoom(1.2_f64.powf(zoom))
-        {
-            log(format_args!("could not zoom: {error}"));
-        }
-    }
-
-    /// The Dock icon shows while the main window is on screen.
-    #[cfg(target_os = "macos")]
-    fn sync_activation_policy(&mut self, target: &Target) {
-        use tao::platform::macos::{ActivationPolicy, EventLoopWindowTargetExtMacOS};
-        let regular = self
-            .main
-            .as_ref()
-            .is_some_and(|main| main.shown && main.window.is_visible());
-        if regular != self.regular {
-            self.regular = regular;
-            let policy = if regular {
-                ActivationPolicy::Regular
-            } else {
-                ActivationPolicy::Accessory
-            };
-            target.set_activation_policy_at_runtime(policy);
         }
     }
 }
