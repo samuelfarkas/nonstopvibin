@@ -1,7 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use base64::Engine;
@@ -11,9 +10,9 @@ use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::RetentionDays;
 use nsv_domain::secret::{ApiKey, ClientKey};
 use nsv_domain::time::iso_string;
-use nsv_domain::wire::{ApiAccount, Profile, UsageRecord};
+use nsv_domain::wire::{Account, ApiAccount, Profile, UsageRecord};
 use nsv_files::DataDir;
-use nsv_store::{Db, Store, StoreError, UsageCursor, UsageRange, Vault, VaultError};
+use nsv_store::{ProfileFact, Store, StoreError, UsageCursor, UsageRange, Vault, VaultError};
 use nsv_testkit::{TempDir, mode, set_mode};
 use serde_json::json;
 
@@ -36,6 +35,14 @@ fn api_account(id: &str) -> ApiAccount {
         "id": id, "name": "Fixture", "provider": "openai",
         "baseUrl": "https://api.example.test/v1", "prefix": "",
         "models": [{ "id": "model", "protocol": "openai" }], "disabled": false,
+    }))
+    .unwrap()
+}
+
+fn oauth_account() -> Account {
+    serde_json::from_value(json!({
+        "id": "a.json", "name": "A", "provider": "claude", "kind": "oauth",
+        "disabled": false, "status": "Ready", "priority": 0,
     }))
     .unwrap()
 }
@@ -173,32 +180,71 @@ async fn a_linked_database_is_refused() {
 }
 
 #[tokio::test]
-async fn profile_writes_refresh_the_cached_profile_names_the_tray_reads() {
-    let temp = TempDir::new("names");
+async fn profile_and_account_writes_publish_the_profile_facts_and_reads_publish_nothing() {
+    let temp = TempDir::new("facts");
     let store = open(temp.path()).await;
-    let empty = store.call(Db::profile_names).await.unwrap();
-    assert!(empty.is_empty());
+    let mut facts = store.facts();
+    assert!(facts.borrow_and_update().is_empty());
     let profile = store.call(|db| db.create_profile("Fixture")).await.unwrap();
-    let names = store.call(Db::profile_names).await.unwrap();
-    assert_eq!(&*names, [(profile.id.clone(), "Fixture".to_owned())]);
+    let fact = |name: &str, api: usize, oauth: usize| ProfileFact {
+        id: profile.id.clone(),
+        name: name.to_owned(),
+        enabled: false,
+        api,
+        oauth,
+    };
+    assert!(
+        facts.has_changed().unwrap(),
+        "published before the write is acknowledged"
+    );
+    assert_eq!(**facts.borrow_and_update(), [fact("Fixture", 0, 0)]);
     let id = profile.id.clone();
-    let after_reads = store
+    store
         .call(move |db| {
             db.profiles()?;
             db.client_key(&id)?;
-            db.profile_names()
+            db.account_metadata(&id)
         })
         .await
         .unwrap();
-    assert!(Arc::ptr_eq(&after_reads, &names), "reads keep the cache");
+    assert!(!facts.has_changed().unwrap(), "reads publish nothing");
     let mut renamed = profile.clone();
     renamed.name = "Renamed".to_owned();
     store
         .call(move |db| db.save_profile(&renamed))
         .await
         .unwrap();
-    let names = store.call(Db::profile_names).await.unwrap();
-    assert_eq!(&*names, [(profile.id, "Renamed".to_owned())]);
+    assert_eq!(**facts.borrow_and_update(), [fact("Renamed", 0, 0)]);
+    let (id, account) = (profile.id.clone(), api_account("key-a"));
+    store
+        .call(move |db| db.save_api_account(&id, &account, Some(&ApiKey::new("key"))))
+        .await
+        .unwrap();
+    assert_eq!(**facts.borrow_and_update(), [fact("Renamed", 1, 0)]);
+    let id = profile.id.clone();
+    store
+        .call(move |db| db.save_account_metadata(&id, &[oauth_account()]))
+        .await
+        .unwrap();
+    assert_eq!(**facts.borrow_and_update(), [fact("Renamed", 1, 1)]);
+    assert!(facts.borrow().first().unwrap().kept());
+    // The same list again writes nothing and wakes no one.
+    let id = profile.id.clone();
+    store
+        .call(move |db| db.save_account_metadata(&id, &[oauth_account()]))
+        .await
+        .unwrap();
+    assert!(!facts.has_changed().unwrap(), "an unchanged account list");
+    let id = profile.id.clone();
+    store
+        .call(move |db| {
+            db.remove_api_account(&id, &AccountId::parse("key-a")?)?;
+            db.save_account_metadata(&id, &[])
+        })
+        .await
+        .unwrap();
+    assert_eq!(**facts.borrow_and_update(), [fact("Renamed", 0, 0)]);
+    assert!(!facts.borrow().first().unwrap().kept());
 }
 
 #[tokio::test]

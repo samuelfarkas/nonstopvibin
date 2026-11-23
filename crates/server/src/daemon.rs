@@ -28,7 +28,7 @@ use nsv_domain::secret::SessionToken;
 use nsv_domain::sync::locked;
 use nsv_files::{DataDir, ServerLock};
 use nsv_gateway::Gateway;
-use nsv_store::{AuthSnapshot, ProfileNames, Store, StoreError, Vault, VaultError};
+use nsv_store::{AuthSnapshot, ProfileFacts, Store, StoreError, Vault, VaultError};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, OnceCell, broadcast, watch};
 
@@ -132,22 +132,22 @@ impl Errors {
 /// desktop keeps it current.
 pub(crate) struct Tray {
     status: watch::Sender<TrayStatus>,
-    names: Mutex<ProfileNames>,
+    facts: watch::Receiver<ProfileFacts>,
     /// Profiles with a gateway request or WebSocket open.
     open: Mutex<BTreeSet<ProfileId>>,
 }
 
 impl Tray {
-    fn new() -> Self {
+    fn new(facts: watch::Receiver<ProfileFacts>) -> Self {
         Self {
             status: watch::Sender::new(TrayStatus::default()),
-            names: Mutex::new(Arc::from([])),
+            facts,
             open: Mutex::new(BTreeSet::new()),
         }
     }
 
     pub(crate) fn has(&self, profile: &ProfileId) -> bool {
-        locked(&self.names).iter().any(|(id, _)| id == profile)
+        self.facts.borrow().iter().any(|fact| fact.id == *profile)
     }
 
     pub(crate) fn opened(&self, profile: &ProfileId, open: bool) {
@@ -162,13 +162,13 @@ impl Tray {
     /// `Application.status()`: a dormant profile still serves, since its core starts on the next
     /// request. Tells the tray only when something it shows changed.
     pub(crate) fn update(&self, pool: &PoolState, scheduler: &Scheduler) {
-        let names = Arc::clone(&locked(&self.names));
+        let facts = Arc::clone(&self.facts.borrow());
         let open = locked(&self.open).clone();
         let mut status = TrayStatus::default();
-        for (id, name) in names.iter() {
-            if pool.running(id) || scheduler.is_dormant(id) {
-                status.running.push(name.clone());
-                status.streaming |= open.contains(id);
+        for fact in facts.iter() {
+            if pool.running(&fact.id) || scheduler.is_dormant(&fact.id) {
+                status.running.push(fact.name.clone());
+                status.streaming |= open.contains(&fact.id);
             }
         }
         self.status.send_if_modified(|current| {
@@ -289,7 +289,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             url::Url::parse(&origin_text).map_err(|error| StartError::Other(error.to_string()))?;
         let shared = Arc::new(Shared {
             errors: Errors::default(),
-            tray: Tray::new(),
+            tray: Tray::new(store.facts()),
             desktop: options.desktop,
             events: broadcast::Sender::new(8),
             closing: AtomicBool::new(false),
@@ -351,10 +351,9 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             started_at: Mutex::new(None),
             closed: OnceCell::new(),
         });
-        app.refresh_names().await?;
         crate::http::serve(&app, listener);
         if app.shared.desktop {
-            follow_pool(&app);
+            follow_tray(&app);
         }
         Ok(Self(app))
     }
@@ -487,16 +486,6 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
 }
 
 impl<F: Fetch + Releases + Clone + 'static> App<F> {
-    /// Reads the profile names again after a profile was created or renamed.
-    pub(crate) async fn refresh_names(&self) -> Result<(), StoreError> {
-        if self.shared.desktop {
-            let names = self.store.call(nsv_store::Db::profile_names).await?;
-            *locked(&self.shared.tray.names) = names;
-            self.update_tray();
-        }
-        Ok(())
-    }
-
     pub(crate) fn update_tray(&self) {
         if self.shared.desktop {
             self.shared
@@ -542,12 +531,18 @@ fn bind(port: u16) -> Result<TcpListener, StartError> {
     Ok(TcpListener::from_std(listener)?)
 }
 
-/// The desktop tray follows each change the pool publishes.
-fn follow_pool<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>) {
+/// The desktop tray follows each change the pool or the store's profile facts publish.
+fn follow_tray<F: Fetch + Releases + Clone + 'static>(app: &Arc<App<F>>) {
     let weak = Arc::downgrade(app);
-    let mut changes = app.cores.pool().subscribe();
+    let mut pool = app.cores.pool().subscribe();
+    let mut facts = app.store.facts();
     tokio::spawn(async move {
-        while changes.changed().await.is_ok() {
+        loop {
+            tokio::select! {
+                published = pool.changed() => if published.is_err() { return },
+                // A closed store publishes nothing more: its branch is skipped.
+                Ok(()) = facts.changed() => {}
+            }
             let Some(app) = weak.upgrade() else { return };
             app.update_tray();
         }

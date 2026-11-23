@@ -90,7 +90,6 @@ struct Version {
 struct Profile {
     claude: HashMap<String, Version>,
     chatgpt: HashMap<String, String>,
-    oauth: Option<usize>,
 }
 
 /// The accounts of every profile: syncs from cores and what the last sync learned.
@@ -118,17 +117,6 @@ impl Accounts {
     #[must_use]
     pub fn chatgpt_account_id(&self, profile: &ProfileId, account: &str) -> Option<String> {
         self.with(profile, |state| state.chatgpt.get(account).cloned())
-    }
-
-    /// How many OAuth accounts the profile has, as last synced or recorded.
-    #[must_use]
-    pub fn oauth_count(&self, profile: &ProfileId) -> Option<usize> {
-        self.with(profile, |state| state.oauth)
-    }
-
-    /// Records how many OAuth accounts the profile has, as stored.
-    pub fn set_oauth_count(&self, profile: &ProfileId, count: usize) {
-        self.with(profile, |state| state.oauth = Some(count));
     }
 
     /// Reads the profile's account list from its usable core and stores it; unchanged metadata
@@ -198,10 +186,7 @@ impl Accounts {
             return Ok(None);
         }
         let count = accounts.len();
-        self.with(profile, |state| {
-            state.chatgpt = chatgpt;
-            state.oauth = Some(count);
-        });
+        self.with(profile, |state| state.chatgpt = chatgpt);
         let id = profile.clone();
         self.store
             .call(move |db| db.save_account_metadata(&id, &accounts))

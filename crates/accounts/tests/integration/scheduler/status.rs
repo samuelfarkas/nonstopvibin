@@ -166,5 +166,5 @@ async fn an_account_sync_that_outlives_its_core_does_not_overwrite_the_restarted
         "the listing of a replaced core is dropped"
     );
     assert_eq!(metadata(&world, &profile).await, []);
-    assert_eq!(world.accounts.oauth_count(&profile), Some(0));
+    assert_eq!(world.store.facts().borrow()[0].oauth, 0);
 }

@@ -790,7 +790,8 @@ impl<F: Fetch + 'static> Inner<F> {
         self.close_callback(None, false);
         self.session.send_replace(None);
         // Its profile's core may stop for being idle again.
-        self.scheduler.changed().await
+        self.scheduler.catch_up();
+        Ok(())
     }
 
     async fn authorization(
@@ -838,7 +839,7 @@ impl<F: Fetch + 'static> Inner<F> {
         self.close_callback(None, false);
         if matches!(authorization, Authorization::Error) {
             self.accounts.sync(pool, profile).await?;
-            self.scheduler.changed().await?;
+            self.scheduler.catch_up();
             return Ok(failed());
         }
         let provider = session.provider.as_str();
@@ -847,7 +848,7 @@ impl<F: Fetch + 'static> Inner<F> {
                 !account.disabled && account.provider == provider
             })
             .await?;
-        self.scheduler.changed().await?;
+        self.scheduler.catch_up();
         Ok(OAuthStatus::Ok {
             account: None,
             reconnected: None,

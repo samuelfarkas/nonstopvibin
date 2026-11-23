@@ -7,7 +7,9 @@
 //!
 //! Its state is one plain struct behind a mutex that is never held across an await. Callers,
 //! the pool's hooks and the tasks it spawns change it in short sections and tell the task
-//! through a [`Notify`] when a deadline moved earlier.
+//! through a [`Notify`] when a deadline moved earlier. Profiles and their account counts are
+//! the store's published [`ProfileFacts`], read as they are now; the task hears each new
+//! version.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -27,7 +29,7 @@ use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time::epoch_ms;
 use nsv_net::Method;
-use nsv_store::Store;
+use nsv_store::{ProfileFact, ProfileFacts, Store};
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
@@ -160,16 +162,7 @@ struct Track {
     collecting: Option<Collection>,
 }
 
-/// A profile as the store last showed it.
 #[derive(Debug)]
-struct Fact {
-    id: ProfileId,
-    name: String,
-    enabled: bool,
-    api: usize,
-}
-
-#[derive(Debug, Default)]
 struct State {
     begun: bool,
     scheduled: Option<Instant>,
@@ -181,12 +174,28 @@ struct State {
     polling: bool,
     /// An account, quota or retention pass is in flight.
     maintenance: bool,
-    /// Profiles in creation order.
-    facts: Vec<Fact>,
+    /// The store's profile facts. Reads see the latest version; one not yet heard is marked
+    /// changed until [`Shared::follow`] hears it.
+    facts: watch::Receiver<ProfileFacts>,
     tracks: BTreeMap<ProfileId, Track>,
 }
 
 impl State {
+    fn new(facts: watch::Receiver<ProfileFacts>) -> Self {
+        Self {
+            begun: false,
+            scheduled: None,
+            watched_until: None,
+            next_accounts: None,
+            next_quotas: None,
+            next_prune: None,
+            polling: false,
+            maintenance: false,
+            facts,
+            tracks: BTreeMap::new(),
+        }
+    }
+
     fn watched(&self, now: Instant) -> bool {
         self.watched_until.is_some_and(|until| now < until)
     }
@@ -195,8 +204,19 @@ impl State {
         self.tracks.entry(profile.clone()).or_default()
     }
 
-    fn fact(&self, profile: &ProfileId) -> Option<&Fact> {
-        self.facts.iter().find(|fact| fact.id == *profile)
+    /// `read` of the profile's facts as the store last published them.
+    fn fact<T>(&self, profile: &ProfileId, read: impl FnOnce(&ProfileFact) -> T) -> Option<T> {
+        self.facts
+            .borrow()
+            .iter()
+            .find(|fact| fact.id == *profile)
+            .map(read)
+    }
+
+    /// No OAuth account: its core starts on demand and stops when idle. OAuth ones must keep
+    /// refreshing tokens.
+    fn lazy(&self, profile: &ProfileId) -> bool {
+        self.fact(profile, |fact| fact.oauth == 0).unwrap_or(true)
     }
 }
 
@@ -233,7 +253,7 @@ impl Scheduler {
         Self(Arc::new_cyclic(|shared| {
             let hooks = Arc::new(PoolHooks(Weak::clone(shared)));
             Shared {
-                state: Mutex::new(State::default()),
+                state: Mutex::new(State::new(store.facts())),
                 notify: Notify::new(),
                 timing,
                 epoch: Instant::now(),
@@ -256,26 +276,21 @@ impl Scheduler {
     /// is reported, not returned), then scheduling begins.
     ///
     /// # Errors
-    /// The store could not be read, or shutdown began.
+    /// Shutdown began.
     pub async fn launch(&self) -> Result<(), AppError> {
-        let facts = self.0.facts().await?;
         let eager: Vec<(ProfileId, String)> = {
             let mut state = self.0.lock();
-            state.facts = facts;
-            let enabled: Vec<(ProfileId, String)> = state
-                .facts
+            let facts = Arc::clone(&state.facts.borrow_and_update());
+            facts
                 .iter()
                 .filter(|fact| fact.enabled)
-                .map(|fact| (fact.id.clone(), fact.name.clone()))
-                .collect();
-            enabled
-                .into_iter()
-                .filter(|(profile, _)| {
+                .filter(|fact| {
                     // A core already running (started before launch) is no longer dormant.
-                    let dormant = self.0.lazy(profile) && !self.0.pool.alive(profile);
-                    state.track(profile).dormant = dormant;
+                    let dormant = state.lazy(&fact.id) && !self.0.pool.alive(&fact.id);
+                    state.track(&fact.id).dormant = dormant;
                     !dormant
                 })
+                .map(|fact| (fact.id.clone(), fact.name.clone()))
                 .collect()
         };
         let mut reported = BTreeSet::new();
@@ -292,28 +307,15 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Profiles or subscriptions may have changed: whether each profile is kept running is
-    /// read again.
-    ///
-    /// # Errors
-    /// The store could not be read.
-    pub async fn changed(&self) -> Result<(), AppError> {
-        let facts = self.0.facts().await?;
+    /// Hears the profile facts the store published since it last did and moves the next
+    /// wakeup: a route that changed a profile, its accounts or a sign-in answers only after
+    /// this. The scheduler's task hears new facts on its own too.
+    pub fn catch_up(&self) {
         let mut state = self.0.lock();
-        state.facts = facts;
         let pool = self.0.pool.state();
         let now = Instant::now();
-        let profiles: BTreeSet<ProfileId> = state
-            .facts
-            .iter()
-            .map(|fact| fact.id.clone())
-            .chain(state.tracks.keys().cloned())
-            .collect();
-        for profile in profiles {
-            self.0.hear(&mut state, &pool, &profile, None, false, now);
-        }
+        self.0.follow(&mut state, &pool, now);
         self.0.schedule(&mut state, &pool, now);
-        Ok(())
     }
 
     /// Gateway activity on the profile: a request opened or closed, and whether any is still
@@ -512,45 +514,6 @@ impl Shared {
         Duration::from_millis(u64::try_from(self.timing.restart.coalesce).unwrap_or(0))
     }
 
-    /// No OAuth account: its core starts on demand and stops when idle. OAuth ones must keep
-    /// refreshing tokens.
-    fn lazy(&self, profile: &ProfileId) -> bool {
-        self.accounts.oauth_count(profile).unwrap_or(0) == 0
-    }
-
-    /// The profiles in creation order, with each one's API-key accounts; the OAuth account
-    /// counts go to [`Accounts`].
-    async fn facts(&self) -> Result<Vec<Fact>, AppError> {
-        let loaded = self
-            .store
-            .call(|db| {
-                let mut facts = Vec::new();
-                for profile in db.profiles()? {
-                    let oauth = db.account_metadata(&profile.id)?.len();
-                    let api = db.api_accounts(&profile.id)?.len();
-                    facts.push((
-                        Fact {
-                            id: profile.id,
-                            name: profile.name,
-                            enabled: profile.enabled,
-                            api,
-                        },
-                        oauth,
-                    ));
-                }
-                Ok(facts)
-            })
-            .await
-            .map_err(AppError::from)?;
-        Ok(loaded
-            .into_iter()
-            .map(|(fact, oauth)| {
-                self.accounts.set_oauth_count(&fact.id, oauth);
-                fact
-            })
-            .collect())
-    }
-
     fn spawn(self: &Arc<Self>, work: impl Future<Output = ()> + Send + 'static) {
         self.work.send_modify(|count| *count += 1);
         let working = Working(Arc::clone(self));
@@ -561,8 +524,38 @@ impl Shared {
     }
 
     fn report_for(&self, state: &State, profile: &ProfileId, message: &str) {
-        if let Some(fact) = state.fact(profile) {
-            self.host.report(format!("{}: {message}", fact.name));
+        if let Some(entry) = state.fact(profile, |fact| format!("{}: {message}", fact.name)) {
+            self.host.report(entry);
+        }
+    }
+
+    /// Hears the profile facts the store published since the scheduler last did: whether each
+    /// profile, and each one it tracks that no longer exists, is kept running. Answers whether
+    /// there were any.
+    fn follow(self: &Arc<Self>, state: &mut State, pool: &PoolState, now: Instant) -> bool {
+        // A closed store publishes nothing more.
+        if !state.facts.has_changed().unwrap_or(false) {
+            return false;
+        }
+        let facts = Arc::clone(&state.facts.borrow_and_update());
+        let profiles: BTreeSet<ProfileId> = facts
+            .iter()
+            .map(|fact| fact.id.clone())
+            .chain(state.tracks.keys().cloned())
+            .collect();
+        for profile in profiles {
+            self.hear(state, pool, &profile, None, false, now);
+        }
+        true
+    }
+
+    /// The store published new facts.
+    fn heard(self: &Arc<Self>) {
+        let mut state = self.lock();
+        let pool = self.pool.state();
+        let now = Instant::now();
+        if self.follow(&mut state, &pool, now) {
+            self.schedule(&mut state, &pool, now);
         }
     }
 
@@ -575,17 +568,19 @@ impl Shared {
         state.next_quotas = Some(now + self.timing.quotas);
         state.next_prune = Some(now + self.timing.prune);
         let pool = self.pool.state();
-        let profiles: Vec<ProfileId> = state.facts.iter().map(|fact| fact.id.clone()).collect();
-        for profile in profiles {
-            let launched = reported.contains(&profile);
-            self.hear(&mut state, &pool, &profile, None, launched, now);
+        let facts = Arc::clone(&state.facts.borrow_and_update());
+        for fact in facts.iter() {
+            let launched = reported.contains(&fact.id);
+            self.hear(&mut state, &pool, &fact.id, None, launched, now);
         }
         self.schedule(&mut state, &pool, now);
+        let published = state.facts.clone();
         drop(state);
-        tokio::spawn(Arc::clone(self).run());
+        tokio::spawn(Arc::clone(self).run(published));
     }
 
-    async fn run(self: Arc<Self>) {
+    /// Sleeps until the next wakeup, an earlier one, or new profile facts.
+    async fn run(self: Arc<Self>, mut published: watch::Receiver<ProfileFacts>) {
         loop {
             let notified = self.notify.notified();
             let mut notified = std::pin::pin!(notified);
@@ -594,12 +589,18 @@ impl Shared {
                 return;
             }
             let scheduled = self.lock().scheduled;
-            match scheduled {
-                Some(at) => tokio::select! {
+            // A closed store publishes nothing more: its branch is skipped.
+            if let Some(at) = scheduled {
+                tokio::select! {
                     () = tokio::time::sleep_until(at) => self.tick(),
                     () = notified => {}
-                },
-                None => notified.await,
+                    Ok(()) = published.changed() => self.heard(),
+                }
+            } else {
+                tokio::select! {
+                    () = notified => {}
+                    Ok(()) = published.changed() => self.heard(),
+                }
             }
         }
     }
@@ -619,9 +620,7 @@ impl Shared {
         if !state.begun || pool.closing {
             return;
         }
-        let kept = state
-            .fact(profile)
-            .is_some_and(|fact| fact.api + self.accounts.oauth_count(profile).unwrap_or(0) > 0)
+        let kept = state.fact(profile, ProfileFact::kept).unwrap_or(false)
             && !state.track(profile).dormant;
         let known = state.track(profile).restart;
         let mut restart = known.unwrap_or_else(|| {
@@ -723,7 +722,7 @@ impl Shared {
     fn idle_at(&self, state: &State, pool: &PoolState, profile: &ProfileId) -> Option<Instant> {
         let track = state.tracks.get(profile);
         if !pool.usable(profile)
-            || !self.lazy(profile)
+            || !state.lazy(profile)
             || track.is_some_and(|track| track.sleeping || track.open)
             || pool.starting(profile)
             || pool.holding(profile)

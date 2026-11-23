@@ -53,8 +53,29 @@ fn reset_request_setting(identity: &str, credit_id: &str) -> Result<String, Stor
 }
 const RETENTION_SETTING: &str = "usage-retention-days";
 
-/// Profile id to name, in creation order; shared until the next profile write.
-pub type ProfileNames = Arc<[(ProfileId, String)]>;
+/// What the scheduler and the tray know of a profile: the store publishes every profile's,
+/// in creation order, before it acknowledges a write that changes one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileFact {
+    pub id: ProfileId,
+    pub name: String,
+    pub enabled: bool,
+    /// API-key accounts.
+    pub api: usize,
+    /// OAuth accounts, as the last account sync stored them.
+    pub oauth: usize,
+}
+
+impl ProfileFact {
+    /// It has a subscription, so the app keeps its core running (`keepsRunning`).
+    #[must_use]
+    pub const fn kept(&self) -> bool {
+        self.api + self.oauth > 0
+    }
+}
+
+/// Every profile's facts, in creation order.
+pub type ProfileFacts = Arc<[ProfileFact]>;
 
 /// One page of usage rows; `next` continues after it and is `None` after the last page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,16 +157,20 @@ pub struct Db {
     vault: Vault,
     page_size: u32,
     usage_generation: u64,
-    names: Option<ProfileNames>,
     auth: watch::Sender<Arc<AuthSnapshot>>,
     auth_stale: bool,
+    facts: watch::Sender<ProfileFacts>,
+    facts_stale: bool,
+}
+
+/// What the store publishes, for [`crate::Store`] to hand out.
+pub(crate) struct Published {
+    pub(crate) auth: watch::Receiver<Arc<AuthSnapshot>>,
+    pub(crate) facts: watch::Receiver<ProfileFacts>,
 }
 
 impl Db {
-    pub(crate) fn open(
-        directory: &DataDir,
-        vault: Vault,
-    ) -> Result<(Self, watch::Receiver<Arc<AuthSnapshot>>), StoreError> {
+    pub(crate) fn open(directory: &DataDir, vault: Vault) -> Result<(Self, Published), StoreError> {
         owner_only_directory(directory.path(), || Ok::<(), StoreError>(()))?;
         let path = directory.database();
         // chmod and SQLite follow a symbolic link, so refuse one before either runs.
@@ -162,29 +187,68 @@ impl Db {
         // Room for every statement below, so none is compiled again (the default keeps 16).
         connection.set_prepared_statement_cache_capacity(32);
         let page_size = registry().usage_page_size;
-        let (auth, receiver) = watch::channel(Arc::new(AuthSnapshot(Ok(HashMap::new()))));
+        let (auth, auth_receiver) = watch::channel(Arc::new(AuthSnapshot(Ok(HashMap::new()))));
+        let (facts, facts_receiver) = watch::channel(ProfileFacts::from([]));
         let mut db = Self {
             connection,
             vault,
             page_size,
             usage_generation: 0,
-            names: None,
             auth,
             auth_stale: true,
+            facts,
+            facts_stale: true,
         };
         db.publish_if_stale();
-        Ok((db, receiver))
+        Ok((
+            db,
+            Published {
+                auth: auth_receiver,
+                facts: facts_receiver,
+            },
+        ))
     }
 
-    /// Rebuilds the auth snapshot after a profile or secret write. A failure publishes the
-    /// error, so the gateway refuses every key rather than trusting a stale one.
+    /// Rebuilds the auth snapshot after a profile or secret write, and the profile facts after
+    /// a profile or account write. A failure to read the keys publishes the error, so the
+    /// gateway refuses every key rather than trusting a stale one; facts that cannot be read
+    /// keep their last value, and the next write tries again. Unchanged facts wake no one.
     pub(crate) fn publish_if_stale(&mut self) {
-        if !self.auth_stale {
-            return;
+        if self.auth_stale {
+            let entries = self.read_auth().map_err(Arc::new);
+            self.auth.send_replace(Arc::new(AuthSnapshot(entries)));
+            self.auth_stale = false;
         }
-        let entries = self.read_auth().map_err(Arc::new);
-        self.auth.send_replace(Arc::new(AuthSnapshot(entries)));
-        self.auth_stale = false;
+        if self.facts_stale {
+            self.facts_stale = false;
+            match self.read_facts() {
+                Ok(facts) => {
+                    self.facts.send_if_modified(|current| {
+                        let changed = **current != *facts;
+                        if changed {
+                            *current = facts;
+                        }
+                        changed
+                    });
+                }
+                Err(error) => tracing::error!(%error, "the profile facts could not be read"),
+            }
+        }
+    }
+
+    fn read_facts(&self) -> Result<ProfileFacts, StoreError> {
+        self.profiles()?
+            .into_iter()
+            .map(|profile| {
+                Ok(ProfileFact {
+                    oauth: self.account_metadata(&profile.id)?.len(),
+                    api: self.api_accounts(&profile.id)?.len(),
+                    id: profile.id,
+                    name: profile.name,
+                    enabled: profile.enabled,
+                })
+            })
+            .collect()
     }
 
     fn read_auth(&self) -> Result<HashMap<KeyDigest, AuthEntry>, StoreError> {
@@ -263,23 +327,6 @@ impl Db {
             .ok_or_else(|| AppError::new("Profile not found.", 404).into())
     }
 
-    /// Profile id to name, in creation order; the same `Arc` until the next profile write.
-    ///
-    /// # Errors
-    /// As [`Db::profiles`].
-    pub fn profile_names(&mut self) -> Result<ProfileNames, StoreError> {
-        if let Some(names) = &self.names {
-            return Ok(Arc::clone(names));
-        }
-        let names: ProfileNames = self
-            .profiles()?
-            .into_iter()
-            .map(|profile| (profile.id, profile.name))
-            .collect();
-        self.names = Some(Arc::clone(&names));
-        Ok(names)
-    }
-
     /// Creates a disabled fill-first profile with a unique slug and new client, core and
     /// management keys.
     ///
@@ -320,7 +367,7 @@ impl Db {
             db.set_secret(&secret_id(id, "management"), management.expose_secret())?;
             Ok(())
         })?;
-        self.names = None;
+        self.facts_stale = true;
         Ok(profile)
     }
 
@@ -330,7 +377,7 @@ impl Db {
     /// A database error.
     pub fn save_profile(&mut self, profile: &Profile) -> Result<(), StoreError> {
         self.auth_stale = true;
-        self.names = None;
+        self.facts_stale = true;
         self.run(
             "UPDATE profiles SET body=? WHERE id=?",
             params![serde_json::to_string(profile)?, profile.id.as_str()],
@@ -343,15 +390,16 @@ impl Db {
     /// # Errors
     /// A database error.
     pub fn save_account_metadata(
-        &self,
+        &mut self,
         profile: &ProfileId,
         accounts: &[Account],
     ) -> Result<(), StoreError> {
-        self.run(
+        let written = self.run(
             "INSERT INTO settings VALUES (?,?) ON CONFLICT(id) DO UPDATE
         SET value=excluded.value WHERE value!=excluded.value",
             params![accounts_setting(profile), serde_json::to_string(accounts)?],
         )?;
+        self.facts_stale |= written > 0;
         Ok(())
     }
 
@@ -466,6 +514,7 @@ impl Db {
         key: Option<&ApiKey>,
     ) -> Result<(), StoreError> {
         let body = serde_json::to_string(account)?;
+        self.facts_stale = true;
         self.transaction(|db| {
             db.run(
                 "INSERT OR REPLACE INTO api_accounts VALUES (?,?,?)",
@@ -487,6 +536,7 @@ impl Db {
         profile: &ProfileId,
         account: &AccountId,
     ) -> Result<(), StoreError> {
+        self.facts_stale = true;
         self.transaction(|db| {
             db.run(
                 "DELETE FROM api_accounts WHERE profile_id=? AND id=?",

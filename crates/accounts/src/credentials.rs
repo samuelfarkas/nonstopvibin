@@ -289,7 +289,7 @@ impl<F: Fetch + 'static> Credentials<F> {
             .await?;
             self.0.accounts.sync(pool, profile).await?;
         }
-        self.0.scheduler.changed().await?;
+        self.0.scheduler.catch_up();
         let mut account = self
             .0
             .accounts
@@ -387,7 +387,7 @@ impl<F: Fetch + 'static> Credentials<F> {
                     db.save_api_account(&profile, &saved, Some(&store_key))
                 })
                 .await?;
-            this.0.scheduler.changed().await?;
+            this.0.scheduler.catch_up();
             this.pool().start(&id, false).await?;
             this.pool().configure(&id).await
         })
@@ -520,7 +520,8 @@ impl<F: Fetch + 'static> Credentials<F> {
             .await?;
             self.0.accounts.sync(pool, profile).await?;
         }
-        self.0.scheduler.changed().await
+        self.0.scheduler.catch_up();
+        Ok(())
     }
 
     async fn listed(&self, profile: &ProfileId, account: &AccountId) -> Result<Account, AppError> {

@@ -5,6 +5,8 @@ mod db;
 mod store;
 mod vault;
 
-pub use db::{AuthEntry, AuthSnapshot, Db, ProfileNames, UsageCursor, UsagePage, UsageRange};
+pub use db::{
+    AuthEntry, AuthSnapshot, Db, ProfileFact, ProfileFacts, UsageCursor, UsagePage, UsageRange,
+};
 pub use store::{Store, StoreError};
 pub use vault::{Vault, VaultError};

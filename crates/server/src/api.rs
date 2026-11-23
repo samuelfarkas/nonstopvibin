@@ -230,7 +230,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             Route::CreateProfile => {
                 let name = parse::profile_name(&body(request).await?)?;
                 let profile = self.store.call(move |db| db.create_profile(&name)).await?;
-                self.profiles_changed().await?;
+                self.cores.scheduler.catch_up();
                 json(StatusCode::CREATED, &profile)
             }
             Route::PatchProfile => {
@@ -252,7 +252,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                         db.save_profile(&profile)
                     })
                     .await?;
-                self.profiles_changed().await?;
+                self.cores.scheduler.catch_up();
                 self.cores.scheduler.pool().configure(&id).await?;
                 self.state_reply().await
             }
@@ -442,7 +442,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                     .credentials
                     .add_api_account(&call.profile()?, input)
                     .await?;
-                self.profiles_changed().await?;
+                self.cores.scheduler.catch_up();
                 let state = self.state().await?;
                 json(StatusCode::CREATED, &state)
             }
@@ -462,13 +462,6 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
     async fn profile(&self, call: &Call<'_>) -> Result<Profile, AppError> {
         let id = call.profile()?;
         Ok(self.store.call(move |db| db.profile(&id)).await?)
-    }
-
-    /// The scheduler and the tray read profiles again.
-    async fn profiles_changed(&self) -> Result<(), AppError> {
-        self.cores.scheduler.changed().await?;
-        self.refresh_names().await?;
-        Ok(())
     }
 
     /// Asks the profile's own gateway endpoint for its models, as an agent would.

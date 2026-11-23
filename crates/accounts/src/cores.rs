@@ -266,7 +266,12 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
         let id = profile.clone();
         self.store.call(move |db| db.profile(&id)).await?;
         let pool = self.pool();
-        let keeps_running = !self.accounts.list(profile).await?.is_empty();
+        let keeps_running = self
+            .store
+            .facts()
+            .borrow()
+            .iter()
+            .any(|fact| fact.id == *profile && fact.kept());
         let failure = if keeps_running {
             pool.start(profile, false).await.err()
         } else {

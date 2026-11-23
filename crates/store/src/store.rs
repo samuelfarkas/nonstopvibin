@@ -10,7 +10,7 @@ use nsv_domain::id::InvalidId;
 use nsv_files::DataDir;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::db::{AuthSnapshot, Db};
+use crate::db::{AuthSnapshot, Db, ProfileFacts, Published};
 use crate::vault::{Vault, VaultError};
 
 /// Calls waiting for the store thread before a caller waits to enqueue.
@@ -52,6 +52,7 @@ enum Job {
 pub struct Store {
     jobs: mpsc::Sender<Job>,
     auth: watch::Receiver<Arc<AuthSnapshot>>,
+    facts: watch::Receiver<ProfileFacts>,
     directory: DataDir,
     vault: Vault,
 }
@@ -80,18 +81,19 @@ impl Store {
         thread::Builder::new()
             .name("nsv-store".to_owned())
             .spawn(move || serve(&thread_directory, thread_vault, opened, queue))?;
-        let auth = opening.await.map_err(|_| StoreError::Closed)??;
+        let Published { auth, facts } = opening.await.map_err(|_| StoreError::Closed)??;
         Ok(Self {
             jobs,
             auth,
+            facts,
             directory: directory.clone(),
             vault,
         })
     }
 
     /// Runs `work` on the store thread as one atomic section and returns its result. A profile
-    /// or secret write in `work` has published a new [`Store::auth`] snapshot by the time this
-    /// returns.
+    /// or secret write in `work` has published a new [`Store::auth`] snapshot, and a profile or
+    /// account write new [`Store::facts`], by the time this returns.
     ///
     /// # Errors
     /// What `work` returns, or [`StoreError::Closed`].
@@ -117,6 +119,12 @@ impl Store {
         self.auth.clone()
     }
 
+    /// Every profile's facts, current before any write is acknowledged.
+    #[must_use]
+    pub fn facts(&self) -> watch::Receiver<ProfileFacts> {
+        self.facts.clone()
+    }
+
     #[must_use]
     pub fn directory(&self) -> &DataDir {
         &self.directory
@@ -138,7 +146,7 @@ impl Store {
     }
 }
 
-type Opened = Result<watch::Receiver<Arc<AuthSnapshot>>, StoreError>;
+type Opened = Result<Published, StoreError>;
 
 fn serve(
     directory: &DataDir,
@@ -147,8 +155,8 @@ fn serve(
     mut queue: mpsc::Receiver<Job>,
 ) {
     let mut db = match Db::open(directory, vault) {
-        Ok((db, auth)) => {
-            if opened.send(Ok(auth)).is_err() {
+        Ok((db, published)) => {
+            if opened.send(Ok(published)).is_err() {
                 return;
             }
             db

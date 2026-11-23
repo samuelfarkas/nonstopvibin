@@ -266,6 +266,37 @@ async fn a_profile_with_an_oauth_account_starts_at_launch_and_never_stops_for_be
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_account_sync_that_removes_the_last_subscription_lets_the_idle_core_stop() {
+    let world = World::new(short(IDLE)).await;
+    let profile = world.profile("Lazy fixture", true, false, true).await;
+    world.fake.knobs(|knobs| {
+        knobs.listings.insert(
+            profile.clone(),
+            json!({ "files": [{ "name": "claude.json", "provider": "claude", "auth_index": "1" }] }),
+        );
+    });
+    world.run(world.scheduler.launch()).await.unwrap();
+    assert_eq!(world.chat(&profile, "fixture-model").await, 200);
+    world.pass(IDLE).await;
+    world.assert_only_cleanup_due("a subscription keeps the core running");
+    // The subscription is gone from the core; a sync no route asked for stores that.
+    world.fake.knobs(|knobs| {
+        knobs
+            .listings
+            .insert(profile.clone(), json!({ "files": [] }))
+    });
+    let synced = world.run(world.accounts.sync(world.pool(), &profile)).await;
+    assert_eq!(synced.unwrap(), Some(0));
+    world
+        .until("the idle stop", IDLE * 2, |world| {
+            !world.pool().alive(&profile)
+        })
+        .await;
+    assert!(world.scheduler.is_dormant(&profile));
+    assert_eq!(world.launches(&profile), 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn an_open_ui_a_pending_sign_in_or_an_open_request_keeps_an_idle_core() {
     let (world, profile) = lazy_world(false).await;
     world.scheduler.launch().await.unwrap();
