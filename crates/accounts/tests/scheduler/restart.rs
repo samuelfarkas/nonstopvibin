@@ -1,6 +1,7 @@
 //! tests/core-restart.test.ts: the scheduler starts again a profile the app keeps running (it
 //! has a subscription) whose core is not running. Refresh is the quota routes' and stays out.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use nsv_accounts::scheduler::{TIMING, Timing};
@@ -498,6 +499,33 @@ async fn shutdown_abandons_a_restarted_profiles_quota_check_and_stores_nothing_f
     assert!(world.host.quota_stored.lock().unwrap().is_empty());
     assert!(world.reports().is_empty(), "{:?}", world.reports());
     assert!(!world.pool().alive(&profile));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_quota_answer_that_comes_as_shutdown_begins_is_not_stored() {
+    // Each round's restart hears of shutdown in the wakeup that brings its quota answer. If
+    // either could win that tie, all sixteen rounds would pick shutdown only once in 65,536 runs.
+    // One profile a round: the fake's cores do not hold their ports, so concurrent starts could
+    // be given the same one.
+    for _ in 0..16 {
+        let world = World::new(timing(100, 300_000, 10)).await;
+        subscribed(&world, "Quota fixture").await;
+        world.host.quota_at_shutdown.store(true, Ordering::SeqCst);
+        world.scheduler.launch().await.unwrap();
+        // The restart waits out the coalescing period. Its start and account sync need no
+        // clock, and moving it on while they run could only time them out.
+        world.pass(Duration::from_millis(100)).await;
+        for _ in 0..1_000 {
+            if !world.host.quota_checks.lock().unwrap().is_empty() {
+                break;
+            }
+            world.settle().await;
+        }
+        assert_eq!(world.host.quota_checks.lock().unwrap().len(), 1);
+        world.run(world.scheduler.shutdown()).await.unwrap();
+        assert_eq!(*world.host.quota_stored.lock().unwrap(), []);
+        assert!(world.reports().is_empty(), "{:?}", world.reports());
+    }
 }
 
 #[tokio::test(start_paused = true)]
