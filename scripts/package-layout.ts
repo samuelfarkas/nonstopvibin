@@ -424,7 +424,6 @@ export function verifyMacSignature(app: string): void {
   }
 }
 
-/** Unpacks a built artifact into a temporary folder and runs its checks. */
 export function verifyArtifact(file: string): void {
   const name = basename(file);
   const work = mkdtempSync(join(tmpdir(), "nv-verify-"));

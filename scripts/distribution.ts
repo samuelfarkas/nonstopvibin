@@ -114,7 +114,6 @@ const rustTargets = {
   },
 } as const;
 
-/** The Rust target triple of one kind of binary for a Node architecture name. */
 export function rustTarget(
   kind: keyof typeof rustTargets,
   arch: string,

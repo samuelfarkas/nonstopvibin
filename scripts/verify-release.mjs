@@ -61,7 +61,6 @@ export function verifyReleaseTag(tag, manifest, cargo, repository) {
   return channel;
 }
 
-/** Checks `directory` holds every asset a release of `version` builds. */
 export async function verifyReleaseAssets(
   directory,
   version,

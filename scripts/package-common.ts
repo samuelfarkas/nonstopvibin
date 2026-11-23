@@ -36,7 +36,6 @@ export function run(
   execFileSync(command, args, { cwd: repo, stdio: "inherit", ...options });
 }
 
-/** Builds `packages` in release mode for `target` and returns the folder with the binaries. */
 export function cargoBuild(
   { target, packages }: RustBuild,
   env: Record<string, string> = {},
@@ -82,7 +81,6 @@ export const coreLayout: {
   license: string;
   version: string;
 } = JSON.parse(coreTool("layout"));
-/** What a packaged core folder holds. */
 export const coreFiles = [coreLayout.binary, coreLayout.manifest];
 
 /**
