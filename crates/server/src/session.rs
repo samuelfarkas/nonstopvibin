@@ -6,7 +6,9 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
+use nsv_domain::endpoint::{loopback_origin, session_link};
 use nsv_domain::secret::SessionToken;
+use nsv_domain::time::{iso_string, parse_iso};
 use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
 use nsv_store::files::{read_own_file, write_atomic_unsynced};
 use nsv_store::layout::session_path;
@@ -23,7 +25,8 @@ pub struct Session {
     pub token: SessionToken,
     pub allow_hosts: Vec<String>,
     pub version: String,
-    pub started_at: String,
+    /// When the daemon started, in milliseconds since the epoch.
+    pub started_at: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,11 +52,7 @@ impl Session {
     /// `http://127.0.0.1:<port>/#session=<token>`: the fragment never reaches the server.
     #[must_use]
     pub fn url(&self) -> String {
-        format!(
-            "http://127.0.0.1:{}/#session={}",
-            self.port,
-            self.token.expose_secret()
-        )
+        session_link(&loopback_origin(self.port), &self.token)
     }
 
     /// The same link on each allowed HTTPS host.
@@ -61,7 +60,7 @@ impl Session {
     pub fn https_urls(&self) -> Vec<String> {
         self.allow_hosts
             .iter()
-            .map(|host| format!("https://{host}/#session={}", self.token.expose_secret()))
+            .map(|host| session_link(&format!("https://{host}"), &self.token))
             .collect()
     }
 
@@ -79,6 +78,9 @@ impl Session {
         let Ok(stored) = serde_json::from_str::<Stored>(&text) else {
             return Ok(None);
         };
+        let Some(started_at) = parse_iso(&stored.started_at) else {
+            return Ok(None);
+        };
         let valid = stored.pid > 0
             && stored.port > 0
             && !stored.token.is_empty()
@@ -89,7 +91,7 @@ impl Session {
             token: SessionToken::new(stored.token),
             allow_hosts: stored.allow_hosts,
             version: stored.version,
-            started_at: stored.started_at,
+            started_at,
         }))
     }
 
@@ -105,7 +107,7 @@ impl Session {
             "token": self.token.expose_secret(),
             "allowHosts": self.allow_hosts,
             "version": self.version,
-            "startedAt": self.started_at,
+            "startedAt": iso_string(self.started_at),
         })
         .to_string();
         write_atomic_unsynced(&session_path(directory), text.as_bytes(), 0o600)

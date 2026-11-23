@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use nsv_domain::helper::Origin;
+use nsv_domain::endpoint::Origin;
 use serde_json::{Value, json};
 
 const PRELUDE: &str = include_str!("checks/prelude.js");

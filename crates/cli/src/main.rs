@@ -9,8 +9,9 @@ mod service;
 use std::fmt::Display;
 use std::io::Write;
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use nsv_domain::endpoint::LOOPBACK_HOST;
 use nsv_server::{Session, VERSION, valid_allow_host};
 
 use crate::args::Args;
@@ -57,55 +58,6 @@ pub(crate) fn say(text: &str) {
 /// One line on standard error.
 pub(crate) fn complain(text: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{text}");
-}
-
-/// Milliseconds since the epoch.
-pub(crate) fn epoch_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-        .unwrap_or(0)
-}
-
-/// `Date.parse` of a `toISOString()` timestamp: `YYYY-MM-DDTHH:MM:SS.mmmZ`.
-pub(crate) fn parse_iso(text: &str) -> Option<i64> {
-    let bytes = text.as_bytes();
-    let number = |range: std::ops::Range<usize>| -> Option<i64> {
-        text.get(range)?.bytes().try_fold(0_i64, |total, b| {
-            b.is_ascii_digit().then(|| total * 10 + i64::from(b - b'0'))
-        })
-    };
-    let shape = bytes.len() == 24
-        && [
-            (4, b'-'),
-            (7, b'-'),
-            (10, b'T'),
-            (13, b':'),
-            (16, b':'),
-            (19, b'.'),
-            (23, b'Z'),
-        ]
-        .iter()
-        .all(|(index, byte)| bytes.get(*index) == Some(byte));
-    if !shape {
-        return None;
-    }
-    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
-    // Howard Hinnant's days_from_civil.
-    let shifted = if month <= 2 { year - 1 } else { year };
-    let era = shifted.div_euclid(400);
-    let year_of_era = shifted - era * 400;
-    let day_of_year = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146_097 + day_of_era - 719_468;
-    Some(
-        days * 86_400_000
-            + number(11..13)? * 3_600_000
-            + number(14..16)? * 60_000
-            + number(17..19)? * 1000
-            + number(20..23)?,
-    )
 }
 
 /// The user name a tunnel command logs in as.
@@ -204,7 +156,7 @@ fn url_text(session: &Session, ssh_connection: Option<&str>) -> String {
         .and_then(|connection| tunnel_command(connection, &user(), session.port));
     let mut lines = vec![
         format!(
-            "NonstopVibin is running on 127.0.0.1:{} (pid {}).",
+            "NonstopVibin is running on {LOOPBACK_HOST}:{} (pid {}).",
             session.port, session.pid
         ),
         String::new(),
@@ -378,17 +330,6 @@ mod tests {
     use nsv_domain::secret::SessionToken;
 
     #[test]
-    fn iso_timestamps_parse_back_to_their_milliseconds() {
-        for milliseconds in [0, 1_763_812_345_678, 951_782_400_000, 4_102_444_799_999] {
-            assert_eq!(
-                parse_iso(&nsv_domain::time::iso_string(milliseconds)),
-                Some(milliseconds)
-            );
-        }
-        assert_eq!(parse_iso("2026-11-22T11:00:00Z"), None);
-    }
-
-    #[test]
     fn the_legacy_background_flag_starts_the_desktop_app_without_a_display() {
         let opens = |line: &str, graphical| {
             let arguments: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
@@ -413,7 +354,7 @@ mod tests {
             token: SessionToken::new("t"),
             allow_hosts: vec![],
             version: VERSION.to_owned(),
-            started_at: String::new(),
+            started_at: 0,
         };
         assert!(url_text(&session, Some("")).contains("Open this link on this machine:"));
         assert_eq!(tunnel_command("1 2 3", "u", 4320), None);
@@ -427,6 +368,7 @@ mod golden {
     use std::path::Path;
 
     use nsv_domain::secret::SessionToken;
+    use nsv_domain::time::parse_iso;
     use serde_json::Value;
 
     use super::{tunnel_command, url_text, user};
@@ -536,7 +478,7 @@ mod golden {
                 token: SessionToken::new(stored["token"].as_str().unwrap()),
                 allow_hosts: strings(&stored["allowHosts"]),
                 version: stored["version"].as_str().unwrap().to_owned(),
-                started_at: stored["startedAt"].as_str().unwrap().to_owned(),
+                started_at: parse_iso(stored["startedAt"].as_str().unwrap()).unwrap(),
             };
             let text = url_text(&session, case["input"]["sshConnection"].as_str())
                 .replace(&format!("{}@", user()), "<user>@");

@@ -2,16 +2,13 @@
 //! it does, and how it shuts down.
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use nsv_accounts::catalog::ModelCatalog;
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Fetch;
@@ -22,11 +19,12 @@ use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::install::Releases;
 use nsv_core::pool::{Backend, PoolState, Processes, READY};
+use nsv_domain::endpoint::{self, Origin};
 use nsv_domain::error::AppError;
-use nsv_domain::helper::Origin;
 use nsv_domain::id::ProfileId;
+use nsv_domain::random;
 use nsv_domain::secret::SessionToken;
-use nsv_domain::time::iso_string;
+use nsv_domain::sync::locked;
 use nsv_gateway::Gateway;
 use nsv_shell::{HostEvent, ShellHost, TrayStatus};
 use nsv_store::{AuthSnapshot, ProfileNames, ServerLock, Store, StoreError, Vault, VaultError};
@@ -112,10 +110,6 @@ pub enum StartError {
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct CloseError(String);
-
-pub(crate) fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 /// The error list the interface shows: the last five distinct messages, oldest first.
 #[derive(Debug, Default)]
@@ -237,7 +231,7 @@ pub(crate) struct App<F> {
     pub(crate) imports: Arc<Mutex<ImportCatalog>>,
     pub(crate) phase: watch::Sender<Phase>,
     lock: Mutex<Option<ServerLock>>,
-    started_at: Mutex<Option<String>>,
+    started_at: Mutex<Option<i64>>,
     closed: OnceCell<Result<(), CloseError>>,
 }
 
@@ -248,32 +242,6 @@ impl<F: Fetch + Releases + Clone + 'static> Clone for Daemon<F> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
-}
-
-fn random<const N: usize>() -> io::Result<[u8; N]> {
-    let mut bytes = [0; N];
-    getrandom::fill(&mut bytes)?;
-    Ok(bytes)
-}
-
-/// `crypto.randomUUID()`.
-fn random_uuid() -> io::Result<String> {
-    let mut bytes = random::<16>()?;
-    if let Some(version) = bytes.get_mut(6) {
-        *version = *version & 0x0f | 0x40;
-    }
-    if let Some(variant) = bytes.get_mut(8) {
-        *variant = *variant & 0x3f | 0x80;
-    }
-    let hex = bytes.iter().fold(String::new(), |mut hex, byte| {
-        let _infallible = write!(hex, "{byte:02x}");
-        hex
-    });
-    Ok([0..8, 8..12, 12..16, 16..20, 20..32]
-        .into_iter()
-        .filter_map(|range| hex.get(range))
-        .collect::<Vec<_>>()
-        .join("-"))
 }
 
 impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
@@ -315,7 +283,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
         store.call(move |db| db.prune_usage(now)).await?;
         let listener = bind(options.port)?;
         let port = listener.local_addr()?.port();
-        let origin_text = format!("http://127.0.0.1:{port}");
+        let origin_text = endpoint::loopback_origin(port);
         let origin =
             Origin::parse(&origin_text).map_err(|error| StartError::Other(error.to_string()))?;
         let base =
@@ -361,7 +329,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             options.agents.clone(),
         )
         .map_err(|error| StartError::Other(error.to_string()))?;
-        let token = SessionToken::new(URL_SAFE_NO_PAD.encode(random::<32>()?));
+        let token = SessionToken::generate()?;
         let app = Arc::new(App {
             imports: Arc::new(Mutex::new(ImportCatalog::new(&options.agents.home))),
             shared,
@@ -374,7 +342,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             origin,
             base,
             token,
-            asset_version: random_uuid()?,
+            asset_version: random::uuid()?,
             store,
             cores,
             gateway,
@@ -428,7 +396,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
             token: app.token.clone(),
             allow_hosts: app.allow_hosts.clone(),
             version: VERSION.to_owned(),
-            started_at: iso_string((app.clock)()),
+            started_at: (app.clock)(),
         };
         session.write(&app.directory)?;
         *locked(&app.started_at) = Some(session.started_at);
@@ -444,7 +412,7 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
     /// What `server.json` says once [`Daemon::restore`] wrote it.
     #[must_use]
     pub fn session(&self) -> Option<Session> {
-        let started_at = locked(&self.0.started_at).clone()?;
+        let started_at = (*locked(&self.0.started_at))?;
         Some(Session {
             pid: std::process::id(),
             port: self.0.port,

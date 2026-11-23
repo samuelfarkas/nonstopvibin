@@ -1,8 +1,10 @@
 //! `window.nonstopvibin`: the user script that builds it, and the parser every IPC message
 //! from a page passes before the helper acts on it.
 
-use nsv_domain::helper::{DaemonCall, Origin, Outcome};
+use nsv_domain::endpoint::Origin;
+use nsv_domain::helper::{DaemonCall, Outcome};
 use nsv_domain::id::ProfileId;
+use nsv_domain::js::utf16_len;
 use nsv_domain::secret::same_secret;
 use serde_json::Value;
 
@@ -179,7 +181,7 @@ pub(crate) fn parse(
     };
     let call = match (method.as_str(), message.remove("arg")) {
         ("bootstrap", None) => Call::Bootstrap,
-        ("copy", Some(Value::String(text))) if units(&text) <= COPY_LIMIT => Call::Copy(text),
+        ("copy", Some(Value::String(text))) if utf16_len(&text) <= COPY_LIMIT => Call::Copy(text),
         ("showWindow", None) => Call::ShowWindow(None),
         ("showWindow", Some(Value::String(profile))) => match ProfileId::parse(&profile) {
             Ok(profile) => Call::ShowWindow(Some(profile)),
@@ -187,7 +189,7 @@ pub(crate) fn parse(
         },
         ("releaseWindow", None) => Call::ReleaseWindow,
         ("chooseProject", None) => Call::ChooseProject,
-        ("openExternal", Some(Value::String(url))) if units(&url) <= OPEN_EXTERNAL_LIMIT => {
+        ("openExternal", Some(Value::String(url))) if utf16_len(&url) <= OPEN_EXTERNAL_LIMIT => {
             Call::Daemon(DaemonCall::OpenExternal(url))
         }
         ("getLoginItem", None) => Call::Daemon(DaemonCall::GetLoginItem),
@@ -228,12 +230,7 @@ fn invalid(id: u64, method: &str) -> Rejected {
 
 /// Whether a new window's URL may go to the daemon, which applies `openExternal`'s limit.
 pub(crate) fn fits_external(url: &str) -> bool {
-    units(url) <= OPEN_EXTERNAL_LIMIT
-}
-
-/// A string's length as JavaScript's `.length` counts it.
-fn units(text: &str) -> usize {
-    text.encode_utf16().count()
+    utf16_len(url) <= OPEN_EXTERNAL_LIMIT
 }
 
 #[cfg(test)]

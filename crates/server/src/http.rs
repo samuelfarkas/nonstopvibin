@@ -21,10 +21,12 @@ use nsv_accounts::quota::QuotaError;
 use nsv_accounts::scheduler::Scheduler;
 use nsv_agents::{AgentError, catalog_entries, offered_models};
 use nsv_core::install::Releases;
+use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::{Agent, RegistryError, registry};
 use nsv_domain::secret::KeyDigest;
+use nsv_domain::sync::locked;
 use nsv_domain::wire::{CatalogModel, Model};
 use nsv_gateway::{Activity, Body, Catalog, Host, ProfileAuth, Refusal, serve_connection};
 use nsv_store::{AuthSnapshot, Store, StoreError};
@@ -33,7 +35,7 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use crate::daemon::{App, Shared, locked};
+use crate::daemon::{App, Shared};
 use crate::panic;
 use crate::parse::Invalid;
 
@@ -253,7 +255,8 @@ fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
 impl<F: Fetch + Releases + Clone + 'static> App<F> {
     fn valid_host(&self, host: Option<&str>) -> bool {
         let Some(host) = host else { return false };
-        host.strip_prefix("127.0.0.1:")
+        host.strip_prefix(LOOPBACK_HOST)
+            .and_then(|rest| rest.strip_prefix(':'))
             .or_else(|| host.strip_prefix("localhost:"))
             // The port's exact decimal text: `parse` would also take a sign or leading zeros.
             .is_some_and(|port| port.parse() == Ok(self.port) && !port.starts_with(['+', '0']))
@@ -351,7 +354,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             }
             return self.api(request, &url).await;
         }
-        if path.starts_with("/v1") || path.starts_with("/p/") {
+        if path.starts_with("/v1") || path.starts_with(PROFILE_ROUTES) {
             if allowed {
                 return Err(Failure::status(
                     403,

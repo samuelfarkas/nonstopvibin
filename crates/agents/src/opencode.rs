@@ -4,14 +4,12 @@
 
 use std::path::Path;
 
+use nsv_domain::endpoint::{CATALOG_QUERY, profile_endpoint};
+use nsv_domain::js;
 use nsv_domain::wire::Profile;
 
-use crate::connection::{
-    CATALOG_QUERY, ConfigDirectory, Definition, native_provider, owned_file, profile_endpoint,
-    same_text,
-};
+use crate::connection::{ConfigDirectory, Definition, native_provider, owned_file, same_text};
 use crate::credential::credential_client;
-use crate::json;
 
 pub(crate) const DEFINITION: Definition = Definition {
     version: 3,
@@ -94,10 +92,10 @@ export default async function () {{
   }};
 }}
 "#,
-        provider = json::string(&native_provider(profile)),
-        base = json::string(&profile_endpoint(port, profile.slug.as_str())),
+        provider = js::quote(&native_provider(profile)),
+        base = js::quote(&profile_endpoint(port, profile.slug.as_str())),
         credential = credential_client(profile, socket, port, &failure),
-        models = json::string(&format!("/models?{CATALOG_QUERY}=opencode")),
-        name = json::string(&format!("nonstopvibin · {}", profile.name)),
+        models = js::quote(&format!("/models?{CATALOG_QUERY}=opencode")),
+        name = js::quote(&format!("nonstopvibin · {}", profile.name)),
     )
 }

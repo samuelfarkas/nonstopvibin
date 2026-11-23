@@ -1,8 +1,9 @@
 //! A connection's input, as the routes and the manifests take it, and the manifest each
 //! connection records under `<data>/agent-connections/<slug>/`.
 
+use nsv_domain::js;
 use nsv_domain::registry::{Agent, Registry};
-use nsv_domain::wire::{AgentSelection, AgentSetupInput, utf16_len};
+use nsv_domain::wire::{AgentSelection, AgentSetupInput};
 use serde_json::{Map, Value};
 
 use crate::error::{AgentError, invalid};
@@ -42,7 +43,7 @@ impl Manifest {
         if let Some(retained) = &self.retained {
             object.insert("retained".to_owned(), retained.clone().into());
         }
-        format!("{}\n", json::pretty(&Value::Object(object)))
+        format!("{}\n", js::pretty(&Value::Object(object)))
     }
 
     /// Parses a manifest a release wrote; a version 1 manifest becomes the current shape.
@@ -127,7 +128,7 @@ fn strict(object: &Map<String, Value>, path: &str, allowed: &[&str]) -> Result<(
 fn limited_text(object: &mut Map<String, Value>, key: &str) -> Result<Option<String>, AgentError> {
     match object.remove(key) {
         None => Ok(None),
-        Some(Value::String(text)) if utf16_len(&text) <= FILE_LIMIT => Ok(Some(text)),
+        Some(Value::String(text)) if js::utf16_len(&text) <= FILE_LIMIT => Ok(Some(text)),
         Some(_) => Err(invalid(key, "Invalid input")),
     }
 }
@@ -236,7 +237,7 @@ fn manifest_models(value: Option<Value>) -> Result<Vec<String>, AgentError> {
     items
         .into_iter()
         .map(|item| match item {
-            Value::String(model) if (1..=200).contains(&utf16_len(&model)) => Ok(model),
+            Value::String(model) if (1..=200).contains(&js::utf16_len(&model)) => Ok(model),
             _ => Err(invalid("models", "Invalid input")),
         })
         .collect()
@@ -248,7 +249,7 @@ fn without_controls(value: &str) -> bool {
 }
 
 fn model_id<'a>(model: &'a str, path: &str) -> Result<&'a str, AgentError> {
-    if !(1..=200).contains(&utf16_len(model)) {
+    if !(1..=200).contains(&js::utf16_len(model)) {
         return Err(invalid(path, "Model IDs have 1 to 200 characters."));
     }
     if !without_controls(model) {
@@ -275,7 +276,7 @@ fn validate_project(project: Option<&str>) -> Result<(), AgentError> {
     let Some(project) = project else {
         return Ok(());
     };
-    if !(1..=4096).contains(&utf16_len(project)) {
+    if !(1..=4096).contains(&js::utf16_len(project)) {
         return Err(invalid(
             "projectDirectory",
             "Project directories have 1 to 4096 characters.",

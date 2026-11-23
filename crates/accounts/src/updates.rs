@@ -14,7 +14,7 @@
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use nsv_core::binary::{BINARY, CorePin, CoreTarget, Version, bundled_pin, verify_core};
@@ -24,6 +24,7 @@ use nsv_core::install::{
 };
 use nsv_core::pool::{NoHooks, Pool};
 use nsv_domain::error::AppError;
+use nsv_domain::sync::locked;
 use nsv_domain::wire::{CorePhase, CoreState};
 use nsv_store::Store;
 use nsv_store::files::{owner_only_directory, unique_directory};
@@ -286,7 +287,7 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
 
 impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
     fn status(&self) -> MutexGuard<'_, Status> {
-        self.status.lock().unwrap_or_else(PoisonError::into_inner)
+        locked(&self.status)
     }
 
     fn pool(&self) -> &Pool {

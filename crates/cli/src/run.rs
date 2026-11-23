@@ -3,17 +3,20 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::SystemTime;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
+use nsv_domain::endpoint::{LOOPBACK_HOST, session_link};
 use nsv_domain::helper::Failure;
+use nsv_domain::time::{epoch_ms, iso_string};
 use nsv_net::Https;
 use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
 use nsv_store::{LockError, ServerLock};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::service::{UNIT, systemctl};
-use crate::{CliError, NOT_RUNNING, complain, epoch_ms, say, url_text};
+use crate::{CliError, NOT_RUNNING, complain, say, url_text};
 
 /// Where the desktop app listens unless `NONSTOPVIBIN_PORT` says otherwise.
 const DESKTOP_PORT: u16 = 4318;
@@ -92,7 +95,7 @@ impl Signals {
 }
 
 fn now() -> i64 {
-    epoch_ms()
+    epoch_ms(SystemTime::now())
 }
 
 /// Starts the daemon, cancelling on a signal. `None` when a signal came first: everything
@@ -177,7 +180,7 @@ pub(crate) async fn serve(
         && existing.probe().await.is_some()
     {
         return Err(CliError::new(format!(
-            "NonstopVibin is already running on 127.0.0.1:{} for {}. Run `nonstopvibin url` for its link.",
+            "NonstopVibin is already running on {LOOPBACK_HOST}:{} for {}. Run `nonstopvibin url` for its link.",
             existing.port,
             directory.display()
         )));
@@ -219,15 +222,15 @@ pub(crate) async fn serve(
     // journald must never receive the session token.
     match daemon.session() {
         Some(session) if development => say(&format!(
-            "Open the local interface: http://{DEV_HOST}/#session={}",
-            session.token.expose_secret()
+            "Open the local interface: {}",
+            session_link(&format!("http://{DEV_HOST}"), &session.token)
         )),
         Some(session) if std::io::IsTerminal::is_terminal(&std::io::stdout()) => say(&url_text(
             &session,
             std::env::var("SSH_CONNECTION").ok().as_deref(),
         )),
         _ => say(&format!(
-            "NonstopVibin {} is listening on 127.0.0.1:{}. Run `nonstopvibin url` for the session link.",
+            "NonstopVibin {} is listening on {LOOPBACK_HOST}:{}. Run `nonstopvibin url` for the session link.",
             nsv_server::VERSION,
             daemon.port()
         )),
@@ -386,8 +389,12 @@ pub(crate) async fn status(directory: &Path) -> Result<u8, CliError> {
         return Ok(NOT_RUNNING);
     };
     say(&format!(
-        "NonstopVibin {} is running on 127.0.0.1:{} (pid {}, since {}).\nCore: CLIProxyAPI {}.{unit}",
-        state.version, session.port, session.pid, session.started_at, state.core_version
+        "NonstopVibin {} is running on {LOOPBACK_HOST}:{} (pid {}, since {}).\nCore: CLIProxyAPI {}.{unit}",
+        state.version,
+        session.port,
+        session.pid,
+        iso_string(session.started_at),
+        state.core_version
     ));
     Ok(0)
 }

@@ -7,11 +7,14 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
+use nsv_domain::js;
 use nsv_domain::registry::{RegistryError, registry};
+use nsv_domain::sync::locked;
+use nsv_domain::time;
 use nsv_domain::wire::{
     Cost, Eur, JsNumber, PricingTokens, UsageHistory, UsagePricing, UsageRecord, UsageSummary,
     UsageTotals,
@@ -21,7 +24,6 @@ use serde_json::Value;
 
 use crate::catalog::{ModelCatalog, Snapshot};
 use crate::fetch::{Fetch, Request};
-use crate::js;
 
 const FX_SOURCE: &str = "https://api.frankfurter.dev/v2/providers/ecb/rate/usd/eur";
 const FX_TIMEOUT: Duration = Duration::from_secs(5);
@@ -302,10 +304,6 @@ pub struct UsagePrices<F> {
     euro: Mutex<Euro>,
 }
 
-fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 impl<F: Fetch + 'static> UsagePrices<F> {
     #[must_use]
     pub fn new(fetch: F, clock: fn() -> i64) -> Self {
@@ -394,7 +392,7 @@ impl<F: Fetch + 'static> UsagePrices<F> {
         let date = js::text(js::field(body, "date"))?;
         (js::text(js::field(body, "base")) == Some("USD")
             && js::text(js::field(body, "quote")) == Some("EUR")
-            && js::is_iso_date(date)
+            && time::is_iso_date(date)
             && rate.is_finite()
             && rate > 0.0)
             .then(|| Eur {

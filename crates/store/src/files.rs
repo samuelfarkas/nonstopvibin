@@ -7,9 +7,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use nsv_domain::random;
 use rustix::fs::{Mode, OFlags};
-
-use crate::random_uuid;
 
 /// Creates the directory (and missing parents) owner-only and tightens an existing one.
 /// `vet` checks it after creation and before the mode changes, since chmod follows a symbolic
@@ -40,8 +39,7 @@ const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 /// A file-system error.
 pub fn unique_directory(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
     loop {
-        let mut random = [0_u8; 6];
-        getrandom::fill(&mut random)?;
+        let random = random::bytes::<6>()?;
         let suffix: String = random
             .iter()
             .filter_map(|byte| ALPHABET.get(usize::from(*byte) % ALPHABET.len()))
@@ -141,7 +139,7 @@ pub fn write_atomic_unsynced(path: &Path, content: &[u8], mode: u32) -> io::Resu
 
 fn replace(path: &Path, content: &[u8], mode: u32, sync: bool) -> io::Result<()> {
     let mut name = OsString::from(path);
-    name.push(format!(".{}.tmp", random_uuid()?));
+    name.push(format!(".{}.tmp", random::uuid()?));
     let temporary = PathBuf::from(name);
     let written = OpenOptions::new()
         .write(true)

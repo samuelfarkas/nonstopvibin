@@ -11,7 +11,6 @@ repository.workspace = true
 [dependencies]
 aes-gcm.workspace = true
 base64.workspace = true
-getrandom = { workspace = true, features = ["std"] }
 nsv-domain.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true

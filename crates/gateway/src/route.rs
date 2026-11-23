@@ -13,16 +13,14 @@ use std::sync::Arc;
 
 use hyper::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use hyper::{Method, StatusCode, Uri};
+use nsv_domain::endpoint::{CATALOG_HEADER, CATALOG_QUERY, PROFILE_ROUTES};
 use nsv_domain::registry::{Agent, AgentCatalog};
 use nsv_domain::secret::KeyDigest;
 
 use crate::{ProfileAuth, Refusal};
 
 const API_KEY: HeaderName = HeaderName::from_static("x-api-key");
-/// `catalogRequest.header`: how Codex asks for its curated catalog.
-pub(crate) const AGENT_HEADER: HeaderName = HeaderName::from_static("x-nonstopvibin-agent");
-/// `catalogRequest.query`: how pi and `OpenCode` ask for theirs.
-const AGENT_QUERY: &str = "nonstopvibin";
+pub(crate) const AGENT_HEADER: HeaderName = HeaderName::from_static(CATALOG_HEADER);
 
 /// The `permitted` expression of `gateway.ts`, split into exact paths and subtrees.
 const EXACT: [&str; 14] = [
@@ -68,7 +66,7 @@ pub(crate) fn route(
         .ok()
         .and_then(|key| profile(&KeyDigest::of(key)).filter(|auth| auth.client_key.matches(key)))
         .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "Invalid profile API key."))?;
-    let path = match uri.path().strip_prefix("/p/") {
+    let path = match uri.path().strip_prefix(PROFILE_ROUTES) {
         None => uri.path(),
         // A slug is `[a-z0-9-]+`, so the prefix names this profile exactly when the slug is
         // followed by a slash.
@@ -228,7 +226,7 @@ fn curated(
     joined(headers, &AGENT_HEADER)
         .and_then(|value| agent(AgentCatalog::Header, &|id| id.as_bytes() == &*value))
         .or_else(|| {
-            let (_, value) = pairs(query?).find(|&(name, _)| decodes_to(name, AGENT_QUERY))?;
+            let (_, value) = pairs(query?).find(|&(name, _)| decodes_to(name, CATALOG_QUERY))?;
             agent(AgentCatalog::Query, &|id| decodes_to(value, id))
         })
 }

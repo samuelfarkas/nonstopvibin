@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use nsv_domain::endpoint::session_link;
 use nsv_domain::helper::{
     DaemonCall, DialogKind, FromHelper, Outcome, Rect, ToHelper, View, ViewKind,
 };
@@ -294,11 +295,7 @@ impl<H: ShellHost> Shell<'_, H> {
         if !self.main && self.popup != Popup::Open {
             return;
         }
-        let link = format!(
-            "{}/#session={}",
-            self.host.origin().as_str(),
-            self.host.session_token().expose_secret()
-        );
+        let link = session_link(self.host.origin().as_str(), self.host.session_token());
         if let Err(error) = external::open(&link) {
             log(format_args!("could not open the browser either: {error}"));
         }

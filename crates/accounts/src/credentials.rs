@@ -16,6 +16,7 @@ use std::sync::Arc;
 use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js::{encode_uri_component, text};
 use nsv_domain::registry::{OAuthProvider, Provider, registry};
 use nsv_domain::secret::same_secret;
 use nsv_domain::wire::{Account, AccountKind, AccountPatch, ApiAccountInput, OAuthAction};
@@ -29,7 +30,6 @@ use crate::accounts::{Accounts, CredentialFile, PoolSource, credential_path};
 use crate::api_accounts::api_account;
 use crate::fetch::Fetch;
 use crate::identity::{claude_identity, same_seat};
-use crate::js::{encode_uri_component, text};
 use crate::quota::Quotas;
 use crate::scheduler::Scheduler;
 
@@ -247,8 +247,8 @@ impl<F: Fetch + 'static> Credentials<F> {
         let name = if let Some(id) = &reconnect {
             id.clone()
         } else {
-            let uuid =
-                nsv_store::random_uuid().map_err(|error| AppError::new(error.to_string(), 500))?;
+            let uuid = nsv_domain::random::uuid()
+                .map_err(|error| AppError::new(error.to_string(), 500))?;
             AccountId::parse(&format!("{provider}-{uuid}.json"))
                 .map_err(|error| AppError::new(error.to_string(), 500))?
         };

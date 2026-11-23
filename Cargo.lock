@@ -1731,7 +1731,6 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nsv-accounts"
 version = "0.2.0"
 dependencies = [
- "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1757,7 +1756,6 @@ dependencies = [
  "nsv-store",
  "rustix",
  "serde_json",
- "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -1800,6 +1798,8 @@ dependencies = [
 name = "nsv-domain"
 version = "0.2.0"
 dependencies = [
+ "base64",
+ "getrandom 0.4.3",
  "secrecy",
  "serde",
  "serde_json",
@@ -1842,8 +1842,6 @@ dependencies = [
 name = "nsv-server"
 version = "0.2.0"
 dependencies = [
- "base64",
- "getrandom 0.4.3",
  "http-body-util",
  "hyper",
  "nsv-accounts",
@@ -1900,7 +1898,6 @@ version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "base64",
- "getrandom 0.4.3",
  "nsv-domain",
  "nsv-testkit",
  "rusqlite",
@@ -1933,7 +1930,6 @@ dependencies = [
 name = "nsv-window"
 version = "0.2.0"
 dependencies = [
- "getrandom 0.4.3",
  "gtk",
  "muda",
  "nsv-domain",

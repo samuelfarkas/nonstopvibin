@@ -9,8 +9,6 @@ publish.workspace = true
 repository.workspace = true
 
 [dependencies]
-base64.workspace = true
-getrandom = { workspace = true, features = ["std"] }
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["server"] }
 nsv-accounts.workspace = true

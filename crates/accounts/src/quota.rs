@@ -11,13 +11,15 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::future::Future;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js;
 use nsv_domain::registry::{Provider, RegistryError, registry};
-use nsv_domain::time::iso_string;
+use nsv_domain::sync::locked;
+use nsv_domain::time::{self, iso_string};
 use nsv_domain::wire::{Account, AccountKind, JsNumber, Quota, QuotaStatus, QuotaWindow, True};
 use nsv_net::USER_AGENT;
 use nsv_store::{Store, StoreError};
@@ -25,7 +27,6 @@ use serde_json::{Map, Value, json};
 
 use crate::accounts::PoolSource;
 use crate::fetch::{Fetch, Request};
-use crate::js;
 
 /// The beta flag Anthropic's OAuth account endpoints require.
 pub const CLAUDE_OAUTH_BETA: &str = "oauth-2025-04-20";
@@ -255,12 +256,12 @@ fn remaining(used: Option<&Value>) -> Option<JsNumber> {
 fn timestamp(value: Option<&Value>) -> Option<String> {
     let value = js::nullish(value).filter(|value| value.as_str() != Some(""))?;
     let time = match js::number(Some(value)) {
-        Some(number) => js::time_clip(if number < 1e12 {
+        Some(number) => time::time_clip(if number < 1e12 {
             number * 1000.0
         } else {
             number
         }),
-        None => js::parse_date(&js::string(Some(value))),
+        None => time::parse_iso(&js::string(Some(value))),
     };
     time.map(iso_string)
 }
@@ -287,7 +288,7 @@ fn reset(raw: Option<&Value>, now: i64) -> Result<Option<String>, ParseError> {
             clippy::cast_precision_loss,
             reason = "JavaScript added milliseconds as doubles"
         )]
-        Some(seconds) => js::time_clip(now as f64 + seconds * 1000.0)
+        Some(seconds) => time::time_clip(now as f64 + seconds * 1000.0)
             .map(|time| Some(iso_string(time)))
             .ok_or(ParseError::Time),
         None => Ok(None),
@@ -539,21 +540,10 @@ fn antigravity_quota(body: &Value) -> Vec<QuotaWindow> {
         .collect()
 }
 
-/// JavaScript truthiness.
-fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|number| number != 0.0),
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Array(_) | Value::Object(_)) => true,
-    }
-}
-
 fn xai_quota(body: &Value) -> Vec<QuotaWindow> {
     let body = Some(body);
     let (weekly, monthly) = (js::field(body, "weekly"), js::field(body, "monthly"));
-    let payloads = if truthy(weekly) || truthy(monthly) {
+    let payloads = if js::truthy(weekly) || js::truthy(monthly) {
         vec![weekly, monthly]
     } else {
         vec![body]
@@ -704,10 +694,7 @@ struct Running<'a> {
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {
-        self.set
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.key);
+        locked(self.set).remove(&self.key);
     }
 }
 
@@ -758,10 +745,7 @@ impl<S: QuotaSource, F: Fetch> Quotas<S, F> {
         };
         let key = (profile.clone(), account_id.clone());
         let running = {
-            let mut refreshing = self
-                .refreshing
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut refreshing = locked(&self.refreshing);
             if refreshing.contains(&key) {
                 return prior.ok_or_else(|| {
                     AppError::new("Quota refresh is already in progress.", 409).into()

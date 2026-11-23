@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use nsv_domain::endpoint::CSP;
 use nsv_shell::TrayStatus;
 use nsv_testkit::shell::Host;
 use serde_json::{Value, json};
@@ -21,7 +22,6 @@ use zbus::zvariant::{OwnedValue, Value as Variant};
 
 use crate::common::{TIMEOUT, directory, exited, options, pause, spawn_shell, wait_until};
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 const PAGE: &str =
     r#"<!doctype html><meta charset="utf-8"><title>shell</title><script src="/page.js"></script>"#;
 /// The main view calls each method the daemon serves; the quota view reports that it loaded.

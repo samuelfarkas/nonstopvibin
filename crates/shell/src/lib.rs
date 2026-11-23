@@ -14,7 +14,7 @@ mod update;
 
 use std::path::Path;
 
-use nsv_domain::helper::Origin;
+use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use tokio::sync::{broadcast, watch};

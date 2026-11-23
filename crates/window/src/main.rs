@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use nsv_domain::helper::{self, Failure, Reason, ToHelper};
+use nsv_domain::random;
 use nsv_domain::secret::SessionToken;
 
 fn main() -> ExitCode {
@@ -54,8 +55,7 @@ fn launch(input: &mut impl BufRead) -> io::Result<Launch> {
     // Linux has no app menu.
     #[cfg(not(target_os = "macos"))]
     let _: bool = updates;
-    let mut nonce = [0u8; 16];
-    getrandom::fill(&mut nonce).map_err(io::Error::other)?;
+    let nonce = random::bytes::<16>()?;
     Ok(Launch::Window(app::Boot {
         origin,
         token: SessionToken::new(token),

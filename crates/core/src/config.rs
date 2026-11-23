@@ -8,8 +8,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js;
 use nsv_domain::registry::{Protocol, Strategy, Upstream, registry};
 use nsv_domain::secret::{ApiKey, CoreKey, ManagementKey};
+use nsv_domain::sha256_hex;
 use nsv_domain::wire::{ApiAccount, Profile};
 use nsv_store::files::owner_only_directory;
 use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
@@ -17,9 +19,7 @@ use nsv_store::{Store, StoreError};
 use rustix::fs::{Mode, OFlags};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
-use crate::binary::Sha256Digest;
 use crate::yaml::to_yaml;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -124,8 +124,11 @@ impl CoreConfiguration {
                     Protocol::Openai => {
                         let identity: String =
                             serde_json::to_string(&(&account.base_url, &account.prefix, &models))?;
-                        let digest = Sha256Digest::from(<[u8; 32]>::from(Sha256::digest(identity)));
-                        let name = format!("{}-{digest}", account.provider.as_str());
+                        let name = format!(
+                            "{}-{}",
+                            account.provider.as_str(),
+                            sha256_hex(identity.as_bytes())
+                        );
                         if let Some(existing) = compatible.iter_mut().find(|p| p.name == name) {
                             existing.api_keys.push(key);
                         } else {
@@ -333,14 +336,7 @@ pub fn applied(expected: &CoreConfiguration, actual: &Value) -> bool {
     let expected = expected.to_json();
     LIVE_FIELDS
         .iter()
-        .all(|key| matches(expected.get(*key), field(Some(actual), key)))
-}
-
-/// `value[key]` when `value` is an object.
-fn field<'a>(value: Option<&'a Value>, key: &str) -> Option<&'a Value> {
-    value
-        .and_then(Value::as_object)
-        .and_then(|map| map.get(key))
+        .all(|key| matches(expected.get(*key), js::field(Some(actual), key)))
 }
 
 /// The Go core omits zero values, so `""`, `false`, `0` and `[]` read back as absent.
@@ -361,7 +357,7 @@ fn matches(expected: Option<&Value>, actual: Option<&Value>) -> bool {
         (Some(Value::Array(_)), _) => false,
         (Some(Value::Object(entries)), _) => entries
             .iter()
-            .all(|(key, value)| matches(Some(value), field(actual, key))),
+            .all(|(key, value)| matches(Some(value), js::field(actual, key))),
         // JavaScript numbers: 1 and 1.0 are the same.
         (Some(Value::Number(a)), Some(Value::Number(b))) => a.as_f64() == b.as_f64(),
         (Some(scalar), None) => {

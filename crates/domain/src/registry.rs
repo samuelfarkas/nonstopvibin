@@ -53,7 +53,7 @@ pub struct Registry {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Limits {
-    /// Profile and account names, in UTF-16 code units ([`crate::wire::utf16_len`]).
+    /// Profile and account names, in UTF-16 code units ([`crate::js::utf16_len`]).
     pub name_length: usize,
     /// API-key model prefixes, in UTF-16 code units.
     pub prefix_length: usize,

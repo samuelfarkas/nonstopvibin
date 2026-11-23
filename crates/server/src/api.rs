@@ -10,17 +10,19 @@ use hyper::body::Incoming;
 use hyper::{Method, Request, Response, StatusCode};
 use nsv_accounts::accounts::listed;
 use nsv_accounts::fetch::Fetch;
-use nsv_agents::{offered_models, profile_endpoint};
+use nsv_agents::offered_models;
 use nsv_core::install::Releases;
+use nsv_domain::endpoint::{profile_endpoint, profile_path};
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
+use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{AppState, ClientKeyResponse, Profile, ProfileState, Runtime};
 use nsv_gateway::Body;
 use nsv_net::{Loopback, LoopbackRequest, loopback};
 use serde_json::{Value, json};
 
-use crate::daemon::{App, VERSION, locked};
+use crate::daemon::{App, VERSION};
 use crate::http::{Failure, enrich, json};
 use crate::parse;
 
@@ -614,7 +616,7 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
         let profile = self.profile(call).await?;
         let key = self.store.call(move |db| db.client_key(&id)).await?;
         // `<endpoint>/models` on this daemon's own port.
-        let target = format!("/p/{}/v1/models", profile.slug.as_str());
+        let target = format!("{}/v1/models", profile_path(profile.slug.as_str()));
         let authorization = format!("Bearer {}", key.expose_secret());
         let response = loopback(LoopbackRequest {
             to: Loopback::v4(self.port),

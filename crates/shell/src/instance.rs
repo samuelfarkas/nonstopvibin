@@ -6,6 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use nsv_domain::endpoint::LOOPBACK_HOST;
 use nsv_store::files::read_own_file;
 use nsv_store::layout::session_path;
 use serde::Deserialize;
@@ -70,7 +71,7 @@ fn post_show(session: &Session) -> io::Result<()> {
     stream.set_read_timeout(Some(ANSWER))?;
     stream.set_write_timeout(Some(ANSWER))?;
     let request = format!(
-        "POST /api/desktop/show HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "POST /api/desktop/show HTTP/1.1\r\nHost: {LOOPBACK_HOST}:{}\r\nAuthorization: Bearer {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         session.port, session.token
     );
     stream.write_all(request.as_bytes())?;

@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::is_uuid;
+use nsv_domain::js;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::fetch::{Fetch, Request};
-use crate::js;
 use crate::quota::CLAUDE_OAUTH_BETA;
 
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";

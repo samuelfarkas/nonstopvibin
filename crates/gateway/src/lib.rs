@@ -360,7 +360,7 @@ impl<H: Host> Gateway<H> {
         );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         if labelled {
-            headers.insert("x-nonstopvibin-profile", lease.auth.slug_header.clone());
+            headers.insert(headers::PROFILE, lease.auth.slug_header.clone());
         }
         Ok(response)
     }

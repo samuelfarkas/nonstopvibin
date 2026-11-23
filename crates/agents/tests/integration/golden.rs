@@ -18,7 +18,6 @@ use nsv_domain::registry::{Agent, registry};
 use nsv_domain::secret::ClientKey;
 use nsv_domain::wire::{AgentSetupInput, CatalogModel, Model, Profile};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -64,10 +63,9 @@ fn error_matches(expected: &Value, actual: &AgentError) -> bool {
 }
 
 fn short_hash(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .take(12)
-        .fold(String::new(), |hex, byte| hex + &format!("{byte:02x}"))
+    let mut hex = nsv_domain::sha256_hex(text.as_bytes());
+    hex.truncate(24);
+    hex
 }
 
 #[derive(Clone, Copy)]

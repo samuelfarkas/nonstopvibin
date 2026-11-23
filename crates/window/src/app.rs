@@ -6,8 +6,9 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use nsv_domain::endpoint::Origin;
 use nsv_domain::helper::{
-    self, DialogKind, Failure, FromHelper, Origin, Outcome, Reason, Rect, ToHelper, View, ViewKind,
+    self, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View, ViewKind,
 };
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
@@ -263,13 +264,6 @@ fn read_daemon(proxy: &Proxy) {
     }
 }
 
-fn main_url(origin: &Origin, profile: Option<&ProfileId>) -> String {
-    match profile {
-        Some(profile) => format!("{}/?profile={profile}", origin.as_str()),
-        None => origin.as_str().to_owned(),
-    }
-}
-
 /// The main window's bounds unless it is maximized, minimized or fullscreen.
 fn normal_bounds(window: &Window) -> Option<Rect> {
     if window.is_maximized() || window.is_minimized() || window.fullscreen().is_some() {
@@ -348,7 +342,7 @@ impl App {
         self.close_quota();
         if let Some(main) = &self.main {
             if profile.is_some()
-                && let Err(error) = main.webview.load_url(&main_url(&self.origin, profile))
+                && let Err(error) = main.webview.load_url(&self.origin.main_url(profile))
             {
                 log(format_args!("could not open the profile: {error}"));
             }
@@ -379,7 +373,7 @@ impl App {
                 .with_fullsize_content_view(true)
                 .with_traffic_light_inset(LogicalPosition::new(21.0, 17.0))
         };
-        let url = main_url(&self.origin, profile);
+        let url = self.origin.main_url(profile);
         match self.open(target, Pane::Main, builder, &url) {
             Ok(surface) => {
                 #[cfg(target_os = "linux")]
@@ -411,7 +405,7 @@ impl App {
             use tao::platform::unix::WindowBuilderExtUnix;
             builder.with_skip_taskbar(true)
         };
-        let url = format!("{}/?view=tray", self.origin.as_str());
+        let url = self.origin.tray_url();
         match self.open(target, Pane::Quota, builder, &url) {
             Ok(surface) => self.quota = Some(surface),
             Err(error) => self.failed("quota popup", &error),

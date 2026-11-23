@@ -8,13 +8,13 @@
 use std::fmt::Display;
 
 use nsv_domain::id::{AccountId, is_uuid};
+use nsv_domain::js;
 use nsv_domain::registry::{
     Agent, OAuthProvider, Protocol, Provider, Registry, RetentionDays, Strategy,
 };
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{
     AccountPatch, AgentSelection, AgentSetupInput, ApiAccountInput, ApiModelInput, ProfilePatch,
-    utf16_len,
 };
 use serde_json::{Map, Value};
 
@@ -129,7 +129,7 @@ fn boolean(issues: &mut Issues, value: Option<&Value>, path: &str) -> Option<boo
 
 /// `.min(min).max(max)` on a string, in UTF-16 code units as JavaScript counts them.
 fn length(issues: &mut Issues, text: &str, path: &str, min: usize, max: usize) {
-    let units = utf16_len(text);
+    let units = js::utf16_len(text);
     if units < min {
         issues.check(
             path,
@@ -144,21 +144,6 @@ fn length(issues: &mut Issues, text: &str, path: &str, min: usize, max: usize) {
     }
 }
 
-/// JavaScript's `String.prototype.trim` set: `WhiteSpace` and `LineTerminator`, not U+0085.
-const fn js_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
-}
-
 /// `z.string().trim().min(min).max(max)`: the trimmed string.
 fn trimmed(
     issues: &mut Issues,
@@ -167,7 +152,7 @@ fn trimmed(
     min: usize,
     max: usize,
 ) -> Option<String> {
-    let text = string(issues, value, path)?.trim_matches(js_whitespace);
+    let text = js::trim(string(issues, value, path)?);
     length(issues, text, path, min, max);
     Some(text.to_owned())
 }
@@ -707,7 +692,7 @@ pub(crate) fn days(value: Option<&str>, all: u32) -> Result<Option<u32>, Invalid
     let Some(value) = value else {
         return Ok(None);
     };
-    let number = js_number(value);
+    let number = js::string_to_number(value);
     let mut issues = Issues::default();
     if number.is_nan() {
         issues.fatal("", "Invalid input: expected number, received NaN");
@@ -723,61 +708,6 @@ pub(crate) fn days(value: Option<&str>, all: u32) -> Result<Option<u32>, Invalid
     )]
     let days = number as u32;
     issues.finish(Some(Some(days)))
-}
-
-/// JavaScript's `Number(string)`: whitespace-trimmed decimal, hexadecimal, octal or binary,
-/// `Infinity`, `0` for an empty string, `NaN` otherwise.
-fn js_number(text: &str) -> f64 {
-    let text = text.trim_matches(js_whitespace);
-    if text.is_empty() {
-        return 0.0;
-    }
-    for (prefix, radix) in [
-        ("0x", 16),
-        ("0X", 16),
-        ("0o", 8),
-        ("0O", 8),
-        ("0b", 2),
-        ("0B", 2),
-    ] {
-        if let Some(digits) = text.strip_prefix(prefix) {
-            if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
-                return f64::NAN;
-            }
-            return digits.chars().fold(0.0, |total, c| {
-                total * f64::from(radix) + f64::from(c.to_digit(radix).unwrap_or(0))
-            });
-        }
-    }
-    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    if unsigned == "Infinity" {
-        return if text.starts_with('-') {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-    }
-    // StrDecimalLiteral: digits, an optional fraction and exponent; Rust's parser also takes
-    // `inf` and `nan`, which JavaScript does not.
-    let (mantissa, exponent) = unsigned
-        .split_once(['e', 'E'])
-        .map_or((unsigned, None), |(mantissa, exponent)| {
-            (mantissa, Some(exponent))
-        });
-    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
-    let exponent_ok = exponent.is_none_or(|exponent| {
-        let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-        !exponent.is_empty() && digits(exponent)
-    });
-    if (whole.is_empty() && fraction.is_empty())
-        || !digits(whole)
-        || !digits(fraction)
-        || !exponent_ok
-    {
-        return f64::NAN;
-    }
-    text.parse().unwrap_or(f64::NAN)
 }
 
 /// `decodeURIComponent`: `None` for a malformed escape or bytes that are not UTF-8.

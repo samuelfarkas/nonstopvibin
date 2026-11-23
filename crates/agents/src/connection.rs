@@ -14,27 +14,10 @@ use crate::{claude, codex, opencode, pi};
 /// Starts every provider name a connected agent lists; pi's controls recognise ours by it.
 pub(crate) const PROVIDER_PREFIX: &str = "nonstopvibin-";
 
-/// How generated pi and `OpenCode` code asks `GET /v1/models` for its curated catalog. Codex's
-/// own requests carry the header `x-nonstopvibin-agent` instead.
-pub const CATALOG_QUERY: &str = "nonstopvibin";
-pub const CATALOG_HEADER: &str = "x-nonstopvibin-agent";
-
 /// The provider a connected agent lists for a profile.
 #[must_use]
 pub fn native_provider(profile: &Profile) -> String {
     format!("{PROVIDER_PREFIX}{}", profile.slug)
-}
-
-/// The gateway's route for one profile; Anthropic clients add `/v1` themselves.
-#[must_use]
-pub fn profile_base(port: u16, slug: &str) -> String {
-    format!("http://127.0.0.1:{port}/p/{slug}")
-}
-
-/// The OpenAI-style base URL of one profile on the gateway.
-#[must_use]
-pub fn profile_endpoint(port: u16, slug: &str) -> String {
-    format!("{}/v1", profile_base(port, slug))
 }
 
 pub(crate) fn shell_quote(value: &str) -> String {

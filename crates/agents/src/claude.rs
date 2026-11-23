@@ -5,10 +5,12 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+use nsv_domain::endpoint::profile_base;
+use nsv_domain::js;
 use nsv_domain::wire::Profile;
 use serde_json::{Map, Value};
 
-use crate::connection::{Definition, profile_base, shell_quote, text};
+use crate::connection::{Definition, shell_quote, text};
 use crate::error::{AgentError, conflict, invalid, refused};
 use crate::files::{json_object, read_config};
 use crate::json;
@@ -128,7 +130,7 @@ fn merge(
     } else {
         root.insert("env".to_owned(), Value::Object(env));
     }
-    Ok((!root.is_empty()).then(|| format!("{}\n", json::pretty(&Value::Object(root)))))
+    Ok((!root.is_empty()).then(|| format!("{}\n", js::pretty(&Value::Object(root)))))
 }
 
 /// Replaces our `old` fields in `target` with `fresh`; a field the user set differently is a
@@ -180,10 +182,7 @@ fn launch_settings(manifest: &Manifest) -> Result<Option<String>, AgentError> {
             ("replaceBuiltInOptions", true.into()),
         ])),
     );
-    Ok(Some(format!(
-        "{}\n",
-        json::pretty(&Value::Object(settings))
-    )))
+    Ok(Some(format!("{}\n", js::pretty(&Value::Object(settings)))))
 }
 
 /// The project a connection belongs to: the canonical directory, which must be owned without
@@ -232,7 +231,7 @@ fn git_marker(directory: &Path) -> Result<(), AgentError> {
         let content = read_config(&marker)?;
         let git_dir = content
             .as_deref()
-            .map(json::trim)
+            .map(js::trim)
             .and_then(|content| content.strip_prefix("gitdir: "))
             .filter(|rest| {
                 !rest.is_empty() && !rest.contains(['\n', '\r', '\u{2028}', '\u{2029}'])

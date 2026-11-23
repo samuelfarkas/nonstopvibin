@@ -84,7 +84,7 @@ impl From<[u8; 32]> for Sha256Digest {
 
 impl fmt::Display for Sha256Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
+        f.write_str(&nsv_domain::hex(&self.0))
     }
 }
 

@@ -7,13 +7,15 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js::{nullish, number, or, record, string, text, truthy};
 use nsv_domain::registry::{Provider, Registry, registry};
+use nsv_domain::sync::locked;
 use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
 use nsv_net::Method;
@@ -22,7 +24,6 @@ use nsv_store::{Db, Store, StoreError};
 use serde_json::{Map, Value};
 
 use crate::identity::{SeatIdentity, claude_identity};
-use crate::js::{nullish, number, or, record, string, text, truthy};
 use crate::quota::QuotaSource;
 
 /// A profile's credential file `name`.
@@ -104,7 +105,7 @@ impl Accounts {
     }
 
     fn with<T>(&self, profile: &ProfileId, read: impl FnOnce(&mut Profile) -> T) -> T {
-        let mut profiles = self.profiles.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut profiles = locked(&self.profiles);
         read(profiles.entry(profile.clone()).or_default())
     }
 

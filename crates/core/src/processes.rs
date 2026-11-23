@@ -14,6 +14,7 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
+use nsv_domain::js::utf16_len;
 use nsv_store::layout::{core_arguments, core_ledger_directory, profile_directory};
 use rustix::process::{Pid, Signal};
 use serde::{Deserialize, Serialize};
@@ -296,7 +297,7 @@ impl Entry {
     /// The checks of core-processes.ts's schema: positive PIDs and identities of at least 25
     /// UTF-16 units (a 24-character start time and a command).
     fn valid(&self) -> bool {
-        let long = |identity: &str| identity.encode_utf16().count() >= 25;
+        let long = |identity: &str| utf16_len(identity) >= 25;
         self.pid > 0 && self.owner.pid > 0 && long(&self.identity) && long(&self.owner.identity)
     }
 }

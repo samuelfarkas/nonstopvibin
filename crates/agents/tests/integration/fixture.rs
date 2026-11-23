@@ -13,7 +13,6 @@ use nsv_domain::error::AppError;
 use nsv_domain::registry::Agent;
 use nsv_domain::wire::{self, Profile};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::common::{
     Broker, Placeholders, Scratch, changes, directory, home_only, read, run, snapshot,
@@ -292,13 +291,11 @@ async fn typescript_claude_connection_disconnects_to_the_users_settings() {
     let mut manifest: Value =
         serde_json::from_str(&read(folder.join(format!("{old}.json")))).unwrap();
     manifest["input"]["projectDirectory"] = project.to_string_lossy().into_owned().into();
-    let digest = Sha256::digest(project.as_os_str().as_bytes());
-    let new: String = digest
-        .iter()
-        .take(12)
-        .fold("claude-".to_owned(), |name, byte| {
-            format!("{name}{byte:02x}")
-        });
+    let mut new = format!(
+        "claude-{}",
+        nsv_domain::sha256_hex(project.as_os_str().as_bytes())
+    );
+    new.truncate("claude-".len() + 24);
     fs::remove_file(folder.join(format!("{old}.json"))).unwrap();
     fs::write(
         folder.join(format!("{new}.json")),

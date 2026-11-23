@@ -6,10 +6,11 @@
 //! `Connection`. Repeated headers pass through as separate lines where Node joined them with
 //! `", "`, which HTTP defines as the same field.
 
-use std::hash::{BuildHasher, RandomState};
 use std::net::SocketAddr;
 
 use hyper::header::{self, HeaderMap, HeaderName, HeaderValue};
+use nsv_domain::endpoint::PROFILE_HEADER;
+use nsv_domain::random::request_uuid;
 
 use crate::route::{AGENT_HEADER, joined};
 
@@ -21,7 +22,7 @@ const SESSION_SOURCES: [HeaderName; 4] = [
     HeaderName::from_static("session_id"),
     HeaderName::from_static("x-session-id"),
 ];
-const PROFILE: HeaderName = HeaderName::from_static("x-nonstopvibin-profile");
+pub(crate) const PROFILE: HeaderName = HeaderName::from_static(PROFILE_HEADER);
 
 /// Agent credentials, browser and proxy headers the core never sees.
 const DROPPED_REQUEST: [HeaderName; 13] = [
@@ -67,7 +68,7 @@ pub(crate) fn forwarded(
         .find_map(|name| joined(&headers, name))
     {
         Some(value) => HeaderValue::from_bytes(&value).ok()?,
-        None => HeaderValue::try_from(random_uuid()).ok()?,
+        None => HeaderValue::try_from(request_uuid()).ok()?,
     };
     for name in DROPPED_REQUEST
         .iter()
@@ -118,34 +119,9 @@ fn connection_listed(headers: &HeaderMap) -> Vec<HeaderName> {
         .collect()
 }
 
-/// A version 4 UUID. It needs to be unique, not secret: `RandomState` keys `SipHash` with OS
-/// randomness once per thread and steps the key on every call.
-fn random_uuid() -> String {
-    let state = RandomState::new();
-    let high = (state.hash_one(0_u8) & !0xF000) | 0x4000;
-    let low = (state.hash_one(1_u8) & !(0b11 << 62)) | (0b10 << 62);
-    format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        high >> 32,
-        (high >> 16) & 0xFFFF,
-        high & 0xFFFF,
-        low >> 48,
-        low & 0xFFFF_FFFF_FFFF
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn uuids_are_version_4_and_distinct() {
-        let first = random_uuid();
-        assert!(nsv_domain::id::is_uuid(&first), "{first}");
-        assert_eq!(first.as_bytes()[14], b'4');
-        assert!(matches!(first.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
-        assert_ne!(first, random_uuid());
-    }
 
     #[test]
     fn connection_listed_headers_are_dropped() {

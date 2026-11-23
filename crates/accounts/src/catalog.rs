@@ -3,13 +3,14 @@
 //! fetch serves every concurrent caller.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::js;
 use nsv_domain::registry::{Provider, RegistryError, registry};
+use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
     ApiAccount, CatalogModel, ContextTier, Cost, CostTier, JsNumber, Modality, Model,
@@ -20,7 +21,6 @@ use serde_json::{Map, Value};
 use tokio::sync::OnceCell;
 
 use crate::fetch::{Fetch, Request};
-use crate::js;
 
 const SOURCE: &str = "https://models.dev/api.json";
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -271,8 +271,8 @@ pub fn enrich_models(
                     cost: data.cost.clone(),
                     source: format!(
                         "{SOURCE}#{}/{}",
-                        encode_uri_component(&provider),
-                        encode_uri_component(id)
+                        js::encode_uri_component(&provider),
+                        js::encode_uri_component(id)
                     ),
                     fetched_at: fetched_at.to_owned(),
                 }),
@@ -280,19 +280,6 @@ pub fn enrich_models(
             })
         })
         .collect()
-}
-
-/// `encodeURIComponent`.
-fn encode_uri_component(text: &str) -> String {
-    let mut encoded = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
 }
 
 /// A fetched catalog and when it arrived.
@@ -382,7 +369,7 @@ impl<F: Fetch + 'static> ModelCatalog<F> {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        locked(&self.state)
     }
 
     /// The fresh cached catalog, or the fetch every concurrent caller shares.

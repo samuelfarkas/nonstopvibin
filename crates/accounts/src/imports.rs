@@ -3,19 +3,18 @@
 //! a scan handed out.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use nsv_domain::error::AppError;
+use nsv_domain::js;
 use nsv_domain::registry::{Provider, RegistryError, registry};
+use nsv_domain::sha256_hex;
 use nsv_domain::wire::ImportSource;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::identity::{SeatIdentity, claude_identity};
-use crate::js;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
@@ -152,13 +151,4 @@ fn read(path: &Path) -> Result<Map<String, Value>, ImportError> {
         Value::Object(object) => Ok(object),
         _ => Ok(Map::new()),
     }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
 }

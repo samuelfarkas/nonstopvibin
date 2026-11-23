@@ -11,8 +11,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::{Duration, SystemTime};
 
 use nsv_core::pool::{
     Backend, BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, PoolState,
@@ -22,6 +22,8 @@ use nsv_core::restart::{
 };
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::sync::locked;
+use nsv_domain::time::epoch_ms;
 use nsv_net::Method;
 use nsv_store::Store;
 use tokio::sync::{Notify, watch};
@@ -498,17 +500,9 @@ impl Drop for Working {
     }
 }
 
-fn unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
-        })
-}
-
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        locked(&self.state)
     }
 
     /// Milliseconds since the scheduler began, the restart policy's clock.
@@ -1098,7 +1092,7 @@ impl Shared {
                 MANAGEMENT_TIMEOUT,
             )
             .await?;
-        let records = parse_page(profile, &page, unix_ms())?;
+        let records = parse_page(profile, &page, epoch_ms(SystemTime::now()))?;
         {
             let mut state = self.lock();
             let now = Instant::now();

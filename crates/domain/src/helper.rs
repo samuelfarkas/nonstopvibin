@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::endpoint::Origin;
 use crate::id::ProfileId;
 
 /// The longest line either side reads. An `openExternal` URL of 20,000 UTF-16 units escapes to
@@ -22,63 +23,6 @@ pub struct Rect {
     pub y: i32,
     pub width: u32,
     pub height: u32,
-}
-
-/// The daemon's origin, `http://<loopback host>:<port>`: the only origin a window may show and
-/// the only origin whose pages reach the bridge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Origin(String);
-
-/// An origin that is not `http://` on a loopback host with a port.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("the daemon origin must be http://127.0.0.1, localhost or [::1] with a port")]
-pub struct InvalidOrigin;
-
-impl Origin {
-    /// # Errors
-    /// When `value` is not exactly `http://<127.0.0.1|localhost|[::1]>:<port>`.
-    pub fn parse(value: &str) -> Result<Self, InvalidOrigin> {
-        let port = ["127.0.0.1:", "localhost:", "[::1]:"]
-            .iter()
-            .find_map(|host| value.strip_prefix("http://")?.strip_prefix(host))
-            .ok_or(InvalidOrigin)?;
-        let valid = !port.starts_with('0')
-            && port.bytes().all(|b| b.is_ascii_digit())
-            && port.parse::<u16>().is_ok_and(|port| port > 0);
-        if valid {
-            Ok(Self(value.to_owned()))
-        } else {
-            Err(InvalidOrigin)
-        }
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Whether `url` is on this origin. The webview hands over normalized URLs, so a prefix match
-    /// that must end the authority is exact: `http://127.0.0.1:1234@evil.example/` and
-    /// `http://127.0.0.1:12345/` both fail.
-    #[must_use]
-    pub fn contains(&self, url: &str) -> bool {
-        url.strip_prefix(self.0.as_str())
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?', '#']))
-    }
-}
-
-impl TryFrom<String> for Origin {
-    type Error = InvalidOrigin;
-    fn try_from(value: String) -> Result<Self, InvalidOrigin> {
-        Self::parse(&value)
-    }
-}
-
-impl From<Origin> for String {
-    fn from(value: Origin) -> String {
-        value.0
-    }
 }
 
 /// The native dialogs the daemon may ask for. Their text is the helper's, never the daemon's.
@@ -333,53 +277,6 @@ mod tests {
 
     fn wire<T: Serialize>(message: &T) -> serde_json::Value {
         serde_json::to_value(message).unwrap()
-    }
-
-    #[test]
-    fn origin_accepts_only_loopback_http_with_a_port() {
-        for good in [
-            "http://127.0.0.1:4100",
-            "http://localhost:1",
-            "http://[::1]:65535",
-        ] {
-            assert!(Origin::parse(good).is_ok(), "{good}");
-        }
-        for bad in [
-            "https://127.0.0.1:4100",
-            "http://127.0.0.1",
-            "http://127.0.0.1:",
-            "http://127.0.0.1:0",
-            "http://127.0.0.1:04100",
-            "http://127.0.0.1:65536",
-            "http://127.0.0.1:4100/",
-            "http://example.com:4100",
-            "http://127.0.0.1.example.com:4100",
-        ] {
-            assert!(Origin::parse(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn origin_contains_its_own_urls_only() {
-        let origin = Origin::parse("http://127.0.0.1:1234").unwrap();
-        for inside in [
-            "http://127.0.0.1:1234",
-            "http://127.0.0.1:1234/",
-            "http://127.0.0.1:1234/?view=tray",
-            "http://127.0.0.1:1234#session=x",
-        ] {
-            assert!(origin.contains(inside), "{inside}");
-        }
-        for outside in [
-            "http://127.0.0.1:12345/",
-            "http://127.0.0.1:1234@example.com/",
-            "http://127.0.0.1:1234.example.com/",
-            "https://127.0.0.1:1234/",
-            "http://localhost:1234/",
-            "about:blank",
-        ] {
-            assert!(!origin.contains(outside), "{outside}");
-        }
     }
 
     #[test]

@@ -13,12 +13,12 @@ use aes_gcm::aead::array::Array;
 use aes_gcm::{AeadInOut, Aes256Gcm, KeyInit};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use nsv_domain::random;
 use rustix::fs::{Mode, OFlags};
 use zeroize::Zeroizing;
 
 use crate::files::{EntryKind, own_entry};
 use crate::layout::{database_path, vault_key_path};
-use crate::random_bytes;
 
 const NONCE: usize = 12;
 const TAG: usize = 16;
@@ -73,7 +73,7 @@ impl Vault {
                 if database_path(directory).exists() {
                     return Err(VaultError::MissingKey);
                 }
-                let key = Zeroizing::new(random_bytes::<32>()?);
+                let key = Zeroizing::new(random::bytes::<32>()?);
                 OpenOptions::new()
                     .write(true)
                     .create_new(true)
@@ -104,7 +104,7 @@ impl Vault {
     }
 
     pub(crate) fn encrypt(&self, plaintext: &str) -> Result<String, VaultError> {
-        let nonce = random_bytes::<NONCE>()?;
+        let nonce = random::bytes::<NONCE>()?;
         let mut sealed = Vec::with_capacity(NONCE + TAG + plaintext.len());
         sealed.extend_from_slice(&nonce);
         sealed.extend_from_slice(&[0; TAG]);

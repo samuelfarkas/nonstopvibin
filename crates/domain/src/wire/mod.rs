@@ -59,13 +59,6 @@ pub use usage::{
 /// Fields a stored body had that this version does not model, written back unchanged.
 pub type Extra = serde_json::Map<String, serde_json::Value>;
 
-/// A string's length as JavaScript's `.length` counts it: UTF-16 code units. The name and
-/// prefix limits were checked this way, so `"★"` counts 1 and `"😀"` counts 2.
-#[must_use]
-pub fn utf16_len(value: &str) -> usize {
-    value.encode_utf16().count()
-}
-
 /// Reads a field that is present, as `Some(value)`, where `value` may be `None` for `null`.
 /// With `#[serde(default)]`, an absent field stays `None`, so `Option<Option<T>>` keeps
 /// absent and `null` apart.
@@ -92,18 +85,9 @@ pub struct JsNumber(pub f64);
 
 impl Serialize for JsNumber {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // 2^53: past it, f64 no longer holds every integer, and JavaScript writes exponents.
-        const SAFE: f64 = 9_007_199_254_740_992.0;
-        let value = self.0;
-        if value.fract() == 0.0 && value.abs() < SAFE {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "a whole value below 2^53 converts exactly"
-            )]
-            let whole = value as i64;
-            serializer.serialize_i64(whole)
-        } else {
-            serializer.serialize_f64(value)
+        match crate::js::whole(self.0) {
+            Some(whole) => serializer.serialize_i64(whole),
+            None => serializer.serialize_f64(self.0),
         }
     }
 }

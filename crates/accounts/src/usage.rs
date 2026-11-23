@@ -1,16 +1,13 @@
 //! Usage records from a core's usage queue, as `usage.ts` stored them: accounting metadata
 //! only, never keys, prompts or upstream error bodies.
 
-use std::fmt::Write;
-
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::js::{nullish, number, or, record, string, stringify, text, truthy};
+use nsv_domain::sha256_hex;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{PricingTokens, UsageRecord};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
-
-use crate::js::{nullish, number, or, record, string, stringify, text, truthy};
 
 /// Usage records per page of the core's queue; a full page means more are waiting.
 pub const PAGE: usize = 500;
@@ -53,13 +50,7 @@ fn usage_record(profile: &ProfileId, entry: &Value, now: i64) -> UsageRecord {
     let fail = record(r.get("fail"));
     let counter = |key: &str| whole(number(tokens.get(key)).unwrap_or(0.0));
     let request = or(r.get("request_id"), None).map_or_else(
-        || {
-            let digest = Sha256::digest(stringify(&Value::Object(r.clone())).as_bytes());
-            digest.iter().fold(String::new(), |mut hex, byte| {
-                let _ = write!(hex, "{byte:02x}");
-                hex
-            })
-        },
+        || sha256_hex(stringify(&Value::Object(r.clone())).as_bytes()),
         |value| string(Some(value)).into_owned(),
     );
     let failed = r.get("failed");

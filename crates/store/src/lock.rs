@@ -10,9 +10,10 @@ use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
+use nsv_domain::sync::locked;
 use rusqlite::{Connection, ErrorCode};
 
 use crate::files::{EntryKind, own_entry, owner_only_directory};
@@ -23,7 +24,7 @@ use crate::layout::server_lock_path;
 static OWNED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
 
 fn owned() -> MutexGuard<'static, BTreeSet<PathBuf>> {
-    OWNED.lock().unwrap_or_else(PoisonError::into_inner)
+    locked(&OWNED)
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -327,11 +327,3 @@ fn literal_true_rejects_false() {
     let window = json!({ "label": "x", "remainingPercent": 1, "resetsAt": null, "scoped": false });
     assert!(serde_json::from_value::<QuotaWindow>(window).is_err());
 }
-
-#[test]
-fn lengths_count_utf16_code_units() {
-    assert_eq!(utf16_len("Équipe"), 6);
-    assert_eq!(utf16_len("★ ★ ★"), 5);
-    assert_eq!(utf16_len("😀"), 2);
-    assert_eq!(utf16_len(""), 0);
-}

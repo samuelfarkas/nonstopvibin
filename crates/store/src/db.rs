@@ -8,28 +8,25 @@ use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId, ProfileSlug};
+use nsv_domain::random;
 use nsv_domain::registry::{RetentionDays, Strategy, registry};
-use nsv_domain::secret::{ApiKey, CLIENT_KEY_PREFIX, ClientKey, CoreKey, KeyDigest, ManagementKey};
-use nsv_domain::time::iso_string;
+use nsv_domain::secret::{ApiKey, ClientKey, CoreKey, KeyDigest, ManagementKey};
+use nsv_domain::time::{epoch_ms, iso_string};
 use nsv_domain::wire::{Account, ApiAccount, Extra, Profile, Quota, UsageRecord};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Params, params};
 use serde::de::DeserializeOwned;
 use tokio::sync::watch;
 use unicode_normalization::UnicodeNormalization;
-use zeroize::Zeroizing;
 
 use crate::files::{EntryKind, own_entry, owner_only_directory};
 use crate::layout::database_path;
 use crate::store::StoreError;
 use crate::vault::Vault;
-use crate::{random_bytes, random_uuid};
 
 const SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, body TEXT NOT NULL);
@@ -301,13 +298,13 @@ impl Db {
             suffix += 1;
         }
         let profile = Profile {
-            id: ProfileId::parse(&random_uuid()?)?,
+            id: ProfileId::parse(&random::uuid()?)?,
             slug: ProfileSlug::parse(&slug)?,
             name: name.to_owned(),
             strategy: Strategy::FillFirst,
             session_affinity: true,
             enabled: false,
-            created_at: iso_string(milliseconds(SystemTime::now())),
+            created_at: iso_string(epoch_ms(SystemTime::now())),
             extra: Extra::new(),
         };
         let body = serde_json::to_string(&profile)?;
@@ -317,9 +314,12 @@ impl Db {
                 "INSERT INTO profiles VALUES (?,?,?)",
                 params![id, profile.slug.as_str(), body],
             )?;
-            db.set_secret(&secret_id(id, "client"), &new_key(CLIENT_KEY_PREFIX)?)?;
-            db.set_secret(&secret_id(id, "core"), &new_key("")?)?;
-            db.set_secret(&secret_id(id, "management"), &new_key("")?)?;
+            let client = ClientKey::generate()?;
+            db.set_secret(&secret_id(id, "client"), client.expose_secret())?;
+            let core = CoreKey::generate()?;
+            db.set_secret(&secret_id(id, "core"), core.expose_secret())?;
+            let management = ManagementKey::generate()?;
+            db.set_secret(&secret_id(id, "management"), management.expose_secret())?;
             Ok(())
         })?;
         self.names = None;
@@ -429,7 +429,7 @@ impl Db {
         let key = reset_request_setting(identity, credit_id)?;
         self.run(
             "INSERT OR IGNORE INTO settings VALUES (?,?)",
-            params![key, random_uuid()?],
+            params![key, random::uuid()?],
         )?;
         Ok(self
             .connection
@@ -732,7 +732,7 @@ impl Db {
         if days == RetentionDays::All {
             return Ok(());
         }
-        let cutoff = iso_string(milliseconds(now) - i64::from(days.days()) * 86_400_000);
+        let cutoff = iso_string(epoch_ms(now) - i64::from(days.days()) * 86_400_000);
         for profile in self.profiles()? {
             if self.run(
                 "DELETE FROM usage WHERE profile_id=? AND timestamp<?",
@@ -780,24 +780,6 @@ fn slug_stem(name: &str) -> String {
         "profile".to_owned()
     } else {
         trimmed.to_owned()
-    }
-}
-
-/// `prefix` and 32 random bytes in base64url: a client key with `nv_`, a core or management
-/// key without.
-fn new_key(prefix: &str) -> Result<Zeroizing<String>, StoreError> {
-    let bytes = Zeroizing::new(random_bytes::<32>()?);
-    let mut key = Zeroizing::new(String::with_capacity(prefix.len() + 43));
-    key.push_str(prefix);
-    URL_SAFE_NO_PAD.encode_string(bytes.as_slice(), &mut key);
-    Ok(key)
-}
-
-/// `Date.prototype.getTime()` of `time`.
-fn milliseconds(time: SystemTime) -> i64 {
-    match time.duration_since(UNIX_EPOCH) {
-        Ok(after) => i64::try_from(after.as_millis()).unwrap_or(i64::MAX),
-        Err(before) => -i64::try_from(before.duration().as_millis()).unwrap_or(i64::MAX),
     }
 }
 

@@ -6,11 +6,11 @@ use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
+use nsv_domain::js;
 use nsv_store::files::{EntryKind, own_entry, read_own_file, write_atomic};
 use serde_json::{Map, Value};
 
 use crate::error::{AgentError, conflicting, refused};
-use crate::json;
 
 /// Largest agent configuration file read or written.
 pub(crate) const FILE_LIMIT: usize = 1_000_000;
@@ -91,7 +91,7 @@ pub(crate) fn read_config(path: &Path) -> Result<Option<String>, AgentError> {
 
 /// A JSON object, or the refusal the user sees for anything else.
 pub(crate) fn json_object(content: &str) -> Result<Map<String, Value>, AgentError> {
-    match json::parse(content) {
+    match js::parse(content) {
         Some(Value::Object(object)) => Ok(object),
         _ => Err(refused(
             "This agent configuration is not a valid JSON object. Fix it before connecting.",

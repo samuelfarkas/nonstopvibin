@@ -16,13 +16,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nsv_domain::helper::{self, DaemonCall, FromHelper, Origin, Outcome, Rect, ToHelper, View};
+use nsv_domain::endpoint::{CSP, Origin};
+use nsv_domain::helper::{self, DaemonCall, FromHelper, Outcome, Rect, ToHelper, View};
 use serde_json::{Value, json};
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) const TOKEN: &str = "session-token-for-the-harness";
-/// `src/server/server.ts`'s header, byte for byte.
-pub(crate) const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 const PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>harness</title><body><script src="/page.js"></script></body>"#;
 const SCRIPT: &str = include_str!("page.js");
 

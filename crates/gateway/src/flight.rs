@@ -1,9 +1,10 @@
 //! Per-profile in-flight accounting.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use nsv_domain::id::ProfileId;
+use nsv_domain::sync::locked;
 
 /// Requests one profile may have open at once.
 pub(crate) const LIMIT: u32 = 32;
@@ -43,8 +44,7 @@ impl Counts {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<ProfileId, u32>> {
-        // Every critical section leaves the map consistent, so a panic elsewhere cannot.
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        locked(&self.0)
     }
 }
 

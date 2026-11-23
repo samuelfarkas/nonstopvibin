@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nsv_domain::helper::Origin;
+use nsv_domain::endpoint::{Origin, loopback_origin};
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use nsv_shell::{HostEvent, ShellHost, TrayStatus};
@@ -39,7 +39,7 @@ impl Host {
     pub fn new(port: u16, data: &Path) -> Arc<Self> {
         let (events, first) = broadcast::channel(8);
         Arc::new(Self {
-            origin: Origin::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+            origin: Origin::parse(&loopback_origin(port)).unwrap(),
             token: SessionToken::new(TOKEN),
             data: data.to_owned(),
             status: watch::channel(TrayStatus::default()).0,

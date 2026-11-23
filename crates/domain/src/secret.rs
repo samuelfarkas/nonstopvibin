@@ -2,12 +2,14 @@
 //! `Debug`, so a secret reaches a log, a response or another crate's API only through an
 //! explicit `expose_secret()` that a reviewer can grep for.
 
-use std::fmt;
+use std::{fmt, io};
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+
+use crate::random;
 
 /// Compares two secrets in constant time for equal lengths; differing lengths are unequal.
 #[must_use]
@@ -81,9 +83,33 @@ secret!(
     ApiKey
 );
 
+/// Secrets this application issues: a prefix and 32 random bytes in base64url.
+macro_rules! generated {
+    ($($name:ident = $prefix:expr),*) => {$(
+        impl $name {
+            /// A new random value.
+            ///
+            /// # Errors
+            /// The random source failed.
+            pub fn generate() -> io::Result<Self> {
+                random::key($prefix).map(Self)
+            }
+        }
+    )*};
+}
+generated!(
+    ClientKey = CLIENT_KEY_PREFIX,
+    CoreKey = "",
+    ManagementKey = "",
+    SessionToken = ""
+);
+
 /// The client-key alphabet and length that installed credential helpers already match.
 pub const CLIENT_KEY_PREFIX: &str = "nv_";
 pub const CLIENT_KEY_LENGTH: usize = 43;
+/// The base64url alphabet as a character class, in the order installed credential helpers
+/// already contain.
+pub const CLIENT_KEY_CHARACTERS: &str = "a-zA-Z0-9_-";
 
 impl ClientKey {
     /// Whether `value` has a client key's shape: `nv_` and 43 base64url characters.
@@ -148,6 +174,9 @@ mod tests {
         assert!(!ClientKey::well_formed(&format!("nv_{}", "a".repeat(42))));
         assert!(!ClientKey::well_formed(&format!("nv_{}=", "a".repeat(42))));
         assert!(!ClientKey::well_formed(&format!("xx_{}", "a".repeat(43))));
+        let generated = ClientKey::generate().unwrap();
+        assert!(ClientKey::well_formed(generated.expose_secret()));
+        assert!(!generated.matches(ClientKey::generate().unwrap().expose_secret()));
     }
 
     #[test]

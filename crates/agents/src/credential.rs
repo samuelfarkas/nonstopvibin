@@ -6,17 +6,15 @@
 
 use std::path::Path;
 
-use nsv_domain::secret::{CLIENT_KEY_LENGTH, CLIENT_KEY_PREFIX};
+use nsv_domain::js;
+use nsv_domain::secret::{CLIENT_KEY_CHARACTERS, CLIENT_KEY_LENGTH, CLIENT_KEY_PREFIX};
 use nsv_domain::wire::Profile;
 
 use crate::connection::{shell_quote, text};
-use crate::json;
 
 pub(crate) const HOST: &str = "localhost";
 pub(crate) const PROFILES_PATH: &str = "/profiles/";
 pub(crate) const SEPARATOR: &str = "\n";
-/// The client-key alphabet in the order installed credential helpers already contain.
-const KEY_CHARACTERS: &str = "a-zA-Z0-9_-";
 
 /// The key helper the harness's native credential hook runs, never an agent launcher. The
 /// installed URL stays fixed; a port change must fail before returning a key.
@@ -37,7 +35,7 @@ nv_connection=$(curl -q --fail --silent --show-error --noproxy '*' --proxy '' --
 nv_key=${{nv_connection%%{separator}*}}
 nv_port=${{nv_connection#*{separator}}}
 case "$nv_key" in {CLIENT_KEY_PREFIX}*) ;; *) exit 1 ;; esac
-case "$nv_key" in *[!{KEY_CHARACTERS}]*) exit 1 ;; esac
+case "$nv_key" in *[!{CLIENT_KEY_CHARACTERS}]*) exit 1 ;; esac
 [ "${{#nv_key}}" -eq {length} ] || exit 1
 [ "$nv_port" = {port} ] || {{
   printf '%s\n' 'The gateway port changed. Reconnect this agent in nonstopvibin.' >&2
@@ -50,7 +48,7 @@ printf '%s\n' "$nv_key"
 
 /// The client key as a JavaScript regular expression source, without anchors.
 pub(crate) fn client_key_source() -> String {
-    format!("{CLIENT_KEY_PREFIX}[{KEY_CHARACTERS}]{{{CLIENT_KEY_LENGTH}}}")
+    format!("{CLIENT_KEY_PREFIX}[{CLIENT_KEY_CHARACTERS}]{{{CLIENT_KEY_LENGTH}}}")
 }
 
 /// JavaScript source of `function credential()`, which resolves to the profile's key or rejects
@@ -64,11 +62,11 @@ pub(crate) fn credential_client(
 ) -> String {
     // The regular expression literal JavaScript prints for `^<key>\n([0-9]{1,5})$`.
     let reply = format!("/^{}\\n([0-9]{{1,5}})$/", client_key_source());
-    let socket = json::string(&text(socket));
-    let path = json::string(&format!("{PROFILES_PATH}{}", profile.id));
-    let host = json::string(HOST);
-    let port = json::string(&port.to_string());
-    let separator = json::string(SEPARATOR);
+    let socket = js::quote(&text(socket));
+    let path = js::quote(&format!("{PROFILES_PATH}{}", profile.id));
+    let host = js::quote(HOST);
+    let port = js::quote(&port.to_string());
+    let separator = js::quote(SEPARATOR);
     format!(
         r#"function credential() {{
   return new Promise((resolve, reject) => {{

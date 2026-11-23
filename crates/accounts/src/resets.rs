@@ -3,16 +3,18 @@
 //! after a failure, an ambiguous answer or a restart redeems the same credit once.
 
 use std::collections::HashSet;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js;
 use nsv_domain::registry::{Provider, ResetResultCode, registry};
+use nsv_domain::sync::locked;
+use nsv_domain::time;
 use nsv_domain::wire::{AccountKind, QuotaStatus, ResetCredit, ResetCredits, ResetResult};
 use nsv_store::Store;
 use serde_json::{Map, Value, json};
 
-use crate::js;
 use crate::quota::{
     CODEX_API, QuotaError, QuotaSource, RefreshQuota, UpstreamRequest, call_upstream, status_text,
 };
@@ -51,7 +53,7 @@ fn reset_credit(value: &Value) -> Option<ResetCredit> {
     }
     let expires_at = match object.get("expires_at")? {
         Value::Null => None,
-        Value::String(time) if js::is_offset_datetime(time) => Some(time.clone()),
+        Value::String(time) if time::is_offset_datetime(time) => Some(time.clone()),
         _ => return None,
     };
     Some(ResetCredit {
@@ -104,10 +106,7 @@ struct Redeeming<'a> {
 
 impl Drop for Redeeming<'_> {
     fn drop(&mut self) {
-        self.set
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.identity);
+        locked(self.set).remove(&self.identity);
     }
 }
 
@@ -250,10 +249,7 @@ impl CodexResets {
     ) -> Result<ResetResult, QuotaError> {
         let subscription = Self::subscription(source, profile, account).await?;
         let _redeeming = {
-            let mut redeeming = self
-                .redeeming
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let mut redeeming = locked(&self.redeeming);
             if !redeeming.insert(subscription.identity.clone()) {
                 return Err(AppError::new(
                     "A reset is already in progress for this subscription.",

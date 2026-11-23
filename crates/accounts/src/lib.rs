@@ -10,7 +10,6 @@ pub mod credentials;
 pub mod fetch;
 pub mod identity;
 pub mod imports;
-mod js;
 pub mod pricing;
 pub mod quota;
 pub mod resets;

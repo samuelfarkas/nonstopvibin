@@ -6,13 +6,14 @@ use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, InvalidId};
+use nsv_domain::js;
+use nsv_domain::random;
 use nsv_domain::registry::{Protocol, Provider, RegistryError, Upstream, registry};
 use nsv_domain::wire::{ApiAccount, ApiAccountInput, ApiModel, Extra};
 use nsv_net::{Loopback, NetError, USER_AGENT};
 use serde_json::Value;
 
 use crate::fetch::{Fetch, Request};
-use crate::js;
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 const DISCOVERY_LIMIT: u64 = 16 * 1024 * 1024;
@@ -33,7 +34,7 @@ pub enum ApiAccountError {
     #[error(transparent)]
     Registry(#[from] RegistryError),
     #[error("no random account id: {0}")]
-    Random(#[from] getrandom::Error),
+    Random(#[from] std::io::Error),
     #[error(transparent)]
     Id(#[from] InvalidId),
 }
@@ -147,7 +148,7 @@ pub async fn api_account(
         .into());
     }
     Ok(ApiAccount {
-        id: AccountId::parse(&random_uuid()?)?,
+        id: AccountId::parse(&random::uuid()?)?,
         name: input.name.clone(),
         provider: input.provider,
         base_url: base_url.to_owned(),
@@ -333,23 +334,4 @@ impl<'a> ProviderUrl<'a> {
         };
         Loopback::new(SocketAddr::new(ip, self.port.unwrap_or(80)))
     }
-}
-
-/// A version 4 UUID as `crypto.randomUUID()` writes it: lowercase and hyphenated.
-fn random_uuid() -> Result<String, getrandom::Error> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes)?;
-    let [.., version, _, variant, _, _, _, _, _, _, _] = &mut bytes;
-    *version = *version & 0x0f | 0x40;
-    *variant = *variant & 0x3f | 0x80;
-    let mut text = String::with_capacity(36);
-    for (index, byte) in bytes.iter().enumerate() {
-        if matches!(index, 4 | 6 | 8 | 10) {
-            text.push('-');
-        }
-        for nibble in [byte >> 4, byte & 0x0f] {
-            text.extend(char::from_digit(u32::from(nibble), 16));
-        }
-    }
-    Ok(text)
 }

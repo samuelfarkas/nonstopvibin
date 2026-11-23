@@ -4,13 +4,12 @@
 
 use std::path::Path;
 
+use nsv_domain::endpoint::{CATALOG_HEADER, profile_endpoint};
+use nsv_domain::js;
 use nsv_domain::wire::Profile;
 
-use crate::connection::{
-    CATALOG_HEADER, ConfigDirectory, Definition, native_provider, profile_endpoint, same_text, text,
-};
+use crate::connection::{ConfigDirectory, Definition, native_provider, same_text, text};
 use crate::error::{AgentError, conflict};
-use crate::json;
 
 pub(crate) const DEFINITION: Definition = Definition {
     version: 3,
@@ -53,7 +52,7 @@ pub(crate) fn configuration(
     let tag = if other_providers == Some(false) {
         format!(
             "\nhttp_headers = {{ {} = \"codex\" }}",
-            json::string(CATALOG_HEADER)
+            js::quote(CATALOG_HEADER)
         )
     } else {
         String::new()
@@ -72,10 +71,10 @@ command = {helper}
 timeout_ms = 5000
 refresh_interval_ms = 300000
 "#,
-        quoted = json::string(&provider),
-        name = json::string(&format!("nonstopvibin · {}", profile.name)),
-        base = json::string(&profile_endpoint(port, profile.slug.as_str())),
-        helper = json::string(&text(helper)),
+        quoted = js::quote(&provider),
+        name = js::quote(&format!("nonstopvibin · {}", profile.name)),
+        base = js::quote(&profile_endpoint(port, profile.slug.as_str())),
+        helper = js::quote(&text(helper)),
     )
 }
 
@@ -96,7 +95,7 @@ fn split(content: Option<&str>) -> Split<'_> {
         let kept: Vec<&str> = content
             .split('\n')
             .filter(|&line| {
-                if line.trim_start_matches(json::is_space).starts_with('[') {
+                if line.trim_start_matches(js::is_space).starts_with('[') {
                     table = true;
                     // Codex records hook approvals and model-picker notices here.
                     runtime_state = runtime_state_header(line);
@@ -113,7 +112,7 @@ fn split(content: Option<&str>) -> Split<'_> {
                 true
             })
             .collect();
-        json::trim(&kept.join("\n")).to_owned()
+        js::trim(&kept.join("\n")).to_owned()
     });
     Split {
         connection,
@@ -152,7 +151,7 @@ fn merge(
 
 /// `/^\s*\[(?:hooks\.state(?:\."(?:[^"\\]|\\.)*")?|tui\.model_availability_nux)\]\s*(?:#.*)?$/`
 fn runtime_state_header(line: &str) -> bool {
-    let Some(rest) = line.trim_start_matches(json::is_space).strip_prefix('[') else {
+    let Some(rest) = line.trim_start_matches(js::is_space).strip_prefix('[') else {
         return false;
     };
     let rest = if let Some(rest) = rest.strip_prefix("hooks.state") {
@@ -182,12 +181,12 @@ fn preference(line: &str) -> bool {
         "model_reasoning_summary",
         "model_verbosity",
     ];
-    let line = line.trim_start_matches(json::is_space);
+    let line = line.trim_start_matches(js::is_space);
     KEYS.iter().any(|key| {
         line.strip_prefix(key)
-            .map(|rest| rest.trim_start_matches(json::is_space))
+            .map(|rest| rest.trim_start_matches(js::is_space))
             .and_then(|rest| rest.strip_prefix('='))
-            .map(|rest| rest.trim_start_matches(json::is_space))
+            .map(|rest| rest.trim_start_matches(js::is_space))
             .and_then(|rest| quoted(rest).or_else(|| single_quoted(rest)))
             .is_some_and(comment_or_end)
     })
@@ -218,7 +217,7 @@ fn single_quoted(text: &str) -> Option<&str> {
 
 /// `\s*(?:#.*)?$`.
 fn comment_or_end(rest: &str) -> bool {
-    let rest = rest.trim_start_matches(json::is_space);
+    let rest = rest.trim_start_matches(js::is_space);
     rest.is_empty()
         || rest
             .strip_prefix('#')

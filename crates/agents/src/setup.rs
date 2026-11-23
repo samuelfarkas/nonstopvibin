@@ -7,7 +7,6 @@
 //! closed for agents still running with it.
 
 use std::cmp::Ordering;
-use std::fmt::Write as _;
 use std::fs::{self, DirBuilder};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::DirBuilderExt;
@@ -20,10 +19,10 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::registry::{Agent, AgentEntry, Registry, registry};
 use nsv_domain::secret::ClientKey;
+use nsv_domain::sha256_hex;
 use nsv_domain::wire::{self, AgentSetupInput, Profile};
 use nsv_store::files::write_atomic;
 use nsv_store::layout::{agent_connections_directory, data_directory_from};
-use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::connection::{Context, definition, native_provider, text};
@@ -93,13 +92,9 @@ fn configured(agent: Agent) -> Option<PathBuf> {
 
 /// The first 24 hexadecimal digits of SHA-256: socket directories and Claude manifest names.
 fn short_hash(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .take(12)
-        .fold(String::with_capacity(24), |mut hex, byte| {
-            let _infallible = write!(hex, "{byte:02x}");
-            hex
-        })
+    let mut hex = sha256_hex(bytes);
+    hex.truncate(24);
+    hex
 }
 
 pub struct AgentSetup {

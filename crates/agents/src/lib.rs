@@ -21,10 +21,7 @@ mod setup;
 mod socket;
 
 pub use catalog::{catalog_entries, native_agent, offered_models};
-pub use connection::{
-    AGENT_ENVIRONMENT, CATALOG_HEADER, CATALOG_QUERY, native_provider, profile_base,
-    profile_endpoint,
-};
+pub use connection::{AGENT_ENVIRONMENT, native_provider};
 pub use error::AgentError;
 pub use manifest::{validate_selection, validate_setup};
 pub use setup::{AgentDirectories, AgentSetup, Connection, ConnectionSource};

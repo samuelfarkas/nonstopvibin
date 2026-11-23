@@ -16,14 +16,16 @@ use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use hyper::Method as HttpMethod;
 use nsv_core::pool::{Backend, MANAGEMENT_TIMEOUT, NoHooks, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::js::{encode_uri_component, number, text};
 use nsv_domain::registry::{OAuthProvider, Provider, registry};
+use nsv_domain::sync::locked;
 use nsv_domain::wire::{
     Account, AccountKind, AccountStatus, Extra, OAuthReview, OAuthSession, OAuthStatus,
 };
@@ -41,7 +43,6 @@ use crate::callback::{Callback, Handler, Reply};
 use crate::credentials::{Credentials, SeatMatch, detached};
 use crate::fetch::Fetch;
 use crate::identity::{claude_identity, verify_claude_identity};
-use crate::js::{encode_uri_component, number, text};
 use crate::quota::Quotas;
 use crate::scheduler::Scheduler;
 
@@ -269,12 +270,7 @@ impl<F: Fetch + 'static> SignIn<F> {
     /// The port the callback listener is bound to, while one is open.
     #[must_use]
     pub fn callback_port(&self) -> Option<u16> {
-        self.0
-            .callback
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .map(Callback::port)
+        locked(&self.0.callback).as_ref().map(Callback::port)
     }
 
     /// `POST …/oauth`: starts a sign-in to `provider` for the profile, or one that replaces
@@ -465,7 +461,7 @@ impl<F: Fetch + 'static> Inner<F> {
     /// flight finish.
     fn close_callback(&self, only: Option<u64>, drain: bool) {
         let closed = {
-            let mut callback = self.callback.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut callback = locked(&self.callback);
             callback.take_if(|callback| only.is_none_or(|id| callback.id() == id))
         };
         if let Some(callback) = closed {
@@ -712,7 +708,7 @@ impl<F: Fetch + 'static> Inner<F> {
                 409,
             ));
         };
-        *self.callback.lock().unwrap_or_else(PoisonError::into_inner) = Some(listening);
+        *locked(&self.callback) = Some(listening);
         Ok(session)
     }
 

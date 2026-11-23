@@ -5,14 +5,15 @@ use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use nsv_agents::AGENT_ENVIRONMENT;
+use nsv_domain::time::epoch_ms;
 use nsv_server::Session;
 use nsv_store::files::write_atomic;
 use nsv_store::layout::data_directory_from;
 
-use crate::{CliError, SERVER_PORT, complain, epoch_ms, parse_iso, say, user};
+use crate::{CliError, SERVER_PORT, complain, say, user};
 
 pub(crate) const UNIT: &str = "nonstopvibin.service";
 
@@ -268,7 +269,7 @@ pub(crate) fn data_directory(override_path: Option<&OsStr>) -> Result<PathBuf, C
 async fn wait_until_running(directory: &Path, since: i64) -> Result<bool, CliError> {
     for _ in 0..60 {
         if let Some(session) = Session::read(directory).map_err(CliError::from_display)?
-            && parse_iso(&session.started_at).is_some_and(|started| started >= since)
+            && session.started_at >= since
             && session.probe().await.is_some()
         {
             return Ok(true);
@@ -365,7 +366,7 @@ pub(crate) async fn install(
             "The port changed from {previous_port} to {port}. Startup moves connected agents to the new port; restart running agents (or /reload in pi). Any connection it cannot update is reported in the app; resolve it in Connect agents."
         ));
     }
-    let since = epoch_ms() - 1000;
+    let since = epoch_ms(SystemTime::now()) - 1000;
     for args in [
         &["daemon-reload"][..],
         &["enable", UNIT][..],

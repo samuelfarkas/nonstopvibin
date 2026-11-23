@@ -10,15 +10,13 @@ use hyper::header::{self, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use nsv_accounts::fetch::Fetch;
 use nsv_core::install::Releases;
+use nsv_domain::endpoint::CSP;
 use nsv_domain::wire::JsNumber;
 use nsv_gateway::Body;
 
 use crate::daemon::App;
 use crate::http::Failure;
 use crate::parse::decode_component;
-
-/// Byte-identical to the TypeScript server's.
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 
 const UNBUILT: &str = "Build the interface with bun run build before opening this page.";
 
