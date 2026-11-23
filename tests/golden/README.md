@@ -2,15 +2,18 @@
 
 These files record what the TypeScript server (`src/server` at main 4ea188a, with
 the `tests/fixtures/ts-data-dir` fixture from 8abd008) does. The Rust port loads the
-same JSON and must produce the same outputs. `record.ts` is the oracle. It cannot be
-rebuilt once `src/server` is deleted, so it is committed with the files.
+same JSON and must produce the same outputs. `record.ts` is the oracle. It imports
+`src/server`, which this branch deleted, so it stays committed with the files but is
+excluded from `tsc` and oxlint, and runs only from a checkout of commit 8d52a37 (the
+commit that recorded the files):
 
 ```
+git worktree add /tmp/nsv-oracle 8d52a37 && cd /tmp/nsv-oracle && bun ci
 bun tests/golden/record.ts            # every area
 bun tests/golden/record.ts gateway    # one area
 ```
 
-Run it from the repository root with Bun 1.4.x. Two runs give byte-identical files.
+Run it from that checkout's root with Bun 1.4.x. Two runs give byte-identical files.
 Loopback ports 24318 (api) and 24319 (cli state stub) must be free, and nothing may
 listen on 24399 (the cli's stale server.json). It never starts a CLIProxyAPI core
 and never touches `~/.nonstopvibin` or port 4320. Scratch data goes to

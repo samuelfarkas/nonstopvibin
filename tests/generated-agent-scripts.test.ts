@@ -19,12 +19,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { z } from "zod";
 import cases from "./golden/agents.json" with { type: "json" };
 
-type Json = unknown;
-interface Step {
-  changes?: Record<string, { content?: string } | null>;
-}
+/** A scenario's steps as the golden records them: the files each step changed. */
+const stepsSchema = z.array(
+  z.object({
+    changes: z
+      .record(
+        z.string(),
+        z.object({ content: z.string().optional() }).nullable(),
+      )
+      .optional(),
+  }),
+);
 
 const execute = promisify(execFile);
 const profileId = "11111111-1111-4111-8111-111111111111";
@@ -33,7 +41,7 @@ const providerID = "nonstopvibin-work";
 function golden(name: string) {
   const found = cases.find((entry) => entry.name === name);
   assert.ok(found, `golden case ${name}`);
-  return found.output as Json;
+  return found.output;
 }
 
 /** The content a scenario's first step wrote to `path`, with the golden's placeholders filled. */
@@ -42,7 +50,7 @@ function written(
   path: string,
   places: Record<string, string>,
 ): string {
-  const [first] = golden(scenario) as Step[];
+  const [first] = stepsSchema.parse(golden(scenario));
   const content = first.changes?.[path]?.content;
   assert.ok(content, `${scenario} writes ${path}`);
   return Object.entries(places).reduce(
@@ -272,7 +280,7 @@ test("pi profile controls preserve session routing across selection, restore, fa
     const source = join(directory, "controls.mjs");
     await writeFile(
       source,
-      `${golden("pi profile controls source") as string}\nexport { connectProfileControls };`,
+      `${z.string().parse(golden("pi profile controls source"))}\nexport { connectProfileControls };`,
     );
     const { connectProfileControls } = await import(pathToFileURL(source).href);
     const result: Promise<void> = runInNewContext(
@@ -291,10 +299,13 @@ test("pi profile controls preserve session routing across selection, restore, fa
 });
 
 // The subset of OpenCode's provider config the generated plugin reads and writes.
+interface OpenCodeModel {
+  name?: string;
+}
 interface OpenCodeProvider {
   npm: string;
   options?: { fetch: typeof fetch; apiKey?: string };
-  models: Record<string, Json>;
+  models: Record<string, OpenCodeModel>;
 }
 interface OpenCodeConfig {
   provider: Record<string, OpenCodeProvider>;
@@ -302,7 +313,7 @@ interface OpenCodeConfig {
 }
 /** Output slot the small_model hook fills with the chosen provider model. */
 interface SmallModelOutput {
-  model?: Json;
+  model?: OpenCodeModel;
 }
 
 test("OpenCode native plugin keeps live credentials and background requests in their profile", async () => {

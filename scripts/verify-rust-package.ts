@@ -23,13 +23,13 @@ import {
   coreLayout,
   coreVersion,
   pinnedArchive,
-} from "../src/server/core-binary.ts";
+} from "./core-binary.ts";
 import {
   architecture,
   privateFilePattern,
   product,
   rustLicenses,
-  rustServerArchive,
+  serverArchive,
 } from "./distribution.ts";
 
 const repo = resolve(import.meta.dirname, "..");
@@ -245,7 +245,7 @@ const licenceEntries = (folder: string) =>
 
 /** The server archive's top folder. */
 export function verifyServerTree(root: string, arch: string): void {
-  const entries = rustServerArchive;
+  const entries = serverArchive;
   assertTree(
     root,
     [

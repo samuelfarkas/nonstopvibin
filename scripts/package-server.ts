@@ -14,10 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { coreLayout, coreVersion } from "../src/server/core-binary.ts";
+import { coreLayout, coreVersion } from "./core-binary.ts";
 import {
   renderInstaller,
-  rustServerArchive,
+  serverArchive,
   rustTarget,
   serverArchiveName,
   serverArchitectures,
@@ -53,7 +53,7 @@ for (const arch of arches) {
   const work = await mkdtemp(join(tmpdir(), "nv-server-"));
   try {
     const out = join(work, name);
-    const entries = rustServerArchive;
+    const entries = serverArchive;
     await mkdir(join(work, "core-stage"));
     await stageCore(
       join(work, "core-stage"),

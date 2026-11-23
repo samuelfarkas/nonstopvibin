@@ -1,4 +1,4 @@
-// `bun run core:pin [version]`: writes src/server/core-release.json for an upstream
+// `bun run core:pin [version]`: writes crates/core/core-release.json for an upstream
 // CLIProxyAPI release, the latest without a version. Review the diff before committing it:
 // installed apps offer a pin as soon as it reaches main.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,11 +9,11 @@ import {
   coreLayout,
   corePinSchema,
   coreTargets,
-} from "../src/server/core-binary.ts";
-import { coreArchives, download, extract } from "../src/server/core-install.ts";
+} from "./core-binary.ts";
+import { coreArchives, download, extract } from "./core-install.ts";
 
 const releases = "https://github.com/router-for-me/CLIProxyAPI/releases";
-const pinPath = join(import.meta.dirname, "../src/server/core-release.json");
+const pinPath = join(import.meta.dirname, "../crates/core/core-release.json");
 
 async function latest() {
   const response = await fetch(`${releases}/latest`, {
@@ -70,7 +70,7 @@ try {
   const pin = corePinSchema.parse({ version, minApp, checksums, binaries });
   await writeFile(pinPath, `${JSON.stringify(pin, null, 2)}\n`);
   console.log(
-    `Pinned CLIProxyAPI ${version}${minApp ? ` for NonstopVibin ${minApp} or later` : ""}. Review src/server/core-release.json.`,
+    `Pinned CLIProxyAPI ${version}${minApp ? ` for NonstopVibin ${minApp} or later` : ""}. Review crates/core/core-release.json.`,
   );
 } finally {
   await rm(temporary, { recursive: true, force: true });

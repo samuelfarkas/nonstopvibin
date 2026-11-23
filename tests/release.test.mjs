@@ -10,60 +10,38 @@ import {
   verifyReleaseAssets,
 } from "../scripts/verify-release.mjs";
 import {
+  desktopTargets,
   serverArchiveName,
   serverArchitectures,
 } from "../scripts/distribution.ts";
-import pkg from "../package.json" with { type: "json" };
 
 test("release tags reject disabled updates, wrong versions and wrong destinations", () => {
-  const manifest = {
-    version: "0.1.2",
-    updatesEnabled: true,
-    build: { publish: [{ provider: "github", owner: "fixture", repo: "app" }] },
-  };
-  assert.equal(verifyReleaseTag("v0.1.2", manifest, "fixture/app"), "release");
+  const manifest = { version: "0.1.2", updatesEnabled: true };
+  const feed = { owner: "fixture", repo: "app" };
+  const verify = (tag, value, repository = "fixture/app") =>
+    verifyReleaseTag(tag, value, repository, feed);
+  assert.equal(verify("v0.1.2", manifest), "release");
+  assert.throws(() => verify("v0.1.3", manifest), /version/);
   assert.throws(
-    () => verifyReleaseTag("v0.1.3", manifest, "fixture/app"),
-    /version/,
-  );
-  assert.throws(
-    () =>
-      verifyReleaseTag(
-        "v0.1.2",
-        { ...manifest, updatesEnabled: false },
-        "fixture/app",
-      ),
+    () => verify("v0.1.2", { ...manifest, updatesEnabled: false }),
     /enable/,
   );
-  assert.throws(
-    () => verifyReleaseTag("v0.1.2", manifest, "another/app"),
-    /repository/,
-  );
+  assert.throws(() => verify("v0.1.2", manifest, "another/app"), /repository/);
   assert.equal(
-    verifyReleaseTag(
-      "v0.2.0-beta.1",
-      { ...manifest, version: "0.2.0-beta.1" },
-      "fixture/app",
-    ),
+    verify("v0.2.0-beta.1", { ...manifest, version: "0.2.0-beta.1" }),
     "prerelease",
   );
   for (const tag of ["0.2.0", "v0.2.0-rc.1", "v0.2.0-beta", "v01.2.0"])
     assert.throws(
-      () =>
-        verifyReleaseTag(
-          tag,
-          { ...manifest, version: tag.replace(/^v/, "") },
-          "fixture/app",
-        ),
+      () => verify(tag, { ...manifest, version: tag.replace(/^v/, "") }),
       /vX\.Y\.Z/,
     );
 });
 
 test("release publication requires every configured installer, both server archives, and matching update payloads", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nv-release-"));
-  // The real build configuration, so a target added to package.json is required here too.
-  const manifest = { ...pkg, version: "0.1.2" };
-  const targets = [...pkg.build.mac.target, ...pkg.build.linux.target];
+  // The real targets, so a target added to scripts/distribution.ts is required here too.
+  const targets = [...desktopTargets.mac, ...desktopTargets.linux];
   const archives = serverArchitectures.map(
     (arch) => `${serverArchiveName("0.1.2", arch)}.tar.gz`,
   );
@@ -87,34 +65,28 @@ test("release publication requires every configured installer, both server archi
           ],
         }),
       );
-    await verifyReleaseAssets(directory, manifest);
+    await verifyReleaseAssets(directory, "0.1.2");
     const later = serverArchitectures.map(
       (arch) => `${serverArchiveName("0.1.3", arch)}.tar.gz`,
     );
     for (const archive of later)
       await writeFile(join(directory, archive), "synthetic server");
     await assert.rejects(
-      verifyReleaseAssets(directory, { ...manifest, version: "0.1.3" }),
+      verifyReleaseAssets(directory, "0.1.3"),
       /Update manifest version mismatch/,
     );
     for (const archive of later) await rm(join(directory, archive));
     await assert.rejects(
-      verifyReleaseAssets(directory, {
-        ...manifest,
-        build: {
-          ...pkg.build,
-          linux: {
-            ...pkg.build.linux,
-            target: [...pkg.build.linux.target, "rpm"],
-          },
-        },
+      verifyReleaseAssets(directory, "0.1.2", {
+        ...desktopTargets,
+        linux: [...desktopTargets.linux, "rpm"],
       }),
       /Missing rpm installer/,
     );
     for (const archive of archives) {
       await rm(join(directory, archive));
       await assert.rejects(
-        verifyReleaseAssets(directory, manifest),
+        verifyReleaseAssets(directory, "0.1.2"),
         /Missing server archive/,
       );
       await writeFile(join(directory, archive), "synthetic server");
@@ -122,7 +94,7 @@ test("release publication requires every configured installer, both server archi
     for (const target of targets) {
       await rm(join(directory, `app.${target}`));
       await assert.rejects(
-        verifyReleaseAssets(directory, manifest),
+        verifyReleaseAssets(directory, "0.1.2"),
         new RegExp(`Missing ${target} installer`),
       );
       await writeFile(join(directory, `app.${target}`), bytes);
@@ -131,7 +103,7 @@ test("release publication requires every configured installer, both server archi
       join(directory, "app.zip"),
       Buffer.from("corrupted installer"),
     );
-    await assert.rejects(verifyReleaseAssets(directory, manifest), /mismatch/);
+    await assert.rejects(verifyReleaseAssets(directory, "0.1.2"), /mismatch/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

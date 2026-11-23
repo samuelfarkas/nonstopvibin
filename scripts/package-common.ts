@@ -13,12 +13,8 @@ import {
 import { join, resolve } from "node:path";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
-import {
-  checkCoreDirectory,
-  coreFiles,
-  coreLayout,
-} from "../src/server/core-binary.ts";
-import { checkoutLayout } from "../src/server/host-defaults.ts";
+import { checkCoreDirectory, coreFiles, coreLayout } from "./core-binary.ts";
+import { clientDirectory } from "./distribution.ts";
 import {
   rustLicenseText,
   rustStdNotices,
@@ -85,10 +81,10 @@ export async function stageCore(
 
 /** Copies the Vite build (`bun run build`) to `destination`, the `client/` the daemon serves. */
 export async function stageClient(destination: string): Promise<void> {
-  const client = join(repo, checkoutLayout.client);
+  const client = join(repo, clientDirectory);
   await stat(join(client, "index.html")).catch(() => {
     throw new Error(
-      `Missing ${checkoutLayout.client}/index.html; run bun run build first.`,
+      `Missing ${clientDirectory}/index.html; run bun run build first.`,
     );
   });
   await cp(client, destination, { recursive: true });

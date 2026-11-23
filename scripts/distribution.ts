@@ -1,7 +1,6 @@
-// What the build ships and for which targets. Bun loads this TypeScript from the
-// electron-builder hooks (CommonJS) and the build scripts (ES modules) alike; it must not
-// import build tooling. The pinned core is src/server/core-binary.ts.
-import { serverArchive, serverPort } from "../src/server/host-defaults.ts";
+// What the build ships and for which targets: plain data for the build scripts, tests and
+// vite.config.ts, so it must not import build tooling. The pinned core is
+// scripts/core-binary.ts.
 
 interface Architecture {
   /** What `uname -m` prints on a Linux server. */
@@ -39,6 +38,13 @@ export function architecture(arch: string): Architecture {
 export const privateFilePattern =
   /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.runtime|\.test-runtime|\.deepsec|\.agents|\.git|\.codex|\.claude|\.playwright-cli|id_rsa|id_ed25519|auth\.json|credentials\.json|tokens\.json)(?:\/|$)|\.(?:pem|key|p12|pfx|sqlite3?(?:-(?:wal|shm))?|db(?:-(?:wal|shm))?|map)$/;
 
+/** The built interface, relative to the checkout; packages ship it as `client/`. */
+export const clientDirectory = "dist/client";
+/** The headless CLI's default `--port` (crates/cli). */
+export const serverPort = 4320;
+/** The headless CLI's exit code for "no server is running" (`status`, `url`). */
+export const notRunningExit = 3;
+
 /** The headless server archive's directory name; the archive adds `.tar.gz`. */
 export const serverArchiveName = (version: string, arch: string): string =>
   `nonstopvibin-server-${version}-linux-${arch}`;
@@ -47,9 +53,8 @@ export const serverArchitectures = ["x64", "arm64"];
 export const serverPrefix = ".local";
 
 /**
- * The desktop app as installed builds and the update feed know it. Electron builds take the
- * same values from package.json `build`, and tests/distribution.test.mjs keeps the two equal:
- * an installed Electron build only accepts a Rust update with this identity.
+ * The desktop app as installed builds and the update feed know it: an installed Electron build
+ * only accepts a Rust update with this identity.
  */
 export const product = {
   name: "NonstopVibin",
@@ -139,10 +144,10 @@ export const rustLicenses = [
 ] as const;
 
 /**
- * The Rust server archive's top-level entries. The daemon finds `core/` and the UI's
- * `client/` beside its real path.
+ * The server archive's top-level entries. The daemon finds `core/` and the UI's `client/`
+ * beside its real path; install.sh copies every entry.
  */
-export const rustServerArchive = {
+export const serverArchive = {
   executable: "nonstopvibin",
   core: "core",
   client: "client",

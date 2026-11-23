@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          pinned=$(jq -r .version src/server/core-release.json)
+          pinned=$(jq -r .version crates/core/core-release.json)
           read -r tag published < <(gh release view --repo router-for-me/CLIProxyAPI \
             --json tagName,publishedAt --jq '"\(.tagName) \(.publishedAt)"')
           version=${tag#v}

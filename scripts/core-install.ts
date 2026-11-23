@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { open, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { AppError, errorMessage } from "./errors.ts";
 import {
   coreArchive,
   coreLayout,
@@ -13,8 +12,8 @@ import {
   type CorePin,
 } from "./core-binary.ts";
 
-// Installs a reviewed core release, for `bun run core:install` and for core updates in
-// installed builds; `bun run core:pin` hashes upstream releases with the same helpers.
+// Installs a reviewed core release for `bun run core:install`; `bun run core:pin` hashes
+// upstream releases with the same helpers.
 
 /** Where upstream publishes each release's archives, under `v<version>/`. */
 export const coreArchives =
@@ -22,6 +21,10 @@ export const coreArchives =
 /** Above any core archive or executable; executables are about 75 MB. */
 const sizeLimit = 256 * 1024 * 1024;
 const downloadTimeout = 10 * 60_000;
+/** A failure this module describes itself, passed on unwrapped. */
+class InstallError extends Error {}
+const message = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause);
 
 /** Writes `chunks` to a new file at `path` with `mode`; answers their SHA-256. */
 async function save(
@@ -38,7 +41,7 @@ async function save(
     for await (const chunk of chunks) {
       size += chunk.byteLength;
       if (size > sizeLimit)
-        throw new AppError(`${basename(path)} is larger than any core.`, 502);
+        throw new InstallError(`${basename(path)} is larger than any core.`);
       hash.update(chunk);
       await file.write(chunk);
     }
@@ -76,19 +79,15 @@ export async function download(
     });
     if (!response.ok || !response.body) {
       await response.body?.cancel();
-      throw new AppError(
+      throw new InstallError(
         `Could not download ${name} (HTTP ${response.status}).`,
-        502,
       );
     }
     return await save(chunks(response.body), path, 0o600);
   } catch (error) {
     signal?.throwIfAborted();
-    if (error instanceof AppError) throw error;
-    throw new AppError(
-      `Could not download ${name}: ${errorMessage(error)}`,
-      502,
-    );
+    if (error instanceof InstallError) throw error;
+    throw new InstallError(`Could not download ${name}: ${message(error)}`);
   }
 }
 
@@ -114,16 +113,13 @@ export async function extract(
       once(tar, "close"),
     ]);
     if (code !== 0)
-      throw new AppError(`The core archive has no ${member}.`, 502);
+      throw new InstallError(`The core archive has no ${member}.`);
     return sha256;
   } catch (error) {
     tar.kill("SIGKILL");
     signal?.throwIfAborted();
-    if (error instanceof AppError) throw error;
-    throw new AppError(
-      `Could not extract ${member}: ${errorMessage(error)}`,
-      502,
-    );
+    if (error instanceof InstallError) throw error;
+    throw new InstallError(`Could not extract ${member}: ${message(error)}`);
   }
 }
 
@@ -149,13 +145,14 @@ export async function installCore(
 ): Promise<void> {
   const target = coreTarget(platform, arch);
   if (!target)
-    throw new AppError("Supported core platforms: macOS/Linux arm64 and x64.");
+    throw new InstallError(
+      "Supported core platforms: macOS/Linux arm64 and x64.",
+    );
   const name = coreArchive(pin.version, platform, arch);
   const archive = join(directory, name);
   const mismatch = () =>
-    new AppError(
+    new InstallError(
       "The downloaded core does not match the reviewed pin. Nothing was changed.",
-      502,
     );
   try {
     const sha256 = await download(

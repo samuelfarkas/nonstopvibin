@@ -27,8 +27,7 @@ pub const ARCHIVE_HOSTS: &[&str] = &[
 ];
 /// The reviewed pin on `main`, which installed builds read; `NONSTOPVIBIN_CORE_FEED` replaces
 /// it. Archives always come from [`CORE_ARCHIVES`].
-pub const CORE_FEED: &str =
-    "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/src/server/core-release.json";
+pub const CORE_FEED: &str = "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/crates/core/core-release.json";
 /// GitHub serves raw files from this host only.
 const FEED_HOSTS: &[&str] = &["raw.githubusercontent.com"];
 const FEED_TIMEOUT: Duration = Duration::from_secs(15);

@@ -239,7 +239,7 @@ fn verify_core_checks_the_manifest_and_optionally_the_pin() {
         "The proxy core failed its integrity check. Reinstall NonstopVibin.".to_owned(),
         503,
     );
-    // The fake core's manifest carries only the binary hash, as tests/support/fake-core.ts writes.
+    // The fake core's manifest carries only the binary hash, as the TypeScript fake core wrote.
     let directory = core_directory("core", &serde_json::json!({ "binarySha256": CORE_SHA256 }));
     let binary = directory.path().join("cli-proxy-api");
     verify_core(&binary, None).unwrap();

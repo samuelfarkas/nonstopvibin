@@ -25,7 +25,7 @@ import {
   coreLayout,
   readCoreManifest,
   writeCoreManifest,
-} from "../src/server/core-binary.ts";
+} from "./core-binary.ts";
 import {
   architecture,
   desktopArtifact,

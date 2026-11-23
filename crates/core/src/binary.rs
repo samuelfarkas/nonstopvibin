@@ -15,10 +15,10 @@ use sha2::{Digest, Sha256};
 
 use crate::CoreError;
 
-/// `src/server/core-release.json`, the reviewed pin this build bundles. Installed builds read
+/// `crates/core/core-release.json`, the reviewed pin this build bundles. Installed builds read
 /// the same file from `main` as their update feed, so it stays where the TypeScript readers
 /// (the build scripts) expect it.
-const BUNDLED_PIN: &str = include_str!("../../../src/server/core-release.json");
+const BUNDLED_PIN: &str = include_str!("../core-release.json");
 
 /// Written by `bun run core:install`, relative to the checkout.
 pub const CHECKOUT_DIRECTORY: &str = ".vendor/core";
@@ -271,7 +271,7 @@ impl Targets {
     }
 }
 
-/// A reviewed core release, `src/server/core-release.json`: bundled into each build and read
+/// A reviewed core release, `crates/core/core-release.json`: bundled into each build and read
 /// from `main` by installed ones. Unknown keys are ignored, so a later field does not stop
 /// older apps from reading it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

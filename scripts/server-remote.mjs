@@ -6,9 +6,10 @@ import { connect, createServer } from "node:net";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pkg from "../package.json" with { type: "json" };
-import { notRunningExit, serverArchive } from "../src/server/host-defaults.ts";
 import {
   architectures,
+  notRunningExit,
+  serverArchive,
   serverArchiveName,
   serverPrefix,
 } from "./distribution.ts";

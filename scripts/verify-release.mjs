@@ -8,12 +8,19 @@ import { basename, join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import { releaseChannel } from "../src/shared/release-channel.ts";
 import {
+  desktopTargets,
+  product,
   serverArchiveName,
   serverArchitectures,
   updatePayload,
 } from "./distribution.ts";
 
-export function verifyReleaseTag(tag, manifest, repository) {
+export function verifyReleaseTag(
+  tag,
+  manifest,
+  repository,
+  feed = product.feed,
+) {
   const channel = tag.startsWith("v") && releaseChannel(tag.slice(1));
   assert.ok(channel, "Use vX.Y.Z or vX.Y.Z-beta.N");
   assert.equal(
@@ -26,8 +33,6 @@ export function verifyReleaseTag(tag, manifest, repository) {
     true,
     "Configure the release repository and enable updatesEnabled first",
   );
-  const feed = manifest.build.publish[0];
-  assert.equal(feed.provider, "github");
   assert.equal(
     `${feed.owner}/${feed.repo}`,
     repository,
@@ -36,14 +41,17 @@ export function verifyReleaseTag(tag, manifest, repository) {
   return channel;
 }
 
-/** Checks `directory` holds every asset `manifest` (package.json) builds for its version. */
-export async function verifyReleaseAssets(directory, manifest) {
+/** Checks `directory` holds every asset a release of `version` builds. */
+export async function verifyReleaseAssets(
+  directory,
+  version,
+  installers = desktopTargets,
+) {
   const { default: YAML } = await import("yaml");
-  const { version, build } = manifest;
   const names = await readdir(directory);
-  // electron-builder names each installer with its target as the extension.
+  // Each installer's name ends with its target as the extension.
   for (const [platform, payload] of Object.entries(updatePayload)) {
-    const targets = build[platform].target;
+    const targets = installers[platform];
     assert.ok(targets.includes(payload), `${platform} must build ${payload}`);
     for (const target of targets)
       assert.ok(
@@ -55,7 +63,7 @@ export async function verifyReleaseAssets(directory, manifest) {
     const archive = `${serverArchiveName(version, arch)}.tar.gz`;
     assert.ok(names.includes(archive), `Missing server archive ${archive}`);
   }
-  // electron-builder 26 uses latest manifests for GitHub, including prereleases.
+  // Installed builds read latest-*.yml for GitHub releases, including prereleases.
   for (const [platform, payload] of Object.entries(updatePayload)) {
     const feed = YAML.parse(
       await readFile(join(directory, `latest-${platform}.yml`), "utf8"),
@@ -92,6 +100,6 @@ if (import.meta.main) {
     pkg,
     process.env.GITHUB_REPOSITORY,
   );
-  if (process.argv[3]) await verifyReleaseAssets(process.argv[3], pkg);
+  if (process.argv[3]) await verifyReleaseAssets(process.argv[3], pkg.version);
   console.log(channel);
 }

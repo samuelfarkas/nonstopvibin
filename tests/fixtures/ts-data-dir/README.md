@@ -3,7 +3,9 @@
 Goal: a data directory written by the TypeScript server, for the Rust port's
 migration test to open and check. Everything here was produced by
 `bun tests/fixtures/ts-data-dir/generate.ts` (run from the repository root of a
-4ea188a checkout, Bun 1.4.4). Rerunning it rewrites `data/`, `agent-home/` and
+4ea188a checkout, Bun 1.4.4). The generator imports `src/server`, which this branch
+deleted: it is kept as the fixture's source, excluded from `tsc` and oxlint, and runs
+only from a checkout of commit 8abd008, which added it. Rerunning it rewrites `data/`, `agent-home/` and
 `expected.json`; only UUIDs, AES-GCM nonces, the reset request id and the ledger
 owner pid change between runs.
 
@@ -11,7 +13,7 @@ owner pid change between runs.
 
 ```
 ts-data-dir/
-  generate.ts      the generator (typechecks, lints and formats clean)
+  generate.ts      the generator (runs from 8abd008; not type-checked here)
   expected.json    what a reader must find (see below)
   data/            the data directory (NONSTOPVIBIN_DATA_DIR)
   agent-home/      the user's home with agent connections installed

@@ -1,7 +1,8 @@
 # Screenshot capture notes
 
 The README screenshots show the real React renderer and local server running
-with isolated sample data from [scripts/preview.ts](../../scripts/preview.ts).
+with isolated sample data from [scripts/preview.ts](https://github.com/samuelfarkas/nonstopvibin/blob/caeab18/scripts/preview.ts),
+which left with the TypeScript server.
 No real credentials or provider accounts were used.
 
 - `subscriptions.png`: account pools, remaining quotas, and reset times.

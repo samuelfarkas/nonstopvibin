@@ -101,7 +101,7 @@ pub(crate) fn release(work: &Path, bytes: &[u8]) -> (Vec<u8>, Value) {
     let target = CoreTarget::current().unwrap();
     let key = format!("{}_{}", target.platform(), target.arch());
     let mut pin: Value =
-        serde_json::from_str(include_str!("../../../../src/server/core-release.json")).unwrap();
+        serde_json::from_str(include_str!("../../../core/core-release.json")).unwrap();
     pin["version"] = json!(UPDATE);
     pin["checksums"][&key] = json!(Sha256Digest::of_file(&archive).unwrap().to_string());
     pin["binaries"][&key] = json!(

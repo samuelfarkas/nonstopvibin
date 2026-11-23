@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { coreLayout } from "../src/server/core-binary.ts";
+import { coreLayout } from "./core-binary.ts";
 import { desktopArtifact, product, rustTarget } from "./distribution.ts";
 import {
   cargoBuild,

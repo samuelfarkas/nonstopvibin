@@ -1,6 +1,5 @@
-// Run with `bun run test:server` on Linux after `bun run dist:server` (or, for the Rust daemon,
-// `bun scripts/package-server.ts`): installs the archive for the host architecture from
-// release/ into temporary directories and runs the installed CLI.
+// Run with `bun run test:server` on Linux after `bun run dist:server`: installs the archive for
+// the host architecture from release/ into temporary directories and runs the installed CLI.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -8,8 +7,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pkg from "../package.json" with { type: "json" };
-import { serverArchiveName } from "../scripts/distribution.ts";
-import { notRunningExit, serverArchive } from "../src/server/host-defaults.ts";
+import {
+  notRunningExit,
+  serverArchive,
+  serverArchiveName,
+} from "../scripts/distribution.ts";
 import { unusedPort } from "./support/ports.ts";
 
 const name = serverArchiveName(pkg.version, process.arch);

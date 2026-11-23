@@ -27,6 +27,10 @@
     "tools/oxlint/anti-slop/",
     "tests/fixtures/ts-data-dir/data/",
     "tests/fixtures/ts-data-dir/agent-home/",
+    "tests/fixtures/ts-data-dir/generate.ts",
+    "tests/golden/record.ts",
+    "tests/golden/lib.ts",
+    "tests/golden/areas/",
     "tests/types/generated/"
   ],
   "jsPlugins": [

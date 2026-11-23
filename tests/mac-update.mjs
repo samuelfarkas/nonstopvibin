@@ -1,5 +1,7 @@
-// Run with `bun run test:update:mac` on macOS after `bun run dist:built`: an older build of
-// this source updates itself to the packaged release through its own dialog.
+// Run with `bun run test:update:mac` on macOS after `bun run dist:mac`: the last Electron
+// release's source (NSV_ELECTRON_CHECKOUT, a checkout of main 4ea188a after `bun ci` and
+// `bun run setup`), built as an older version, updates itself to the packaged Rust app through
+// its own dialog and Squirrel.Mac.
 // GitHub Actions only: the relaunched app runs without this test's environment, so it opens the default
 // data folder, and Squirrel.Mac keeps its state under the real bundle identifier.
 import assert from "node:assert/strict";
@@ -25,6 +27,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
+import { product as identity } from "../scripts/distribution.ts";
 
 assert.equal(process.platform, "darwin", "Run the update test on macOS.");
 assert.equal(
@@ -32,13 +35,21 @@ assert.equal(
   "true",
   "Run the update test on a GitHub Actions runner: the updated app opens the default data folder.",
 );
-assert.ok(pkg.updatesEnabled, "The update test needs updatesEnabled.");
+const checkout = process.env.NSV_ELECTRON_CHECKOUT;
+assert.ok(
+  checkout,
+  "Set NSV_ELECTRON_CHECKOUT to a built checkout of 4ea188a.",
+);
+const electron = JSON.parse(
+  readFileSync(join(checkout, "package.json"), "utf8"),
+);
+assert.ok(electron.updatesEnabled, "The older build needs updatesEnabled.");
 
 const root = resolve(import.meta.dirname, "..");
 const release = join(root, "release");
 const results = join(root, "test-results/mac-update");
-const product = `${pkg.build.productName}.app`;
-const requirement = `identifier "${pkg.build.appId}"`;
+const product = `${identity.name}.app`;
+const requirement = `identifier "${identity.id}"`;
 const oldVersion = "0.0.1";
 // ps shows the relaunched app under the resolved path: /private/var, not /var.
 const work = realpathSync(mkdtempSync(join(tmpdir(), "nv-mac-update-")));
@@ -84,7 +95,7 @@ function checkSignature(app) {
 }
 
 async function runningPid(app) {
-  const executable = join(app, "Contents/MacOS", pkg.build.productName);
+  const executable = join(app, "Contents/MacOS", identity.name);
   const { stdout } = await run("ps", ["-ax", "-ww", "-o", "pid=,command="]);
   const line = stdout
     .split("\n")
@@ -156,15 +167,15 @@ try {
   writeFileSync(
     config,
     JSON.stringify({
-      ...pkg.build,
+      ...electron.build,
       extraMetadata: { version: oldVersion },
       publish: [{ provider: "generic", url: feedUrl }],
       directories: { output: join(work, "old") },
-      mac: { ...pkg.build.mac, target: ["zip"] },
+      mac: { ...electron.build.mac, target: ["zip"] },
     }),
   );
   command("bun", ["run", "dist:built", "--mac", "--config", config], {
-    cwd: root,
+    cwd: checkout,
     stdio: "inherit",
   });
   const output = readdirSync(join(work, "old")).find(
@@ -182,7 +193,7 @@ try {
 
   const log = openSync(appLog, "a");
   const app = spawn(
-    join(installed, "Contents/MacOS", pkg.build.productName),
+    join(installed, "Contents/MacOS", identity.name),
     ["--background"],
     {
       stdio: ["ignore", log, log],
@@ -234,7 +245,7 @@ try {
   mkdirSync(results, { recursive: true });
   spawnSync("screencapture", ["-x", join(results, "screen.png")]);
   writeFileSync(join(results, "requests.txt"), requests.join("\n"));
-  const shipIt = join(homedir(), `Library/Caches/${pkg.build.appId}.ShipIt`);
+  const shipIt = join(homedir(), `Library/Caches/${identity.id}.ShipIt`);
   for (const file of [
     appLog,
     join(shipIt, "ShipIt_stderr.log"),

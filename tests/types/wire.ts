@@ -4,7 +4,6 @@
 import type * as Api from "../../src/shared/api.ts";
 import type * as Shared from "../../src/shared/types.ts";
 import type { Agent } from "../../src/shared/agents.ts";
-import type { ApiAccount as StoredApiAccount } from "../../src/server/store.ts";
 import type {
   OAuthProvider,
   Protocol,
@@ -17,7 +16,6 @@ import type {
 } from "../../src/shared/vocabulary.ts";
 import type { AccountPatch } from "./generated/AccountPatch";
 import type { Agent as RustAgent } from "./generated/Agent";
-import type { ApiAccount } from "./generated/ApiAccount";
 import type { AgentSelection } from "./generated/AgentSelection";
 import type { AgentSetup } from "./generated/AgentSetup";
 import type { ApiAccountInput } from "./generated/ApiAccountInput";
@@ -59,7 +57,6 @@ type Query<K extends Api.RouteKey> = Api.RouteQuery<K>;
 export type WireTwins = [
   Holds<Mutual<Profile, Shared.Profile>>,
   Holds<Mutual<AppState, Shared.AppState>>,
-  Holds<Mutual<ApiAccount, StoredApiAccount>>,
   Holds<Mutual<ImportSource, Shared.ImportSource>>,
   Holds<Mutual<ResetCredits, Shared.ResetCredits>>,
   Holds<Mutual<ResetResult, Shared.ResetResult>>,

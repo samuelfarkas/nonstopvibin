@@ -28,21 +28,21 @@ import {
 const project = resolve(import.meta.dirname, "..");
 
 test("Rust packages keep the identity and file names installed Electron builds update from", () => {
-  const { build } = pkg;
-  assert.equal(product.id, build.appId);
-  assert.equal(product.name, build.productName);
+  // package.json `build` of the last Electron release (main 4ea188a).
+  assert.equal(product.id, "app.nonstopvibin.desktop");
+  assert.equal(product.name, "NonstopVibin");
   // electron-builder's default Linux executable: the package name, lowercased.
-  assert.equal(product.executable, pkg.name);
+  assert.equal(product.executable, "nonstopvibin");
   assert.deepEqual(product.feed, {
-    owner: build.publish[0].owner,
-    repo: build.publish[0].repo,
+    owner: "samuelfarkas",
+    repo: "nonstopvibin",
   });
-  assert.equal(product.macCategory, build.mac.category);
-  assert.equal(product.linuxCategory, build.linux.category);
-  assert.equal(product.maintainer, build.linux.maintainer);
+  assert.equal(product.macCategory, "public.app-category.developer-tools");
+  assert.equal(product.linuxCategory, "Development");
+  assert.equal(product.maintainer, "nonstopvibin");
   assert.deepEqual(desktopTargets, {
-    mac: build.mac.target,
-    linux: build.linux.target,
+    mac: ["dmg", "zip"],
+    linux: ["AppImage", "deb"],
   });
   // The names electron-builder gave the 0.2.0 installers.
   assert.equal(

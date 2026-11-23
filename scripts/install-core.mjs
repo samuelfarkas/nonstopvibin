@@ -1,11 +1,7 @@
 import { copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import {
-  bundledPin,
-  coreLayout,
-  coreTarget,
-} from "../src/server/core-binary.ts";
-import { installCore } from "../src/server/core-install.ts";
+import { bundledPin, coreLayout, coreTarget } from "./core-binary.ts";
+import { installCore } from "./core-install.ts";
 
 const platform = process.env.CORE_PLATFORM || process.platform;
 const arch = process.env.CORE_ARCH || process.arch;

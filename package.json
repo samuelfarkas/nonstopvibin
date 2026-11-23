@@ -13,31 +13,23 @@
     "url": "https://github.com/samuelfarkas/nonstopvibin/issues"
   },
   "type": "module",
-  "main": "dist/desktop/main.cjs",
   "engines": {
     "bun": ">=1.4.2"
   },
   "scripts": {
     "dev": "bun scripts/dev.mjs",
-    "dev:web": "vite",
-    "dev:server": "bun src/server/standalone.ts",
+    "start": "cargo build -p nsv-window && cargo run -p nsv-cli --bin nonstopvibin",
     "core:install": "bun scripts/install-core.mjs",
     "core:pin": "bun scripts/pin-core.mjs",
     "check": "tsc --noEmit",
-    "test": "bun test",
-    "test:desktop": "bun run build && bun run test:desktop:built",
-    "test:desktop:built": "bun tests/desktop-smoke.cjs",
-    "test:ui": "bun run build && bun run test:ui:built",
-    "test:ui:built": "bun tests/focus.cjs && bun tests/logo-animation.cjs && bun tests/page-layout.cjs && bun tests/tray-guard.cjs && bun tests/root-load.cjs",
+    "test": "bun test && cargo test --locked",
     "test:server": "bun tests/server-archive-smoke.mjs",
+    "build": "bun run build:client && cargo build --release --locked",
+    "build:client": "bun run check && vite build && bun scripts/third-party.mjs",
+    "dist:mac": "bun run build:client && bun scripts/package-mac.ts",
+    "dist:linux": "bun run build:client && bun scripts/package-linux.ts",
+    "dist:server": "bun run build:client && bun scripts/package-server.ts",
     "test:update:mac": "bun tests/mac-update.mjs",
-    "build": "bun run check && vite build && bun scripts/build-desktop.mjs",
-    "start": "electron .",
-    "package": "bun run build && install-electron && electron-builder --dir --publish never --config.electronDist=node_modules/electron/dist",
-    "dist:mac": "bun run build && electron-builder --mac --publish never",
-    "dist:linux": "bun run build && electron-builder --linux --publish never",
-    "dist:built": "CSC_FOR_PULL_REQUEST=true electron-builder --publish never",
-    "dist:server": "bun run build && bun scripts/build-server.mjs",
     "server:deploy": "bun scripts/server-remote.mjs deploy",
     "server:open": "bun scripts/server-remote.mjs open",
     "format": "oxfmt --write src tests scripts *.json *.ts index.html .github .vscode .oxlintrc.json .oxfmtrc.json",
@@ -47,7 +39,6 @@
     "security:scan": "bun run --cwd .deepsec scan",
     "security:report": "bun run --cwd .deepsec report",
     "setup": "bun ci && bun run core:install",
-    "preview": "bun run build && bun scripts/preview.ts",
     "security:install": "bun scripts/install-security-tools.mjs",
     "security:secrets": ".vendor/security/gitleaks dir . --config .gitleaks-source.toml --redact --no-banner",
     "security:history": "git rev-parse --verify HEAD >/dev/null && .vendor/security/gitleaks git . --config .gitleaks.toml --redact --no-banner --log-opts=--all",
@@ -63,108 +54,25 @@
     "@fontsource-variable/space-grotesk": "5.3.0",
     "@radix-ui/react-dialog": "1.1.23",
     "@radix-ui/react-select": "2.3.7",
-    "electron-updater": "6.8.9",
     "lucide-react": "1.41.0",
     "react": "19.3.1",
-    "react-dom": "19.3.1",
-    "yaml": "2.9.1",
-    "zod": "4.6.6"
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
-    "@electron/asar": "4.3.2",
-    "@electron/osx-sign": "1.3.3",
     "@oxlint/plugins": "1.93.0",
     "@types/node": "24.13.3",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
-    "electron": "44.9.1",
-    "electron-builder": "26.18.0",
     "esbuild": "0.28.2",
+    "js-yaml": "4.3.2",
     "oxfmt": "0.78.0",
     "oxlint": "1.93.0",
     "sharp": "0.35.5",
     "typescript": "5.9.3",
-    "vite": "8.3.8"
-  },
-  "build": {
-    "asarUnpack": [
-      "dist/desktop/tray-click-monitor"
-    ],
-    "appId": "app.nonstopvibin.desktop",
-    "productName": "NonstopVibin",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "samuelfarkas",
-        "repo": "nonstopvibin"
-      }
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "!node_modules/**/*",
-      "!**/*.map"
-    ],
-    "extraResources": [
-      {
-        "from": ".vendor/core",
-        "to": "core",
-        "filter": [
-          "cli-proxy-api",
-          "manifest.json"
-        ]
-      },
-      {
-        "from": "licenses",
-        "to": "licenses",
-        "filter": [
-          "CLIProxyAPI.txt",
-          "NOTICE.md"
-        ]
-      },
-      {
-        "from": "LICENSE",
-        "to": "LICENSE"
-      }
-    ],
-    "electronFuses": {
-      "runAsNode": false,
-      "enableNodeOptionsEnvironmentVariable": false,
-      "enableNodeCliInspectArguments": false,
-      "grantFileProtocolExtraPrivileges": false,
-      "resetAdHocDarwinSignature": true
-    },
-    "mac": {
-      "category": "public.app-category.developer-tools",
-      "icon": "build/icon.icns",
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
-      "identity": "-",
-      "sign": "./scripts/sign-mac.cjs",
-      "notarize": false
-    },
-    "linux": {
-      "category": "Development",
-      "icon": "public/icon.png",
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "maintainer": "nonstopvibin"
-    },
-    "beforePack": "scripts/validate-core.cjs",
-    "afterPack": "scripts/verify-package.cjs"
+    "vite": "8.3.8",
+    "yaml": "2.9.1",
+    "zod": "4.6.6"
   },
   "author": "nonstopvibin",
   "license": "MIT",
