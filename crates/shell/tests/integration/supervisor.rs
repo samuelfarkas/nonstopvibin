@@ -106,10 +106,16 @@ fn forwards_bridge_calls_remembers_bounds_and_quits_from_the_helper() {
             json!({"type": "Bridge", "id": 2, "method": "setLoginItem", "arg": true}),
             json!({"type": "Bridge", "id": 3, "method": "openExternal", "arg": "http://claude.ai/"}),
             json!({"type": "OpenExternal", "url": "https://evil.example/"}),
-            json!({"type": "Closed", "view": {"window": "main"}, "bounds": bounds}),
+            json!({"type": "Closed", "view": {"window": "main"}, "bounds": bounds, "last": true}),
         ],
     );
-    fake.say(2, &[json!({"type": "Ready"}), json!({"type": "QuitApp"})]);
+    fake.say(
+        2,
+        &[
+            json!({"type": "Ready"}),
+            json!({"type": "Command", "command": "quit"}),
+        ],
+    );
     let host = Host::new(4100, &fake.dir);
     let shell = spawn_shell(&host, options(fake.helper(), false, false, &fake.config()));
     // No main window exists, so a sign-in shows none; the second launch's request does.
@@ -160,7 +166,7 @@ fn a_known_profile_opens_and_a_crashed_helper_is_replaced() {
         &[
             json!({"type": "Ready"}),
             json!({"type": "OpenMain", "profile": PROFILE}),
-            json!({"type": "QuitApp"}),
+            json!({"type": "Command", "command": "quit"}),
         ],
     );
     let host = Host::new(4100, &fake.dir);

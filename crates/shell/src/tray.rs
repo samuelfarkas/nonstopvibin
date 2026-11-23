@@ -8,8 +8,8 @@ mod macos;
 
 use std::time::{Duration, Instant};
 
-use nsv_desktop::TrayStatus;
-use nsv_desktop::pipe::Rect;
+use nsv_desktop::pipe::Anchor;
+use nsv_desktop::{Command, TrayStatus};
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::Tray;
@@ -55,47 +55,27 @@ impl Look {
     }
 }
 
-/// What the user chose in the tray.
+/// What the user chose in the tray: a left click toggles the quota popup, or a menu item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Action {
-    /// A left click or "Subscription quotas". `anchor` is the icon's bounds, or the point a
-    /// Linux tray host reported; `None` keeps the last one.
-    ToggleQuota(Option<Rect>),
-    OpenMain,
-    CheckUpdates,
-    Quit,
+pub(crate) struct Action {
+    pub(crate) command: Command,
+    /// Where the icon is, when the tray knows; `None` keeps the last one.
+    pub(crate) anchor: Option<Anchor>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Entry {
-    Item { label: &'static str, action: Action },
+    Item(Command),
     Separator,
-}
-
-/// "Check for updates…" is enabled only where the app can update itself.
-pub(crate) fn enabled(action: Action, updates: bool) -> bool {
-    action != Action::CheckUpdates || updates
 }
 
 /// The tray menu, as main.ts built it.
 pub(crate) const MENU: [Entry; 5] = [
-    Entry::Item {
-        label: "Open NonstopVibin",
-        action: Action::OpenMain,
-    },
-    Entry::Item {
-        label: "Subscription quotas",
-        action: Action::ToggleQuota(None),
-    },
-    Entry::Item {
-        label: "Check for updates…",
-        action: Action::CheckUpdates,
-    },
+    Entry::Item(Command::OpenMain),
+    Entry::Item(Command::ToggleQuota),
+    Entry::Item(Command::CheckUpdates),
     Entry::Separator,
-    Entry::Item {
-        label: "Quit NonstopVibin",
-        action: Action::Quit,
-    },
+    Entry::Item(Command::Quit),
 ];
 
 /// A click this soon after the popup closed on focus loss is the click that took the focus
@@ -178,29 +158,6 @@ mod tests {
                     icon,
                     tooltip: tooltip.to_owned()
                 }
-            );
-        }
-    }
-
-    #[test]
-    fn the_menu_is_main_ts_menu_with_updates_enabled_only_where_possible() {
-        for updates in [false, true] {
-            let shown: Vec<(&str, bool)> = MENU
-                .iter()
-                .map(|entry| match entry {
-                    Entry::Item { label, action } => (*label, enabled(*action, updates)),
-                    Entry::Separator => ("---", false),
-                })
-                .collect();
-            assert_eq!(
-                shown,
-                [
-                    ("Open NonstopVibin", true),
-                    ("Subscription quotas", true),
-                    ("Check for updates…", updates),
-                    ("---", false),
-                    ("Quit NonstopVibin", true),
-                ]
             );
         }
     }

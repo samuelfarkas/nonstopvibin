@@ -3,7 +3,8 @@
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use nsv_desktop::pipe::{DialogKind, Reason, Rect};
+use nsv_desktop::Command;
+use nsv_desktop::pipe::{Anchor, Choice, Rect};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{
@@ -14,7 +15,7 @@ use objc2_foundation::{NSDate, NSPoint, NSRect, NSString};
 use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
 
-use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
+use super::{Dialog, FOLDER_BUTTON, FOLDER_TITLE};
 use crate::app::{Proxy, Ticket, UserEvent, log, post};
 
 /// `NSPasteboardTypeString`'s value: the static itself is an extern symbol only unsafe code
@@ -120,19 +121,16 @@ pub(crate) fn choose_folder(_parent: &Window, proxy: &Proxy, ticket: Ticket) {
     post(proxy, UserEvent::FolderChosen { ticket, result });
 }
 
-/// An application-modal alert; answers with `DialogAnswered`.
-pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Proxy) {
+/// An application-modal alert; calls `answered` with the user's choice once it is dismissed.
+pub(crate) fn show_dialog(text: &Dialog<'_>, answered: impl FnOnce(Choice) + 'static) {
     let Some(main_thread) = MainThreadMarker::new() else {
         log(format_args!("a dialog must open on the main thread"));
         return;
     };
-    let text = dialog_text(kind);
     activate(main_thread);
     let alert = NSAlert::new(main_thread);
     alert.setMessageText(&NSString::from_str(text.message));
-    alert.setInformativeText(&NSString::from_str(
-        reason.map_or(text.detail, Reason::as_str),
-    ));
+    alert.setInformativeText(&NSString::from_str(text.detail));
     alert.setAlertStyle(if text.error {
         NSAlertStyle::Critical
     } else {
@@ -140,36 +138,35 @@ pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Pro
     });
     let buttons: Vec<_> = text
         .buttons
-        .iter()
+        .labels()
         .map(|label| alert.addButtonWithTitle(&NSString::from_str(label)))
         .collect();
-    // AppKit makes the first button the default; main.ts made "Later" (the last) the default.
-    if let [first, .., last] = buttons.as_slice() {
+    // AppKit makes the first button the default.
+    if let (Some(first), Some(default)) = (buttons.first(), buttons.get(text.buttons.default())) {
         first.setKeyEquivalent(&NSString::from_str(""));
-        last.setKeyEquivalent(&NSString::from_str("\r"));
+        default.setKeyEquivalent(&NSString::from_str("\r"));
     }
-    let response = alert.runModal();
-    let restart = kind == DialogKind::UpdateReady && response == NSAlertFirstButtonReturn;
-    post(proxy, UserEvent::DialogAnswered { kind, restart });
+    let index = alert
+        .runModal()
+        .checked_sub(NSAlertFirstButtonReturn)
+        .and_then(|index| usize::try_from(index).ok());
+    answered(text.buttons.choice(index));
 }
 
-/// What a menu item asks for.
+/// What a menu item asks for: a command the daemon carries out, or the page zoom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuAction {
-    CheckUpdates,
-    QuitApp,
-    ToggleQuota,
-    OpenMain,
+    Command(Command),
     ResetZoom,
     ZoomIn,
     ZoomOut,
 }
 
 const ACTIONS: [(&str, MenuAction); 7] = [
-    ("check-updates", MenuAction::CheckUpdates),
-    ("quit", MenuAction::QuitApp),
-    ("quotas", MenuAction::ToggleQuota),
-    ("open-main", MenuAction::OpenMain),
+    ("check-updates", MenuAction::Command(Command::CheckUpdates)),
+    ("quit", MenuAction::Command(Command::Quit)),
+    ("quotas", MenuAction::Command(Command::ToggleQuota)),
+    ("open-main", MenuAction::Command(Command::OpenMain)),
     ("reset-zoom", MenuAction::ResetZoom),
     ("zoom-in", MenuAction::ZoomIn),
     ("zoom-out", MenuAction::ZoomOut),
@@ -195,17 +192,27 @@ fn item(action: MenuAction, label: &str, modifiers: Modifiers, key: Option<Code>
     )
 }
 
+/// A command's item, labelled and enabled as in the tray.
+fn command_item(
+    command: Command,
+    updates: bool,
+    modifiers: Modifiers,
+    key: Option<Code>,
+) -> MenuItem {
+    let item = item(
+        MenuAction::Command(command),
+        command.app_menu_label(),
+        modifiers,
+        key,
+    );
+    item.set_enabled(command.enabled(updates));
+    item
+}
+
 /// Electron's application menu (`desktop/main.ts`). Menu events arrive as `UserEvent::Menu`.
 /// "Check for updates…" is enabled when the app can update itself (`updates`).
 pub(crate) fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
     let command = Modifiers::META;
-    let check_updates = item(
-        MenuAction::CheckUpdates,
-        "Check for updates…",
-        command,
-        None,
-    );
-    check_updates.set_enabled(updates);
     let app = Submenu::with_items(
         "NonstopVibin",
         true,
@@ -218,18 +225,13 @@ pub(crate) fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
                     ..AboutMetadata::default()
                 }),
             ),
-            &check_updates,
+            &command_item(Command::CheckUpdates, updates, command, None),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::hide(None),
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &item(
-                MenuAction::QuitApp,
-                "Quit NonstopVibin",
-                command,
-                Some(Code::KeyQ),
-            ),
+            &command_item(Command::Quit, updates, command, Some(Code::KeyQ)),
         ],
     )?;
     let edit = Submenu::with_items(
@@ -249,18 +251,13 @@ pub(crate) fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
         "View",
         true,
         &[
-            &item(
-                MenuAction::ToggleQuota,
-                "Subscription quotas",
+            &command_item(
+                Command::ToggleQuota,
+                updates,
                 command | Modifiers::SHIFT,
                 Some(Code::KeyU),
             ),
-            &item(
-                MenuAction::OpenMain,
-                "Open main window",
-                command,
-                Some(Code::Digit1),
-            ),
+            &command_item(Command::OpenMain, updates, command, Some(Code::Digit1)),
             &PredefinedMenuItem::separator(),
             &item(
                 MenuAction::ResetZoom,
@@ -301,7 +298,7 @@ pub(crate) fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
     clippy::cast_sign_loss,
     reason = "screen frames are whole points well inside i32"
 )]
-pub(crate) fn work_area(anchor: Rect) -> Option<Rect> {
+pub(crate) fn work_area(anchor: Anchor) -> Option<Rect> {
     let screens = NSScreen::screens(MainThreadMarker::new()?).to_vec();
     // Cocoa's origin is the bottom left of the first screen; tao's, the anchor's, the top left.
     let top = screens.first()?.frame().size.height;

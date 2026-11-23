@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Handle, ToolTip, TrayMethods};
-use nsv_desktop::pipe::Rect;
+use nsv_desktop::Command;
+use nsv_desktop::pipe::Anchor;
 use tokio::sync::mpsc;
 
-use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};
+use super::{Action, Entry, Icon, Look, MENU, rgba};
 use crate::log;
 
 /// Nothing on Linux: the tray joins the daemon's runtime when [`crate::run`] starts.
@@ -103,23 +104,24 @@ impl ksni::Tray for Item {
     /// A left click. Hosts that know where it happened pass the point; others pass 0, 0, and
     /// the popup then sits in the bottom-left corner, as Electron's did on Linux.
     fn activate(&mut self, x: i32, y: i32) {
-        self.send(Action::ToggleQuota(Some(Rect {
-            x,
-            y,
-            width: 0,
-            height: 0,
-        })));
+        self.send(Action {
+            command: Command::ToggleQuota,
+            anchor: Some(Anchor::point(x, y)),
+        });
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         MENU.iter()
             .map(|entry| match *entry {
-                Entry::Item { label, action } => StandardItem {
-                    label: label.to_owned(),
-                    enabled: enabled(action, self.updates),
+                Entry::Item(command) => StandardItem {
+                    label: command.label().to_owned(),
+                    enabled: command.enabled(self.updates),
                     activate: Box::new(move |item: &mut Self| {
-                        if enabled(action, item.updates) {
-                            item.send(action);
+                        if command.enabled(item.updates) {
+                            item.send(Action {
+                                command,
+                                anchor: None,
+                            });
                         }
                     }),
                     ..StandardItem::default()

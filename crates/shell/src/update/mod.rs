@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use minisign_verify::PublicKey;
-use nsv_desktop::pipe::DialogKind;
+use nsv_desktop::pipe::{Choice, DialogKind};
 use sha2::{Digest, Sha256, Sha512};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 
@@ -151,18 +151,19 @@ impl Updates {
         }
     }
 
-    /// "Restart to update": the staged update, while its dialog is the one open.
-    pub(crate) fn restart(&mut self) -> Option<Staged> {
+    /// A dialog closed with the user's choice: the staged update to install when it was
+    /// "Restart to update".
+    pub(crate) fn closed(&mut self, kind: DialogKind, choice: Choice) -> Option<Staged> {
         match &mut self.0 {
-            Mode::On(updater) => updater.machine.restart(),
+            Mode::On(updater) => updater.machine.closed(kind, choice),
             _ => None,
         }
     }
 
-    /// An update dialog closed; `None` when the helper exited with its windows.
-    pub(crate) fn closed(&mut self, kind: Option<DialogKind>) {
+    /// The helper exited with its dialogs, except `showing`, which goes to the next one.
+    pub(crate) fn helper_gone(&mut self, showing: Option<DialogKind>) {
         if let Mode::On(updater) = &mut self.0 {
-            updater.machine.closed(kind);
+            updater.machine.helper_gone(showing);
         }
     }
 }

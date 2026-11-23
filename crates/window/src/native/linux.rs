@@ -6,11 +6,11 @@ use gtk::gdk::prelude::*;
 use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
-use nsv_desktop::pipe::{DialogKind, Reason, Rect};
+use nsv_desktop::pipe::{Anchor, Choice, Rect};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::Window;
 
-use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
+use super::{Dialog, FOLDER_BUTTON, FOLDER_TITLE};
 use crate::app::{Proxy, Ticket, UserEvent, log, post};
 
 /// The app icon Electron gave the main window (`dist/client/icon.png`).
@@ -75,9 +75,8 @@ pub(crate) fn choose_folder(parent: &Window, proxy: &Proxy, ticket: Ticket) {
     dialog.present();
 }
 
-/// A message dialog of its own; answers with `DialogAnswered`.
-pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Proxy) {
-    let text = dialog_text(kind);
+/// A message dialog of its own; calls `answered` once with the user's choice.
+pub(crate) fn show_dialog(text: &Dialog<'_>, answered: impl FnOnce(Choice) + 'static) {
     let dialog = gtk::MessageDialog::new(
         None::<&gtk::Window>,
         DialogFlags::empty(),
@@ -91,20 +90,24 @@ pub(crate) fn show_dialog(kind: DialogKind, reason: Option<&Reason>, proxy: &Pro
     );
     dialog.set_title("NonstopVibin");
     // Plain text: GTK reads markup only when told to.
-    dialog.set_secondary_text(Some(reason.map_or(text.detail, Reason::as_str)));
-    let mut last = ResponseType::None;
-    for (index, label) in (0u16..).zip(text.buttons) {
-        last = ResponseType::Other(index);
-        dialog.add_button(label, last);
+    dialog.set_secondary_text(Some(text.detail));
+    for (index, label) in (0u16..).zip(text.buttons.labels()) {
+        dialog.add_button(label, ResponseType::Other(index));
     }
-    dialog.set_default_response(last);
-    let (answered, proxy) = (Cell::new(false), proxy.clone());
+    if let Ok(default) = u16::try_from(text.buttons.default()) {
+        dialog.set_default_response(ResponseType::Other(default));
+    }
+    let (buttons, answered) = (text.buttons, Cell::new(Some(answered)));
     dialog.connect_response(move |dialog, response| {
-        if answered.replace(true) {
+        // Closing the dialog emits one more response, DeleteEvent.
+        let Some(answered) = answered.take() else {
             return;
-        }
-        let restart = kind == DialogKind::UpdateReady && response == ResponseType::Other(0);
-        post(&proxy, UserEvent::DialogAnswered { kind, restart });
+        };
+        let index = match response {
+            ResponseType::Other(index) => Some(usize::from(index)),
+            _ => None,
+        };
+        answered(buttons.choice(index));
         dialog.close();
     });
     dialog.show_all();
@@ -131,7 +134,7 @@ pub(crate) fn set_icon(window: &Window) {
 }
 
 /// The work area of the monitor that holds `anchor`, or of the monitor nearest to it.
-pub(crate) fn work_area(anchor: Rect) -> Option<Rect> {
+pub(crate) fn work_area(anchor: Anchor) -> Option<Rect> {
     let monitor = gtk::gdk::Display::default()?.monitor_at_point(anchor.x, anchor.y)?;
     let area = monitor.workarea();
     Some(Rect {

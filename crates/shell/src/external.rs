@@ -36,6 +36,11 @@ pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
     Ok(url.into())
 }
 
+/// Opens `url` when [`safe_external`] approves it: `openExternal`, and a page's new window.
+pub(crate) fn open_approved(url: &str) -> Result<(), String> {
+    open(&safe_external(url)?)
+}
+
 /// Opens `url`, which [`safe_external`] approved or which is the daemon's own session link.
 pub(crate) fn open(url: &str) -> Result<(), String> {
     let opener = if cfg!(target_os = "macos") {

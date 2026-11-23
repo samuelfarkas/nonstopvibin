@@ -5,7 +5,8 @@
 use std::panic::{self, AssertUnwindSafe};
 
 use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use nsv_desktop::pipe::Rect;
+use nsv_desktop::Command;
+use nsv_desktop::pipe::Anchor;
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
 use objc2_foundation::NSAppleEventManager;
@@ -15,7 +16,7 @@ use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tokio::sync::mpsc;
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};
+use super::{Action, Entry, Icon, Look, MENU, rgba};
 use crate::log;
 
 /// `kAEOpenApplication`, `keyAEPropData` and `keyAELaunchedAsLogInItem`.
@@ -95,7 +96,10 @@ pub fn run_desktop(daemon: impl FnOnce(TrayLink) -> u8 + Send + 'static) -> ! {
             // the running daemon to reopen instead of starting a second one.
             Event::Reopen { .. } => {
                 if let Some(item) = &item {
-                    item.send(Action::OpenMain);
+                    item.send(Action {
+                        command: Command::OpenMain,
+                        anchor: None,
+                    });
                 }
             }
             Event::UserEvent(event) => {
@@ -140,7 +144,7 @@ struct StatusItem {
     ball: tray_icon::Icon,
     stopped: tray_icon::Icon,
     /// The menu items' ids, in [`MENU`] order.
-    ids: Vec<(MenuId, Action)>,
+    ids: Vec<(MenuId, Command)>,
     updates: Option<MenuItem>,
     actions: mpsc::Sender<Action>,
     _menu: Menu,
@@ -160,11 +164,11 @@ impl StatusItem {
         let mut updates = None;
         for entry in MENU {
             let appended = match entry {
-                Entry::Item { label, action } => {
+                Entry::Item(command) => {
                     // The daemon turns "Check for updates…" on once it knows it can update.
-                    let item = MenuItem::new(label, enabled(action, false), None);
-                    ids.push((item.id().clone(), action));
-                    if action == Action::CheckUpdates {
+                    let item = MenuItem::new(command.label(), command.enabled(false), None);
+                    ids.push((item.id().clone(), command));
+                    if command == Command::CheckUpdates {
                         updates = Some(item.clone());
                     }
                     menu.append(&item)
@@ -215,15 +219,16 @@ impl StatusItem {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            }) => self.send(Action::ToggleQuota(self.anchor())),
+            }) => self.send(Action {
+                command: Command::ToggleQuota,
+                anchor: self.anchor(),
+            }),
             MainEvent::Menu(event) => {
-                let chosen = self.ids.iter().find(|(id, _)| *id == event.id);
-                match chosen {
-                    Some((_, Action::ToggleQuota(_))) => {
-                        self.send(Action::ToggleQuota(self.anchor()));
-                    }
-                    Some((_, action)) => self.send(*action),
-                    None => {}
+                if let Some(&(_, command)) = self.ids.iter().find(|(id, _)| *id == event.id) {
+                    let anchor = (command == Command::ToggleQuota)
+                        .then(|| self.anchor())
+                        .flatten();
+                    self.send(Action { command, anchor });
                 }
             }
             MainEvent::Tray(_) | MainEvent::Exit(_) => {}
@@ -238,8 +243,8 @@ impl StatusItem {
         }
     }
 
-    /// The item's bounds in points, with the origin at the top left of the main screen.
-    fn anchor(&self) -> Option<Rect> {
+    /// The item's bounds, converted from Cocoa's bottom-left origin.
+    fn anchor(&self) -> Option<Anchor> {
         let mtm = MainThreadMarker::new()?;
         let window = self.tray.ns_status_item()?.button(mtm)?.window()?;
         let frame = window.frame();
@@ -249,7 +254,7 @@ impl StatusItem {
             clippy::cast_sign_loss,
             reason = "menu bar frames are whole points well inside i32"
         )]
-        Some(Rect {
+        Some(Anchor {
             x: frame.origin.x.round() as i32,
             y: (top - frame.origin.y - frame.size.height).round() as i32,
             width: frame.size.width.round() as u32,

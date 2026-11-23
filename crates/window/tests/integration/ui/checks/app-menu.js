@@ -42,13 +42,13 @@ run(async () => {
   await act({ shortcut: "1" });
   equal(
     (await act({ sent: true })).sent,
-    ["OpenMain { profile: None }"],
+    ["Command { command: OpenMain }"],
     "⌘1 asks the daemon for the main window",
   );
   await act({ shortcut: "u", shift: true });
   equal(
     (await act({ sent: true })).sent,
-    ["ToggleQuota"],
+    ["Command { command: ToggleQuota }"],
     "⌘⇧U asks the daemon to toggle the quota popup",
   );
   const width = innerWidth;
@@ -59,7 +59,7 @@ run(async () => {
   await act({ shortcut: "q" });
   equal(
     (await act({ sent: true })).sent,
-    ["QuitApp"],
+    ["Command { command: Quit }"],
     "⌘Q asks the daemon to quit; the helper keeps its window",
   );
   return { app, edit, view };

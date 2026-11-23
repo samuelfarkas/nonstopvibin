@@ -113,7 +113,7 @@ pub(crate) struct Helper {
     stdin: ChildStdin,
     events: mpsc::Receiver<Event>,
     /// `Ready` arrived: the first view is on screen.
-    pub(crate) ready: bool,
+    ready: bool,
 }
 
 impl Helper {
@@ -156,7 +156,16 @@ impl Helper {
 
     /// The next message, then `Exited` once. Cancel-safe.
     pub(crate) async fn next(&mut self) -> Event {
-        self.events.recv().await.unwrap_or(Event::Exited(None))
+        let event = self.events.recv().await.unwrap_or(Event::Exited(None));
+        if matches!(event, Event::Message(FromHelper::Ready)) {
+            self.ready = true;
+        }
+        event
+    }
+
+    /// Whether its first view has been on screen.
+    pub(crate) fn ready(&self) -> bool {
+        self.ready
     }
 }
 

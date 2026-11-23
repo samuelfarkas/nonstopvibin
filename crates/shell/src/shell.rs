@@ -4,10 +4,10 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use nsv_desktop::HostEvent;
 use nsv_desktop::pipe::{
-    DaemonCall, DialogKind, FromHelper, Outcome, Rect, Start, ToHelper, View, ViewKind,
+    Anchor, DaemonCall, DialogKind, FromHelper, Outcome, Rect, Start, ToHelper, View, ViewKind,
 };
+use nsv_desktop::{Command, HostEvent};
 use nsv_domain::endpoint::session_link;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -57,14 +57,8 @@ pub async fn run(
         helper: None,
         main: false,
         popup: Popup::Closed { at: None },
-        dialogs: Vec::new(),
         bounds: None,
-        anchor: Rect {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        },
+        anchor: Anchor::point(0, 0),
     };
     if shell.options.packaged
         && let Err(error) = shell.options.login.follow()
@@ -143,14 +137,13 @@ struct Shell<'a, H> {
     look: Look,
     options: Options,
     helper: Option<Helper>,
-    /// What the helper shows, as its messages tell.
+    /// Whether the main window is open, for a sign-in that brings it forward.
     main: bool,
     popup: Popup,
-    dialogs: Vec<DialogKind>,
     /// Where the main window was when it last closed.
     bounds: Option<Rect>,
-    /// The tray icon's last known bounds, for the popup.
-    anchor: Rect,
+    /// Where the tray icon was last, for the popup.
+    anchor: Anchor,
 }
 
 impl<H: ShellHost> Shell<'_, H> {
@@ -162,25 +155,25 @@ impl<H: ShellHost> Shell<'_, H> {
     }
 
     async fn tray_action(&mut self, action: Action) -> Step {
-        match action {
-            Action::ToggleQuota(anchor) => {
-                if let Some(anchor) = anchor {
-                    self.anchor = anchor;
-                }
-                self.toggle_quota().await;
-            }
-            Action::OpenMain => self.show(View::Main { profile: None }).await,
-            Action::CheckUpdates => self.check_updates().await,
-            Action::Quit => return self.quit().await,
+        if let Some(anchor) = action.anchor {
+            self.anchor = anchor;
         }
-        Step::Continue
+        self.command(action.command).await
     }
 
-    /// "Check for updates…" in the tray or the app menu.
-    async fn check_updates(&mut self) {
-        if let Some(kind) = self.updates.check(true) {
-            self.show(View::Dialog { kind }).await;
+    /// A command from the tray or the macOS app menu.
+    async fn command(&mut self, command: Command) -> Step {
+        match command {
+            Command::OpenMain => self.show(View::Main { profile: None }).await,
+            Command::ToggleQuota => self.toggle_quota().await,
+            Command::CheckUpdates => {
+                if let Some(kind) = self.updates.check(true) {
+                    self.show(View::Dialog { kind }).await;
+                }
+            }
+            Command::Quit => return self.quit().await,
         }
+        Step::Continue
     }
 
     /// "Restart to update": closes the windows, stops the daemon as Quit would (open requests
@@ -189,8 +182,7 @@ impl<H: ShellHost> Shell<'_, H> {
     async fn install(&mut self, update: Staged) -> Step {
         // Open windows would show "Failed to fetch" once the local service stops.
         self.send(&ToHelper::Quit).await;
-        self.helper = None;
-        self.forget_windows();
+        self.helper_gone(None);
         let failure = match self.host.close().await {
             Err(error) => {
                 log(format_args!("could not stop for the update: {error}"));
@@ -250,14 +242,12 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.opened(&view);
                 return;
             }
-            // It is exiting, and takes its windows along. A dialog to show came from the
-            // updater, which already counts it as open.
-            self.helper = None;
-            if !matches!(view, View::Dialog { .. }) {
-                self.updates.closed(None);
-            }
+            // It is exiting, and takes its windows along, but never had this one.
+            self.helper_gone(match view {
+                View::Dialog { kind } => Some(kind),
+                _ => None,
+            });
         }
-        self.forget_windows();
         self.opened(&view);
         let start = Start {
             origin: self.host.origin().clone(),
@@ -271,8 +261,7 @@ impl<H: ShellHost> Shell<'_, H> {
             Err(error) => {
                 log(format_args!("could not start the window helper: {error}"));
                 self.fall_back();
-                self.forget_windows();
-                self.updates.closed(None);
+                self.helper_gone(None);
             }
         }
     }
@@ -281,12 +270,19 @@ impl<H: ShellHost> Shell<'_, H> {
         match view {
             View::Main { .. } => self.main = true,
             View::Quota { .. } => self.popup = Popup::Open,
-            View::Dialog { kind } => {
-                if !self.dialogs.contains(kind) {
-                    self.dialogs.push(*kind);
-                }
-            }
+            View::Dialog { .. } => {}
         }
+    }
+
+    /// The helper has exited or is exiting, and its windows with it. `showing` is a dialog
+    /// that goes to the next helper instead.
+    fn helper_gone(&mut self, showing: Option<DialogKind>) {
+        self.helper = None;
+        self.main = false;
+        if self.popup == Popup::Open {
+            self.popup = Popup::Closed { at: None };
+        }
+        self.updates.helper_gone(showing);
     }
 
     /// Without a helper, the main window and the quota popup become the session link in the
@@ -299,12 +295,6 @@ impl<H: ShellHost> Shell<'_, H> {
         if let Err(error) = external::open(&link) {
             log(format_args!("could not open the browser either: {error}"));
         }
-    }
-
-    fn forget_windows(&mut self) {
-        self.main = false;
-        self.popup = Popup::Closed { at: None };
-        self.dialogs.clear();
     }
 
     async fn send(&mut self, message: &ToHelper) {
@@ -326,10 +316,10 @@ impl<H: ShellHost> Shell<'_, H> {
         match event {
             Event::Message(message) => return self.message(message).await,
             Event::Exited(status) => {
-                let Some(helper) = self.helper.take() else {
+                let Some(helper) = &self.helper else {
                     return Step::Continue;
                 };
-                if !helper.ready {
+                if !helper.ready() {
                     log(format_args!(
                         "the window helper could not start ({status:?})"
                     ));
@@ -337,8 +327,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 } else if !status.is_some_and(|status| status.success()) {
                     log(format_args!("the window helper stopped ({status:?})"));
                 }
-                self.forget_windows();
-                self.updates.closed(None);
+                self.helper_gone(None);
             }
         }
         Step::Continue
@@ -346,30 +335,29 @@ impl<H: ShellHost> Shell<'_, H> {
 
     async fn message(&mut self, message: FromHelper) -> Step {
         match message {
-            FromHelper::Ready => {
-                if let Some(helper) = &mut self.helper {
-                    helper.ready = true;
-                }
-            }
-            FromHelper::Closed { view, bounds } => {
-                match view {
+            // The helper notes it.
+            FromHelper::Ready => {}
+            FromHelper::Closed { view, bounds, last } => {
+                let update = match view {
                     ViewKind::Main => {
                         self.main = false;
                         self.bounds = bounds.or(self.bounds);
+                        None
                     }
                     ViewKind::Quota => {
                         self.popup = Popup::Closed {
                             at: Some(Instant::now()),
                         };
+                        None
                     }
-                    ViewKind::Dialog { kind } => {
-                        self.dialogs.retain(|open| *open != kind);
-                        self.updates.closed(Some(kind));
-                    }
+                    ViewKind::Dialog { kind, choice } => self.updates.closed(kind, choice),
+                };
+                if last {
+                    // The next view needs a new helper.
+                    self.helper_gone(None);
                 }
-                if !self.main && self.popup != Popup::Open && self.dialogs.is_empty() {
-                    // The helper exits with its last window: the next view needs a new one.
-                    self.helper = None;
+                if let Some(update) = update {
+                    return self.install(update).await;
                 }
             }
             FromHelper::Bridge { id, call } => {
@@ -380,9 +368,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.send(&ToHelper::Reply { id, outcome }).await;
             }
             FromHelper::OpenExternal { url } => {
-                if let Err(message) =
-                    external::safe_external(&url).and_then(|url| external::open(&url))
-                {
+                if let Err(message) = external::open_approved(&url) {
                     self.host.report(&message);
                 }
             }
@@ -396,14 +382,7 @@ impl<H: ShellHost> Shell<'_, H> {
                     self.show(View::Main { profile }).await;
                 }
             }
-            FromHelper::ToggleQuota => self.toggle_quota().await,
-            FromHelper::QuitApp => return self.quit().await,
-            FromHelper::CheckUpdates => self.check_updates().await,
-            FromHelper::RestartToUpdate => {
-                if let Some(update) = self.updates.restart() {
-                    return self.install(update).await;
-                }
-            }
+            FromHelper::Command { command } => return self.command(command).await,
         }
         Step::Continue
     }
@@ -412,7 +391,7 @@ impl<H: ShellHost> Shell<'_, H> {
     async fn bridge(&self, call: DaemonCall) -> Result<Value, String> {
         match call {
             DaemonCall::OpenExternal(url) => {
-                external::open(&external::safe_external(&url)?)?;
+                external::open_approved(&url)?;
                 Ok(Value::Null)
             }
             DaemonCall::GetLoginItem => Ok(Value::Bool(self.options.login.enabled())),

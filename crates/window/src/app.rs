@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use nsv_desktop::bridge::fits_external;
 use nsv_desktop::pipe::{
-    self, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View, ViewKind,
+    self, Anchor, Choice, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View,
+    ViewKind,
 };
 use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
@@ -25,7 +26,8 @@ use wry::{
 };
 
 use crate::bridge::{self, Call, Rejected};
-use crate::{layout, native};
+use crate::layout;
+use crate::native::{self, Dialog};
 
 const BACKGROUND: (u8, u8, u8, u8) = (0x1c, 0x1b, 0x18, 0xff);
 
@@ -55,7 +57,7 @@ pub(crate) enum UserEvent {
     },
     DialogAnswered {
         kind: DialogKind,
-        restart: bool,
+        choice: Choice,
     },
     #[cfg(target_os = "macos")]
     Menu(muda::MenuId),
@@ -150,8 +152,8 @@ struct App {
     updates: bool,
 }
 
-fn event_loop() -> EventLoop<UserEvent> {
-    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+fn event_loop<T: 'static>() -> EventLoop<T> {
+    let event_loop = EventLoopBuilder::<T>::with_user_event().build();
     #[cfg(target_os = "macos")]
     let event_loop = {
         use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
@@ -164,17 +166,19 @@ fn event_loop() -> EventLoop<UserEvent> {
 
 /// `failure`'s error dialog with `reason` as its text, then exit once it is dismissed.
 pub(crate) fn alert(failure: Failure, reason: Reason) -> ! {
-    let event_loop = event_loop();
+    let event_loop = event_loop::<()>();
     let proxy = event_loop.create_proxy();
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                native::show_dialog(failure.dialog(), Some(&reason), &proxy);
+                let dismissed = proxy.clone();
+                native::show_dialog(&Dialog::alert(failure, &reason), move |_| {
+                    // Fails only once the loop has ended.
+                    let _ = dismissed.send_event(());
+                });
             }
-            Event::UserEvent(UserEvent::DialogAnswered { .. }) => {
-                *control_flow = ControlFlow::ExitWithCode(0);
-            }
+            Event::UserEvent(()) => *control_flow = ControlFlow::ExitWithCode(0),
             _ => {}
         }
     })
@@ -231,8 +235,7 @@ pub(crate) fn run(boot: Boot) -> ! {
         #[cfg(target_os = "macos")]
         app.sync_activation_policy(target);
         // Before Init has opened the first view, an empty helper is starting, not done.
-        let idle =
-            first.is_none() && app.main.is_none() && app.quota.is_none() && app.dialogs.is_empty();
+        let idle = first.is_none() && app.windowless();
         if let Some(code) = app.exit.or(idle.then_some(0)) {
             *control_flow = ControlFlow::ExitWithCode(code);
         }
@@ -296,6 +299,18 @@ impl App {
         }
     }
 
+    /// The helper exits with its last window.
+    fn windowless(&self) -> bool {
+        self.main.is_none() && self.quota.is_none() && self.dialogs.is_empty()
+    }
+
+    /// Tells the daemon `view` has closed, and whether the helper exits with it.
+    fn report_closed(&mut self, view: ViewKind, bounds: Option<Rect>) {
+        // A helper that failed tells by its exit status instead.
+        let last = self.windowless() && self.exit.is_none();
+        self.send(&FromHelper::Closed { view, bounds, last });
+    }
+
     fn send(&mut self, message: &FromHelper) {
         if let Err(error) = pipe::write(&mut io::stdout().lock(), message) {
             log(format_args!("the daemon stopped listening: {error}"));
@@ -332,15 +347,26 @@ impl App {
                 if !self.dialogs.contains(&kind) {
                     self.dialogs.push(kind);
                     self.mark_ready();
-                    native::show_dialog(kind, None, &self.proxy);
+                    let proxy = self.proxy.clone();
+                    native::show_dialog(&Dialog::of(kind), move |choice| {
+                        post(&proxy, UserEvent::DialogAnswered { kind, choice });
+                    });
                 }
             }
         }
     }
 
+    /// As showMain did: the popup gives way to the main window. It is reported closed once the
+    /// main window stands in its place.
     fn show_main(&mut self, target: &Target, profile: Option<&ProfileId>) {
-        // As showMain did: the popup gives way to the main window.
-        self.close_quota();
+        let popup = self.quota.take().is_some();
+        self.open_main(target, profile);
+        if popup {
+            self.report_closed(ViewKind::Quota, None);
+        }
+    }
+
+    fn open_main(&mut self, target: &Target, profile: Option<&ProfileId>) {
         if let Some(main) = &self.main {
             if profile.is_some()
                 && let Err(error) = main.webview.load_url(&self.origin.main_url(profile))
@@ -385,7 +411,7 @@ impl App {
         }
     }
 
-    fn show_quota(&mut self, target: &Target, anchor: Rect) {
+    fn show_quota(&mut self, target: &Target, anchor: Anchor) {
         if let Some(quota) = &self.quota {
             native::present(&quota.window);
             return;
@@ -484,10 +510,7 @@ impl App {
 
     fn close_quota(&mut self) {
         if self.quota.take().is_some() {
-            self.send(&FromHelper::Closed {
-                view: ViewKind::Quota,
-                bounds: None,
-            });
+            self.report_closed(ViewKind::Quota, None);
         }
     }
 
@@ -498,11 +521,7 @@ impl App {
         }
         drop(main);
         self.main_closing = Closing::No;
-        let bounds = self.main_bounds;
-        self.send(&FromHelper::Closed {
-            view: ViewKind::Main,
-            bounds,
-        });
+        self.report_closed(ViewKind::Main, self.main_bounds);
     }
 
     /// The draft guard (`useKeepDraft`): the page may veto, as with Electron's
@@ -570,17 +589,11 @@ impl App {
                 };
                 self.answer(ticket, &outcome);
             }
-            UserEvent::DialogAnswered { kind, restart } => {
+            UserEvent::DialogAnswered { kind, choice } => {
                 if let Some(index) = self.dialogs.iter().position(|open| *open == kind) {
                     self.dialogs.swap_remove(index);
                 }
-                if restart {
-                    self.send(&FromHelper::RestartToUpdate);
-                }
-                self.send(&FromHelper::Closed {
-                    view: ViewKind::Dialog { kind },
-                    bounds: None,
-                });
+                self.report_closed(ViewKind::Dialog { kind, choice }, None);
             }
             #[cfg(target_os = "macos")]
             UserEvent::Menu(id) => self.menu(&id),
@@ -712,11 +725,8 @@ impl App {
     fn menu(&mut self, id: &muda::MenuId) {
         use native::MenuAction;
         let zoom = match native::menu_action(id) {
-            Some(MenuAction::CheckUpdates) => return self.send(&FromHelper::CheckUpdates),
-            Some(MenuAction::QuitApp) => return self.send(&FromHelper::QuitApp),
-            Some(MenuAction::ToggleQuota) => return self.send(&FromHelper::ToggleQuota),
-            Some(MenuAction::OpenMain) => {
-                return self.send(&FromHelper::OpenMain { profile: None });
+            Some(MenuAction::Command(command)) => {
+                return self.send(&FromHelper::Command { command });
             }
             Some(MenuAction::ResetZoom) => 0.0,
             Some(MenuAction::ZoomIn) => (self.zoom_level + 0.5).min(9.0),
