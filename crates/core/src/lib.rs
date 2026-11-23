@@ -4,6 +4,7 @@
 pub mod binary;
 pub mod config;
 pub mod install;
+pub mod pool;
 pub mod processes;
 pub mod restart;
 mod yaml;

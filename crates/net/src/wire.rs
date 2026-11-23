@@ -78,14 +78,16 @@ pub(crate) async fn collect<I: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let (head, mut body) = response.into_parts();
     check_declared(&head.headers, limit)?;
     let mut bytes = Vec::new();
-    wire.read(&mut body, async |data: Bytes| {
-        if too_large(bytes.len(), data.len(), limit) {
-            return Err(NetError::TooLarge { limit });
+    // A loop rather than `Wire::read` with an async closure: rustc cannot prove such a closure's
+    // future `Send` for every lifetime, and the core pool boxes and spawns this call.
+    while let Some(frame) = wire.drive(async { Ok(body.frame().await) }).await? {
+        if let Ok(data) = frame?.into_data() {
+            if too_large(bytes.len(), data.len(), limit) {
+                return Err(NetError::TooLarge { limit });
+            }
+            bytes.extend_from_slice(&data);
         }
-        bytes.extend_from_slice(&data);
-        Ok(())
-    })
-    .await?;
+    }
     Ok(crate::Response {
         status: head.status,
         headers: head.headers,
