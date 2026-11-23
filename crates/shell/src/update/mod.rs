@@ -417,3 +417,61 @@ fn relaunch(executable: &Path) -> std::io::Result<()> {
         .spawn()
         .map(drop)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// The app at `path`: a file, or a bundle-like folder holding one.
+    fn app(path: &Path, folder: bool, version: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if folder {
+            fs::create_dir_all(path).unwrap();
+            fs::write(path.join("version"), version).unwrap();
+        } else {
+            fs::write(path, version).unwrap();
+        }
+    }
+
+    fn version(path: &Path) -> String {
+        let file = if path.is_dir() {
+            path.join("version")
+        } else {
+            path.to_owned()
+        };
+        fs::read_to_string(file).unwrap()
+    }
+
+    #[test]
+    fn install_swaps_the_update_in_or_puts_the_running_version_back_when_it_cannot_start() {
+        let root = std::env::temp_dir().join(format!("nsv-update-install-{}", std::process::id()));
+        for folder in [false, true] {
+            for (executable, installed) in [("/usr/bin/true", "new"), ("/nonexistent/app", "old")] {
+                drop(fs::remove_dir_all(&root));
+                let current = root.join("Applications/NonstopVibin.app");
+                let staging = root.join("Applications/.NonstopVibin.app.update");
+                let new = staging.join("unpacked/NonstopVibin.app");
+                app(&current, folder, "old");
+                app(&new, folder, "new");
+                let result = Staged {
+                    new,
+                    current: current.clone(),
+                    executable: PathBuf::from(executable),
+                    staging: staging.clone(),
+                }
+                .install();
+                assert_eq!(result.is_ok(), installed == "new", "{result:?}");
+                assert_eq!(version(&current), installed);
+                // The next start removes whatever the install left beside the app.
+                remove(&staging);
+                assert!(!staging.exists());
+                assert_eq!(version(&current), installed);
+            }
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+}
