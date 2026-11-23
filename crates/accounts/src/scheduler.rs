@@ -23,7 +23,7 @@ use nsv_core::restart::{
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_net::Method;
-use nsv_store::{Store, StoreError};
+use nsv_store::Store;
 use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
@@ -498,13 +498,6 @@ impl Drop for Working {
     }
 }
 
-fn store_error(error: StoreError) -> AppError {
-    match error {
-        StoreError::App(error) => error,
-        other => AppError::new(other.to_string(), 500),
-    }
-}
-
 fn unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -560,7 +553,7 @@ impl Shared {
                 Ok(facts)
             })
             .await
-            .map_err(store_error)?;
+            .map_err(AppError::from)?;
         Ok(loaded
             .into_iter()
             .map(|(fact, oauth)| {
@@ -968,7 +961,7 @@ impl Shared {
                 .await
         {
             self.host
-                .report(format!("History cleanup: {}", store_error(error)));
+                .report(format!("History cleanup: {}", AppError::from(error)));
         }
         if accounts {
             let profiles: Vec<ProfileId> = self.pool.state().profiles.keys().cloned().collect();
@@ -1124,7 +1117,7 @@ impl Shared {
         self.store
             .call(move |db| db.add_usage(&records))
             .await
-            .map_err(store_error)?;
+            .map_err(AppError::from)?;
         Ok(count)
     }
 }

@@ -1757,7 +1757,6 @@ dependencies = [
 name = "nsv-core"
 version = "0.2.0"
 dependencies = [
- "getrandom 0.4.3",
  "nsv-domain",
  "nsv-net",
  "nsv-store",

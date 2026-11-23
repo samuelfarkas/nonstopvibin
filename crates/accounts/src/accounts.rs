@@ -1,19 +1,20 @@
 //! A profile's OAuth accounts as its core lists them in `/auth-files`, with the seat identity
-//! read from Claude credential files (`crate::identity`). A port of `accounts.ts` (sync and
-//! credential reads).
+//! read from Claude credential files (`crate::identity`), and the account list the UI, quota
+//! and resets read. A port of `accounts.ts`.
 
 use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::{Provider, Registry, registry};
+use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
 use nsv_net::Method;
 use nsv_store::Store;
@@ -22,6 +23,7 @@ use serde_json::{Map, Value};
 
 use crate::identity::{SeatIdentity, claude_identity};
 use crate::js::{nullish, number, or, record, string, text, truthy};
+use crate::quota::QuotaSource;
 
 /// A profile's credential file `name`.
 ///
@@ -61,6 +63,14 @@ pub fn read_credential(path: &Path, limit: u64) -> Result<Map<String, Value>, Ap
     let content = fs::read_to_string(path).map_err(|_| unreadable())?;
     let value: Value = serde_json::from_str(&content).map_err(|_| unreadable())?;
     Ok(record(Some(&value)).clone())
+}
+
+/// A credential file of a profile, as `credentialFiles` read it.
+#[derive(Debug, Clone)]
+pub struct CredentialFile {
+    /// The file name, which is the account id.
+    pub id: String,
+    pub raw: Map<String, Value>,
 }
 
 /// A Claude credential file's identity, keyed by the file's version.
@@ -192,12 +202,179 @@ impl Accounts {
         let id = profile.clone();
         self.store
             .call(move |db| db.save_account_metadata(&id, &accounts))
-            .await
-            .map_err(|error| match error {
-                nsv_store::StoreError::App(error) => error,
-                other => AppError::new(other.to_string(), 500),
-            })?;
+            .await?;
         Ok(Some(count))
+    }
+
+    /// The profile's accounts as the UI lists them: its OAuth accounts as last synced, then its
+    /// API-key accounts, each with its stored quota (`Accounts.list`).
+    ///
+    /// # Errors
+    /// A store failure.
+    pub async fn list(&self, profile: &ProfileId) -> Result<Vec<Account>, AppError> {
+        let profile = profile.clone();
+        Ok(self
+            .store
+            .call(move |db| {
+                let oauth = db.account_metadata(&profile)?;
+                let api = db.api_accounts(&profile)?.into_iter().map(api_listing);
+                oauth
+                    .into_iter()
+                    .chain(api)
+                    .map(|mut account| {
+                        account.quota = db.quota(&profile, &account.id)?;
+                        Ok(account)
+                    })
+                    .collect()
+            })
+            .await?)
+    }
+
+    /// A credential file was replaced without the core: its account shows the file's seat and
+    /// email from now on.
+    ///
+    /// # Errors
+    /// A store failure.
+    pub async fn replaced(
+        &self,
+        profile: &ProfileId,
+        account: &AccountId,
+        credential: &Map<String, Value>,
+    ) -> Result<(), AppError> {
+        let identity = claude_identity(&Value::Object(credential.clone()));
+        let email = text(credential.get("email")).map(str::to_owned);
+        let (profile, account) = (profile.clone(), account.clone());
+        Ok(self
+            .store
+            .call(move |db| {
+                let accounts: Vec<Account> = db
+                    .account_metadata(&profile)?
+                    .into_iter()
+                    .map(|mut listed| {
+                        if listed.id == account {
+                            listed.account_uuid.clone_from(&identity.account_uuid);
+                            listed
+                                .organization_uuid
+                                .clone_from(&identity.organization_uuid);
+                            listed
+                                .organization_name
+                                .clone_from(&identity.organization_name);
+                            listed.email = email.clone().or(listed.email);
+                        }
+                        listed
+                    })
+                    .collect();
+                db.save_account_metadata(&profile, &accounts)
+            })
+            .await?)
+    }
+
+    /// Every regular `.json` file in the profile's credential directory, read.
+    ///
+    /// # Errors
+    /// 404 for an unknown profile, 400 for a file that cannot be read as a credential, or a
+    /// file-system error.
+    pub async fn credential_files(
+        &self,
+        profile: &ProfileId,
+    ) -> Result<Vec<CredentialFile>, AppError> {
+        let id = profile.clone();
+        self.store.call(move |db| db.profile(&id)).await?;
+        let directory = credential_directory(self.store.directory(), profile);
+        let limit = registry()
+            .map_err(|error| AppError::new(error.to_string(), 500))?
+            .limits
+            .credential_file_bytes;
+        tokio::task::spawn_blocking(move || {
+            let listing = match fs::read_dir(&directory) {
+                Ok(listing) => listing,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+                Err(error) => return Err(AppError::new(error.to_string(), 500)),
+            };
+            let mut files = Vec::new();
+            for entry in listing {
+                let entry = entry.map_err(|error| AppError::new(error.to_string(), 500))?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let file = entry
+                    .file_type()
+                    .map_err(|error| AppError::new(error.to_string(), 500))?
+                    .is_file();
+                if file && has_json_extension(&name) {
+                    let raw = read_credential(&credential_file(&directory, &name)?, limit)?;
+                    files.push(CredentialFile { id: name, raw });
+                }
+            }
+            Ok(files)
+        })
+        .await
+        .map_err(|error| AppError::new(error.to_string(), 500))?
+    }
+}
+
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "accounts.ts listed only `.json`, as the core does"
+)]
+fn has_json_extension(name: &str) -> bool {
+    name.ends_with(".json")
+}
+
+/// An API-key account as `list` shows it.
+fn api_listing(account: ApiAccount) -> Account {
+    Account {
+        id: account.id,
+        name: account.name,
+        account_uuid: None,
+        organization_uuid: None,
+        organization_name: None,
+        provider: account.provider.as_str().to_owned(),
+        kind: AccountKind::ApiKey,
+        email: None,
+        disabled: account.disabled,
+        status: if account.disabled {
+            AccountStatus::Paused
+        } else {
+            AccountStatus::Configured
+        },
+        priority: 0,
+        auth_index: None,
+        quota: None,
+        prefix: Some(account.prefix),
+        model_count: Some(u32::try_from(account.models.len()).unwrap_or(u32::MAX)),
+        extra: Extra::new(),
+    }
+}
+
+/// The quota and reset features' view of the core pool and the account list.
+#[derive(Clone)]
+pub struct PoolSource {
+    pub pool: Pool,
+    pub accounts: Arc<Accounts>,
+}
+
+impl QuotaSource for PoolSource {
+    async fn accounts(&self, profile: &ProfileId) -> Result<Vec<Account>, AppError> {
+        self.accounts.list(profile).await
+    }
+
+    fn chatgpt_account_id(&self, profile: &ProfileId, account: &AccountId) -> Option<String> {
+        self.accounts.chatgpt_account_id(profile, account.as_str())
+    }
+
+    fn usable(&self, profile: &ProfileId) -> bool {
+        self.pool.usable(profile)
+    }
+
+    async fn api_call(&self, profile: &ProfileId, body: Value) -> Result<Value, AppError> {
+        self.pool
+            .management(
+                profile,
+                &Method::POST,
+                "/api-call",
+                Some(&body),
+                MANAGEMENT_TIMEOUT,
+            )
+            .await
     }
 }
 

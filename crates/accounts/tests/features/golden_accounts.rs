@@ -1,7 +1,6 @@
 //! Replays the quota, reset, identity and API-account cases of `tests/golden/accounts.json`
 //! (`tests/golden/areas/accounts.ts`) and the import scan of `api.json`. The `sync`,
-//! `credentialPath` and `list` cases are replayed in tests/scheduler; `verifyClaudeIdentity`
-//! records sign-in.
+//! `credentialPath` and `list` cases are replayed in tests/scheduler.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -10,7 +9,7 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use nsv_accounts::api_accounts::{api_account, go_model_protocol};
-use nsv_accounts::identity::{SeatIdentity, claude_identity, same_seat};
+use nsv_accounts::identity::{SeatIdentity, claude_identity, same_seat, verify_claude_identity};
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
 use nsv_accounts::resets::{CodexResets, reset_credits, reset_result};
@@ -175,6 +174,48 @@ async fn api_accounts_validate_and_discover_as_typescript_did() {
         }
     }
     assert_eq!(accounts.len(), 20);
+}
+
+#[tokio::test]
+async fn claude_identity_is_verified_with_the_token_as_typescript_did() {
+    let cases = cases("accounts");
+    let verified = named(&cases, "verifyClaudeIdentity ");
+    for case in &verified {
+        let answer = case["input"]["response"].clone();
+        let fetch = StubFetch::new(move |_| match &answer {
+            Value::String(network) if network == "network" => Err(nsv_net::NetError::Connect(
+                std::io::ErrorKind::ConnectionRefused.into(),
+            )),
+            answer => Ok(response(
+                u16::try_from(answer["status"].as_u64().unwrap()).unwrap(),
+                answer["body"].as_str().unwrap(),
+            )),
+        });
+        let raw = case["input"]["raw"].as_object().unwrap();
+        let result = verify_claude_identity(&fetch, raw).await;
+        let requests: Vec<Value> = fetch
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|seen| {
+                json!({ "url": seen.request.url, "method": "GET", "headers": headers(&seen.request), "redirect": "error" })
+            })
+            .collect();
+        match (result, case.get("output")) {
+            (Ok(credential), Some(expected)) => assert_eq!(
+                &json!({ "credential": credential, "requests": requests }),
+                expected,
+                "{}",
+                case["name"]
+            ),
+            (Err(error), None) => {
+                assert_error(&case["error"], &error.message, error.status, &case["name"]);
+            }
+            (result, _) => panic!("{}: {result:?}", case["name"]),
+        }
+    }
+    assert_eq!(verified.len(), 7);
 }
 
 /// Stands in for `Quotas` in the reset flow, as the recorder's stub did.

@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use super::backend::{CoreHandle, exit_text};
 use super::{
     Context, Core, CoreEvent, CoreId, CoreKeys, Phase, Pool, PoolState, ProfileCore, RETRY,
-    SHUTTING_DOWN, app_error, management,
+    SHUTTING_DOWN, management,
 };
 use crate::config::write_config;
 
@@ -561,6 +561,7 @@ impl Launch {
                         id: self.id,
                         port,
                         phase: Phase::Failed(Arc::from(text.as_str())),
+                        binary: Arc::clone(&self.binary),
                         keys,
                     },
                 })
@@ -574,6 +575,7 @@ impl Launch {
                 id: self.id,
                 port,
                 phase: Phase::Starting,
+                binary: Arc::clone(&self.binary),
                 keys: Arc::clone(&keys),
             },
         })
@@ -635,7 +637,7 @@ impl Launch {
         })?;
         let config = write_config(&self.context.store, self.profile.clone(), port)
             .await
-            .map_err(app_error)?;
+            .map_err(AppError::from)?;
         if self.context.closing() {
             return Err(AppError::new(SHUTTING_DOWN, 503));
         }
@@ -706,7 +708,7 @@ impl Launch {
                 db.save_profile(&record)
             })
             .await
-            .map_err(app_error)?;
+            .map_err(AppError::from)?;
         let (published, done) = oneshot::channel();
         self.tell(Command::Answered {
             profile: self.profile.clone(),

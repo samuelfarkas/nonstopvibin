@@ -22,7 +22,10 @@ fn random_bytes<const N: usize>() -> io::Result<[u8; N]> {
 }
 
 /// A version 4 UUID as `crypto.randomUUID()` writes it: lowercase and hyphenated.
-fn random_uuid() -> io::Result<String> {
+///
+/// # Errors
+/// The system's random source failed.
+pub fn random_uuid() -> io::Result<String> {
     let mut bytes = random_bytes::<16>()?;
     let [.., version, _, variant, _, _, _, _, _, _, _] = &mut bytes;
     *version = *version & 0x0f | 0x40;

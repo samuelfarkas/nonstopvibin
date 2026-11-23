@@ -1,16 +1,16 @@
-//! Installing a reviewed core release: the download, the archive and executable hash checks
-//! against the pin, and the `cores/` layout updates live in: `cores/.staging-*` while a core
-//! installs, `cores/<version>/` once committed.
+//! Installing a reviewed core release: the reviewed pin feed, the download, the archive and
+//! executable hash checks against the pin, and the `cores/` layout updates live in:
+//! `cores/.staging-*` while a core installs, `cores/<version>/` once committed.
 
-use std::fs::{self, DirBuilder, Permissions};
+use std::fs::{self, Permissions};
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
-use nsv_net::{Get, Https, NetError, Redirects};
+use nsv_net::{Get, Https, NetError, Redirects, Response};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -25,6 +25,14 @@ pub const ARCHIVE_HOSTS: &[&str] = &[
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
 ];
+/// The reviewed pin on `main`, which installed builds read; `NONSTOPVIBIN_CORE_FEED` replaces
+/// it. Archives always come from [`CORE_ARCHIVES`].
+pub const CORE_FEED: &str =
+    "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/src/server/core-release.json";
+/// GitHub serves raw files from this host only.
+const FEED_HOSTS: &[&str] = &["raw.githubusercontent.com"];
+const FEED_TIMEOUT: Duration = Duration::from_secs(15);
+const FEED_LIMIT: u64 = 64 * 1024;
 /// Above any core archive or executable; executables are about 80 MB.
 const SIZE_LIMIT: u64 = 256 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(10);
@@ -68,6 +76,58 @@ pub async fn download(https: &Https, url: &str, path: &Path) -> Result<Sha256Dig
             502,
         )),
     }
+}
+
+/// Where the reviewed pin and release archives come from: GitHub through [`Https`] in the
+/// daemon; tests serve their own.
+pub trait Releases: Send + Sync + 'static {
+    /// The pin feed at `url`, whatever its status.
+    fn feed(&self, url: &str) -> impl Future<Output = Result<Response, NetError>> + Send;
+
+    /// See [`download`].
+    fn download(
+        &self,
+        url: &str,
+        path: &Path,
+    ) -> impl Future<Output = Result<Sha256Digest, AppError>> + Send;
+}
+
+impl Releases for Https {
+    async fn feed(&self, url: &str) -> Result<Response, NetError> {
+        self.get(&Get {
+            url,
+            headers: &[],
+            timeout: FEED_TIMEOUT,
+            limit: FEED_LIMIT,
+            redirects: Redirects::Follow(FEED_HOSTS),
+        })
+        .await
+    }
+
+    async fn download(&self, url: &str, path: &Path) -> Result<Sha256Digest, AppError> {
+        download(self, url, path).await
+    }
+}
+
+/// The reviewed pin the feed at `url` serves.
+///
+/// # Errors
+/// [`AppError`] 502 "Could not check for core updates: …" when the feed cannot be read or is
+/// not a core pin.
+pub async fn fetch_pin(releases: &impl Releases, url: &str) -> Result<CorePin, AppError> {
+    let failed = |reason: &dyn std::fmt::Display| {
+        AppError::new(format!("Could not check for core updates: {reason}"), 502)
+    };
+    let response = releases.feed(url).await.map_err(|error| match error {
+        NetError::Status(status) => failed(&format_args!("HTTP {}.", status.as_u16())),
+        other => failed(&other),
+    })?;
+    if !response.ok() {
+        return Err(failed(&format_args!("HTTP {}.", response.status.as_u16())));
+    }
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.body).map_err(|error| failed(&error))?;
+    serde_json::from_value(body).map_err(|_| failed(&"the feed is not a core pin."))
 }
 
 /// Streams `member` of the gzipped tar `archive` into a new file at `path` with exactly
@@ -143,7 +203,7 @@ pub async fn extract(
 /// # Errors
 /// [`CoreError::App`] 502 for a failed download, extraction or pin check.
 pub async fn install_core(
-    https: &Https,
+    releases: &impl Releases,
     archives: &str,
     pin: &CorePin,
     target: CoreTarget,
@@ -154,7 +214,7 @@ pub async fn install_core(
     let archive = directory.join(&name);
     let installed = async {
         let url = format!("{archives}/v{}/{name}", pin.version);
-        let sha256 = download(https, &url, &archive).await?;
+        let sha256 = releases.download(&url, &archive).await?;
         install_archive(pin, target, &archive, sha256, directory, license).await
     }
     .await;
@@ -191,9 +251,6 @@ pub async fn install_archive(
     Ok(())
 }
 
-/// `mkdtemp`'s suffix characters.
-const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-
 /// A `cores/.staging-*` directory a core installs into. Dropping it uncommitted deletes it;
 /// what a crash leaves is deleted by the next [`select_installed_core`]. Its methods block.
 #[derive(Debug)]
@@ -210,27 +267,11 @@ impl Staging {
     /// A file-system error.
     pub fn create(cores: &Path) -> io::Result<Self> {
         nsv_store::files::owner_only_directory(cores, || Ok::<(), io::Error>(()))?;
-        loop {
-            let mut random = [0_u8; 6];
-            getrandom::fill(&mut random)?;
-            let suffix: String = random
-                .iter()
-                .filter_map(|byte| ALPHABET.get(usize::from(*byte) % ALPHABET.len()))
-                .map(|&byte| char::from(byte))
-                .collect();
-            let path = cores.join(format!(".staging-{suffix}"));
-            match DirBuilder::new().mode(0o700).create(&path) {
-                Ok(()) => {
-                    return Ok(Self {
-                        path,
-                        cores: cores.to_owned(),
-                        committed: false,
-                    });
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
-            }
-        }
+        Ok(Self {
+            path: nsv_store::files::unique_directory(cores, ".staging-")?,
+            cores: cores.to_owned(),
+            committed: false,
+        })
     }
 
     #[must_use]
