@@ -5,11 +5,9 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use nsv_domain::registry::Agent;
-use nsv_domain::wire::Profile;
+use nsv_domain::wire::{AgentSetupInput, Profile};
 
 use crate::error::{AgentError, conflict};
-use nsv_domain::wire::AgentSetupInput;
-
 use crate::manifest::Manifest;
 use crate::{claude, codex, opencode, pi};
 
