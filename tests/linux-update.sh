@@ -30,6 +30,7 @@ pids=""
 app=""
 cleanup() {
   status=$?
+  set +e
   # shellcheck disable=SC2086
   [ -n "$pids" ] && kill $pids 2>/dev/null
   [ -n "$app" ] && /bin/kill -s KILL -- "-$app" 2>/dev/null
@@ -38,6 +39,7 @@ cleanup() {
     cat "$log"
   fi
   rm -rf "$work"
+  exit "$status"
 }
 trap cleanup EXIT
 fail() {
