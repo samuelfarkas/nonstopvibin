@@ -13,7 +13,8 @@ mod macos;
 pub(crate) use linux::{choose_folder, copy, present, set_icon, show_dialog, work_area};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
-    MenuAction, choose_folder, copy, install_menu, menu_action, present, show_dialog, work_area,
+    MenuAction, choose_folder, copy, drag, install_menu, menu_action, present, show_dialog,
+    work_area,
 };
 
 pub(crate) const FOLDER_TITLE: &str = "Connect Claude Code in a project";

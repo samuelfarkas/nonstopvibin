@@ -660,13 +660,15 @@ impl App {
                     self.close_quota();
                 }
             }
+            // Only the macOS main window's bridge script sends it.
+            #[cfg(target_os = "macos")]
             Call::DragWindow => {
-                if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main)
-                    && let Err(error) = main.window.drag_window()
-                {
-                    log(format_args!("could not move the window: {error}"));
+                if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main) {
+                    native::drag(&main.window);
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            Call::DragWindow => {}
         }
     }
 

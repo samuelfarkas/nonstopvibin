@@ -5,11 +5,13 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use nsv_domain::helper::{DialogKind, Rect};
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSModalResponseOK, NSOpenPanel,
-    NSPasteboard, NSScreen,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSEvent, NSEventModifierFlags,
+    NSEventType, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSScreen,
 };
 use objc2_foundation::{NSRect, NSString};
+use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
 
 use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
@@ -23,6 +25,41 @@ const PLAIN_TEXT: &str = "public.utf8-plain-text";
 pub(crate) fn present(window: &Window) {
     window.set_visible(true);
     window.set_focus();
+}
+
+/// Moves `window` with the pointer while the primary button stays down: a press in a drag
+/// region. The page reports the press after AppKit has dispatched it, so the press is
+/// recreated at the pointer instead of read from `currentEvent` as tao's `drag_window` does.
+pub(crate) fn drag(window: &Window) {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    // Released already: the press was a click.
+    if NSEvent::pressedMouseButtons() & 1 == 0 {
+        return;
+    }
+    // The press made the window key; any other key window means the pointer left it.
+    let Some(key) = NSApplication::sharedApplication(main_thread)
+        .keyWindow()
+        .filter(|key| Retained::as_ptr(key).cast_mut().cast() == window.ns_window())
+    else {
+        return;
+    };
+    let press = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+        NSEventType::LeftMouseDown,
+        key.mouseLocationOutsideOfEventStream(),
+        NSEventModifierFlags::empty(),
+        0.0,
+        key.windowNumber(),
+        None,
+        0,
+        1,
+        1.0,
+    );
+    match press {
+        Some(press) => key.performWindowDragWithEvent(&press),
+        None => log(format_args!("could not move the window: no press event")),
+    }
 }
 
 /// The pasteboard server keeps the text after this process exits.

@@ -675,9 +675,14 @@ try {
       const running = appProcesses();
       const helper = pidOf(helperPath);
       ok(helper, "the helper runs before quitting");
+      // launchd holds the daemon, which started the helper, responsible for them.
+      const owners = [pidOf(daemonPath), helper];
       const before = webKitProcesses();
-      const helpers = before.filter((p) => p.responsible === helper);
-      ok(helpers.length > 0, "the helper's WebKit processes are known", before);
+      const helpers = before.filter((p) => owners.includes(p.responsible));
+      ok(helpers.length > 0, "the helper's WebKit processes are known", {
+        owners,
+        before,
+      });
       await fromTrayMenu("Quit NonstopVibin");
       await poll(() => appProcesses().length === 0, 20_000);
       const left = appProcesses();
@@ -694,7 +699,7 @@ try {
       return {
         running: running.map(({ command }) => command.slice(app.length)),
         helpers,
-        others: before.filter((p) => p.responsible !== helper),
+        others: before.filter((p) => !owners.includes(p.responsible)),
       };
     },
   );
