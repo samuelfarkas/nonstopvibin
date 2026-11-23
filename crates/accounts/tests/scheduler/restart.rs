@@ -142,10 +142,9 @@ async fn a_core_that_exits_right_after_each_start_is_restarted_with_the_same_bac
         ..Script::default()
     };
     world.fake.script(&profile, vec![crashes; 12]);
-    world
-        .run(world.pool().start(&profile, false))
-        .await
-        .unwrap();
+    // The start needs no clock. Moving it could end the core's 10 ms while the start still
+    // syncs its accounts off the runtime, and the start would then rightly fail.
+    world.pool().start(&profile, false).await.unwrap();
     world.scheduler.launch().await.unwrap();
     world
         .until("ten launches", Duration::from_secs(60), |world| {

@@ -227,7 +227,8 @@ impl World {
         );
     }
 
-    /// Lets every task run until nothing moves without the clock.
+    /// Lets every task run until nothing moves without the clock. Work on the blocking pool,
+    /// such as an account sync's credential scan, may still be running after it.
     pub(crate) async fn settle(&self) {
         for _ in 0..24 {
             for _ in 0..16 {
