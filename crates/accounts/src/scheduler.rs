@@ -19,9 +19,6 @@ use std::time::{Duration, SystemTime};
 use nsv_core::pool::{
     Backend, BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, PoolState,
 };
-use nsv_core::restart::{
-    Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
-};
 use nsv_core::upstream;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -34,14 +31,22 @@ use tokio::sync::{Notify, watch};
 use tokio::time::Instant;
 
 use crate::accounts::Accounts;
+use crate::restart::{
+    Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
+};
 use crate::usage::{PAGE, parse_page};
 
 /// The scheduler's periods.
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
-    /// Restart backoff; its `coalesce` is also the shortest wait between wakeups, so a drain
-    /// follows gateway activity by about that much.
+    /// Restart backoff.
     pub restart: RestartTiming,
+    /// The shortest wait between wakeups, so a drain follows gateway activity by about that
+    /// much.
+    pub coalesce: Duration,
+    /// How long a usage drain that failed twice waits; each further failure doubles it, up to
+    /// [`Timing::usage_backoff`].
+    pub usage_retry: Duration,
     /// Account status refresh for running profiles, while a UI watches.
     pub accounts: Duration,
     /// How long one UI read of the state keeps account and quota polling on.
@@ -67,6 +72,8 @@ pub static TIMING: LazyLock<Timing> = LazyLock::new(|| {
     let registry = registry();
     Timing {
         restart: RESTART_TIMING,
+        coalesce: Duration::from_secs(2),
+        usage_retry: Duration::from_secs(2),
         accounts: Duration::from_secs(20),
         // Three of the UI's polls: a hidden or closed UI stops polling the cores.
         watch: Duration::from_millis(registry.poll_ms) * 3,
@@ -463,8 +470,10 @@ impl Scheduler {
     /// From now on nothing starts, no request reaches a core, a start still waiting for its
     /// core gives up, and nothing more is scheduled.
     pub async fn begin_shutdown(&self) {
-        // An error means the pool is gone, which is the state asked for.
-        let _ = self.0.pool.begin_shutdown().await;
+        // The pool's owner is gone, which is the state asked for.
+        if let Err(error) = self.0.pool.begin_shutdown().await {
+            tracing::debug!(%error, "the pool had already ended");
+        }
         self.0.notify.notify_one();
     }
 
@@ -508,10 +517,6 @@ impl Shared {
 
     fn instant(&self, ms: i64) -> Instant {
         self.epoch + Duration::from_millis(u64::try_from(ms).unwrap_or(0))
-    }
-
-    fn coalesce(&self) -> Duration {
-        Duration::from_millis(u64::try_from(self.timing.restart.coalesce).unwrap_or(0))
     }
 
     fn spawn(self: &Arc<Self>, work: impl Future<Output = ()> + Send + 'static) {
@@ -796,7 +801,7 @@ impl Shared {
         let Some(due) = due else {
             return;
         };
-        let at = due.max(now + self.coalesce());
+        let at = due.max(now + self.timing.coalesce);
         if state.scheduled.is_none_or(|scheduled| at < scheduled) {
             state.scheduled = Some(at);
             self.notify.notify_one();
@@ -902,7 +907,7 @@ impl Shared {
             let result = self.collect(&profile).await;
             let mut state = self.lock();
             let now = Instant::now();
-            let (coalesce, backoff) = (self.coalesce(), self.timing.usage_backoff);
+            let (retry, backoff) = (self.timing.usage_retry, self.timing.usage_backoff);
             if let Some(cadence) = state
                 .track(&profile)
                 .cadence
@@ -927,7 +932,7 @@ impl Shared {
                         Next::Now
                     } else {
                         let factor = 2_u32.saturating_pow(cadence.failures - 1);
-                        Next::At(now + coalesce.saturating_mul(factor).min(backoff))
+                        Next::At(now + retry.saturating_mul(factor).min(backoff))
                     };
                 }
             }
@@ -1106,8 +1111,9 @@ impl Shared {
     }
 }
 
-/// The scheduler's side of the pool: it hears every core event, starts each new core's drain
-/// cadence and syncs its accounts once it answers, and drains a core's usage before it stops.
+/// The scheduler's side of the pool: it hears every core event, marks a profile whose core
+/// answered enabled (the next launch starts it), starts each new core's drain cadence and syncs
+/// its accounts, and drains a core's usage before it stops.
 struct PoolHooks(Weak<Shared>);
 
 impl Hooks for PoolHooks {
@@ -1130,17 +1136,21 @@ impl Hooks for PoolHooks {
         shared.schedule(&mut state, &pool, now);
     }
 
-    fn ready(
-        &self,
-        pool: Pool,
-        profile: ProfileId,
-        core: CoreId,
-    ) -> BoxFuture<'static, Result<(), AppError>> {
+    fn ready(&self, profile: ProfileId, core: CoreId) -> BoxFuture<'static, Result<(), AppError>> {
         let shared = self.0.upgrade();
         Box::pin(async move {
             let Some(shared) = shared else {
                 return Ok(());
             };
+            let id = profile.clone();
+            shared
+                .store
+                .call(move |db| {
+                    let mut record = db.profile(&id)?;
+                    record.enabled = true;
+                    db.save_profile(&record)
+                })
+                .await?;
             {
                 let mut state = shared.lock();
                 let track = state.track(&profile);
@@ -1159,11 +1169,15 @@ impl Hooks for PoolHooks {
                 let snapshot = shared.pool.state();
                 shared.schedule(&mut state, &snapshot, Instant::now());
             }
-            shared.accounts.sync(&pool, &profile).await.map(|_| ())
+            shared
+                .accounts
+                .sync(&shared.pool, &profile)
+                .await
+                .map(|_| ())
         })
     }
 
-    fn before_stop(&self, _: Pool, profile: ProfileId) -> BoxFuture<'static, ()> {
+    fn before_stop(&self, profile: ProfileId) -> BoxFuture<'static, ()> {
         let shared = self.0.upgrade();
         Box::pin(async move {
             let Some(shared) = shared else {

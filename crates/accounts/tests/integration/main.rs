@@ -4,4 +4,5 @@
 #![cfg(test)]
 
 mod features;
+mod restart;
 mod scheduler;

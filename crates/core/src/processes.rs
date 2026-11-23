@@ -411,7 +411,9 @@ impl<I: Identify> Ledger<I> {
                 continue;
             };
             // Unprovable this time (e.g. ps could not run): the entry stays for the next start.
-            let _ = self.reap(&name, &path, &entry).await;
+            if let Err(error) = self.reap(&name, &path, &entry).await {
+                tracing::warn!(%error, ?name, "a recorded core was not reaped; its entry stays");
+            }
         }
         Ok(())
     }

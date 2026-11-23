@@ -71,10 +71,12 @@ impl Host for TestHost {
 /// Short periods, so sequences take few steps of the paused clock.
 pub(crate) fn short(idle: Duration) -> Timing {
     Timing {
-        restart: nsv_core::restart::RestartTiming {
+        restart: nsv_accounts::restart::RestartTiming {
             coalesce: 200,
             ..TIMING.restart
         },
+        coalesce: Duration::from_millis(200),
+        usage_retry: Duration::from_millis(200),
         activity: Duration::from_secs(1),
         idle,
         ..*TIMING

@@ -9,10 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsv_accounts::accounts::Accounts;
+use nsv_accounts::restart::RestartTiming;
 use nsv_accounts::scheduler::{Host, Scheduler, TIMING, Timing};
 use nsv_core::binary::{CoreTarget, bundled_pin};
 use nsv_core::pool::{BoxFuture, Pool, Processes, READY};
-use nsv_core::restart::RestartTiming;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ApiKey;
@@ -181,6 +181,8 @@ async fn real_world(
             coalesce: 200,
             ..TIMING.restart
         },
+        coalesce: Duration::from_millis(200),
+        usage_retry: Duration::from_millis(200),
         activity: Duration::from_millis(500),
         idle,
         ..*TIMING

@@ -4,8 +4,8 @@
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use nsv_accounts::restart::RestartTiming;
 use nsv_accounts::scheduler::{TIMING, Timing};
-use nsv_core::restart::RestartTiming;
 use nsv_domain::id::ProfileId;
 use nsv_testkit::fake::Script;
 use serde_json::json;
@@ -15,12 +15,15 @@ use tokio::time::Instant;
 use super::common::World;
 
 fn timing(coalesce: i64, backoff: i64, limit: u32) -> Timing {
+    let period = Duration::from_millis(u64::try_from(coalesce).unwrap());
     Timing {
         restart: RestartTiming {
             coalesce,
             restart_backoff: backoff,
             restart_limit: limit,
         },
+        coalesce: period,
+        usage_retry: period,
         ..*TIMING
     }
 }

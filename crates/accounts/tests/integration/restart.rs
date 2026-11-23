@@ -4,7 +4,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use nsv_core::restart::{
+use nsv_accounts::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming, Run,
     give_up_text,
 };

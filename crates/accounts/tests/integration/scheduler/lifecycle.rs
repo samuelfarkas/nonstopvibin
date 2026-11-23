@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use nsv_accounts::restart::RestartTiming;
 use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_core::processes::KILL_GRACE;
-use nsv_core::restart::RestartTiming;
 use nsv_domain::id::ProfileId;
 use nsv_testkit::fake::Script;
 use tokio::time::Instant;
@@ -345,6 +345,8 @@ async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_
             coalesce: 20,
             ..timing().restart
         },
+        coalesce: Duration::from_millis(20),
+        usage_retry: Duration::from_millis(20),
         accounts: Duration::from_millis(50),
         watch: Duration::from_millis(200),
         quotas: Duration::from_millis(100),

@@ -3,8 +3,8 @@
 //! nsv-accounts.
 
 use std::ops::Deref;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, READY};
@@ -40,13 +40,15 @@ impl World {
 
     async fn with_ready(ready: Duration) -> Self {
         let paused = Paused::new().await;
+        let drain = Arc::new(Drain::default());
         let pool = Pool::new(
             paused.store.clone(),
             paused.binary.clone(),
             Arc::new(paused.backend()),
             ready,
-            Arc::new(Drain),
+            Arc::<Drain>::clone(&drain),
         );
+        drain.0.set(pool.clone()).ok().unwrap();
         Self { paused, pool }
     }
 
@@ -57,16 +59,18 @@ impl World {
 
 /// The scheduler's hook a stop waits for: it reads the stopping core's usage queue, which lives
 /// only in the core's memory. What the queue held is the scheduler's concern.
-struct Drain;
+#[derive(Default)]
+struct Drain(OnceLock<Pool>);
 
 impl Hooks for Drain {
     fn event(&self, _: &ProfileId, _: CoreEvent) {}
 
-    fn ready(&self, _: Pool, _: ProfileId, _: CoreId) -> BoxFuture<'static, Result<(), AppError>> {
+    fn ready(&self, _: ProfileId, _: CoreId) -> BoxFuture<'static, Result<(), AppError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn before_stop(&self, pool: Pool, profile: ProfileId) -> BoxFuture<'static, ()> {
+    fn before_stop(&self, profile: ProfileId) -> BoxFuture<'static, ()> {
+        let pool = self.0.get().unwrap().clone();
         Box::pin(async move {
             let _ = pool
                 .management(

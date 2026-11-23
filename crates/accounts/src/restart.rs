@@ -3,10 +3,12 @@
 //! store, and time is an argument in milliseconds, so a decision depends only on what
 //! happened, in order, and when.
 
+use nsv_core::pool::CoreEvent;
+
 /// The restart periods of the scheduler's timing, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartTiming {
-    /// Shortest wait between scheduler wakeups; the wait after the first failed start.
+    /// The wait after the first failed start; each further failure doubles it.
     pub coalesce: i64,
     /// Longest wait between automatic starts, and how long a core must stay up to end a run
     /// of failures.
@@ -79,6 +81,25 @@ pub enum RestartEvent {
     Exited { error: Option<String> },
     /// A wakeup this policy asked for came due.
     Time,
+}
+
+impl From<CoreEvent> for RestartEvent {
+    fn from(event: CoreEvent) -> Self {
+        match event {
+            CoreEvent::Starting { automatic } => Self::Starting { automatic },
+            CoreEvent::Started {
+                automatic,
+                running,
+                error,
+            } => Self::Started {
+                automatic,
+                running,
+                error,
+            },
+            CoreEvent::Exited { error } => Self::Exited { error },
+            CoreEvent::Holding(holding) => Self::Holding(holding),
+        }
+    }
 }
 
 /// When the profile next wants [`RestartEvent::Time`].

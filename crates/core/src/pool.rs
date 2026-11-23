@@ -27,7 +27,6 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::config::{applied, write_config};
-use crate::restart::RestartEvent;
 
 pub use backend::{Backend, Call, CoreHandle, Processes};
 use owner::{Command, Owner};
@@ -193,25 +192,6 @@ pub enum CoreEvent {
     Holding(bool),
 }
 
-impl From<CoreEvent> for RestartEvent {
-    fn from(event: CoreEvent) -> Self {
-        match event {
-            CoreEvent::Starting { automatic } => Self::Starting { automatic },
-            CoreEvent::Started {
-                automatic,
-                running,
-                error,
-            } => Self::Started {
-                automatic,
-                running,
-                error,
-            },
-            CoreEvent::Exited { error } => Self::Exited { error },
-            CoreEvent::Holding(holding) => Self::Holding(holding),
-        }
-    }
-}
-
 /// What the pool asks of the code around it. The owner calls [`Hooks::event`] synchronously,
 /// so it must not wait for the pool.
 pub trait Hooks: Send + Sync + 'static {
@@ -222,15 +202,10 @@ pub trait Hooks: Send + Sync + 'static {
     ///
     /// # Errors
     /// Why the core is not ready yet.
-    fn ready(
-        &self,
-        pool: Pool,
-        profile: ProfileId,
-        core: CoreId,
-    ) -> BoxFuture<'static, Result<(), AppError>>;
+    fn ready(&self, profile: ProfileId, core: CoreId) -> BoxFuture<'static, Result<(), AppError>>;
 
     /// Runs before a running core is terminated: the usage queue lives only in its memory.
-    fn before_stop(&self, pool: Pool, profile: ProfileId) -> BoxFuture<'static, ()>;
+    fn before_stop(&self, profile: ProfileId) -> BoxFuture<'static, ()>;
 }
 
 /// The hooks of a pool that runs no features, such as a sign-in's.
@@ -240,11 +215,11 @@ pub struct NoHooks;
 impl Hooks for NoHooks {
     fn event(&self, _: &ProfileId, _: CoreEvent) {}
 
-    fn ready(&self, _: Pool, _: ProfileId, _: CoreId) -> BoxFuture<'static, Result<(), AppError>> {
+    fn ready(&self, _: ProfileId, _: CoreId) -> BoxFuture<'static, Result<(), AppError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn before_stop(&self, _: Pool, _: ProfileId) -> BoxFuture<'static, ()> {
+    fn before_stop(&self, _: ProfileId) -> BoxFuture<'static, ()> {
         Box::pin(async {})
     }
 }

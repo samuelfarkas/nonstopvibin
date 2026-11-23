@@ -10,4 +10,3 @@ mod core;
 mod install;
 mod native;
 mod pool;
-mod restart;

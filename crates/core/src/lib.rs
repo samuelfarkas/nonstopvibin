@@ -1,4 +1,4 @@
-//! `CLIProxyAPI` cores: binary pins, config, spawn, watchdog, ledger, restart policy, pool, management client and updates.
+//! `CLIProxyAPI` cores: binary pins, config, spawn, watchdog, ledger, pool, management client and updates.
 #![forbid(unsafe_code)]
 
 pub mod binary;
@@ -6,7 +6,6 @@ pub mod config;
 pub mod install;
 pub mod pool;
 pub mod processes;
-pub mod restart;
 pub mod upstream;
 mod yaml;
 

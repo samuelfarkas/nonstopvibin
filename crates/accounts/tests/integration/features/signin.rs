@@ -372,7 +372,7 @@ async fn a_failed_authorization_ends_the_sign_in_and_an_expired_one_is_cleaned_u
 async fn a_pending_sign_in_keeps_an_idle_core_running() {
     let idle = Duration::from_millis(300);
     // Wakeups coalesce over 50 ms instead of two seconds.
-    let restart = nsv_core::restart::RestartTiming {
+    let restart = nsv_accounts::restart::RestartTiming {
         coalesce: 50,
         ..TIMING.restart
     };
@@ -382,6 +382,8 @@ async fn a_pending_sign_in_keeps_an_idle_core_running() {
         nsv_accounts::scheduler::Timing {
             idle,
             restart,
+            coalesce: Duration::from_millis(50),
+            usage_retry: Duration::from_millis(50),
             ..*TIMING
         },
     )

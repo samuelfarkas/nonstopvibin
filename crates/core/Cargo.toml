@@ -1,6 +1,6 @@
 [package]
 name = "nsv-core"
-description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, restart policy, pool, management client and updates."
+description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, pool, management client and updates."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,6 +20,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 nsv-testkit = { workspace = true, features = ["core"] }

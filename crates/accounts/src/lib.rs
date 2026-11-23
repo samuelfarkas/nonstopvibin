@@ -13,6 +13,7 @@ pub mod imports;
 pub mod pricing;
 pub mod quota;
 pub mod resets;
+pub mod restart;
 pub mod scheduler;
 pub mod sign_in;
 pub mod updates;

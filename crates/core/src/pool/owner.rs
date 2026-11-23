@@ -17,8 +17,7 @@ use tokio::time::Instant;
 
 use super::backend::{CoreHandle, exit_text};
 use super::{
-    Context, Core, CoreEvent, CoreId, CoreKeys, Phase, Pool, PoolState, ProfileCore, RETRY,
-    management,
+    Context, Core, CoreEvent, CoreId, CoreKeys, Phase, PoolState, ProfileCore, RETRY, management,
 };
 use crate::config::write_config;
 
@@ -426,17 +425,11 @@ impl Owner {
         self.emit(&profile, CoreEvent::Holding(true));
         match (alive, sender) {
             (true, Some(sender)) => {
-                let pool = Pool {
-                    commands: sender.clone(),
-                    context: Arc::clone(&self.context),
-                };
+                let context = Arc::clone(&self.context);
                 tokio::spawn(async move {
                     // A failed spawn has no process to end.
                     if answered {
-                        pool.context
-                            .hooks
-                            .before_stop(pool.clone(), profile.clone())
-                            .await;
+                        context.hooks.before_stop(profile.clone()).await;
                     }
                     let result = match terminate {
                         Some(terminate) => terminated(terminate).await,
@@ -675,9 +668,8 @@ impl Launch {
                     handle.record().await;
                     let ready = async {
                         self.answered().await?;
-                        let pool = self.pool();
                         let hooks = &self.context.hooks;
-                        hooks.ready(pool, self.profile.clone(), self.id).await
+                        hooks.ready(self.profile.clone(), self.id).await
                     };
                     match race(handle, &self.context, ready).await? {
                         Ok(()) => return Ok(()),
@@ -691,18 +683,8 @@ impl Launch {
         }
     }
 
-    /// The core answered: the profile is enabled, and the owner publishes it running.
+    /// The core answered: the owner publishes it running.
     async fn answered(&self) -> Result<(), AppError> {
-        let profile = self.profile.clone();
-        self.context
-            .store
-            .call(move |db| {
-                let mut record = db.profile(&profile)?;
-                record.enabled = true;
-                db.save_profile(&record)
-            })
-            .await
-            .map_err(AppError::from)?;
         let (published, done) = oneshot::channel();
         self.tell(Command::Answered {
             profile: self.profile.clone(),
@@ -711,13 +693,6 @@ impl Launch {
         })
         .await;
         done.await.map_err(|_| AppError::shutting_down())
-    }
-
-    fn pool(&self) -> Pool {
-        Pool {
-            commands: self.sender.clone(),
-            context: Arc::clone(&self.context),
-        }
     }
 }
 
