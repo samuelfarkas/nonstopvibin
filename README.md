@@ -145,10 +145,10 @@ replaced, on the same synthetic workload with three profiles. They cover the hos
 
 | Measured on Linux x64                         | Bun server    | Electron, no window          | Rust daemon  |
 | --------------------------------------------- | ------------- | ---------------------------- | ------------ |
-| Startup to first accepted connection          | 48–101 ms     | 164–995 ms                   | 2.2–2.9 ms   |
-| Memory (PSS) while idle                       | 43.5–43.7 MiB | 178.6–185.1 MiB              | 8.8–10.8 MiB |
+| Startup to first accepted connection          | 48–101 ms     | 164–995 ms                   | 2.8–3.0 ms   |
+| Memory (PSS) while idle                       | 43.5–43.7 MiB | 178.6–185.1 MiB              | 9.4–11.4 MiB |
 | Wakeups per second, 2–3 minutes after a burst | 21.9–51.6     | 1.9–2.0                      | 0.0          |
-| Memory (PSS) right after eight 1 MB requests  | 88–99 MiB     | 82–84 MiB, main process only | 9.4–11.4 MiB |
+| Memory (PSS) right after eight 1 MB requests  | 88–99 MiB     | 82–84 MiB, main process only | 10.0 MiB     |
 
 The Rust column is the static musl build that the Linux packages ship, run as the
 headless server. As the desktop app with its tray registered and no window open, the

@@ -201,3 +201,27 @@ profiles. Two runs at load 0.7–1.2 and 2.5–3.9. Harness: `desktop-run.sh`, `
 
 Both include the same 77 MB CLIProxyAPI core. Compressed artefacts on CI: AppImage 24.9 MiB, deb
 18.6 MiB, server archive 25.9 MiB, macOS zip 24.3 MiB, dmg 28.0 MiB.
+
+## The final build (67c45db code), same harness
+
+CI's static x64 server archive from build run 45176826189 (code identical to 67c45db apart from
+the scheduler's shutdown fix), run with `after-rust.sh` exactly as above. Two runs, load 1.9–3.5.
+
+| Metric                                 | Bun 1.4.2 server | Electron 44, no window | Rust, final static musl |
+| -------------------------------------- | ---------------- | ---------------------- | ----------------------- |
+| Startup to TCP accept                  | 48–101 ms        | 164–995 ms             | 2.8–3.0 ms              |
+| Idle host PSS                          | 43.5–43.7 MiB    | 178.6–185.1 MiB        | 9.4–11.4 MiB            |
+| Idle host wakeups/s                    | 2.1–3.2          | 2.0–2.6                | 0.0                     |
+| Host wakeups/s 30–180 s after a burst  | 8.9–51.6         | 1.9–2.0                | 0.0                     |
+| Host PSS right after 1 MB × 8          | 88–99 MiB        | 82–84 MiB (main)       | 10.0 MiB                |
+| Host PSS 90 s after the burst          | 65.3–65.9 MiB    | 191–194 MiB (tree)     | 10.1 MiB                |
+| Host CPU, 290 KB request               | 1.7–6.0 ms       | 1.3–2.8 ms             | 0.56–0.62 ms            |
+| Host CPU, 1 MB request                 | 4.3–6.0 ms       | 3.3–5.7 ms             | 1.09–1.37 ms            |
+| Host CPU, 200-event stream             | 18.5–47.5 ms     | 23–35 ms               | 8.7–9.9 ms              |
+| Per event (stream ÷ 200, with request) | 93–238 µs        | 115–175 µs             | 44–50 µs                |
+| First request on a lazy profile        | 277–317 ms       | 261–307 ms             | 271–287 ms              |
+| Shutdown with cores running            | 0.28–0.31 s      | 0.28 s                 | 0.27–0.28 s             |
+
+The 25 µs-per-event target is not met on this host: a raw byte relay costs 30 µs per 5 ms-paced
+event here (powersave governor; each event wakes an idle core), and the gateway's own share is
+2–5 µs above that floor.
