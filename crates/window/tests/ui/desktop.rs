@@ -111,7 +111,24 @@ mod imp {
             ));
             let (left, top) = position.split_once(", ").unwrap();
             let (left, top): (f64, f64) = (left.parse().unwrap(), top.parse().unwrap());
-            system_events(&format!("click at {{{}, {}}}", left + x, top + y));
+            // System Events' `click at` presses the accessibility element there, which a
+            // WebKit page never sees as a click: post the mouse events themselves.
+            let script = format!(
+                "ObjC.import('CoreGraphics'); const point = $.CGPointMake({}, {}); \
+                 for (const type of [$.kCGEventMouseMoved, $.kCGEventLeftMouseDown, $.kCGEventLeftMouseUp]) \
+                 $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent($(), type, point, $.kCGMouseButtonLeft));",
+                left + x,
+                top + y
+            );
+            let output = Command::new("osascript")
+                .args(["-l", "JavaScript", "-e", &script])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "osascript: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
         pub(crate) fn close_main(&self) {

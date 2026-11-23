@@ -79,7 +79,9 @@ async function press(selector) {
 }
 
 // WebKit has no media emulation: rewrite the stylesheets' `(feature: value)` conditions so
-// those for `value` hold and the others do not.
+// those for `value` hold and the others do not. Each call starts from a rule's own text, so
+// a later call can choose another value.
+const mediaTexts = new WeakMap();
 function emulateMedia(feature, value) {
   const condition = new RegExp(
     `\\(\\s*${feature}\\s*:\\s*([a-z-]+)\\s*\\)`,
@@ -88,7 +90,8 @@ function emulateMedia(feature, value) {
   const visit = (rules) => {
     for (const rule of rules) {
       if (rule instanceof CSSMediaRule) {
-        const text = rule.media.mediaText;
+        if (!mediaTexts.has(rule)) mediaTexts.set(rule, rule.media.mediaText);
+        const text = mediaTexts.get(rule);
         const emulated = text.replace(condition, (_, wanted) =>
           wanted === value ? "(min-width: 0px)" : "(min-width: 99999px)",
         );

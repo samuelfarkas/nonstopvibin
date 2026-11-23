@@ -1,11 +1,9 @@
 // The sidebar logo (fixtures/logo.tsx renders AnimatedLogo in the desktop brand area).
 run(async () => {
-  equal(
-    matchMedia("(prefers-reduced-motion: no-preference)").matches,
-    true,
-    "the display allows motion",
-  );
   const button = await present("button");
+  // As the Electron check did: motion is allowed whatever the system's setting (macOS runners
+  // reduce motion). The animations start once the rule applies.
+  emulateMedia("prefers-reduced-motion", "no-preference");
   const active = () => button.getAnimations({ subtree: true });
   const initial = active().length;
   const spin = active().find(
