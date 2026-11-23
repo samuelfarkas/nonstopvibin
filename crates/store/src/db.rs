@@ -230,8 +230,11 @@ impl Db {
             self.connection.execute_batch("COMMIT")?;
             Ok(value)
         });
-        if result.is_err() {
-            self.connection.execute_batch("ROLLBACK")?;
+        if result.is_err()
+            && let Err(error) = self.connection.execute_batch("ROLLBACK")
+        {
+            // The caller gets the failure that caused the rollback.
+            tracing::error!(%error, "a store transaction could not roll back");
         }
         result
     }
@@ -811,7 +814,22 @@ fn milliseconds(time: SystemTime) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::slug_stem;
+    use super::*;
+
+    #[test]
+    fn a_failed_rollback_keeps_the_transaction_s_own_error() {
+        let directory = std::env::temp_dir().join(format!("nsv-rollback-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let vault = Vault::open(&directory).unwrap();
+        let (mut db, _auth) = Db::open(&directory, vault).unwrap();
+        let failed = db.transaction(|db| -> Result<(), StoreError> {
+            // Ends the transaction, so the store's own ROLLBACK fails.
+            db.connection.execute_batch("ROLLBACK")?;
+            Err(StoreError::Closed)
+        });
+        assert!(matches!(failed, Err(StoreError::Closed)));
+        fs::remove_dir_all(&directory).unwrap();
+    }
 
     #[test]
     fn slugs_follow_the_typescript_derivation() {
