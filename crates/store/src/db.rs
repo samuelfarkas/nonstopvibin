@@ -108,6 +108,28 @@ impl AuthSnapshot {
             .get(&KeyDigest::of(presented))
             .filter(|entry| entry.client_key.matches(presented)))
     }
+
+    /// The entry the index files under `digest`. Its live key still has to be compared with
+    /// the presented one.
+    ///
+    /// # Errors
+    /// The error that kept the store from reading the keys.
+    pub fn get(&self, digest: &KeyDigest) -> Result<Option<&AuthEntry>, &StoreError> {
+        Ok(self.0.as_ref().map_err(|error| &**error)?.get(digest))
+    }
+
+    /// The profile's entry: its live client key.
+    ///
+    /// # Errors
+    /// The error that kept the store from reading the keys.
+    pub fn profile(&self, profile: &ProfileId) -> Result<Option<&AuthEntry>, &StoreError> {
+        Ok(self
+            .0
+            .as_ref()
+            .map_err(|error| &**error)?
+            .values()
+            .find(|entry| entry.profile == *profile))
+    }
 }
 
 /// A body column, parsed as the type its reader asks for.

@@ -13,9 +13,18 @@ name = "nonstopvibin"
 path = "src/main.rs"
 
 [dependencies]
+nsv-agents.workspace = true
+nsv-core.workspace = true
 nsv-domain.workspace = true
+nsv-net.workspace = true
 nsv-server.workspace = true
 nsv-shell.workspace = true
+nsv-store.workspace = true
+# preserve_order: `url --json` and server.json keep JSON.stringify's key order.
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

@@ -139,7 +139,7 @@ pub(crate) async fn spawn_gateway(host: TestHost) -> (SocketAddr, Gateway<TestHo
                     async move { Ok::<_, Infallible>(dispatch(gateway, request).await) }
                 });
                 // Agents hanging up mid-response are part of these tests.
-                let _served = serve_connection(stream, service).await;
+                let _served = serve_connection(stream, service, std::future::pending()).await;
             });
         }
     });
