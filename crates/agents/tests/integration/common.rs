@@ -47,7 +47,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Creates `path` and its parents with `mode`.
 pub(crate) fn directory(path: &Path, mode: u32) {
     DirBuilder::new()
         .recursive(true)

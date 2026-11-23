@@ -214,7 +214,6 @@ impl<'a> Scenario<'a> {
         )
     }
 
-    /// Runs one step: its result as JSON, or the error.
     async fn step(&self, step: &Value) -> Result<Value, AgentError> {
         let profile = if step["profile"] == "other" {
             personal()

@@ -142,13 +142,11 @@ impl AgentSetup {
         }
     }
 
-    /// `<data>/agent-connections`.
     #[must_use]
     pub fn directory(&self) -> &Path {
         &self.inner.directory
     }
 
-    /// [`DataDir::socket_directory`].
     #[must_use]
     pub fn socket_directory(&self) -> &Path {
         &self.inner.socket_directory
@@ -808,7 +806,6 @@ impl Inner {
     /// Writes a planned connection; the configuration is put back if a later write fails.
     fn commit(&self, plan: &Plan) -> Result<wire::AgentSetup, AgentError> {
         if let Some(content) = &plan.manifest.helper_content {
-            // Refuses symbolic links and files of others before replacing.
             read_config(&plan.helper)?;
             write_atomic(&plan.helper, content.as_bytes(), 0o700)?;
         }
