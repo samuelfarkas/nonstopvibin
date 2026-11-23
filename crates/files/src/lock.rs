@@ -56,7 +56,6 @@ pub struct ServerLock {
 impl ServerLock {
     pub(crate) fn acquire(data: &DataDir) -> Result<Self, LockError> {
         let directory = data.path();
-        // Tightened before the lock exists, and only once the directory is vetted.
         owner_only_directory(directory, || {
             // Any mode: owner_only_directory tightens it next.
             if own_entry(&fs::symlink_metadata(directory)?, EntryKind::Directory, 0) {
@@ -114,7 +113,6 @@ impl ServerLock {
         &self.directory
     }
 
-    /// Releases the directory for the next owner.
     pub fn release(self) {
         drop(self);
     }

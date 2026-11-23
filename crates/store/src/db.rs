@@ -281,7 +281,6 @@ impl Db {
         if result.is_err()
             && let Err(error) = self.connection.execute_batch("ROLLBACK")
         {
-            // The caller gets the failure that caused the rollback.
             tracing::error!(%error, "a store transaction could not roll back");
         }
         result
@@ -687,7 +686,6 @@ impl Db {
             before,
             through,
         } = range;
-        // A cursor before the range starts at the range.
         let (timestamp, sequence) = match from {
             Some(cursor) if cursor.timestamp.as_str() >= since => {
                 (cursor.timestamp.as_str(), cursor.sequence)

@@ -194,7 +194,6 @@ async fn check(store: &Store, data: &Path, expected: &Value) {
         assert_eq!(observed[key], expected[key], "{key}");
     }
 
-    // Each profile's whole history in sequence order.
     for (id, usage) in expected["usage"].as_object().unwrap() {
         let mut records: Vec<&Value> = usage["records"].as_array().unwrap().iter().collect();
         records.sort_by_key(|entry| entry["sequence"].as_i64());

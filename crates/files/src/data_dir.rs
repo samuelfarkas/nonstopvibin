@@ -178,7 +178,6 @@ impl DataDir {
         ))
     }
 
-    /// The agent credential socket.
     #[must_use]
     pub fn credential_socket(&self) -> PathBuf {
         self.socket_directory().join("agents.sock")

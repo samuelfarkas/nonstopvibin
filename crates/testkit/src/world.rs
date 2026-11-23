@@ -336,7 +336,6 @@ impl World {
         self.store.directory().path()
     }
 
-    /// The names under `oauth-pending/`.
     #[must_use]
     pub fn pending(&self) -> Vec<String> {
         names(&self.data().join("oauth-pending"))

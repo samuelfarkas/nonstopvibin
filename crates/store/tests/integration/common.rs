@@ -1,5 +1,3 @@
-//! Helpers shared by the store's integration tests.
-
 use std::path::Path;
 
 use nsv_domain::secret::KeyDigest;
