@@ -1,6 +1,21 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Every crate except `window`, the only one that links WebKitGTK: plain `cargo build`, `test`
+# and `clippy` work on a host without the GUI dev packages. `--workspace` (or `-p nsv-window`)
+# needs libwebkit2gtk-4.1-dev and libgtk-3-dev on Linux.
+default-members = [
+    "crates/accounts",
+    "crates/agents",
+    "crates/cli",
+    "crates/core",
+    "crates/domain",
+    "crates/gateway",
+    "crates/net",
+    "crates/server",
+    "crates/shell",
+    "crates/store",
+]
 
 [workspace.package]
 version = "0.2.0"
@@ -23,6 +38,15 @@ nsv-shell = { path = "crates/shell" }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 base64 = "0.23.1"
 getrandom = "0.4.3"
+# The window helper only (crates/window): webview, windows, native dialogs, clipboard, menus.
+gtk = "0.18.2"
+muda = { version = "0.21.2", default-features = false }
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+tao = { version = "0.37.3", default-features = false, features = ["rwh_06", "x11"] }
+wry = "0.57.3"
+x11-dl = "2.21.0"
 rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "cache"] }
 rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
 secrecy = "0.10.3"

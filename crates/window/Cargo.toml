@@ -13,7 +13,23 @@ name = "nonstopvibin-window"
 path = "src/main.rs"
 
 [dependencies]
+getrandom.workspace = true
 nsv-domain.workspace = true
+serde_json.workspace = true
+tao.workspace = true
+wry.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11-dl.workspace = true
 
 [lints]
 workspace = true
