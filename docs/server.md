@@ -9,8 +9,9 @@ tunnel.
 The two archives target **glibc-based Linux, x64 or arm64**, not just Debian.
 Use them on common distributions such as Ubuntu/Debian, Fedora, Rocky/Alma/RHEL,
 Arch and openSUSE, subject to the compatibility evidence below. Bun and Node are
-not needed on the server. Alpine/musl is not supported by these archives;
-compatibility shims are not a substitute for a tested musl build. A systemd user
+not needed on the server. The `nonstopvibin` daemon is static, but the bundled
+core needs glibc, so Alpine and other musl distributions are not supported;
+compatibility shims are not a substitute for a tested build. A systemd user
 session is required only for automatic service installation, not foreground use.
 For **trusted co-located agents**, install it as the same non-root user that runs
 those agents: native setup writes their settings (`~/.codex`, `~/.claude`, pi and
@@ -54,22 +55,27 @@ verification.
 
 ## Compatibility evidence
 
-Both current executables are dynamically linked ELF64 binaries, not static
-Linux-universal executables. They need the matching glibc loader and system
-libraries: the app uses libc, libpthread, libdl and libm; the pinned Go core also
-uses libresolv. The current app's largest required GLIBC symbol version is 2.17
-on both targets; the core's is 2.17 on arm64 and 2.3.2 on x64. These measured symbol
-versions are **not** a complete minimum supported OS/kernel/CPU guarantee.
-Old glibc releases, unusual loaders, CPU configurations and stripped-down images
-need their own runtime checks. The loaders are `/lib64/ld-linux-x86-64.so.2` and
-`/lib/ld-linux-aarch64.so.1`. These archives use Bun 1.4.2's normal Linux targets
-(the x64 archive is not its alternate baseline-CPU target); the pinned core was
-built with Go 1.26.4. Do not infer an older-CPU or kernel floor from ELF ABI notes.
-Arch Linux ARM is distinct from official x86_64 Arch; results for one do not
-certify the other.
+The `nonstopvibin` daemon is a statically linked musl executable (Rust targets
+`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`). It needs no loader
+or system libraries, and `scripts/verify-rust-package.ts` rejects an archive whose
+daemon is not static. A glibc build of the daemon would need GLIBC_2.34 and
+refused to start on Rocky 8 (glibc 2.28); the static build passed the same tests
+there and on Alpine ([decision record](decisions/rust-port.md#updates-and-packaging)).
 
-Earlier official archives were exercised in these isolated environments (before
-the protected-upstream socket-read correction):
+The pinned Go core is a dynamically linked ELF64 binary. It needs the matching
+glibc loader and libc, libpthread and libresolv. Its largest required GLIBC symbol
+version is 2.17 on arm64 and 2.3.2 on x64, so the core sets the archive's floor.
+These measured symbol versions are **not** a complete minimum supported
+OS/kernel/CPU guarantee. Old glibc releases, unusual loaders, CPU configurations
+and stripped-down images need their own runtime checks. The loaders are
+`/lib64/ld-linux-x86-64.so.2` and `/lib/ld-linux-aarch64.so.1`. The pinned core
+was built with Go 1.26.4. Do not infer an older-CPU or kernel floor from ELF ABI
+notes. Arch Linux ARM is distinct from official x86_64 Arch; results for one do
+not certify the other.
+
+Earlier archives, which held a Bun-compiled server instead of the Rust daemon,
+were exercised in these isolated environments (before the protected-upstream
+socket-read correction):
 
 | Distribution                  | glibc | Architecture | Coverage                                         |
 | ----------------------------- | ----- | ------------ | ------------------------------------------------ |
@@ -79,13 +85,15 @@ the protected-upstream socket-read correction):
 | Rocky 8.9                     | 2.28  | native arm64 | container, foreground                            |
 | openSUSE Leap 16.0            | 2.40  | native arm64 | partial container: install, startup, UI, cleanup |
 
-A separate **current-source** compiled protected-upstream smoke passed on existing
+A separate protected-upstream smoke of the Bun-compiled server passed on
 Debian 12 arm64/glibc 2.36: native Anthropic synthetic tool SSE/replay/images,
 non-spending readiness, graceful FIN cleanup, startup ownership, restart/session
 rotation and stopped complete synthetic-data backup/restore. It ran foreground
 with isolated configuration and no service/linger policy changes. The older
-matrix above remains historical lifecycle/ABI evidence, not current-gateway
-acceptance on every listed distribution; neither check proves live inference.
+matrix above remains historical lifecycle/ABI evidence, not acceptance of the
+Rust daemon on every listed distribution; neither check proves live inference.
+CI installs and runs the Rust archive on Ubuntu 24.04 x64 and arm64
+(`bun run test:server`).
 
 All but the partial openSUSE check exercised authenticated state and UI HTTP 200, a real pinned
 core request to a synthetic provider, restart, status, session-token rotation
@@ -114,6 +122,11 @@ bun run server:deploy myserver
 
 This checks the server's architecture, builds the matching archive
 (`bun run dist:server <arch>`), copies it over `scp`, and runs its `install.sh`.
+The build compiles the static daemon for the server's Rust musl target, so the
+laptop needs that target (`rustup target add x86_64-unknown-linux-musl`, or the
+`aarch64` one) and a C compiler for it. On a Linux laptop of the same
+architecture, `musl-tools` is enough. Otherwise, download a release archive and
+install it by hand as described next.
 Extra arguments go to `install.sh`, for example
 `bun run server:deploy myserver --allow-host myserver.tailnet.ts.net`.
 
@@ -374,18 +387,20 @@ translation are **different acceptance paths**.
 - After consuming the initial native frame, fixture checks verify **graceful
   FIN, explicit TCP reset, Fetch abort and ClientRequest destroy** release the
   local profile slot and close an idle provider transport within two seconds.
-  The gateway resumes socket reads once after successful body-pipeline completion:
-  Bun 1.4.2 can otherwise leave native reads paused and defer a peer FIN. Checks
-  also preserve fragmented request bodies and successive profile identities on
-  one keep-alive connection. This is tested local transport cleanup, not a
+  The gateway keeps a read pending on each agent connection once a request is
+  read, so an agent's FIN during a silent stream drops the response and closes
+  the upstream connection (`crates/gateway/tests/gateway/proxy.rs`). Checks also
+  preserve fragmented request bodies and successive profile identities on one
+  keep-alive connection. This is tested local transport cleanup, not a
   universal native-client cancellation guarantee; the consuming gate/guest path
   still needs its own acceptance. Even closure does not prove remote computation
   or billing stopped. NonstopVibin has no task cancellation endpoint; stopping a
   shared profile is not task cancellation.
 
-Reproduce the supported local slice with `bun test tests/native-anthropic.test.ts`
-and existing `tests/cross-harness.test.ts`/`tests/integration.test.ts`. Only the
-external provider boundary is synthetic; app and compiled pinned core are real.
+Reproduce the supported local slice with
+`cargo test -p nsv-core --locked --test integration native` and
+`cargo test -p nsv-gateway --locked`, after `bun run core:install`. Only the
+external provider boundary is synthetic; the gateway and the pinned core are real.
 These checks do not certify a consuming gate, real provider or full native-client
 acceptance. A completed local transport check must not be treated as proof that
 provider computation/billing or a consuming task's tools stopped.
