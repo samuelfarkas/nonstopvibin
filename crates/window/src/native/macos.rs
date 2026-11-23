@@ -3,7 +3,7 @@
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
-use nsv_domain::helper::{DialogKind, Reason, Rect};
+use nsv_desktop::pipe::{DialogKind, Reason, Rect};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{

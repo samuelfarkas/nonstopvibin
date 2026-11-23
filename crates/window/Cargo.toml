@@ -13,6 +13,7 @@ name = "nonstopvibin-window"
 path = "src/main.rs"
 
 [dependencies]
+nsv-desktop.workspace = true
 nsv-domain.workspace = true
 serde_json.workspace = true
 tao.workspace = true

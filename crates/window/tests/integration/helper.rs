@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use nsv_domain::helper::{
+use nsv_desktop::pipe::{
     DaemonCall, DialogKind, Failure, FromHelper, Reason, Rect, ToHelper, View, ViewKind,
 };
 use nsv_domain::id::ProfileId;
@@ -432,7 +432,7 @@ fn an_alert_shows_alone_and_exits_once_dismissed() {
         reason: Reason::new("vault.key is missing for an existing database."),
     };
     let mut stdin = child.stdin.take().unwrap();
-    nsv_domain::helper::write(&mut stdin, &alert).unwrap();
+    nsv_desktop::pipe::write(&mut stdin, &alert).unwrap();
     drop(stdin);
     let dialog = shown_window(&x, "NonstopVibin");
     wait_until("the dialog has the focus", || x.has_focus(dialog));

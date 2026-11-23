@@ -17,8 +17,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use nsv_desktop::pipe::{FromHelper, Rect, ToHelper, View};
 use nsv_domain::endpoint::Origin;
-use nsv_domain::helper::{FromHelper, Rect, ToHelper, View};
 use nsv_domain::id::ProfileId;
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};

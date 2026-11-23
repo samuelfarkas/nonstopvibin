@@ -14,11 +14,11 @@ hyper = { workspace = true, features = ["server"] }
 nsv-accounts.workspace = true
 nsv-agents.workspace = true
 nsv-core.workspace = true
+nsv-desktop.workspace = true
 nsv-domain.workspace = true
 nsv-files.workspace = true
 nsv-gateway.workspace = true
 nsv-net.workspace = true
-nsv-shell.workspace = true
 nsv-store.workspace = true
 serde.workspace = true
 # preserve_order: server.json keeps JSON.stringify's key order.

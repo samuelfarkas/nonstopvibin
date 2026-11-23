@@ -3,13 +3,13 @@
 //! running because its core starts on the next request.
 
 use nsv_agents::AgentDirectories;
-use nsv_domain::secret::ApiKey;
+use nsv_desktop::HostEvent;
+use nsv_domain::secret::{ApiKey, SessionToken};
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
-use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
-use nsv_shell::{HostEvent, ShellHost};
+use nsv_server::{CoreOptions, Daemon, Options, Session, TIMING, processes};
 use nsv_store::{Store, Vault};
-use nsv_testkit::TempDir;
+use nsv_testkit::{TempDir, set_mode};
 use serde_json::json;
 
 use crate::common::{ModelsDev, now, send};
@@ -125,6 +125,35 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
     // The sleeping profile serves, so the tray shows it running.
     assert_eq!(daemon.tray_status().borrow().running, ["Sleeper"]);
     assert!(!daemon.tray_status().borrow().streaming);
+    daemon.close().await.unwrap();
+}
+
+/// A second desktop launch finds the running daemon through its `server.json`, read and
+/// validated as `url` and `status` read it, and brings its window forward with its token.
+#[tokio::test]
+async fn a_second_launch_shows_the_running_window_through_server_json() {
+    let root = TempDir::new("desktop-second");
+    let daemon = daemon(&root, true).await;
+    let data = DataDir::new(root.path().join("data"));
+    let mut events = daemon.events();
+    Session::show_main(&data).await.unwrap();
+    assert_eq!(events.try_recv().unwrap(), HostEvent::ShowMain);
+    // A token the daemon does not hold is refused, and nothing shows.
+    let mut stale = daemon.session().unwrap();
+    stale.token = SessionToken::new("stale-token");
+    stale.write(&data).unwrap();
+    assert_eq!(
+        Session::show_main(&data).await.unwrap_err().to_string(),
+        "NonstopVibin is already running but did not answer: it answered HTTP/1.1 401"
+    );
+    assert!(events.try_recv().is_err());
+    // A server.json others may write is never trusted.
+    set_mode(&data.session(), 0o644);
+    assert_eq!(
+        Session::show_main(&data).await.unwrap_err().to_string(),
+        "server.json must be an owner-only ordinary file you own (chmod 600)."
+    );
+    daemon.session().unwrap().write(&data).unwrap();
     daemon.close().await.unwrap();
 }
 

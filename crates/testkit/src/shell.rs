@@ -10,11 +10,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::{Origin, loopback_origin};
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use nsv_files::DataDir;
-use nsv_shell::{HostEvent, ShellHost, TrayStatus};
+use nsv_shell::ShellHost;
 use tokio::sync::{broadcast, watch};
 
 pub const TOKEN: &str = "session-token-for-the-shell-tests";

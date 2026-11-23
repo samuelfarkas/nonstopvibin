@@ -21,7 +21,7 @@ use std::{env, fs};
 
 use daemon::Daemon;
 use desktop::Desktop;
-use nsv_domain::helper::{FromHelper, Rect, ToHelper, View, ViewKind};
+use nsv_desktop::pipe::{FromHelper, Rect, ToHelper, View, ViewKind};
 use serde_json::{Value, json};
 use site::{CHECK_TIMEOUT, Content, Event, Site};
 

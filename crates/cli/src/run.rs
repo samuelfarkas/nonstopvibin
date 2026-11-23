@@ -7,14 +7,15 @@ use std::time::SystemTime;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
+use nsv_desktop::pipe::Failure;
 use nsv_domain::endpoint::{LOOPBACK_HOST, session_link};
-use nsv_domain::helper::Failure;
 use nsv_domain::time::{epoch_ms, iso_string};
 use nsv_files::{DataDir, LockError, ServerLock};
 use nsv_net::Https;
 use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
+use crate::desktop::Desktop;
 use crate::service::{UNIT, systemctl};
 use crate::{CliError, NOT_RUNNING, complain, say, url_text};
 
@@ -273,10 +274,9 @@ async fn desktop_daemon(
     let lock = match directory.lock() {
         Ok(lock) => lock,
         Err(LockError::Occupied(_)) => {
-            let shown = tokio::task::spawn_blocking(move || nsv_shell::show_running(&directory))
+            Session::show_main(&directory)
                 .await
                 .map_err(CliError::from_display)?;
-            shown.map_err(CliError::from_display)?;
             return Ok(0);
         }
         Err(error) => return Err(CliError::from_display(error)),
@@ -324,7 +324,8 @@ async fn desktop_daemon(
         packaged: layout.packaged,
         login,
     };
-    let shell = nsv_shell::run(&daemon, shell_options, link);
+    let host = Desktop(daemon.clone());
+    let shell = nsv_shell::run(&host, shell_options, link);
     Ok(run_until_stopped(&daemon, &mut signals, shell, true).await)
 }
 

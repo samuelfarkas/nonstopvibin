@@ -1,6 +1,6 @@
 [package]
 name = "nsv-domain"
-description = "Ids, wire types, the provider and agent registry, secret newtypes, JavaScript semantics, the daemon's addresses and the window-helper protocol. No file, network or process I/O."
+description = "Ids, wire types, the provider and agent registry, secret newtypes, JavaScript semantics and the daemon's addresses. No file, network or process I/O."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 nsv-agents.workspace = true
 nsv-core.workspace = true
+nsv-desktop.workspace = true
 nsv-domain.workspace = true
 nsv-files.workspace = true
 nsv-net.workspace = true

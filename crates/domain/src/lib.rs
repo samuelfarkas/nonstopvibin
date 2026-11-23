@@ -1,5 +1,5 @@
-//! Ids, wire types, the provider and agent registry, secret newtypes, JavaScript semantics, the
-//! daemon's addresses and the window-helper protocol. No file, network or process I/O.
+//! Ids, wire types, the provider and agent registry, secret newtypes, JavaScript semantics and
+//! the daemon's addresses. No file, network or process I/O.
 #![forbid(unsafe_code)]
 
 use std::fmt::Write as _;
@@ -8,7 +8,6 @@ use sha2::{Digest, Sha256};
 
 pub mod endpoint;
 pub mod error;
-pub mod helper;
 pub mod id;
 pub mod js;
 pub mod random;

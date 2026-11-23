@@ -15,11 +15,12 @@ core = ["dep:nsv-core", "dep:nsv-domain", "dep:nsv-files", "dep:nsv-net", "dep:n
 # The account features assembled as the daemon assembles them, over the fake cores.
 accounts = ["core", "dep:nsv-accounts"]
 # A host for the shell's tests and idle example, adding no tokio feature to the measured example.
-shell = ["dep:nsv-domain", "dep:nsv-files", "dep:nsv-shell", "dep:tokio"]
+shell = ["dep:nsv-desktop", "dep:nsv-domain", "dep:nsv-files", "dep:nsv-shell", "dep:tokio"]
 
 [dependencies]
 nsv-accounts = { workspace = true, optional = true }
 nsv-core = { workspace = true, optional = true }
+nsv-desktop = { workspace = true, optional = true }
 nsv-domain = { workspace = true, optional = true }
 nsv-files = { workspace = true, optional = true }
 nsv-net = { workspace = true, optional = true }

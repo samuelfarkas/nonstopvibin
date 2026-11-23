@@ -5,7 +5,7 @@
 use std::panic::{self, AssertUnwindSafe};
 
 use muda::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use nsv_domain::helper::Rect;
+use nsv_desktop::pipe::Rect;
 use objc2::MainThreadMarker;
 use objc2_app_kit::NSScreen;
 use objc2_foundation::NSAppleEventManager;

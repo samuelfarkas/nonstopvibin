@@ -2,7 +2,7 @@
 //! one at a time, a check while one is busy (a manual check during a download included) is
 //! dropped, and once an update is ready only a manual check shows it again.
 
-use nsv_domain::helper::DialogKind;
+use nsv_desktop::pipe::DialogKind;
 
 /// What the shell must do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

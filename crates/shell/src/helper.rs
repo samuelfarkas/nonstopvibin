@@ -1,14 +1,13 @@
-//! One `nonstopvibin-window` process: spawned with piped stdin and stdout, `Start` and the
-//! token written first, and its messages read on a task of their own so the shell's loop never
+//! One `nonstopvibin-window` process: spawned with piped stdin and stdout, the handshake
+//! written first, and its messages read on a task of their own so the shell's loop never
 //! loses half a line. Dropping a [`Helper`] closes its stdin, and the helper then exits.
 
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 
-use nsv_domain::helper::{Failure, FromHelper, MAX_LINE, Reason, ToHelper};
+use nsv_desktop::pipe::{self, Failure, FromHelper, Reason, Start, ToHelper};
 use nsv_domain::secret::SessionToken;
-use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::mpsc;
@@ -47,7 +46,7 @@ pub fn alert(failure: Failure, reason: &str) {
         };
         // Dropping stdin ends the pipe; the helper needs nothing after the one line.
         let written = match child.stdin.take() {
-            Some(mut stdin) => line(&message).and_then(|line| stdin.write_all(&line)),
+            Some(mut stdin) => pipe::encode(&message).and_then(|line| stdin.write_all(&line)),
             None => Err(io::Error::other("the helper's stdin is missing")),
         };
         let status = child.wait()?;
@@ -118,10 +117,10 @@ pub(crate) struct Helper {
 }
 
 impl Helper {
-    /// Starts a helper with `start`, a `ToHelper::Start`.
+    /// Starts a helper with `start`.
     pub(crate) async fn spawn(
         program: &Path,
-        start: &ToHelper,
+        start: Start,
         token: &SessionToken,
     ) -> io::Result<Self> {
         let mut command = Command::new(program);
@@ -139,10 +138,7 @@ impl Helper {
         let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(io::Error::other("the helper's pipes are missing"));
         };
-        let mut first = line(start)?;
-        first.extend_from_slice(token.expose_secret().as_bytes());
-        first.push(b'\n');
-        stdin.write_all(&first).await?;
+        stdin.write_all(&pipe::handshake(start, token)?).await?;
         let (sender, events) = mpsc::channel(16);
         tokio::spawn(read(child, stdout, sender));
         Ok(Self {
@@ -155,19 +151,13 @@ impl Helper {
     /// # Errors
     /// When the helper no longer reads its stdin: it has exited or is exiting.
     pub(crate) async fn send(&mut self, message: &ToHelper) -> io::Result<()> {
-        self.stdin.write_all(&line(message)?).await
+        self.stdin.write_all(&pipe::encode(message)?).await
     }
 
     /// The next message, then `Exited` once. Cancel-safe.
     pub(crate) async fn next(&mut self) -> Event {
         self.events.recv().await.unwrap_or(Event::Exited(None))
     }
-}
-
-fn line(message: &impl Serialize) -> io::Result<Vec<u8>> {
-    let mut line = serde_json::to_vec(message)?;
-    line.push(b'\n');
-    Ok(line)
 }
 
 /// Forwards the helper's messages until its stdout ends, then its exit. A line that is not a
@@ -207,19 +197,11 @@ async fn read_message(
     reader: &mut BufReader<impl AsyncRead + Unpin>,
 ) -> io::Result<Option<FromHelper>> {
     let mut line = Vec::new();
-    let limit = u64::try_from(MAX_LINE + 1).unwrap_or(u64::MAX);
     (&mut *reader)
-        .take(limit)
+        .take(pipe::line_limit())
         .read_until(b'\n', &mut line)
         .await?;
-    if line.is_empty() {
-        return Ok(None);
-    }
-    if line.pop() != Some(b'\n') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "helper message too long or unterminated",
-        ));
-    }
-    Ok(Some(serde_json::from_slice(&line)?))
+    pipe::frame(line)?
+        .map(|line| pipe::decode(&line))
+        .transpose()
 }

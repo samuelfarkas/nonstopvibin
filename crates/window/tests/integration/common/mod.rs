@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nsv_desktop::pipe::{self, DaemonCall, FromHelper, Outcome, Rect, Start, ToHelper, View};
 use nsv_domain::endpoint::{CSP, Origin};
-use nsv_domain::helper::{self, DaemonCall, FromHelper, Outcome, Rect, ToHelper, View};
+use nsv_domain::secret::SessionToken;
 use serde_json::{Value, json};
 
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(20);
@@ -252,28 +253,29 @@ impl Helper {
             .spawn()
             .unwrap();
         let mut input = child.stdin.take().unwrap();
-        let start = ToHelper::Start {
+        let start = Start {
             origin: origin.clone(),
             view,
             bounds,
             webview: directory.join("webview"),
             updates: false,
         };
-        helper::write(&mut input, &start).unwrap();
-        writeln!(input, "{token}").unwrap();
+        input
+            .write_all(&pipe::handshake(start, &SessionToken::new(token)).unwrap())
+            .unwrap();
         let stdin = Arc::new(Mutex::new(Some(input)));
         let (sender, events) = mpsc::channel();
         let mut output = BufReader::new(child.stdout.take().unwrap());
         let replies = Arc::clone(&stdin);
         thread::spawn(move || {
-            while let Ok(Some(event)) = helper::read::<FromHelper>(&mut output) {
+            while let Ok(Some(event)) = pipe::read::<FromHelper>(&mut output) {
                 if let FromHelper::Bridge { id, call } = &event {
                     let reply = ToHelper::Reply {
                         id: *id,
                         outcome: answer(call),
                     };
                     if let Some(input) = replies.lock().unwrap().as_mut() {
-                        helper::write(input, &reply).unwrap_or_default();
+                        pipe::write(input, &reply).unwrap_or_default();
                     }
                 }
                 if sender.send(event).is_err() {
@@ -305,7 +307,7 @@ impl Helper {
 
     pub(crate) fn send(&self, message: &ToHelper) {
         let mut stdin = self.stdin.lock().unwrap();
-        helper::write(stdin.as_mut().unwrap(), message).unwrap();
+        pipe::write(stdin.as_mut().unwrap(), message).unwrap();
     }
 
     pub(crate) fn close_stdin(&self) {

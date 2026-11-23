@@ -1767,6 +1767,7 @@ version = "0.2.0"
 dependencies = [
  "nsv-agents",
  "nsv-core",
+ "nsv-desktop",
  "nsv-domain",
  "nsv-files",
  "nsv-net",
@@ -1795,6 +1796,15 @@ dependencies = [
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "nsv-desktop"
+version = "0.2.0"
+dependencies = [
+ "nsv-domain",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1861,11 +1871,11 @@ dependencies = [
  "nsv-accounts",
  "nsv-agents",
  "nsv-core",
+ "nsv-desktop",
  "nsv-domain",
  "nsv-files",
  "nsv-gateway",
  "nsv-net",
- "nsv-shell",
  "nsv-store",
  "nsv-testkit",
  "serde",
@@ -1885,6 +1895,7 @@ dependencies = [
  "minisign-verify",
  "muda",
  "nsv-core",
+ "nsv-desktop",
  "nsv-domain",
  "nsv-files",
  "nsv-net",
@@ -1895,7 +1906,6 @@ dependencies = [
  "objc2-service-management",
  "png",
  "rustix",
- "serde",
  "serde_json",
  "sha2 0.11.1",
  "tao",
@@ -1933,6 +1943,7 @@ version = "0.2.0"
 dependencies = [
  "nsv-accounts",
  "nsv-core",
+ "nsv-desktop",
  "nsv-domain",
  "nsv-files",
  "nsv-net",
@@ -1949,6 +1960,7 @@ version = "0.2.0"
 dependencies = [
  "gtk",
  "muda",
+ "nsv-desktop",
  "nsv-domain",
  "nsv-testkit",
  "objc2",

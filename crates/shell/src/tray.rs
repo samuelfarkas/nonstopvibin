@@ -8,7 +8,8 @@ mod macos;
 
 use std::time::{Duration, Instant};
 
-use nsv_domain::helper::Rect;
+use nsv_desktop::TrayStatus;
+use nsv_desktop::pipe::Rect;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::Tray;
@@ -18,15 +19,6 @@ pub use linux::{TrayLink, run_desktop};
 pub(crate) use macos::Tray;
 #[cfg(target_os = "macos")]
 pub use macos::{TrayLink, run_desktop};
-
-/// What the daemon reports for the tray.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TrayStatus {
-    /// The running profiles' names, in the order the tooltip lists them.
-    pub running: Vec<String>,
-    /// Whether any request is streaming.
-    pub streaming: bool,
-}
 
 /// The colored mirrorball while a profile runs, the grey one when none does
 /// (docs/design/icons.md).

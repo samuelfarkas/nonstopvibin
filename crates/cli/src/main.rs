@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod desktop;
 mod run;
 mod service;
 

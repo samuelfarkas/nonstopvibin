@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::process::Stdio;
 
+use nsv_desktop::bridge::{Method, fits_external};
 use nsv_domain::registry::registry;
 use tokio::process::Command;
 use url::Url;
@@ -11,8 +12,11 @@ use url::Url;
 const NOT_APPROVED: &str = "This external URL is not an approved provider sign-in page.";
 
 /// main.ts's `safeExternal`: `https:` with no user name or password on a host some provider
-/// lists in `hosts`. Returns the normalized URL to open.
+/// lists in `hosts`, within `openExternal`'s length limit. Returns the normalized URL to open.
 pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
+    if !fits_external(raw) {
+        return Err(Method::OpenExternal.invalid_argument());
+    }
     // Node's message for a string `new URL` cannot parse.
     let url = Url::parse(raw).map_err(|_| "Invalid URL".to_owned())?;
     let providers = registry();
@@ -145,6 +149,18 @@ mod tests {
         assert_eq!(
             safe_external("https://claude.ai:pass@claude.ai/"),
             Err(NOT_APPROVED.to_owned())
+        );
+    }
+
+    /// The daemon applies `openExternal`'s 20,000-unit limit again, to bridge calls and to new
+    /// windows alike.
+    #[test]
+    fn an_approved_url_over_the_bridge_limit_is_refused() {
+        let at_limit = format!("https://claude.ai/{}", "a".repeat(20_000 - 18));
+        assert_eq!(safe_external(&at_limit), Ok(at_limit.clone()));
+        assert_eq!(
+            safe_external(&format!("{at_limit}a")),
+            Err("Invalid argument for openExternal.".to_owned())
         );
     }
 }

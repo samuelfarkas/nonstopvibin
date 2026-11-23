@@ -11,7 +11,6 @@ use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, Timing, processes};
-use nsv_shell::ShellHost;
 use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
 use serde_json::{Value, json};

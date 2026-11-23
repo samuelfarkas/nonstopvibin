@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use minisign_verify::PublicKey;
-use nsv_domain::helper::DialogKind;
+use nsv_desktop::pipe::DialogKind;
 use sha2::{Digest, Sha256, Sha512};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 

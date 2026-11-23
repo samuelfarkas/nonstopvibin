@@ -3,7 +3,8 @@
 
 use std::process::ExitCode;
 
-use nsv_shell::{Login, Options, TrayStatus};
+use nsv_desktop::TrayStatus;
+use nsv_shell::{Login, Options};
 use nsv_testkit::shell::Host;
 
 fn main() -> ExitCode {

@@ -1,16 +1,14 @@
 //! `window.nonstopvibin`: the user script that builds it, and the parser every IPC message
 //! from a page passes before the helper acts on it.
 
+use nsv_desktop::bridge::{COPY_LIMIT, Method, fits_external};
+use nsv_desktop::pipe::{DaemonCall, Outcome};
 use nsv_domain::endpoint::Origin;
-use nsv_domain::helper::{DaemonCall, Outcome};
 use nsv_domain::id::ProfileId;
 use nsv_domain::js::utf16_len;
 use nsv_domain::secret::same_secret;
 use serde_json::Value;
 
-/// `main.ts`'s zod limits, in UTF-16 code units as JavaScript counts them.
-const OPEN_EXTERNAL_LIMIT: usize = 20_000;
-const COPY_LIMIT: usize = 1_000_000;
 /// The largest message a valid call makes: `copy` of 1,000,000 units that each escape to
 /// six bytes of JSON (`\u001f`), plus the envelope.
 const MESSAGE_LIMIT: usize = 6 * COPY_LIMIT + 1024;
@@ -49,8 +47,7 @@ const SCRIPT: &str = r#"(() => {
       else waiter.reject(new Error(error));
     },
   });
-  const methods = ["bootstrap", "openExternal", "copy", "showWindow", "releaseWindow",
-    "setLoginItem", "getLoginItem", "revealData", "chooseProject"];
+  const methods = METHODS;
   Object.defineProperty(window, "nonstopvibin", {
     enumerable: true,
     value: Object.freeze(Object.fromEntries(
@@ -88,7 +85,9 @@ pub(crate) const BEFORE_UNLOAD: &str = r#"(() => {
 /// `before-input-event` handler did; a press in a drag region moves a window that `drags`.
 pub(crate) fn script(origin: &Origin, nonce: &str, escape_closes: bool, drags: bool) -> String {
     let flag = |on: bool| if on { "true" } else { "false" };
+    let methods = Value::from(Method::ALL.map(Method::name).to_vec()).to_string();
     SCRIPT
+        .replacen("METHODS", &methods, 1)
         .replacen("ORIGIN", &Value::from(origin.as_str()).to_string(), 1)
         .replacen("NONCE", &Value::from(nonce).to_string(), 1)
         .replacen("ESCAPE_CLOSES", flag(escape_closes), 1)
@@ -135,18 +134,6 @@ pub(crate) enum Rejected {
     Invalid { id: u64, message: String },
 }
 
-const METHODS: [&str; 9] = [
-    "bootstrap",
-    "openExternal",
-    "copy",
-    "showWindow",
-    "releaseWindow",
-    "setLoginItem",
-    "getLoginItem",
-    "revealData",
-    "chooseProject",
-];
-
 /// Parses an IPC message that a page at `page_url` posted.
 pub(crate) fn parse(
     origin: &Origin,
@@ -179,24 +166,8 @@ pub(crate) fn parse(
         Some(Value::String(method)) => method,
         _ => String::new(),
     };
-    let call = match (method.as_str(), message.remove("arg")) {
-        ("bootstrap", None) => Call::Bootstrap,
-        ("copy", Some(Value::String(text))) if utf16_len(&text) <= COPY_LIMIT => Call::Copy(text),
-        ("showWindow", None) => Call::ShowWindow(None),
-        ("showWindow", Some(Value::String(profile))) => match ProfileId::parse(&profile) {
-            Ok(profile) => Call::ShowWindow(Some(profile)),
-            Err(_) => return Err(invalid(id, &method)),
-        },
-        ("releaseWindow", None) => Call::ReleaseWindow,
-        ("chooseProject", None) => Call::ChooseProject,
-        ("openExternal", Some(Value::String(url))) if utf16_len(&url) <= OPEN_EXTERNAL_LIMIT => {
-            Call::Daemon(DaemonCall::OpenExternal(url))
-        }
-        ("getLoginItem", None) => Call::Daemon(DaemonCall::GetLoginItem),
-        ("setLoginItem", Some(Value::Bool(enabled))) => {
-            Call::Daemon(DaemonCall::SetLoginItem(enabled))
-        }
-        ("revealData", None) => Call::Daemon(DaemonCall::RevealData),
+    let arg = message.remove("arg");
+    let call = match (method.as_str(), arg) {
         ("escape", None) => Call::Escape,
         ("dragWindow", Some(Value::Array(point))) => match point.as_slice() {
             [x, y] => match (page_coordinate(x), page_coordinate(y)) {
@@ -205,15 +176,38 @@ pub(crate) fn parse(
             },
             _ => return Err(invalid(id, &method)),
         },
-        _ if METHODS.contains(&method.as_str()) => return Err(invalid(id, &method)),
-        _ => {
-            return Err(Rejected::Invalid {
+        (name, arg) => {
+            let Some(method) = Method::named(name) else {
+                return Err(Rejected::Invalid {
+                    id,
+                    message: "Unknown desktop method.".to_owned(),
+                });
+            };
+            bridge_call(method, arg).ok_or_else(|| Rejected::Invalid {
                 id,
-                message: "Unknown desktop method.".to_owned(),
-            });
+                message: method.invalid_argument(),
+            })?
         }
     };
     Ok((id, call))
+}
+
+/// The call `method` makes with `arg`, when `arg` is valid for it.
+fn bridge_call(method: Method, arg: Option<Value>) -> Option<Call> {
+    match (method, arg) {
+        (Method::Bootstrap, None) => Some(Call::Bootstrap),
+        (Method::Copy, Some(Value::String(text))) if utf16_len(&text) <= COPY_LIMIT => {
+            Some(Call::Copy(text))
+        }
+        (Method::ShowWindow, None) => Some(Call::ShowWindow(None)),
+        (Method::ShowWindow, Some(Value::String(profile))) => ProfileId::parse(&profile)
+            .ok()
+            .map(|profile| Call::ShowWindow(Some(profile))),
+        (Method::ReleaseWindow, None) => Some(Call::ReleaseWindow),
+        (Method::ChooseProject, None) => Some(Call::ChooseProject),
+        (Method::OpenExternal, Some(Value::String(url))) if !fits_external(&url) => None,
+        (method, arg) => DaemonCall::new(method, arg).map(Call::Daemon),
+    }
 }
 
 /// A whole page coordinate; a window is far smaller than `i32`.
@@ -226,11 +220,6 @@ fn invalid(id: u64, method: &str) -> Rejected {
         id,
         message: format!("Invalid argument for {method}."),
     }
-}
-
-/// Whether a new window's URL may go to the daemon, which applies `openExternal`'s limit.
-pub(crate) fn fits_external(url: &str) -> bool {
-    utf16_len(url) <= OPEN_EXTERNAL_LIMIT
 }
 
 #[cfg(test)]
@@ -392,8 +381,11 @@ mod tests {
         assert!(script.contains(&format!("const nonce = \"{NONCE}\";")));
         assert!(script.contains("if (true)\n    window.addEventListener(\"keydown\""));
         assert!(script.contains("if (false)\n    window.addEventListener(\"mousedown\""));
+        assert!(script.contains(
+            r#"const methods = ["bootstrap","openExternal","copy","showWindow","releaseWindow","setLoginItem","getLoginItem","revealData","chooseProject"];"#
+        ));
         assert!(
-            !["ORIGIN", "ESCAPE_CLOSES", "DRAGS"]
+            !["METHODS", "ORIGIN", "ESCAPE_CLOSES", "DRAGS"]
                 .iter()
                 .any(|name| script.contains(name))
         );

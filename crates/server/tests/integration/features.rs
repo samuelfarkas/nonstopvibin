@@ -11,12 +11,12 @@ use nsv_agents::AgentDirectories;
 use nsv_core::binary::{Sha256Digest, bundled_pin};
 use nsv_core::install::Releases;
 use nsv_core::pool::Backend;
+use nsv_desktop::HostEvent;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
 use nsv_net::{Loopback, NetError, Response};
 use nsv_server::{CoreOptions, Daemon, Options, TIMING};
-use nsv_shell::{HostEvent, ShellHost};
 use nsv_testkit::fake::{Directory, FakeCores, response};
 use nsv_testkit::world::{
     ACCOUNT, ORGANIZATION_A, StubFetch, TestReleases, UPDATE, bundled_core, claude, release,

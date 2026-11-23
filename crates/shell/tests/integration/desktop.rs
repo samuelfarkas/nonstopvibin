@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use nsv_desktop::TrayStatus;
 use nsv_domain::endpoint::CSP;
-use nsv_shell::TrayStatus;
 use nsv_testkit::shell::Host;
 use serde_json::{Value, json};
 use zbus::zvariant::{OwnedValue, Value as Variant};

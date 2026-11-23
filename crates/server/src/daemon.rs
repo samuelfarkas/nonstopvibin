@@ -19,6 +19,7 @@ use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::install::Releases;
 use nsv_core::pool::{Backend, PoolState, Processes, READY};
+use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::{self, Origin};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -27,7 +28,6 @@ use nsv_domain::secret::SessionToken;
 use nsv_domain::sync::locked;
 use nsv_files::{DataDir, ServerLock};
 use nsv_gateway::Gateway;
-use nsv_shell::{HostEvent, ShellHost, TrayStatus};
 use nsv_store::{AuthSnapshot, ProfileNames, Store, StoreError, Vault, VaultError};
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, OnceCell, broadcast, watch};
@@ -420,6 +420,46 @@ impl<F: Fetch + Releases + Clone + 'static> Daemon<F> {
         })
     }
 
+    /// `http://127.0.0.1:<port>`: the only origin the desktop's windows show.
+    #[must_use]
+    pub fn origin(&self) -> &Origin {
+        &self.0.origin
+    }
+
+    /// The session token the desktop's window helper hands the UI.
+    #[must_use]
+    pub fn session_token(&self) -> &SessionToken {
+        &self.0.token
+    }
+
+    #[must_use]
+    pub fn data_directory(&self) -> &DataDir {
+        &self.0.directory
+    }
+
+    /// The tray's view of the running profiles; only the desktop keeps it current.
+    #[must_use]
+    pub fn tray_status(&self) -> watch::Receiver<TrayStatus> {
+        self.0.shared.tray.status.subscribe()
+    }
+
+    /// Sign-ins and second launches, for the desktop shell.
+    #[must_use]
+    pub fn events(&self) -> broadcast::Receiver<HostEvent> {
+        self.0.shared.events.subscribe()
+    }
+
+    /// Whether the tray knows `profile`.
+    #[must_use]
+    pub fn has_profile(&self, profile: &ProfileId) -> bool {
+        self.0.shared.tray.has(profile)
+    }
+
+    /// Shows an error in the UI's error list.
+    pub fn report(&self, message: &str) {
+        self.0.shared.errors.report(message.to_owned());
+    }
+
     /// Asks the daemon's owner to shut it down: [`Daemon::stopping`] resolves.
     pub fn stop(&self) {
         self.0.shared.stop.notify_one();
@@ -543,42 +583,4 @@ fn connection_source(
         }
         Ok(Connection { key, port })
     })
-}
-
-impl<F: Fetch + Releases + Clone + 'static> ShellHost for Daemon<F> {
-    fn origin(&self) -> &Origin {
-        &self.0.origin
-    }
-
-    fn session_token(&self) -> &SessionToken {
-        &self.0.token
-    }
-
-    fn data_directory(&self) -> &DataDir {
-        &self.0.directory
-    }
-
-    fn tray_status(&self) -> watch::Receiver<TrayStatus> {
-        self.0.shared.tray.status.subscribe()
-    }
-
-    fn events(&self) -> broadcast::Receiver<HostEvent> {
-        self.0.shared.events.subscribe()
-    }
-
-    fn has_profile(&self, profile: &ProfileId) -> bool {
-        self.0.shared.tray.has(profile)
-    }
-
-    fn report(&self, message: &str) {
-        self.0.shared.errors.report(message.to_owned());
-    }
-
-    fn shutdown(&self) {
-        self.stop();
-    }
-
-    async fn close(&self) -> Result<(), String> {
-        Daemon::close(self).await.map_err(|error| error.to_string())
-    }
 }

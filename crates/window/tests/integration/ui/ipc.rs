@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use nsv_domain::helper::View;
+use nsv_desktop::pipe::View;
 use serde_json::json;
 
 use super::site::{Content, Site};

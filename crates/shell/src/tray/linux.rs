@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Handle, ToolTip, TrayMethods};
-use nsv_domain::helper::Rect;
+use nsv_desktop::pipe::Rect;
 use tokio::sync::mpsc;
 
 use super::{Action, Entry, Icon, Look, MENU, enabled, rgba};

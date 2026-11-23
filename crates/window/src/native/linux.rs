@@ -6,7 +6,7 @@ use gtk::gdk::prelude::*;
 use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
-use nsv_domain::helper::{DialogKind, Reason, Rect};
+use nsv_desktop::pipe::{DialogKind, Reason, Rect};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::Window;
 

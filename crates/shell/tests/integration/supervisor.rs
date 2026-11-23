@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use nsv_shell::HostEvent;
+use nsv_desktop::HostEvent;
 use nsv_testkit::shell::{Host, PROFILE, TOKEN};
 use serde_json::{Value, json};
 

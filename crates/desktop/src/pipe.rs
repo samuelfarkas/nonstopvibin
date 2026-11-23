@@ -1,20 +1,27 @@
 //! The pipe between the daemon and the window helper (`nonstopvibin-window`): one JSON object
-//! per line on the helper's stdin and stdout. The daemon writes `Start`, then the session token
-//! alone on the next line, so the token never appears in argv, the environment or a URL.
-//! A daemon that failed to start or stop writes `Alert` instead, and nothing after it.
+//! per line on the helper's stdin and stdout. The handshake opens it: [`handshake`] writes
+//! `Start` and then the session token alone on the next line, so the token never appears in
+//! argv, the environment or a URL, and [`read_handshake`] reads them back. A daemon that failed
+//! to start or stop writes `Alert` instead, and nothing after it.
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use nsv_domain::endpoint::Origin;
+use nsv_domain::id::ProfileId;
+use nsv_domain::secret::SessionToken;
+use serde::de::{self, DeserializeOwned};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 
-use crate::endpoint::Origin;
-use crate::id::ProfileId;
+use crate::bridge::{Method, OPEN_EXTERNAL_LIMIT};
 
-/// The longest line either side reads. An `openExternal` URL of 20,000 UTF-16 units escapes to
-/// at most 120,000 bytes of JSON.
+/// The longest line either side reads.
 pub const MAX_LINE: usize = 256 * 1024;
+
+// An `openExternal` URL whose UTF-16 units each escape to six bytes of JSON still fits a line.
+const _: () = assert!(6 * OPEN_EXTERNAL_LIMIT + 1024 <= MAX_LINE);
 
 /// A rectangle in logical pixels, as Electron's `Rectangle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,9 +149,9 @@ pub enum ViewKind {
     Dialog { kind: DialogKind },
 }
 
-/// The bridge methods the daemon serves. The daemon validates each argument again.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "method", content = "arg", rename_all = "camelCase")]
+/// The bridge methods the daemon serves, named by [`Method`]. The daemon validates each
+/// argument again.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCall {
     OpenExternal(String),
     GetLoginItem,
@@ -152,31 +159,89 @@ pub enum DaemonCall {
     RevealData,
 }
 
+impl DaemonCall {
+    /// The call `method` makes with `arg`, when the daemon serves `method` and `arg` has its
+    /// type.
+    #[must_use]
+    pub fn new(method: Method, arg: Option<Value>) -> Option<Self> {
+        match (method, arg) {
+            (Method::OpenExternal, Some(Value::String(url))) => Some(Self::OpenExternal(url)),
+            (Method::GetLoginItem, None) => Some(Self::GetLoginItem),
+            (Method::SetLoginItem, Some(Value::Bool(enabled))) => Some(Self::SetLoginItem(enabled)),
+            (Method::RevealData, None) => Some(Self::RevealData),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn method(&self) -> Method {
+        match self {
+            Self::OpenExternal(_) => Method::OpenExternal,
+            Self::GetLoginItem => Method::GetLoginItem,
+            Self::SetLoginItem(_) => Method::SetLoginItem,
+            Self::RevealData => Method::RevealData,
+        }
+    }
+}
+
+/// `{"method": <name>, "arg": <argument>}`, without `arg` for a method that takes none.
+impl Serialize for DaemonCall {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("method", self.method().name())?;
+        match self {
+            Self::OpenExternal(url) => map.serialize_entry("arg", url)?,
+            Self::SetLoginItem(enabled) => map.serialize_entry("arg", enabled)?,
+            Self::GetLoginItem | Self::RevealData => {}
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DaemonCall {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            method: String,
+            #[serde(default)]
+            arg: Option<Value>,
+        }
+        let Raw { method, arg } = Raw::deserialize(deserializer)?;
+        Method::named(&method)
+            .and_then(|method| Self::new(method, arg))
+            .ok_or_else(|| de::Error::custom(format!("not a daemon call: {method}")))
+    }
+}
+
 /// A bridge call's answer: the method's JSON result, or the message the page's promise
 /// rejects with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Outcome {
-    Result(serde_json::Value),
+    Result(Value),
     Error(String),
+}
+
+/// What the helper starts with. `bounds` is where the main window was when it last closed,
+/// sent with every start so a helper started for the popup can still restore it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Start {
+    pub origin: Origin,
+    pub view: View,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<Rect>,
+    /// The data directory's webview storage, which Linux keeps for the owner only.
+    pub webview: PathBuf,
+    /// The app can update itself: the macOS app menu enables "Check for updates…".
+    pub updates: bool,
 }
 
 /// Daemon → helper.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum ToHelper {
-    /// The first line. `bounds` is where the main window was when it last closed, sent with
-    /// every start so a helper started for the popup can still restore it.
-    Start {
-        origin: Origin,
-        view: View,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        bounds: Option<Rect>,
-        /// The data directory's webview storage, which Linux keeps for the owner only.
-        webview: PathBuf,
-        /// The app can update itself: the macOS app menu enables "Check for updates…".
-        updates: bool,
-    },
+    /// The first line, which [`handshake`] writes.
+    Start(Start),
     /// The only line, in place of `Start`: an error dialog of its own, with no window, origin
     /// or token. The helper exits once it is dismissed.
     Alert { failure: Failure, reason: Reason },
@@ -228,35 +293,64 @@ pub enum FromHelper {
     RestartToUpdate,
 }
 
-/// Reads one message line. `None` at the end of the stream.
+/// One message as its line.
 ///
 /// # Errors
-/// On I/O errors, a line longer than [`MAX_LINE`], or a line that is not a `T`.
-pub fn read<T: DeserializeOwned>(reader: &mut impl BufRead) -> io::Result<Option<T>> {
-    read_line(reader)?
-        .map(|line| serde_json::from_slice(&line).map_err(io::Error::from))
-        .transpose()
+/// When `message` does not serialize.
+pub fn encode(message: &impl Serialize) -> io::Result<Vec<u8>> {
+    let mut line = serde_json::to_vec(message)?;
+    line.push(b'\n');
+    Ok(line)
 }
 
-/// Reads one raw line without its newline, such as the session token. `None` at the end of
-/// the stream.
+/// How much a reader takes for one line: [`MAX_LINE`] bytes and the newline.
+#[must_use]
+pub fn line_limit() -> u64 {
+    u64::try_from(MAX_LINE + 1).unwrap_or(u64::MAX)
+}
+
+/// The line in what a reader read up to a newline, taking at most [`line_limit`] bytes: `None`
+/// for nothing, at the end of the stream.
 ///
 /// # Errors
-/// On I/O errors, or a line longer than [`MAX_LINE`] or cut off by the end of the stream.
-pub fn read_line(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
-    let mut line = Vec::new();
-    let limit = u64::try_from(MAX_LINE + 1).unwrap_or(u64::MAX);
-    reader.take(limit).read_until(b'\n', &mut line)?;
-    if line.is_empty() {
+/// A line longer than [`MAX_LINE`] or cut off by the end of the stream.
+pub fn frame(mut read: Vec<u8>) -> io::Result<Option<Vec<u8>>> {
+    if read.is_empty() {
         return Ok(None);
     }
-    if line.pop() != Some(b'\n') {
+    if read.pop() != Some(b'\n') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "helper message too long or unterminated",
         ));
     }
-    Ok(Some(line))
+    Ok(Some(read))
+}
+
+/// The message on one line.
+///
+/// # Errors
+/// A line that is not a `T`.
+pub fn decode<T: DeserializeOwned>(line: &[u8]) -> io::Result<T> {
+    Ok(serde_json::from_slice(line)?)
+}
+
+/// Reads one message line. `None` at the end of the stream.
+///
+/// # Errors
+/// On I/O errors, a line longer than [`MAX_LINE`], or a line that is not a `T`.
+pub fn read<T: DeserializeOwned>(reader: &mut impl BufRead) -> io::Result<Option<T>> {
+    read_line(reader)?.map(|line| decode(&line)).transpose()
+}
+
+/// Reads one raw line without its newline. `None` at the end of the stream.
+///
+/// # Errors
+/// On I/O errors, or a line longer than [`MAX_LINE`] or cut off by the end of the stream.
+pub fn read_line(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    reader.take(line_limit()).read_until(b'\n', &mut line)?;
+    frame(line)
 }
 
 /// Writes one message line and flushes it.
@@ -264,10 +358,48 @@ pub fn read_line(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
 /// # Errors
 /// On I/O errors.
 pub fn write<T: Serialize>(writer: &mut impl Write, message: &T) -> io::Result<()> {
-    let mut line = serde_json::to_vec(message)?;
-    line.push(b'\n');
-    writer.write_all(&line)?;
+    writer.write_all(&encode(message)?)?;
     writer.flush()
+}
+
+/// The daemon's half of the handshake: `Start`, then the session token alone on the next line.
+///
+/// # Errors
+/// When `start` does not serialize.
+pub fn handshake(start: Start, token: &SessionToken) -> io::Result<Vec<u8>> {
+    let mut lines = encode(&ToHelper::Start(start))?;
+    lines.extend_from_slice(token.expose_secret().as_bytes());
+    lines.push(b'\n');
+    Ok(lines)
+}
+
+/// What the helper opens with.
+#[derive(Debug)]
+pub enum Opening {
+    Window { start: Start, token: SessionToken },
+    Alert { failure: Failure, reason: Reason },
+}
+
+/// The helper's half of the handshake: `Start` and the token line after it, or `Alert` alone.
+///
+/// # Errors
+/// On I/O errors, a first message other than `Start` or `Alert`, or a missing or empty token.
+pub fn read_handshake(input: &mut impl BufRead) -> io::Result<Opening> {
+    let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message.to_owned());
+    match read(input)? {
+        Some(ToHelper::Alert { failure, reason }) => Ok(Opening::Alert { failure, reason }),
+        Some(ToHelper::Start(start)) => {
+            let token = read_line(input)?
+                .and_then(|line| String::from_utf8(line).ok())
+                .filter(|token| !token.is_empty())
+                .ok_or_else(|| invalid("the session token must follow Start on its own line"))?;
+            Ok(Opening::Window {
+                start,
+                token: SessionToken::new(token),
+            })
+        }
+        _ => Err(invalid("the first message must be Start or Alert")),
+    }
 }
 
 #[cfg(test)]
@@ -275,7 +407,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn wire<T: Serialize>(message: &T) -> serde_json::Value {
+    fn wire<T: Serialize>(message: &T) -> Value {
         serde_json::to_value(message).unwrap()
     }
 
@@ -290,7 +422,7 @@ mod tests {
         };
         let cases = [
             (
-                wire(&ToHelper::Start {
+                wire(&ToHelper::Start(Start {
                     origin: Origin::parse("http://127.0.0.1:4100").unwrap(),
                     view: View::Main {
                         profile: Some(profile.clone()),
@@ -298,7 +430,7 @@ mod tests {
                     bounds: None,
                     webview: PathBuf::from("/data/webview"),
                     updates: true,
-                }),
+                })),
                 json!({"type": "Start", "origin": "http://127.0.0.1:4100",
                        "view": {"window": "main", "profile": profile.as_str()},
                        "webview": "/data/webview", "updates": true}),
@@ -444,5 +576,56 @@ mod tests {
                 .map(|line| line.len()),
             Some(MAX_LINE)
         );
+    }
+
+    fn start() -> Start {
+        Start {
+            origin: Origin::parse("http://127.0.0.1:4100").unwrap(),
+            view: View::Main { profile: None },
+            bounds: None,
+            webview: PathBuf::from("/data/webview"),
+            updates: false,
+        }
+    }
+
+    #[test]
+    fn the_handshake_puts_the_token_alone_on_the_line_after_start() {
+        let token = SessionToken::new("session-token".to_owned());
+        let lines = handshake(start(), &token).unwrap();
+        let text = String::from_utf8(lines.clone()).unwrap();
+        let (first, rest) = text.split_once('\n').unwrap();
+        assert!(!first.contains("session-token"), "{first}");
+        assert_eq!(rest, "session-token\n");
+        let Opening::Window { start: read, token } = read_handshake(&mut lines.as_slice()).unwrap()
+        else {
+            panic!("expected a window");
+        };
+        assert_eq!(read, start());
+        assert_eq!(token.expose_secret(), "session-token");
+    }
+
+    #[test]
+    fn the_helper_opens_only_with_start_and_its_token_or_an_alert() {
+        let alert = encode(&ToHelper::Alert {
+            failure: Failure::Start,
+            reason: Reason::new("port in use"),
+        })
+        .unwrap();
+        assert!(matches!(
+            read_handshake(&mut alert.as_slice()).unwrap(),
+            Opening::Alert {
+                failure: Failure::Start,
+                ..
+            }
+        ));
+        let without_token = encode(&ToHelper::Start(start())).unwrap();
+        let empty_token = [without_token.as_slice(), b"\n"].concat();
+        let show = encode(&ToHelper::Show {
+            view: View::Main { profile: None },
+        })
+        .unwrap();
+        for input in [without_token, empty_token, show, Vec::new()] {
+            assert!(read_handshake(&mut input.as_slice()).is_err());
+        }
     }
 }

@@ -6,10 +6,11 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use nsv_domain::endpoint::Origin;
-use nsv_domain::helper::{
+use nsv_desktop::bridge::fits_external;
+use nsv_desktop::pipe::{
     self, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View, ViewKind,
 };
+use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use serde_json::{Value, json};
@@ -247,7 +248,7 @@ fn read_daemon(proxy: &Proxy) {
             // Stdin buffers what `main` read past the token line; this lock reads on from it.
             let mut input = io::stdin().lock();
             loop {
-                match helper::read::<ToHelper>(&mut input) {
+                match pipe::read::<ToHelper>(&mut input) {
                     Ok(Some(message)) => post(&reader, UserEvent::Daemon(message)),
                     Ok(None) => break,
                     Err(error) => {
@@ -296,7 +297,7 @@ impl App {
     }
 
     fn send(&mut self, message: &FromHelper) {
-        if let Err(error) = helper::write(&mut io::stdout().lock(), message) {
+        if let Err(error) = pipe::write(&mut io::stdout().lock(), message) {
             log(format_args!("the daemon stopped listening: {error}"));
             self.quit();
         }
@@ -549,7 +550,7 @@ impl App {
             UserEvent::Ipc { pane, url, body } => self.ipc(pane, &url, &body),
             UserEvent::PageLoad { pane, finished } => self.page_load(pane, finished),
             UserEvent::NewWindow(url) => {
-                if bridge::fits_external(&url) {
+                if fits_external(&url) {
                     self.send(&FromHelper::OpenExternal { url });
                 } else {
                     log(format_args!("dropped an overlong new-window URL"));

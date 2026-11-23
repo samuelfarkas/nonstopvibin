@@ -1,5 +1,5 @@
 //! `nonstopvibin-window`: the only process that links WebKit. The daemon starts it whenever a
-//! window or dialog must show and talks to it over stdin and stdout (`nsv_domain::helper`); it
+//! window or dialog must show and talks to it over stdin and stdout (`nsv_desktop::pipe`); it
 //! exits when its last window closes, so no WebKit process outlives the window. A daemon that
 //! failed to start or stop starts it for an error dialog alone (`Alert`).
 #![forbid(unsafe_code)]
@@ -13,9 +13,8 @@ use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use nsv_domain::helper::{self, Failure, Reason, ToHelper};
+use nsv_desktop::pipe::{self, Failure, Opening, Reason, Start};
 use nsv_domain::random;
-use nsv_domain::secret::SessionToken;
 
 fn main() -> ExitCode {
     // The lock ends here; whatever it buffered stays in stdin for the pipe thread.
@@ -36,29 +35,24 @@ enum Launch {
 }
 
 fn launch(input: &mut impl BufRead) -> io::Result<Launch> {
-    let invalid = |message: &str| io::Error::new(io::ErrorKind::InvalidData, message.to_owned());
-    let (origin, view, bounds, webview, updates) = match helper::read(input)? {
-        Some(ToHelper::Alert { failure, reason }) => return Ok(Launch::Alert(failure, reason)),
-        Some(ToHelper::Start {
-            origin,
-            view,
-            bounds,
-            webview,
-            updates,
-        }) => (origin, view, bounds, webview, updates),
-        _ => return Err(invalid("the first message must be Start or Alert")),
+    let (start, token) = match pipe::read_handshake(input)? {
+        Opening::Alert { failure, reason } => return Ok(Launch::Alert(failure, reason)),
+        Opening::Window { start, token } => (start, token),
     };
-    let token = helper::read_line(input)?
-        .and_then(|line| String::from_utf8(line).ok())
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| invalid("the session token must follow Start on its own line"))?;
+    let Start {
+        origin,
+        view,
+        bounds,
+        webview,
+        updates,
+    } = start;
     // Linux has no app menu.
     #[cfg(not(target_os = "macos"))]
     let _: bool = updates;
     let nonce = random::bytes::<16>()?;
     Ok(Launch::Window(app::Boot {
         origin,
-        token: SessionToken::new(token),
+        token,
         view,
         bounds,
         web_data: web_data(webview)?,

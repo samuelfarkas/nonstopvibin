@@ -35,6 +35,21 @@ pub enum SessionError {
     Io(#[from] io::Error),
 }
 
+/// Why a second desktop launch could not bring the running daemon's window forward.
+#[derive(Debug, thiserror::Error)]
+pub enum ShowError {
+    #[error(transparent)]
+    Session(#[from] SessionError),
+    #[error("NonstopVibin is already running but has not said where. Try again in a moment.")]
+    NoSession,
+    #[error("NonstopVibin is already running but did not answer: {0}")]
+    NoAnswer(String),
+}
+
+/// How long a second launch waits for a daemon that holds the lock but is still starting.
+const STARTING: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(100);
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Stored {
@@ -122,6 +137,45 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// The second desktop launch: the daemon holding `directory`'s lock shows its main window on
+    /// `POST /api/desktop/show` with its token. Waits up to five seconds for a daemon that is
+    /// still starting to write `server.json`.
+    ///
+    /// # Errors
+    /// An unsafe `server.json`, none in time, or no 2xx answer within two seconds.
+    pub async fn show_main(directory: &DataDir) -> Result<(), ShowError> {
+        let deadline = tokio::time::Instant::now() + STARTING;
+        let session = loop {
+            if let Some(session) = Self::read(directory)? {
+                break session;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ShowError::NoSession);
+            }
+            tokio::time::sleep(POLL).await;
+        };
+        let authorization = format!("Bearer {}", session.token.expose_secret());
+        let response = loopback(LoopbackRequest {
+            to: Loopback::v4(session.port),
+            method: &Method::POST,
+            target: "/api/desktop/show",
+            headers: &[("Authorization", &authorization)],
+            body: None,
+            timeout: Duration::from_secs(2),
+            limit: 64 * 1024,
+        })
+        .await
+        .map_err(|error| ShowError::NoAnswer(error.to_string()))?;
+        if response.ok() {
+            Ok(())
+        } else {
+            Err(ShowError::NoAnswer(format!(
+                "it answered HTTP/1.1 {}",
+                response.status.as_u16()
+            )))
+        }
     }
 
     /// Authenticated liveness: the daemon answers `GET /api/state` with this token within two

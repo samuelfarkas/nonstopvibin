@@ -1,17 +1,17 @@
-//! The desktop shell: the tray, the window helper's supervision, the login item, the second
-//! launch and app updates. The daemon implements [`ShellHost`]; on Linux the shell links no GUI library.
+//! The desktop shell: the tray, the window helper's supervision, the login item and app
+//! updates. The desktop app implements [`ShellHost`]; on Linux the shell links no GUI library.
 #![cfg_attr(not(target_os = "macos"), forbid(unsafe_code))]
 // SMAppService's bindings are unsafe functions; macOS code allows them one call at a time.
 #![cfg_attr(target_os = "macos", deny(unsafe_code))]
 
 mod external;
 mod helper;
-mod instance;
 mod login;
 mod shell;
 mod tray;
 mod update;
 
+use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::Origin;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
@@ -19,10 +19,9 @@ use nsv_files::DataDir;
 use tokio::sync::{broadcast, watch};
 
 pub use helper::{alert, beside_executable as helper_beside_executable};
-pub use instance::{ShowError, show_running};
 pub use login::Login;
 pub use shell::{Options, run};
-pub use tray::{TrayLink, TrayStatus, run_desktop};
+pub use tray::{TrayLink, run_desktop};
 
 /// What the shell needs from the daemon.
 pub trait ShellHost {
@@ -54,14 +53,6 @@ pub trait ShellHost {
 /// failure after the error dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateFailed;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostEvent {
-    /// A provider sign-in finished: an open main window comes forward to show it.
-    SignInAccepted,
-    /// `POST /api/desktop/show` from a second launch ([`show_running`]).
-    ShowMain,
-}
 
 /// A shell warning in the daemon's log, through the subscriber the CLI installs.
 fn log(message: std::fmt::Arguments<'_>) {

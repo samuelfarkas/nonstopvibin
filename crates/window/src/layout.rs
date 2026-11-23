@@ -1,6 +1,6 @@
 //! Window geometry, in logical pixels.
 
-use nsv_domain::helper::Rect;
+use nsv_desktop::pipe::Rect;
 
 pub(crate) const MAIN_SIZE: (u32, u32) = (1240, 880);
 pub(crate) const MAIN_MIN_SIZE: (u32, u32) = (740, 580);

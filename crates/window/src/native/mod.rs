@@ -2,7 +2,7 @@
 //! platform module offers `copy`, `choose_folder` and `show_dialog`; answers come back as
 //! events on the loop.
 
-use nsv_domain::helper::{DialogKind, Failure};
+use nsv_desktop::pipe::{DialogKind, Failure};
 
 #[cfg(target_os = "linux")]
 mod linux;

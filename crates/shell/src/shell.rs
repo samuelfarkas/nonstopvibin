@@ -4,10 +4,11 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use nsv_domain::endpoint::session_link;
-use nsv_domain::helper::{
-    DaemonCall, DialogKind, FromHelper, Outcome, Rect, ToHelper, View, ViewKind,
+use nsv_desktop::HostEvent;
+use nsv_desktop::pipe::{
+    DaemonCall, DialogKind, FromHelper, Outcome, Rect, Start, ToHelper, View, ViewKind,
 };
+use nsv_domain::endpoint::session_link;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -15,7 +16,7 @@ use crate::helper::{Event, Helper};
 use crate::login::{Login, UNPACKAGED};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
 use crate::update::{Staged, Updates};
-use crate::{HostEvent, ShellHost, UpdateFailed, external, log};
+use crate::{ShellHost, UpdateFailed, external, log};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -258,14 +259,14 @@ impl<H: ShellHost> Shell<'_, H> {
         }
         self.forget_windows();
         self.opened(&view);
-        let start = ToHelper::Start {
+        let start = Start {
             origin: self.host.origin().clone(),
             view: view.clone(),
             bounds: self.bounds,
             webview: self.host.data_directory().webview(),
             updates: self.updates.possible(),
         };
-        match Helper::spawn(&self.options.helper, &start, self.host.session_token()).await {
+        match Helper::spawn(&self.options.helper, start, self.host.session_token()).await {
             Ok(helper) => self.helper = Some(helper),
             Err(error) => {
                 log(format_args!("could not start the window helper: {error}"));
