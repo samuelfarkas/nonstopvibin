@@ -16,6 +16,7 @@
 mod common;
 mod daemon;
 mod desktop;
+mod ipc;
 mod site;
 
 use std::path::{Path, PathBuf};
@@ -283,4 +284,28 @@ fn pages_keep_their_geometry_at_every_width() {
     let site = Site::start(Content::Framed(daemon.port), "page-layout");
     site.check_with("page-layout", &json!({ "token": daemon.token }));
     check_once("page-layout", &site, View::Main { profile: None }, TOKEN);
+}
+
+/// What desktop-smoke drove in the full app, in three openings of the main window as the
+/// tray's "Open main window" makes them: drafts defer closing, a background failure stays
+/// readable, and the settings page edits one profile and one global draft at a time.
+#[test]
+fn drafts_and_settings_survive_closing_the_window() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    built("client");
+    let daemon = Daemon::serve("flows");
+    let site = Site::start(Content::Daemon(daemon.port), "drafts");
+    // One data directory, as the shell keeps for every helper it starts.
+    let data = data_directory("flows");
+    for name in ["drafts", "settings", "settings-restored"] {
+        site.check(name);
+        check(
+            name,
+            &site,
+            View::Main { profile: None },
+            &daemon.token,
+            &data,
+        );
+    }
+    fs::remove_dir_all(&data).unwrap_or_default();
 }
