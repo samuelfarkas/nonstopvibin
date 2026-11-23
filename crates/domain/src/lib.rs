@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod helper;
 pub mod id;
 pub mod registry;
 pub mod secret;

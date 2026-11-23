@@ -8,3 +8,5 @@ disallowed-methods = [
   { path = "tokio::sync::mpsc::unbounded_channel", reason = "every queue is bounded" },
   { path = "std::thread::sleep", reason = "use a timer; sleeping blocks the runtime thread" },
 ]
+# Product names, not code: `..` keeps clippy's defaults.
+doc-valid-idents = ["AppKit", "WebKit", "WebKitGTK", ".."]
