@@ -61,9 +61,12 @@ fn main() -> ExitCode {
         helper: data.join("no-helper"),
         open_window: false,
         packaged: false,
+        #[cfg(target_os = "linux")]
         login: Login::new(&data, data.join("idle")),
+        #[cfg(target_os = "macos")]
+        login: Login::new(),
     };
-    nsv_shell::run_desktop(|link| {
+    nsv_shell::run_desktop(move |link| {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

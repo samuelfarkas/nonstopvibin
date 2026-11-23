@@ -3,7 +3,7 @@
 use std::cell::Cell;
 
 use gtk::gdk::prelude::*;
-use gtk::gdk_pixbuf::PixbufLoader;
+use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
 use nsv_domain::helper::{DialogKind, Rect};
@@ -111,12 +111,19 @@ pub(crate) fn show_dialog(kind: DialogKind, proxy: &Proxy) {
 }
 
 /// The window manager's icon for the main window; Wayland compositors take it from the desktop
-/// entry instead.
+/// entry instead. Scaled down: GDK silently drops an X11 icon list over 262,144 pixels, and
+/// the 512-pixel image alone is just over.
 pub(crate) fn set_icon(window: &Window) {
     let loader = PixbufLoader::new();
     let decoded = loader.write(ICON).and_then(|()| loader.close());
     match decoded.map(|()| loader.pixbuf()) {
-        Ok(Some(icon)) => window.gtk_window().set_icon(Some(&icon)),
+        Ok(Some(icon)) => {
+            let sizes = [256, 64, 32]
+                .into_iter()
+                .filter_map(|size| icon.scale_simple(size, size, InterpType::Bilinear))
+                .collect::<Vec<_>>();
+            window.gtk_window().set_icon_list(&sizes);
+        }
         Ok(None) => log(format_args!("the app icon decoded to nothing")),
         Err(error) => log(format_args!("could not decode the app icon: {error}")),
     }
