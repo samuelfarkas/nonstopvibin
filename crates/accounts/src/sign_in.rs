@@ -19,7 +19,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use hyper::Method as HttpMethod;
-use nsv_core::pool::{Backend, MANAGEMENT_TIMEOUT, Pool};
+use nsv_core::pool::{Backend, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{encode_uri_component, number, text};
@@ -559,9 +559,7 @@ impl Inner {
         });
         pool.start(core, false).await?;
         let path = format!("/{}-auth-url", core_name(provider));
-        let response = pool
-            .management(core, &Method::GET, &path, None, MANAGEMENT_TIMEOUT)
-            .await?;
+        let response = pool.management(core, &Method::GET, &path, None).await?;
         let no_link = || AppError::new("The provider did not return a sign-in link.", 502);
         let (Some(link), Some(key)) = (
             text(response.get("url")).map(str::to_owned),
@@ -619,8 +617,7 @@ impl Inner {
                 "/oauth-session?state={}",
                 encode_uri_component(&session.state)
             );
-            pool.management(core, &Method::DELETE, &path, None, MANAGEMENT_TIMEOUT)
-                .await?;
+            pool.management(core, &Method::DELETE, &path, None).await?;
             return Err(AppError::new(
                 format!(
                     "Sign-in port {port} is in use. Close any pending sign-in in another app, then try again."
@@ -702,13 +699,7 @@ impl Inner {
             );
             let pool = &self.pool;
             if pool
-                .management(
-                    &session.profile_id,
-                    &Method::DELETE,
-                    &path,
-                    None,
-                    MANAGEMENT_TIMEOUT,
-                )
+                .management(&session.profile_id, &Method::DELETE, &path, None)
                 .await
                 .is_err()
             {
@@ -728,9 +719,7 @@ impl Inner {
         state: &str,
     ) -> Result<Authorization, AppError> {
         let path = format!("/get-auth-status?state={}", encode_uri_component(state));
-        let result = pool
-            .management(core, &Method::GET, &path, None, MANAGEMENT_TIMEOUT)
-            .await?;
+        let result = pool.management(core, &Method::GET, &path, None).await?;
         Ok(match text(result.get("status")) {
             Some("ok") => Authorization::Ok,
             Some("error") => Authorization::Error,
@@ -971,14 +960,8 @@ impl Inner {
             None => (&self.pool, profile),
         };
         let body = json!({ "provider": core_name(session.provider), "redirect_url": redirect });
-        pool.management(
-            core,
-            &Method::POST,
-            "/oauth-callback",
-            Some(&body),
-            MANAGEMENT_TIMEOUT,
-        )
-        .await?;
+        pool.management(core, &Method::POST, "/oauth-callback", Some(&body))
+            .await?;
         Ok(())
     }
 }

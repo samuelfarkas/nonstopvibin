@@ -36,15 +36,7 @@ impl Sha256Digest {
     /// `None` unless `text` is 64 lowercase hex digits.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
-        let digits = text.as_bytes();
-        if digits.len() != 64 {
-            return None;
-        }
-        let mut bytes = [0; 32];
-        for (byte, [high, low]) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
-            *byte = hex_value(*high)? << 4 | hex_value(*low)?;
-        }
-        Some(Self(bytes))
+        nsv_domain::sha256_from_hex(text).map(Self)
     }
 
     /// A file's SHA-256, streamed: a core is too large to read into one buffer.
@@ -67,14 +59,6 @@ impl Sha256Digest {
     #[must_use]
     pub const fn bytes(&self) -> &[u8; 32] {
         &self.0
-    }
-}
-
-const fn hex_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        _ => None,
     }
 }
 

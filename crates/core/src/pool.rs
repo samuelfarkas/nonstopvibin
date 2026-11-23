@@ -37,8 +37,8 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub const READY: Duration = Duration::from_secs(15);
 /// The wait between readiness checks, and between checks that settings were applied.
 const RETRY: Duration = Duration::from_millis(100);
-/// The default timeout of a management request.
-pub const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(15);
+/// The timeout of a management request.
+const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Commands waiting for the owner before a caller waits to enqueue.
 const QUEUE: usize = 64;
 /// The most of a management or model-list answer read.
@@ -432,7 +432,7 @@ impl Pool {
                 if !current() {
                     return Ok(true);
                 }
-                let reported = self.call(&core, &Method::GET, "/config", None, MANAGEMENT_TIMEOUT);
+                let reported = self.call(&core, &Method::GET, "/config", None);
                 if applied(&expected, &reported.await?) {
                     return Ok(true);
                 }
@@ -481,7 +481,6 @@ impl Pool {
         method: &Method,
         path: &str,
         body: Option<&Value>,
-        timeout: Duration,
     ) -> Result<Value, AppError> {
         let core = self
             .context
@@ -490,7 +489,7 @@ impl Pool {
             .core(profile)
             .cloned()
             .ok_or_else(|| AppError::new("Start this profile first.", 409))?;
-        self.call(&core, method, path, body, timeout).await
+        self.call(&core, method, path, body).await
     }
 
     async fn call(
@@ -499,7 +498,6 @@ impl Pool {
         method: &Method,
         path: &str,
         body: Option<&Value>,
-        timeout: Duration,
     ) -> Result<Value, AppError> {
         management(
             self.context.backend.as_ref(),
@@ -508,7 +506,7 @@ impl Pool {
             method,
             path,
             body,
-            timeout,
+            MANAGEMENT_TIMEOUT,
         )
         .await
     }

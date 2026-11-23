@@ -29,6 +29,13 @@ pub use loopback::{Loopback, LoopbackRequest, loopback};
 /// Sent on every HTTPS request whose caller names no `User-Agent`.
 pub const USER_AGENT: &str = concat!("nonstopvibin/", env!("CARGO_PKG_VERSION"));
 
+/// Hosts a GitHub release download may be redirected to: GitHub serves assets from its CDN.
+pub const GITHUB_RELEASE_HOSTS: &[&str] = &[
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+
 /// A response read to its end.
 #[derive(Debug)]
 pub struct Response {

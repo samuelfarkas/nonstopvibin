@@ -138,7 +138,7 @@ impl Sums {
         let mut sums = BTreeMap::new();
         for line in text.lines().filter(|line| !line.is_empty()) {
             let (hex, name) = line.split_once("  ").ok_or(malformed)?;
-            let hash = hex_digest(hex).ok_or(malformed)?;
+            let hash = nsv_domain::sha256_from_hex(hex).ok_or(malformed)?;
             if !bare_name(name) || sums.insert(name.to_owned(), hash).is_some() {
                 return Err(malformed);
             }
@@ -151,24 +151,6 @@ impl Sums {
             .get(name)
             .ok_or(Rejected("SHA256SUMS does not list a file the update needs"))
     }
-}
-
-fn hex_digest(hex: &str) -> Option<[u8; 32]> {
-    let mut digest = [0; 32];
-    let (pairs, []) = hex.as_bytes().as_chunks::<2>() else {
-        return None;
-    };
-    if pairs.len() != digest.len() {
-        return None;
-    }
-    for (byte, pair) in digest.iter_mut().zip(pairs) {
-        let text = std::str::from_utf8(pair).ok()?;
-        if text.bytes().any(|b| b.is_ascii_uppercase()) {
-            return None;
-        }
-        *byte = u8::from_str_radix(text, 16).ok()?;
-    }
-    Some(digest)
 }
 
 /// Checks `SHA256SUMS.minisig` over `sums` with the release key. The trusted comment, which

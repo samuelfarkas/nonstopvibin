@@ -414,7 +414,6 @@ async fn a_pending_sign_in_keeps_an_idle_core_running() {
         nsv_accounts::scheduler::Timing {
             idle,
             restart,
-            coalesce: Duration::from_millis(50),
             usage_retry: Duration::from_millis(50),
             ..*TIMING
         },

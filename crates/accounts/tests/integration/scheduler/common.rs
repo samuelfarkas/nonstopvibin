@@ -79,7 +79,6 @@ pub(crate) fn short(idle: Duration) -> Timing {
             coalesce: 200,
             ..TIMING.restart
         },
-        coalesce: Duration::from_millis(200),
         usage_retry: Duration::from_millis(200),
         activity: Duration::from_secs(1),
         idle,

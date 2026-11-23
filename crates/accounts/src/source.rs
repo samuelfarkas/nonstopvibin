@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
+use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::wire::Account;
@@ -34,13 +34,7 @@ impl QuotaSource for PoolSource {
 
     async fn api_call(&self, profile: &ProfileId, body: Value) -> Result<Value, AppError> {
         self.pool
-            .management(
-                profile,
-                &Method::POST,
-                "/api-call",
-                Some(&body),
-                MANAGEMENT_TIMEOUT,
-            )
+            .management(profile, &Method::POST, "/api-call", Some(&body))
             .await
     }
 }

@@ -8,7 +8,8 @@ use nsv_core::pool::CoreEvent;
 /// The restart periods of the scheduler's timing, in milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartTiming {
-    /// The wait after the first failed start; each further failure doubles it.
+    /// The wait after the first failed start; each further failure doubles it. Also the
+    /// shortest wait between the scheduler's wakeups.
     pub coalesce: i64,
     /// Longest wait between automatic starts, and how long a core must stay up to end a run
     /// of failures.

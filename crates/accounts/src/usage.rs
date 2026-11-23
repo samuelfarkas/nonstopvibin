@@ -4,13 +4,18 @@
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::js::{nullish, number, or, record, string, stringify, text, truthy};
+use nsv_domain::registry::registry;
 use nsv_domain::sha256_hex;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{PricingTokens, UsageRecord};
 use serde_json::Value;
 
-/// Usage records per page of the core's queue; a full page means more are waiting.
-pub const PAGE: usize = 500;
+/// Whether a page of `count` records from the core's queue is full, which means more are
+/// waiting. Pages hold the registry's `usagePageSize`.
+#[must_use]
+pub fn full_page(count: usize) -> bool {
+    u32::try_from(count).is_ok_and(|count| count == registry().usage_page_size)
+}
 
 /// One page of the core's usage queue as stored rows, `now` (Unix milliseconds) stamping a
 /// row without a timestamp.

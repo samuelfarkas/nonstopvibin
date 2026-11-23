@@ -5,18 +5,15 @@
 use std::path::Path;
 use std::time::Duration;
 
-use nsv_net::{Download, Get, Https, Loopback, LoopbackRequest, Method, NetError, Redirects};
+use nsv_net::{
+    Download, GITHUB_RELEASE_HOSTS, Get, Https, Loopback, LoopbackRequest, Method, NetError,
+    Redirects,
+};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 /// `https://github.com/<owner>/<repo>/`, Cargo.toml's `repository`.
 const REPOSITORY: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/");
-/// Release downloads redirect from github.com to these.
-const ASSET_HOSTS: &[&str] = &[
-    "github.com",
-    "objects.githubusercontent.com",
-    "release-assets.githubusercontent.com",
-];
 /// The test feed's port, which build.rs checked.
 const TEST_PORT: Option<u16> = match option_env!("NONSTOPVIBIN_TEST_UPDATE_PORT") {
     Some(port) => match u16::from_str_radix(port, 10) {
@@ -61,7 +58,7 @@ impl Source {
                         headers: &headers,
                         timeout: SMALL,
                         limit,
-                        redirects: Redirects::Follow(ASSET_HOSTS),
+                        redirects: Redirects::Follow(GITHUB_RELEASE_HOSTS),
                     })
                     .await?
             }
@@ -88,7 +85,7 @@ impl Source {
                     headers: &[],
                     timeout: PAYLOAD,
                     limit,
-                    redirects: Redirects::Follow(ASSET_HOSTS),
+                    redirects: Redirects::Follow(GITHUB_RELEASE_HOSTS),
                 };
                 https.download(&request, to).await
             }

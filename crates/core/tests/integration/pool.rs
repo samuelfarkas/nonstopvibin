@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, READY};
+use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, Pool, READY};
 use nsv_core::processes::KILL_GRACE;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -73,13 +73,7 @@ impl Hooks for Drain {
         let pool = self.0.get().unwrap().clone();
         Box::pin(async move {
             let _ = pool
-                .management(
-                    &profile,
-                    &Method::GET,
-                    "/usage-queue",
-                    None,
-                    MANAGEMENT_TIMEOUT,
-                )
+                .management(&profile, &Method::GET, "/usage-queue", None)
                 .await;
         })
     }
@@ -225,13 +219,11 @@ async fn a_core_held_stopped_for_a_credential_swap_cannot_start_until_the_swap_e
 /// The routing the profile's core reports.
 async fn strategy(world: &World, profile: &ProfileId) -> String {
     let config = world
-        .run(world.pool().management(
-            profile,
-            &Method::GET,
-            "/config",
-            None,
-            Duration::from_secs(15),
-        ))
+        .run(
+            world
+                .pool()
+                .management(profile, &Method::GET, "/config", None),
+        )
         .await
         .unwrap();
     config["routing"]["strategy"].as_str().unwrap().to_owned()

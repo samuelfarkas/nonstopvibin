@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use nsv_core::pool::{MANAGEMENT_TIMEOUT, Pool};
+use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{nullish, number, or, record, string, text, truthy};
@@ -134,13 +134,7 @@ impl Accounts {
         }
         let core = before.core(profile).map(|core| core.id);
         let response = pool
-            .management(
-                profile,
-                &Method::GET,
-                "/auth-files",
-                None,
-                MANAGEMENT_TIMEOUT,
-            )
+            .management(profile, &Method::GET, "/auth-files", None)
             .await?;
         let files = record(Some(&response))
             .get("files")

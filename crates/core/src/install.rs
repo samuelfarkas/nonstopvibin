@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use nsv_domain::error::AppError;
 use nsv_domain::version::Version;
-use nsv_net::{Get, Https, NetError, Redirects, Response};
+use nsv_net::{GITHUB_RELEASE_HOSTS, Get, Https, NetError, Redirects, Response};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -35,12 +35,6 @@ pub const LATEST_RELEASE: &str = concat!(
     repository!(),
     "/releases/latest"
 );
-/// Hosts a release download may be redirected to: GitHub serves assets from its CDN.
-pub const ARCHIVE_HOSTS: &[&str] = &[
-    "github.com",
-    "objects.githubusercontent.com",
-    "release-assets.githubusercontent.com",
-];
 /// The reviewed pin on `main`, which installed builds read; `NONSTOPVIBIN_CORE_FEED` replaces
 /// it. Archives always come from [`CORE_ARCHIVES`].
 pub const CORE_FEED: &str = "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/crates/core/core-release.json";
@@ -96,7 +90,7 @@ pub async fn download(https: &Https, url: &str, path: &Path) -> Result<Sha256Dig
         headers: &[],
         timeout: DOWNLOAD_TIMEOUT,
         limit: SIZE_LIMIT,
-        redirects: Redirects::Follow(ARCHIVE_HOSTS),
+        redirects: Redirects::Follow(GITHUB_RELEASE_HOSTS),
     };
     match https.download(&request, path).await {
         Ok(download) => Ok(download.sha256.into()),

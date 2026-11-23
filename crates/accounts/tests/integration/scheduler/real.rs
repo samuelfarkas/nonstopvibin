@@ -185,7 +185,6 @@ async fn real_world(
             coalesce: 200,
             ..TIMING.restart
         },
-        coalesce: Duration::from_millis(200),
         usage_retry: Duration::from_millis(200),
         activity: Duration::from_millis(500),
         idle,
@@ -206,10 +205,6 @@ async fn real_world(
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one real core's life, start to idle stop, reads top to bottom"
-)]
 async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_and_stops_when_idle()
 {
     let root = TempDir::new("real-core");
@@ -258,13 +253,7 @@ async fn the_pinned_core_starts_on_demand_reports_usage_restarts_after_a_kill_an
         "{arguments}"
     );
     let reported = pool
-        .management(
-            &profile,
-            &Method::GET,
-            "/config",
-            None,
-            Duration::from_secs(5),
-        )
+        .management(&profile, &Method::GET, "/config", None)
         .await
         .unwrap();
     assert_eq!(

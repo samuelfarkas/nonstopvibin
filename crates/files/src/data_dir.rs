@@ -183,3 +183,25 @@ impl DataDir {
         self.socket_directory().join("agents.sock")
     }
 }
+
+/// The user's configuration directory: `$XDG_CONFIG_HOME`, or `~/.config`. A relative value is
+/// ignored, as the XDG Base Directory specification says.
+///
+/// # Errors
+/// When neither is set.
+pub fn config_home() -> io::Result<PathBuf> {
+    env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            env::home_dir()
+                .filter(|home| home.is_absolute())
+                .map(|home| home.join(".config"))
+        })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "neither XDG_CONFIG_HOME nor a home directory is set",
+            )
+        })
+}

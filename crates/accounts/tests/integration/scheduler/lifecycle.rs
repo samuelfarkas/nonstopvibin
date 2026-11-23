@@ -348,7 +348,6 @@ async fn the_first_ui_read_after_a_pause_shows_the_cooldown_and_refreshes_stale_
             coalesce: 20,
             ..timing().restart
         },
-        coalesce: Duration::from_millis(20),
         usage_retry: Duration::from_millis(20),
         accounts: Duration::from_millis(50),
         watch: Duration::from_millis(200),

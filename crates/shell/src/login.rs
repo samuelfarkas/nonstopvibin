@@ -11,7 +11,6 @@ pub(crate) const UNPACKAGED: &str = "Use the packaged app to enable automatic st
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use std::ffi::OsString;
     use std::fs::{self, OpenOptions};
     use std::io::{self, Write};
     use std::os::unix::fs::OpenOptionsExt;
@@ -49,14 +48,10 @@ mod linux {
         /// executable.
         ///
         /// # Errors
-        /// When neither `$XDG_CONFIG_HOME` nor `$HOME` is set, or the executable's path is unknown.
+        /// When there is no configuration directory ([`nsv_files::config_home`]), or the
+        /// executable's path is unknown.
         fn of(install: &Install) -> io::Result<Self> {
-            let absolute = |value: Option<OsString>| {
-                value.map(PathBuf::from).filter(|path| path.is_absolute())
-            };
-            let config = absolute(std::env::var_os("XDG_CONFIG_HOME"))
-                .or_else(|| absolute(std::env::var_os("HOME")).map(|home| home.join(".config")))
-                .ok_or_else(|| io::Error::other("neither XDG_CONFIG_HOME nor HOME is set"))?;
+            let config = nsv_files::config_home()?;
             let executable = install
                 .app_image
                 .as_ref()

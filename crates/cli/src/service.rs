@@ -8,7 +8,7 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, SystemTime};
 
 use nsv_agents::agent_environment;
-use nsv_files::{DataDir, write_atomic};
+use nsv_files::{DataDir, config_home, write_atomic};
 use nsv_server::{AllowedHost, Session};
 
 use crate::{CliError, SERVER_PORT, complain, say, user};
@@ -164,11 +164,7 @@ pub(crate) fn update_unit(
 }
 
 fn unit_path() -> Result<PathBuf, CliError> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))
-        .ok_or_else(|| CliError::new("There is no home directory."))?;
+    let config = config_home().map_err(|_| CliError::new("There is no home directory."))?;
     Ok(config.join("systemd/user").join(UNIT))
 }
 

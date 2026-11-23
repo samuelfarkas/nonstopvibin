@@ -16,9 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
-use nsv_core::pool::{
-    Backend, BoxFuture, CoreEvent, CoreId, Hooks, MANAGEMENT_TIMEOUT, Pool, PoolState,
-};
+use nsv_core::pool::{Backend, BoxFuture, CoreEvent, CoreId, Hooks, Pool, PoolState};
 use nsv_core::upstream;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -34,16 +32,14 @@ use crate::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
 };
 use crate::sign_in::about;
-use crate::usage::{PAGE, parse_page};
+use crate::usage::{full_page, parse_page};
 
 /// The scheduler's periods.
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
-    /// Restart backoff.
+    /// Restart backoff; its `coalesce` is also the shortest wait between wakeups, so a drain
+    /// follows gateway activity by about that much.
     pub restart: RestartTiming,
-    /// The shortest wait between wakeups, so a drain follows gateway activity by about that
-    /// much.
-    pub coalesce: Duration,
     /// How long a usage drain that failed twice waits; each further failure doubles it, up to
     /// [`Timing::usage_backoff`].
     pub usage_retry: Duration,
@@ -72,7 +68,6 @@ pub static TIMING: LazyLock<Timing> = LazyLock::new(|| {
     let registry = registry();
     Timing {
         restart: RESTART_TIMING,
-        coalesce: Duration::from_secs(2),
         usage_retry: Duration::from_secs(2),
         accounts: Duration::from_secs(20),
         // Three of the UI's polls: a hidden or closed UI stops polling the cores.
@@ -842,7 +837,7 @@ impl Shared {
         let Some(due) = due else {
             return;
         };
-        let at = due.max(now + self.timing.coalesce);
+        let at = due.max(now + Duration::from_millis(self.timing.restart.coalesce.unsigned_abs()));
         if state.scheduled.is_none_or(|scheduled| at < scheduled) {
             state.scheduled = Some(at);
             self.notify.notify_one();
@@ -957,7 +952,7 @@ impl Shared {
             {
                 if let Ok(count) = &result {
                     cadence.failures = 0;
-                    if *count == PAGE {
+                    if full_page(*count) {
                         cadence.next = Next::Now;
                     } else if let Some(until) = cadence.active_until
                         && cadence.next != Next::Now
@@ -1081,7 +1076,7 @@ impl Shared {
     /// Reads the profile's queue until a page is not full.
     async fn drain(self: &Arc<Self>, profile: &ProfileId) -> Result<(), AppError> {
         // Full destructive pages must be stored before the core ends.
-        while self.collect(profile).await? == PAGE {}
+        while full_page(self.collect(profile).await?) {}
         Ok(())
     }
 
@@ -1121,9 +1116,8 @@ impl Shared {
             .management(
                 profile,
                 &Method::GET,
-                &format!("/usage-queue?count={PAGE}"),
+                &format!("/usage-queue?count={}", registry().usage_page_size),
                 None,
-                MANAGEMENT_TIMEOUT,
             )
             .await?;
         let records = parse_page(profile, &page, self.host.now())?;
