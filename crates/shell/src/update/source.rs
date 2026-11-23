@@ -1,7 +1,6 @@
 //! Where releases come from: GitHub over HTTPS, following redirects only to its release-asset
-//! hosts, or a test feed on loopback HTTP that only the build environment can name
-//! (`NONSTOPVIBIN_TEST_UPDATE_FEED=http://127.0.0.1:<port>/`, which tests/linux-update.sh and
-//! tests/mac-update-rust.mjs set and release builds never do). Every read has a size cap.
+//! hosts, or a test feed on loopback HTTP that only the build environment can name (build.rs).
+//! Every read has a size cap.
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,7 +9,7 @@ use nsv_net::{Download, Get, Https, Loopback, LoopbackRequest, Method, NetError,
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-/// `https://github.com/<owner>/<repo>/`, as package.json's publish setting named it.
+/// `https://github.com/<owner>/<repo>/`, Cargo.toml's `repository`.
 const REPOSITORY: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/");
 /// Release downloads redirect from github.com to these.
 const ASSET_HOSTS: &[&str] = &[
@@ -18,6 +17,14 @@ const ASSET_HOSTS: &[&str] = &[
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
 ];
+/// The test feed's port, which build.rs checked.
+const TEST_PORT: Option<u16> = match option_env!("NONSTOPVIBIN_TEST_UPDATE_PORT") {
+    Some(port) => match u16::from_str_radix(port, 10) {
+        Ok(port) => Some(port),
+        Err(_) => panic!("NONSTOPVIBIN_TEST_UPDATE_PORT is not a port"),
+    },
+    None => None,
+};
 const SMALL: Duration = Duration::from_secs(30);
 const PAYLOAD: Duration = Duration::from_mins(30);
 
@@ -30,18 +37,11 @@ pub(crate) enum Source {
 impl Source {
     /// GitHub, unless this build names a test feed. `Err` holds what to log.
     pub(crate) fn new() -> Result<Self, String> {
-        match option_env!("NONSTOPVIBIN_TEST_UPDATE_FEED") {
+        match TEST_PORT {
             None => Https::new()
                 .map(Self::GitHub)
                 .map_err(|error| error.to_string()),
-            Some(feed) => feed
-                .strip_prefix("http://127.0.0.1:")
-                .and_then(|rest| rest.strip_suffix('/'))
-                .and_then(|port| port.parse().ok())
-                .map(|port| Self::Test(Loopback::v4(port)))
-                .ok_or_else(|| {
-                    "the build's test update feed is not http://127.0.0.1:<port>/".to_owned()
-                }),
+            Some(port) => Ok(Self::Test(Loopback::v4(port))),
         }
     }
 
