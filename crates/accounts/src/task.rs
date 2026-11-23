@@ -1,12 +1,20 @@
 //! How the account features run work: in a task that outlives a caller who stops waiting, on
-//! the blocking pool, or at most once per key at a time.
+//! the blocking pool, or at most once per key at a time; and how they report a failure.
 
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nsv_domain::error::AppError;
 use nsv_domain::sync::locked;
+
+/// Adds a message to the app's error list.
+pub type Report = Arc<dyn Fn(String) + Send + Sync>;
+
+/// The error-list entry for a failure of the profile named `name`.
+pub(crate) fn about(name: &str, message: &str) -> String {
+    format!("{name}: {message}")
+}
 
 /// Runs `work` in a task of its own once `turn` is held, so it ends even if its caller stops
 /// waiting; the turn ends with it.

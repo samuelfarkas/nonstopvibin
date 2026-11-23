@@ -19,7 +19,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use hyper::Method as HttpMethod;
-use nsv_core::pool::{Backend, Pool};
+use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{encode_uri_component, number, text};
@@ -28,7 +28,6 @@ use nsv_domain::sync::locked;
 use nsv_domain::wire::{
     Account, AccountKind, AccountStatus, Extra, OAuthReview, OAuthSession, OAuthStatus,
 };
-use nsv_files::DataDir;
 use nsv_net::Method;
 use nsv_store::Store;
 use serde_json::{Map, Value, json};
@@ -42,9 +41,9 @@ use crate::credentials::{Credentials, SeatMatch};
 use crate::fetch::Outside;
 use crate::identity::{claude_identity, verify_claude_identity};
 use crate::quota::Quotas;
-use crate::sandbox::Sandbox;
+use crate::sandbox::{Backends, Sandbox};
 use crate::source::PoolSource;
-use crate::task::detached;
+use crate::task::{Report, detached};
 
 const NOT_FOUND: &str = "Sign-in session not found for this profile.";
 const DID_NOT_COMPLETE: &str = "Sign-in did not complete. Start a new sign-in.";
@@ -83,17 +82,6 @@ const ACCEPTED: Reply = Reply {
     ],
     body: RECEIVED,
 };
-
-/// Launches a data directory's cores: `Processes::new(directory)` in the daemon, so a throwaway
-/// store's cores are recorded in its own ledger.
-pub type Backends = Arc<dyn Fn(&DataDir) -> Arc<dyn Backend> + Send + Sync>;
-/// Adds a message to the app's error list.
-pub type Report = Arc<dyn Fn(String) + Send + Sync>;
-
-/// The error-list entry for a failure of the profile named `name`.
-pub(crate) fn about(name: &str, message: &str) -> String {
-    format!("{name}: {message}")
-}
 
 pub struct SignInOptions {
     pub backends: Backends,

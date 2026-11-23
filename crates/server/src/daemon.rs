@@ -8,13 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hyper::body::Incoming;
 use hyper::{Request, Response};
+use nsv_accounts::Backends;
 use nsv_accounts::catalog::ModelCatalog;
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
 use nsv_accounts::scheduler::{TIMING, Timing};
-use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::install::CoreSource;
 use nsv_core::pool::{Backend, Processes, READY};
@@ -40,9 +40,7 @@ use crate::failure::{self, Errors};
 use crate::gateway_host::GatewayHost;
 use crate::listener::{self, Phase, advance};
 use crate::session::Session;
-
-/// This build's version, as `package.json` states it.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+use crate::shared::{Shared, VERSION};
 
 /// How the daemon runs.
 pub struct Options {
@@ -138,17 +136,6 @@ pub enum StartError {
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct CloseError(String);
-
-/// What every part of the daemon reads: where it listens, its clock, the error list and the
-/// desktop's part.
-pub(crate) struct Shared {
-    pub(crate) port: u16,
-    /// `http://127.0.0.1:<port>`.
-    pub(crate) origin: Origin,
-    pub(crate) clock: fn() -> i64,
-    pub(crate) errors: Errors,
-    pub(crate) desktop: Option<Desktop>,
-}
 
 /// The running daemon's parts.
 pub(crate) struct App {

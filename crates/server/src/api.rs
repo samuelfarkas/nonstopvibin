@@ -31,9 +31,9 @@ use nsv_store::Store;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::daemon::{Shared, VERSION};
 use crate::parse;
 use crate::session::LOOPBACK_LIMIT;
+use crate::shared::{Shared, VERSION};
 
 const BODY_LIMIT: usize = 2_097_152;
 

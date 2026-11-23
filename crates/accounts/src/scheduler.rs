@@ -31,7 +31,7 @@ use crate::accounts::Accounts;
 use crate::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming,
 };
-use crate::sign_in::about;
+use crate::task::about;
 use crate::usage::{full_page, parse_page};
 
 /// The scheduler's periods.

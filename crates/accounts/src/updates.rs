@@ -32,9 +32,9 @@ use tokio::sync::watch;
 
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
-use crate::sandbox::Sandbox;
-use crate::sign_in::{Backends, Report, SignIn, about};
-use crate::task::{blocking, detached};
+use crate::sandbox::{Backends, Sandbox};
+use crate::sign_in::SignIn;
+use crate::task::{Report, about, blocking, detached};
 
 pub struct UpdateOptions {
     pub outside: Arc<dyn Outside>,

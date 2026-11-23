@@ -17,8 +17,8 @@ use nsv_gateway::{Activity, Catalog, Host, ProfileAuth, Refusal};
 use nsv_store::{AuthSnapshot, ProfileFacts, Store};
 use tokio::sync::watch;
 
-use crate::daemon::Shared;
 use crate::failure;
+use crate::shared::Shared;
 
 /// One auth snapshot as the gateway takes it, shared per request instead of copied.
 struct GatewayProfiles {

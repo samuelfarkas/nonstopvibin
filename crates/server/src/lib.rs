@@ -19,9 +19,11 @@ mod listener;
 pub mod panic;
 mod parse;
 mod session;
+mod shared;
 
 pub use checks::{AllowedHost, InvalidHost};
-pub use daemon::{Boundaries, CloseError, CoreOptions, Daemon, Options, StartError, VERSION};
+pub use daemon::{Boundaries, CloseError, CoreOptions, Daemon, Options, StartError};
 pub use desktop::Desktop;
 pub use panic::runtime;
 pub use session::{ServerState, Session, SessionError, ShowError};
+pub use shared::VERSION;

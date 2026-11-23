@@ -7,14 +7,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nsv_core::pool::{NoHooks, Pool};
+use nsv_core::pool::{Backend, NoHooks, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_files::{DataDir, owner_only_directory, unique_directory};
 use nsv_store::Store;
 
-use crate::sign_in::Backends;
 use crate::task::blocking;
+
+/// Launches a data directory's cores: `Processes::new(directory)` in the daemon, so a throwaway
+/// store's cores are recorded in its own ledger.
+pub type Backends = Arc<dyn Fn(&DataDir) -> Arc<dyn Backend> + Send + Sync>;
 
 pub(crate) struct Sandbox {
     pub(crate) directory: DataDir,

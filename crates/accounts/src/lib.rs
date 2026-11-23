@@ -21,3 +21,6 @@ pub mod source;
 mod task;
 pub mod updates;
 pub mod usage;
+
+pub use sandbox::Backends;
+pub use task::Report;
