@@ -1,5 +1,5 @@
-//! The shell alone and idle: the tray registered, no window. `tests/desktop.rs`'s idle
-//! measurement runs it to price the daemon's desktop side.
+//! The shell alone and idle: the tray registered, no window. The idle measurement in
+//! `tests/integration/desktop.rs` runs it to price the daemon's desktop side.
 
 use std::process::ExitCode;
 

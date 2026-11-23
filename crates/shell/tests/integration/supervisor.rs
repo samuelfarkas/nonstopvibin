@@ -1,21 +1,17 @@
 //! The supervisor over a real pipe, with a shell script playing the window helper: it says
 //! what the test wrote for it and records what the shell sends. No X server needed, except for
 //! the browser fallback, which needs the fake `xdg-open` that tests/gui.sh puts on PATH.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(target_os = "linux")]
-
-mod common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use common::{directory, exited, options, spawn_shell, wait_until};
 use nsv_shell::HostEvent;
 use nsv_testkit::shell::{Host, PROFILE, TOKEN};
 use serde_json::{Value, json};
+
+use crate::common::{directory, exited, options, spawn_shell, wait_until};
 
 /// Helper number n says `say.n`, records its stdin in `heard.n` until the pipe closes, and
 /// exits; `crash.n` makes it exit 1 right after speaking.

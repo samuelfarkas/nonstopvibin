@@ -2,11 +2,6 @@
 //! registered with a `StatusNotifierWatcher` this test serves on the session bus, and every
 //! click made over D-Bus as a tray host would. Run by tests/gui.sh, which provides Xvfb, a
 //! session bus, the built helper and a fake `xdg-open`.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-#![cfg(target_os = "linux")]
-
-mod common;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -19,11 +14,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use common::{TIMEOUT, directory, exited, options, pause, spawn_shell, wait_until};
 use nsv_shell::TrayStatus;
 use nsv_testkit::shell::Host;
 use serde_json::{Value, json};
 use zbus::zvariant::{OwnedValue, Value as Variant};
+
+use crate::common::{TIMEOUT, directory, exited, options, pause, spawn_shell, wait_until};
 
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 const PAGE: &str =
@@ -383,8 +379,8 @@ fn the_tray_drives_the_helper_and_quits_cleanly() {
     assert_eq!(window_processes(), Vec::<u32>::new());
 
     // The icon and tooltip follow the status.
-    let stopped = pixmap(include_bytes!("../../../public/tray/linux-stopped.png"));
-    let ball = pixmap(include_bytes!("../../../public/tray/linux-ball.png"));
+    let stopped = pixmap(include_bytes!("../../../../public/tray/linux-stopped.png"));
+    let ball = pixmap(include_bytes!("../../../../public/tray/linux-ball.png"));
     assert_eq!(
         item.look(),
         ("NonstopVibin · proxy off".to_owned(), stopped)

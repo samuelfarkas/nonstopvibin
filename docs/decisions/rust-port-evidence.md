@@ -60,7 +60,8 @@ States: (a) started, no window ever opened; (b) after three open/close cycles an
 
 `nsv-shell` alone (`crates/shell/examples/idle.rs`, release build): its tray registered with a
 StatusNotifierWatcher on a session bus, no window ever opened, measured for 60 s after a 5 s
-settle by `crates/shell/tests/desktop.rs` (`measure_idle`). Three runs at load 0.4–2.7.
+settle by `crates/shell/tests/integration/desktop.rs` (`measure_idle`). Three runs at load
+0.4–2.7.
 
 | Measure                                | Value (3 runs)      |
 | -------------------------------------- | ------------------- |
