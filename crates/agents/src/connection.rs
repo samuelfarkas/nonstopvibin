@@ -102,7 +102,7 @@ pub(crate) const fn definition(agent: Agent) -> &'static Definition {
 pub(crate) const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 
 /// The environment variables that move agent configuration, which a service must forward: each
-/// agent's own, then [`XDG_CONFIG_HOME`] if an agent follows it.
+/// agent's own, then `XDG_CONFIG_HOME` if an agent follows it.
 #[must_use]
 pub fn agent_environment() -> Vec<&'static str> {
     let directories = Agent::ALL

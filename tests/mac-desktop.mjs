@@ -551,7 +551,7 @@ try {
     },
   );
 
-  await check("the tray menu lists main.ts's items", async () => {
+  await check("the tray menu lists its items", async () => {
     const items = await trayMenu();
     screenshot("tray-menu");
     keyCode(53);

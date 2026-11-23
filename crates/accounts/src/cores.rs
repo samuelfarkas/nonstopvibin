@@ -333,7 +333,7 @@ impl Cores {
     }
 
     /// Runs `change` after the credential changes queued before it, so it ends even if its
-    /// caller stops waiting; see [`Credentials::queue`].
+    /// caller stops waiting; see `Credentials::queue`.
     ///
     /// # Errors
     /// What `change` returns.
@@ -395,7 +395,7 @@ impl Cores {
         self.updates.state()
     }
 
-    /// `POST /core/check`; see [`CoreUpdates::check`].
+    /// `POST /core/check`; see `CoreUpdates::check`.
     ///
     /// # Errors
     /// The check's.
@@ -403,7 +403,7 @@ impl Cores {
         self.updates.check().await
     }
 
-    /// `POST /core/install`; see [`CoreUpdates::install`].
+    /// `POST /core/install`; see `CoreUpdates::install`.
     ///
     /// # Errors
     /// The install's.
@@ -411,7 +411,7 @@ impl Cores {
         self.updates.install(version).await
     }
 
-    /// `DELETE /core/install`; see [`CoreUpdates::use_bundled`].
+    /// `DELETE /core/install`; see `CoreUpdates::use_bundled`.
     ///
     /// # Errors
     /// The switch's.
@@ -496,7 +496,7 @@ impl Cores {
         self.sign_in.callback(profile, redirect).await
     }
 
-    /// `POST …/credentials`; see [`Credentials::import`].
+    /// `POST …/credentials`; see `Credentials::import`.
     ///
     /// # Errors
     /// The import's.
@@ -510,7 +510,7 @@ impl Cores {
         Ok(account)
     }
 
-    /// Imports a credential that replaces `account`'s; see [`Credentials::import_credential`].
+    /// Imports a credential that replaces `account`'s; see `Credentials::import_credential`.
     ///
     /// # Errors
     /// The import's.
@@ -528,7 +528,7 @@ impl Cores {
         Ok(imported)
     }
 
-    /// `POST …/api-accounts`; see [`Credentials::add_api_account`].
+    /// `POST …/api-accounts`; see `Credentials::add_api_account`.
     ///
     /// # Errors
     /// The change's.
@@ -542,7 +542,7 @@ impl Cores {
         added
     }
 
-    /// `PATCH …/accounts/:accountId`; see [`Credentials::set_account`].
+    /// `PATCH …/accounts/:accountId`; see `Credentials::set_account`.
     ///
     /// # Errors
     /// The change's.
@@ -555,7 +555,7 @@ impl Cores {
         self.credentials.set_account(profile, account, patch).await
     }
 
-    /// `DELETE …/accounts/:accountId`; see [`Credentials::remove_account`].
+    /// `DELETE …/accounts/:accountId`; see `Credentials::remove_account`.
     ///
     /// # Errors
     /// The change's.
@@ -594,7 +594,7 @@ impl Cores {
         self.resets.consume(profile, account, credit_id).await
     }
 
-    /// At startup: profiles start from the core [`CoreUpdates::select`] picks. Cores a dead
+    /// At startup: profiles start from the core `CoreUpdates::select` picks. Cores a dead
     /// earlier instance left are stopped (the profiles' and the pending sign-ins'), pending
     /// sign-ins and core checks are deleted, the profiles start and scheduling begins. An installed build then checks for a core update
     /// in the background; offline stays quiet, as Settings checks again.

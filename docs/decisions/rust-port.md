@@ -207,30 +207,10 @@ every commit.
 
 #### Switching packaging
 
-`scripts/package-{mac,linux,server}.ts`, `verify-rust-package.ts`, `release-tools.ts`,
-`rust-licenses.ts`, `sign-release.ts` and `.github/workflows/rust.yml` exist beside the
-Electron and Bun paths until the switch commits, which:
+Both switch commits have landed: `scripts/package-{mac,linux,server}.ts` package the Rust
+daemon and app, the Electron, Bun-compile and TypeScript core-install paths are gone, and
+`crates/core/examples/core-tool.rs` installs and pins the core. What remains:
 
-- Switch 1: delete `scripts/build-server.mjs`; `dist:server` runs `package-server.ts`;
-  `renderInstaller` defaults to `rustServerArchive`; `tests/server-archive-smoke.mjs` takes
-  its entries and exit code from `scripts/` instead of `src/server/host-defaults.ts`;
-  docs/server.md's compatibility section describes the static daemon.
-- Switch 2: delete package.json `build`, `start`, `package`, `dist:mac`, `dist:linux`,
-  `dist:built` and the Electron dependencies; `scripts/build-desktop.mjs` (keep its
-  `THIRD-PARTY.txt` generation, which `stageLicences` needs, in `bun run build`),
-  `sign-mac.cjs`, `validate-core.cjs`, `verify-package.cjs` and
-  `build/entitlements.mac.plist`. Move the build-side core code (`core-binary.ts`,
-  `core-install.ts`) to `scripts/`, which `install-core.mjs`, `pin-core.mjs` and the
-  packaging scripts import. `verify-release.mjs` reads `product.feed` and `desktopTargets`
-  from `scripts/distribution.ts`; the identity test in `tests/rust-distribution.test.mjs`
-  compares with literals instead of package.json; the Electron tests in
-  `tests/distribution.test.mjs` go.
-- Workflows: delete the `desktop` and `server` jobs from `checks.yml` and move rust.yml's
-  `checks`, `desktop` and `server` jobs there, with artifacts named `nonstopvibin-<os>` and
-  `nonstopvibin-server-<arch>`; `build.yml` drops its `rust` job. The required checks
-  `build / desktop (macos-26)` and `build / desktop (ubuntu-24.04)` keep their names;
-  `build / server` becomes `build / server (x64)` and `(arm64)`, and `build / checks (...)`
-  is new. Releases then build with the `release` environment's signing secrets.
 - `tests/mac-update.mjs` builds its old version with electron-builder from the checkout.
   After switch 2 it must install a published Electron release's zip instead.
 
