@@ -64,13 +64,7 @@ pub enum HostEvent {
     ShowMain,
 }
 
-/// The shell's line on the daemon's standard error. The helper logs the same way.
+/// A shell warning in the daemon's log, through the subscriber the CLI installs.
 fn log(message: std::fmt::Arguments<'_>) {
-    #[expect(
-        clippy::print_stderr,
-        reason = "the daemon's log is its standard error"
-    )]
-    {
-        eprintln!("nonstopvibin: {message}");
-    }
+    tracing::warn!("{message}");
 }
