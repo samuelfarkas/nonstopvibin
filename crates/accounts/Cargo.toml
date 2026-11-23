@@ -13,6 +13,15 @@ nsv-domain.workspace = true
 nsv-store.workspace = true
 nsv-net.workspace = true
 nsv-core.workspace = true
+getrandom = { workspace = true, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [lints]
 workspace = true

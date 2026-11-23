@@ -502,10 +502,16 @@ dependencies = [
 name = "nsv-accounts"
 version = "0.2.0"
 dependencies = [
+ "getrandom 0.4.3",
  "nsv-core",
  "nsv-domain",
  "nsv-net",
  "nsv-store",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
