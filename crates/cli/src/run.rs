@@ -3,17 +3,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::SystemTime;
 
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_desktop::pipe::Failure;
 use nsv_domain::endpoint::{LOOPBACK_HOST, session_link};
-use nsv_domain::time::{epoch_ms, iso_string};
+use nsv_domain::time::iso_string;
 use nsv_files::{DataDir, LockError, ServerLock};
-use nsv_net::Https;
-use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
+use nsv_server::{AllowedHost, Boundaries, CoreOptions, DEV_HOST, Daemon, Options, Session, panic};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 use crate::desktop::Desktop;
@@ -96,10 +93,6 @@ impl Signals {
     }
 }
 
-fn now() -> i64 {
-    epoch_ms(SystemTime::now())
-}
-
 /// Starts the daemon, cancelling on a signal. `None` when a signal came first: everything
 /// started is stopped again.
 async fn start(
@@ -107,8 +100,9 @@ async fn start(
     options: Options,
     lock: ServerLock,
 ) -> Result<Option<Daemon>, CliError> {
+    let boundaries = Boundaries::production().map_err(CliError::from_display)?;
     let daemon = tokio::select! {
-        started = Daemon::start(options, lock) => {
+        started = Daemon::start(options, boundaries, lock) => {
             started.map_err(CliError::from_display)?
         }
         () = signals.received() => return Ok(None),
@@ -165,17 +159,13 @@ fn agents() -> Result<AgentDirectories, CliError> {
     AgentDirectories::from_environment().map_err(CliError::from_display)
 }
 
-fn https() -> Result<Https, CliError> {
-    Https::new().map_err(CliError::from_display)
-}
-
 /// `serve`: the headless server in the foreground. With `NONSTOPVIBIN_DEVELOPMENT=1`, a build
 /// run from its source checkout (`bun run dev`) also accepts the Vite development server's
 /// Host and Origin and starts without its core; packaged builds ignore the variable.
 pub(crate) async fn serve(
     directory: DataDir,
     port: u16,
-    allow_hosts: Vec<String>,
+    allow_hosts: Vec<AllowedHost>,
 ) -> Result<u8, CliError> {
     let mut signals = Signals::new()?;
     if let Some(existing) = Session::read(&directory).map_err(CliError::from_display)?
@@ -201,7 +191,7 @@ pub(crate) async fn serve(
         port,
         allow_hosts,
         development,
-        desktop: false,
+        desktop: None,
         client: layout.client,
         core: CoreOptions {
             binary: layout.core,
@@ -212,10 +202,6 @@ pub(crate) async fn serve(
             allow_missing: development,
         },
         agents: agents()?,
-        backends: processes(),
-        outside: Arc::new(https()?),
-        clock: now,
-        timing: *TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
@@ -250,7 +236,8 @@ pub(crate) fn desktop(background: bool) -> ExitCode {
         }
     };
     nsv_shell::run_desktop(move |link| {
-        let result = crate::runtime()
+        let result = nsv_server::runtime()
+            .map_err(CliError::from_display)
             .and_then(|runtime| runtime.block_on(desktop_daemon(directory, background, link)));
         result.unwrap_or_else(|error| {
             could_not_start(&error.message);
@@ -291,11 +278,12 @@ async fn desktop_daemon(
         _ => DESKTOP_PORT,
     };
     let layout = Layout::detect();
+    let desktop = nsv_server::Desktop::default();
     let options = Options {
         port,
         allow_hosts: Vec::new(),
         development: false,
-        desktop: true,
+        desktop: Some(desktop.clone()),
         client: layout.client,
         core: CoreOptions {
             binary: layout.core,
@@ -306,10 +294,6 @@ async fn desktop_daemon(
             allow_missing: !layout.packaged,
         },
         agents: agents()?,
-        backends: processes(),
-        outside: Arc::new(https()?),
-        clock: now,
-        timing: *TIMING,
     };
     let Some(daemon) = start(&mut signals, options, lock).await? else {
         return Ok(0);
@@ -325,7 +309,10 @@ async fn desktop_daemon(
         packaged: layout.packaged,
         login,
     };
-    let host = Desktop(daemon.clone());
+    let host = Desktop {
+        daemon: daemon.clone(),
+        desktop,
+    };
     let shell = nsv_shell::run(&host, shell_options, link);
     Ok(run_until_stopped(&daemon, &mut signals, shell, true).await)
 }

@@ -208,9 +208,20 @@ pub struct CreditBody {
     pub credit_id: String,
 }
 
-/// A route under `/api`.
+/// A route under `/api`, by the path parameters it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
+    /// No parameters: the path matches exactly.
+    Plain(PlainRoute),
+    /// `/profiles/:profileId…`.
+    Profile(ProfileRoute),
+    /// `/profiles/:profileId/accounts/:accountId…`.
+    Account(AccountRoute),
+}
+
+/// A route whose path names no parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlainRoute {
     State,
     Retention,
     CoreCheck,
@@ -218,7 +229,13 @@ pub enum Route {
     CoreBundled,
     ImportSources,
     CreateProfile,
-    PatchProfile,
+    DesktopShow,
+}
+
+/// A route under one profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileRoute {
+    Patch,
     Start,
     Refresh,
     Key,
@@ -236,96 +253,164 @@ pub enum Route {
     Callback,
     Import,
     ImportSource,
-    SetAccount,
-    RemoveAccount,
+    ApiAccount,
+}
+
+/// A route under one account of a profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountRoute {
+    Set,
+    Remove,
     ResetCredits,
     ConsumeReset,
-    ApiAccount,
-    DesktopShow,
 }
 
 /// `server.ts`'s route table, in its order: a 405 lists methods in this order. Each entry is
 /// `(method, path, route)`; `:name` path segments are parameters. `src/shared/api.ts` types
 /// every key (`bun run wire:check`).
 pub const ROUTES: &[(&str, &str, Route)] = &[
-    ("GET", "/state", Route::State),
-    ("PUT", "/usage-retention", Route::Retention),
-    ("POST", "/core/check", Route::CoreCheck),
-    ("POST", "/core/install", Route::CoreInstall),
-    ("DELETE", "/core/install", Route::CoreBundled),
-    ("GET", "/import-sources", Route::ImportSources),
-    ("POST", "/profiles", Route::CreateProfile),
-    ("PATCH", "/profiles/:profileId", Route::PatchProfile),
-    ("POST", "/profiles/:profileId/start", Route::Start),
-    ("POST", "/profiles/:profileId/refresh", Route::Refresh),
-    ("GET", "/profiles/:profileId/key", Route::Key),
-    ("GET", "/profiles/:profileId/models", Route::Models),
-    ("GET", "/profiles/:profileId/usage", Route::Usage),
+    ("GET", "/state", Route::Plain(PlainRoute::State)),
+    (
+        "PUT",
+        "/usage-retention",
+        Route::Plain(PlainRoute::Retention),
+    ),
+    ("POST", "/core/check", Route::Plain(PlainRoute::CoreCheck)),
+    (
+        "POST",
+        "/core/install",
+        Route::Plain(PlainRoute::CoreInstall),
+    ),
+    (
+        "DELETE",
+        "/core/install",
+        Route::Plain(PlainRoute::CoreBundled),
+    ),
+    (
+        "GET",
+        "/import-sources",
+        Route::Plain(PlainRoute::ImportSources),
+    ),
+    ("POST", "/profiles", Route::Plain(PlainRoute::CreateProfile)),
+    (
+        "PATCH",
+        "/profiles/:profileId",
+        Route::Profile(ProfileRoute::Patch),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/start",
+        Route::Profile(ProfileRoute::Start),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/refresh",
+        Route::Profile(ProfileRoute::Refresh),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/key",
+        Route::Profile(ProfileRoute::Key),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/models",
+        Route::Profile(ProfileRoute::Models),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/usage",
+        Route::Profile(ProfileRoute::Usage),
+    ),
     (
         "GET",
         "/profiles/:profileId/agent-setup",
-        Route::AgentStatus,
+        Route::Profile(ProfileRoute::AgentStatus),
     ),
     (
         "POST",
         "/profiles/:profileId/agent-setup",
-        Route::AgentInstall,
+        Route::Profile(ProfileRoute::AgentInstall),
     ),
     (
         "DELETE",
         "/profiles/:profileId/agent-setup",
-        Route::AgentRemove,
+        Route::Profile(ProfileRoute::AgentRemove),
     ),
     (
         "POST",
         "/profiles/:profileId/agent-check",
-        Route::AgentCheck,
+        Route::Profile(ProfileRoute::AgentCheck),
     ),
-    ("POST", "/profiles/:profileId/oauth", Route::SignIn),
-    ("GET", "/profiles/:profileId/oauth", Route::SignInStatus),
-    ("DELETE", "/profiles/:profileId/oauth", Route::SignInCancel),
+    (
+        "POST",
+        "/profiles/:profileId/oauth",
+        Route::Profile(ProfileRoute::SignIn),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/oauth",
+        Route::Profile(ProfileRoute::SignInStatus),
+    ),
+    (
+        "DELETE",
+        "/profiles/:profileId/oauth",
+        Route::Profile(ProfileRoute::SignInCancel),
+    ),
     (
         "POST",
         "/profiles/:profileId/oauth-confirm",
-        Route::SignInConfirm,
+        Route::Profile(ProfileRoute::SignInConfirm),
     ),
     (
         "GET",
         "/profiles/:profileId/oauth-session",
-        Route::SignInSession,
+        Route::Profile(ProfileRoute::SignInSession),
     ),
-    ("POST", "/profiles/:profileId/callback", Route::Callback),
-    ("POST", "/profiles/:profileId/import", Route::Import),
+    (
+        "POST",
+        "/profiles/:profileId/callback",
+        Route::Profile(ProfileRoute::Callback),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/import",
+        Route::Profile(ProfileRoute::Import),
+    ),
     (
         "POST",
         "/profiles/:profileId/import-source",
-        Route::ImportSource,
+        Route::Profile(ProfileRoute::ImportSource),
     ),
     (
         "PATCH",
         "/profiles/:profileId/accounts/:accountId",
-        Route::SetAccount,
+        Route::Account(AccountRoute::Set),
     ),
     (
         "DELETE",
         "/profiles/:profileId/accounts/:accountId",
-        Route::RemoveAccount,
+        Route::Account(AccountRoute::Remove),
     ),
     (
         "GET",
         "/profiles/:profileId/accounts/:accountId/reset-credits",
-        Route::ResetCredits,
+        Route::Account(AccountRoute::ResetCredits),
     ),
     (
         "POST",
         "/profiles/:profileId/accounts/:accountId/reset-credits",
-        Route::ConsumeReset,
+        Route::Account(AccountRoute::ConsumeReset),
     ),
     (
         "POST",
         "/profiles/:profileId/api-account",
-        Route::ApiAccount,
+        Route::Profile(ProfileRoute::ApiAccount),
     ),
     // A second desktop launch; only the desktop app serves it.
-    ("POST", "/desktop/show", Route::DesktopShow),
+    (
+        "POST",
+        "/desktop/show",
+        Route::Plain(PlainRoute::DesktopShow),
+    ),
 ];

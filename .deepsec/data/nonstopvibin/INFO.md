@@ -16,7 +16,7 @@ exhaustion.
 
 ## Auth shape
 
-- `App::handle` in `crates/server/src/http.rs` checks the Host (`valid_host`,
+- `Checks::admit` in `crates/server/src/checks.rs` checks the Host (`valid_host`,
   `allowed_host`) and Origin before the `/api/` branch reaches management routes.
   Management uses a per-launch random session token distinct from profile API keys.
 - `route` in `crates/gateway/src/route.rs` authenticates profile keys with

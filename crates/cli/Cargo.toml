@@ -18,7 +18,6 @@ nsv-core.workspace = true
 nsv-desktop.workspace = true
 nsv-domain.workspace = true
 nsv-files.workspace = true
-nsv-net.workspace = true
 nsv-server.workspace = true
 nsv-shell.workspace = true
 # preserve_order: `url --json` and server.json keep JSON.stringify's key order.

@@ -10,11 +10,7 @@ use nsv_server::panic;
 #[test]
 fn only_a_panic_no_one_waits_on_starts_the_shutdown() {
     panic::install_hook();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
-        .thread_name(panic::BLOCKING_THREAD)
-        .build()
-        .unwrap();
+    let runtime = panic::runtime().unwrap();
     runtime.block_on(async {
         // A blocking task's caller receives the panic as its JoinError.
         let joined = tokio::task::spawn_blocking(|| panic!("blocking")).await;

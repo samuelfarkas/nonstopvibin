@@ -2,35 +2,41 @@
 //! it does, and how it shuts down.
 
 use std::io;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hyper::body::Incoming;
+use hyper::{Request, Response};
 use nsv_accounts::catalog::ModelCatalog;
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
-use nsv_accounts::scheduler::Timing;
+use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
 use nsv_core::pool::{Backend, Processes, READY};
-use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::{self, Origin};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_domain::random;
 use nsv_domain::secret::SessionToken;
 use nsv_domain::sync::locked;
+use nsv_domain::time::epoch_ms;
 use nsv_files::{DataDir, ServerLock};
-use nsv_gateway::Gateway;
-use nsv_store::{AuthSnapshot, ProfileFacts, Store, StoreError, Vault, VaultError};
-use tokio::net::TcpListener;
-use tokio::sync::{Notify, OnceCell, broadcast, watch};
+use nsv_gateway::{Body, Gateway, Refusal};
+use nsv_net::{Https, NetError};
+use nsv_store::{AuthSnapshot, Store, StoreError, Vault, VaultError};
+use tokio::sync::{OnceCell, watch};
+use tokio::task::JoinError;
 
-use crate::http::{GatewayHost, Phase, valid_allow_host};
+use crate::api::Api;
+use crate::assets::Assets;
+use crate::checks::{Admission, AllowedHost, Checks};
+use crate::desktop::Desktop;
+use crate::failure::{self, Errors};
+use crate::gateway_host::GatewayHost;
+use crate::listener::{self, Phase, advance};
 use crate::session::Session;
 
 /// This build's version, as `package.json` states it.
@@ -40,32 +46,49 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Options {
     /// The loopback port; 0 takes any free one.
     pub port: u16,
-    /// Exact DNS names an HTTPS reverse proxy (such as Tailscale Serve) uses for the interface
-    /// and the management API. The agent gateway stays loopback-only.
-    pub allow_hosts: Vec<String>,
+    /// The names an HTTPS reverse proxy (such as Tailscale Serve) uses for the interface and the
+    /// management API. The agent gateway stays loopback-only.
+    pub allow_hosts: Vec<AllowedHost>,
     /// Accepts the Vite development server's Host and Origin.
     pub development: bool,
-    /// The desktop app: `POST /api/desktop/show`, and the tray's status.
-    pub desktop: bool,
+    /// The desktop app's part: `POST /api/desktop/show`, the tray's status and the shell's
+    /// events.
+    pub desktop: Option<Desktop>,
     /// The built interface, an absolute path.
     pub client: PathBuf,
     pub core: CoreOptions,
     pub agents: AgentDirectories,
-    /// Launches a data directory's cores: [`processes`] outside tests.
+}
+
+/// What the daemon reaches outside itself; tests replace each.
+pub struct Boundaries {
+    /// Launches a data directory's cores.
     pub backends: Backends,
     /// The outside requests: models.dev, the euro rate, provider APIs, the core feed and
     /// release downloads.
     pub outside: Arc<dyn Outside>,
     /// Milliseconds since the epoch, for usage periods, pricing and retention.
     pub clock: fn() -> i64,
-    /// The scheduler's periods: [`nsv_accounts::scheduler::TIMING`] outside tests.
+    /// The scheduler's periods.
     pub timing: Timing,
 }
 
-/// Each data directory's cores run as processes of the core binary.
-#[must_use]
-pub fn processes() -> Backends {
-    Arc::new(|directory: &DataDir| -> Arc<dyn Backend> { Arc::new(Processes::new(directory)) })
+impl Boundaries {
+    /// Cores as processes of the core binary, HTTPS, the system clock and the scheduler's
+    /// periods.
+    ///
+    /// # Errors
+    /// When the TLS client cannot be configured.
+    pub fn production() -> Result<Self, NetError> {
+        Ok(Self {
+            backends: Arc::new(|directory: &DataDir| -> Arc<dyn Backend> {
+                Arc::new(Processes::new(directory))
+            }),
+            outside: Arc::new(Https::new()?),
+            clock: || epoch_ms(SystemTime::now()),
+            timing: *TIMING,
+        })
+    }
 }
 
 /// Which core profiles start from.
@@ -83,24 +106,37 @@ pub struct CoreOptions {
     pub allow_missing: bool,
 }
 
+/// What kept the daemon from starting or restoring.
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
-    #[error("Invalid allowed host: {0}")]
-    InvalidHost(String),
     #[error(
         "Port {0} on 127.0.0.1 is already in use. Stop the other program, or choose another port with --port."
     )]
     PortInUse(u16),
+    /// The loopback port could not be bound or read back.
     #[error(transparent)]
-    App(#[from] AppError),
-    #[error(transparent)]
-    Store(#[from] StoreError),
+    Listen(io::Error),
+    /// The vault key could not be read or created.
     #[error(transparent)]
     Vault(#[from] VaultError),
+    /// The task that opens the vault ended without an answer.
     #[error(transparent)]
-    Io(#[from] io::Error),
-    #[error("{0}")]
-    Other(String),
+    VaultTask(#[from] JoinError),
+    /// The store did not open, prune old usage or list the profiles.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// No entropy for the session token or the interface's version.
+    #[error(transparent)]
+    Entropy(io::Error),
+    /// The port's origin did not parse.
+    #[error("The daemon's origin is not valid: {0}")]
+    Origin(String),
+    /// The cores could not be set up, or the core could not be selected and checked.
+    #[error(transparent)]
+    Cores(AppError),
+    /// `server.json` could not be written.
+    #[error(transparent)]
+    Session(io::Error),
 }
 
 /// What closing failed to do; every later step still ran.
@@ -108,119 +144,90 @@ pub enum StartError {
 #[error("{0}")]
 pub struct CloseError(String);
 
-/// The error list the interface shows: the last five distinct messages, oldest first.
-#[derive(Debug, Default)]
-pub(crate) struct Errors(Mutex<Vec<String>>);
-
-impl Errors {
-    pub(crate) fn report(&self, message: String) {
-        let mut list = locked(&self.0);
-        list.retain(|known| *known != message);
-        list.push(message);
-        let excess = list.len().saturating_sub(5);
-        list.drain(..excess);
-    }
-
-    pub(crate) fn list(&self) -> Vec<String> {
-        locked(&self.0).clone()
-    }
+/// What every part of the daemon reads: where it listens, its clock, the error list and the
+/// desktop's part.
+pub(crate) struct Shared {
+    pub(crate) port: u16,
+    /// `http://127.0.0.1:<port>`.
+    pub(crate) origin: Origin,
+    pub(crate) clock: fn() -> i64,
+    pub(crate) errors: Errors,
+    pub(crate) desktop: Option<Desktop>,
 }
 
-/// The tray's view: serving profiles by name, and whether any request streams. Only the
-/// desktop keeps it current.
-pub(crate) struct Tray {
-    status: watch::Sender<TrayStatus>,
-    facts: watch::Receiver<ProfileFacts>,
+/// The running daemon's parts.
+pub(crate) struct App {
+    shared: Arc<Shared>,
+    checks: Checks,
+    api: Api,
+    assets: Assets,
+    gateway: Gateway<GatewayHost>,
+    store: Store,
+    /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
+    /// and core updates.
+    cores: Arc<Cores>,
+    agents: Arc<AgentSetup>,
+    prices: Arc<UsagePrices>,
+    phase: watch::Sender<Phase>,
+    directory: DataDir,
+    lock: Mutex<Option<ServerLock>>,
+    /// What `server.json` says, once [`Daemon::restore`] wrote it.
+    session: OnceLock<Session>,
+    /// The close's outcome: it runs once, and a caller dropped part-way lets the next one run it.
+    closed: OnceCell<Result<(), CloseError>>,
 }
 
-impl Tray {
-    fn new(facts: watch::Receiver<ProfileFacts>) -> Self {
-        Self {
-            status: watch::Sender::new(TrayStatus::default()),
-            facts,
+impl App {
+    /// Answers a request once it passed the checks, and the refusal otherwise.
+    pub(crate) async fn dispatch(&self, request: Request<Incoming>) -> Response<Body> {
+        let answered = match self.checks.admit(&request) {
+            Admission::Closed(status) => return failure::closed(status),
+            Admission::WebSocket => return self.gateway.upgrade(request).await,
+            Admission::Gateway => {
+                return self
+                    .gateway
+                    .proxy(request)
+                    .await
+                    .unwrap_or_else(Refusal::into_response);
+            }
+            Admission::Refused(error) => Err(error),
+            Admission::Api(url) => self.api.answer(request, &url).await,
+            Admission::Asset { path, head } => self.assets.answer(&request, &path, head).await,
+        };
+        answered
+            .unwrap_or_else(|error| failure::refusal(error, &self.shared.errors).into_response())
+    }
+
+    fn update_tray(&self) {
+        if let Some(desktop) = &self.shared.desktop {
+            desktop.update(&self.cores, &self.store.facts());
         }
     }
 
-    pub(crate) fn has(&self, profile: &ProfileId) -> bool {
-        self.facts.borrow().iter().any(|fact| fact.id == *profile)
+    async fn close_resources(&self) -> Result<(), CloseError> {
+        let mut failures = Vec::new();
+        advance(&self.phase, Phase::Draining);
+        if let Err(error) = self.agents.close().await {
+            failures.push(error.to_string());
+        }
+        if let Err(error) = self.cores.shutdown().await {
+            failures.push(error.message);
+        }
+        self.prices.close().await;
+        advance(&self.phase, Phase::Closed);
+        self.store.close().await;
+        if let Err(error) = Session::remove(&self.directory, std::process::id()) {
+            failures.push(error.to_string());
+        }
+        if let Some(lock) = locked(&self.lock).take() {
+            lock.release();
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(CloseError(failures.join(" ")))
+        }
     }
-
-    /// `Application.status()`: a dormant profile still serves, since its core starts on the next
-    /// request. Tells the tray only when something it shows changed.
-    pub(crate) fn update(&self, cores: &Cores) {
-        let facts = Arc::clone(&self.facts.borrow());
-        let status = cores.statuses(|status| {
-            let mut tray = TrayStatus::default();
-            for fact in facts.iter() {
-                let status = status(&fact.id);
-                if status.serving {
-                    tray.running.push(fact.name.clone());
-                    tray.streaming |= status.streaming;
-                }
-            }
-            tray
-        });
-        self.status.send_if_modified(|current| {
-            let changed = *current != status;
-            *current = status;
-            changed
-        });
-    }
-}
-
-/// What the daemon's hosts, features and shell share.
-pub(crate) struct Shared {
-    pub(crate) errors: Errors,
-    pub(crate) tray: Tray,
-    pub(crate) desktop: bool,
-    events: broadcast::Sender<HostEvent>,
-    closing: AtomicBool,
-    stop: Notify,
-}
-
-impl Shared {
-    pub(crate) fn sign_in_accepted(&self) {
-        // No receiver means no shell: nothing to bring forward.
-        let _ = self.events.send(HostEvent::SignInAccepted);
-    }
-
-    pub(crate) fn show_main(&self) {
-        let _ = self.events.send(HostEvent::ShowMain);
-    }
-
-    pub(crate) fn closing(&self) -> bool {
-        self.closing.load(Ordering::Acquire)
-    }
-}
-
-/// Everything a request may reach.
-pub(crate) struct App {
-    pub(crate) shared: Arc<Shared>,
-    pub(crate) directory: DataDir,
-    pub(crate) allow_hosts: Vec<String>,
-    pub(crate) development: bool,
-    pub(crate) client: PathBuf,
-    pub(crate) clock: fn() -> i64,
-    pub(crate) port: u16,
-    pub(crate) origin: Origin,
-    pub(crate) base: url::Url,
-    pub(crate) token: SessionToken,
-    /// Starts every static `ETag`: file times in a package are not trustworthy, so unhashed
-    /// files revalidate after each launch.
-    pub(crate) asset_version: String,
-    pub(crate) store: Store,
-    /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
-    /// and core updates.
-    pub(crate) cores: Arc<Cores>,
-    pub(crate) gateway: Gateway<GatewayHost>,
-    pub(crate) agents: AgentSetup,
-    pub(crate) catalog: Arc<ModelCatalog>,
-    pub(crate) prices: Arc<UsagePrices>,
-    pub(crate) imports: Arc<Mutex<ImportCatalog>>,
-    pub(crate) phase: watch::Sender<Phase>,
-    lock: Mutex<Option<ServerLock>>,
-    started_at: Mutex<Option<i64>>,
-    closed: OnceCell<Result<(), CloseError>>,
 }
 
 /// The running daemon. Clones share it.
@@ -237,23 +244,16 @@ impl Daemon {
     /// are served from here on. Then [`Daemon::restore`] starts the profiles.
     ///
     /// # Errors
-    /// An invalid allowed host, a port in use, or a store that does not open.
-    pub async fn start(options: Options, lock: ServerLock) -> Result<Self, StartError> {
-        if let Some(host) = options
-            .allow_hosts
-            .iter()
-            .find(|host| !valid_allow_host(host))
-        {
-            return Err(StartError::InvalidHost(
-                serde_json::Value::String(host.clone()).to_string(),
-            ));
-        }
+    /// A port in use, or a store that does not open.
+    pub async fn start(
+        options: Options,
+        boundaries: Boundaries,
+        lock: ServerLock,
+    ) -> Result<Self, StartError> {
         let directory = lock.directory().clone();
-        let vault = tokio::task::spawn_blocking(move || Vault::open(&directory))
-            .await
-            .map_err(|error| StartError::Other(error.to_string()))??;
+        let vault = tokio::task::spawn_blocking(move || Vault::open(&directory)).await??;
         let store = Store::open(lock.directory(), vault).await?;
-        match Self::assemble(options, lock, store.clone()).await {
+        match Self::assemble(options, boundaries, lock, store.clone()).await {
             Ok(daemon) => Ok(daemon),
             Err(error) => {
                 store.close().await;
@@ -264,87 +264,101 @@ impl Daemon {
 
     async fn assemble(
         options: Options,
+        boundaries: Boundaries,
         lock: ServerLock,
         store: Store,
     ) -> Result<Self, StartError> {
-        let now = UNIX_EPOCH + Duration::from_millis(u64::try_from((options.clock)()).unwrap_or(0));
+        let Boundaries {
+            backends,
+            outside,
+            clock,
+            timing,
+        } = boundaries;
+        let now = UNIX_EPOCH + Duration::from_millis(u64::try_from(clock()).unwrap_or(0));
         store.call(move |db| db.prune_usage(now)).await?;
-        let listener = bind(options.port)?;
-        let port = listener.local_addr()?.port();
-        let origin_text = endpoint::loopback_origin(port);
-        let origin =
-            Origin::parse(&origin_text).map_err(|error| StartError::Other(error.to_string()))?;
-        let base =
-            url::Url::parse(&origin_text).map_err(|error| StartError::Other(error.to_string()))?;
+        let listener = listener::bind(options.port)?;
+        let port = listener.local_addr().map_err(StartError::Listen)?.port();
+        let origin = Origin::parse(&endpoint::loopback_origin(port))
+            .map_err(|error| StartError::Origin(error.to_string()))?;
+        let phase = watch::Sender::new(Phase::Serving);
+        let checks = Checks::new(
+            port,
+            origin.clone(),
+            options.allow_hosts,
+            options.development,
+            SessionToken::generate().map_err(StartError::Entropy)?,
+            phase.subscribe(),
+        )
+        .map_err(|error| StartError::Origin(error.to_string()))?;
         let shared = Arc::new(Shared {
-            errors: Errors::default(),
-            tray: Tray::new(store.facts()),
-            desktop: options.desktop,
-            events: broadcast::Sender::new(8),
-            closing: AtomicBool::new(false),
-            stop: Notify::new(),
-        });
-        let (reported, accepted) = (Arc::clone(&shared), Arc::clone(&shared));
-        let cores = Arc::new(Cores::new(CoresOptions {
-            store: store.clone(),
-            binary: options.core.binary,
-            backends: options.backends,
-            ready: READY,
-            timing: options.timing,
-            outside: Arc::clone(&options.outside),
-            feed: options.core.feed,
-            require_pinned_core: options.core.pinned,
-            allow_missing_core: options.core.allow_missing,
-            clock: options.clock,
-            report: Arc::new(move |message| reported.errors.report(message)),
-            sign_in_accepted: Arc::new(move || accepted.sign_in_accepted()),
-        })?);
-        let catalog = Arc::new(ModelCatalog::new(
-            Arc::clone(&options.outside),
-            options.clock,
-        ));
-        let prices = Arc::new(UsagePrices::new(options.outside, options.clock));
-        let gateway = Gateway::new(GatewayHost {
-            shared: Arc::clone(&shared),
-            auth: store.auth(),
-            profiles: Mutex::default(),
-            cores: Arc::clone(&cores),
-            catalog: Arc::clone(&catalog),
-            store: store.clone(),
-        });
-        let agents = AgentSetup::new(
-            lock.directory(),
-            connection_source(&shared, &store, &cores, port),
-            options.agents.clone(),
-        );
-        let token = SessionToken::generate()?;
-        let app = Arc::new(App {
-            imports: Arc::new(Mutex::new(ImportCatalog::new(&options.agents.home))),
-            shared,
-            directory: lock.directory().clone(),
-            allow_hosts: options.allow_hosts,
-            development: options.development,
-            client: options.client,
-            clock: options.clock,
             port,
             origin,
-            base,
-            token,
-            asset_version: random::uuid()?,
+            clock,
+            errors: Errors::default(),
+            desktop: options.desktop,
+        });
+        let (reported, accepted) = (Arc::clone(&shared), Arc::clone(&shared));
+        let cores = Arc::new(
+            Cores::new(CoresOptions {
+                store: store.clone(),
+                binary: options.core.binary,
+                backends,
+                ready: READY,
+                timing,
+                outside: Arc::clone(&outside),
+                feed: options.core.feed,
+                require_pinned_core: options.core.pinned,
+                allow_missing_core: options.core.allow_missing,
+                clock,
+                report: Arc::new(move |message| reported.errors.report(message)),
+                sign_in_accepted: Arc::new(move || {
+                    if let Some(desktop) = &accepted.desktop {
+                        desktop.sign_in_accepted();
+                    }
+                }),
+            })
+            .map_err(StartError::Cores)?,
+        );
+        let catalog = Arc::new(ModelCatalog::new(Arc::clone(&outside), clock));
+        let prices = Arc::new(UsagePrices::new(outside, clock));
+        let imports = ImportCatalog::new(&options.agents.home);
+        let agents = Arc::new(AgentSetup::new(
+            lock.directory(),
+            connection_source(phase.subscribe(), &store, &cores, port),
+            options.agents,
+        ));
+        let app = Arc::new(App {
+            api: Api::new(
+                Arc::clone(&shared),
+                store.clone(),
+                Arc::clone(&cores),
+                Arc::clone(&agents),
+                Arc::clone(&catalog),
+                Arc::clone(&prices),
+                imports,
+            ),
+            assets: Assets::new(options.client).map_err(StartError::Entropy)?,
+            gateway: Gateway::new(GatewayHost::new(
+                Arc::clone(&shared),
+                store.clone(),
+                Arc::clone(&cores),
+                catalog,
+            )),
+            shared,
+            checks,
             store,
             cores,
-            gateway,
             agents,
-            catalog,
             prices,
-            phase: watch::Sender::new(Phase::Serving),
+            phase,
+            directory: lock.directory().clone(),
             lock: Mutex::new(Some(lock)),
-            started_at: Mutex::new(None),
+            session: OnceLock::new(),
             closed: OnceCell::new(),
         });
-        crate::http::serve(&app, listener);
-        if app.shared.desktop {
-            follow_tray(&app);
+        listener::serve(&app, listener, &app.phase);
+        if let Some(desktop) = &app.shared.desktop {
+            desktop.follow(&app.cores, app.store.facts());
         }
         Ok(Self(app))
     }
@@ -360,9 +374,9 @@ impl Daemon {
     /// read, or shutdown beginning meanwhile.
     pub async fn restore(&self) -> Result<(), StartError> {
         let app = &self.0;
-        app.cores.launch().await?;
+        app.cores.launch().await.map_err(StartError::Cores)?;
         let profiles = app.store.call(|db| db.profiles()).await?;
-        match app.agents.restore(&profiles, app.port).await {
+        match app.agents.restore(&profiles, app.shared.port).await {
             Ok(failures) => {
                 for failure in failures {
                     app.shared.errors.report(failure);
@@ -379,47 +393,39 @@ impl Daemon {
         app.update_tray();
         let session = Session {
             pid: std::process::id(),
-            port: app.port,
-            token: app.token.clone(),
-            allow_hosts: app.allow_hosts.clone(),
+            port: app.shared.port,
+            token: app.checks.token().clone(),
+            allow_hosts: app.checks.allow_hosts().to_vec(),
             version: VERSION.to_owned(),
-            started_at: (app.clock)(),
+            started_at: (app.shared.clock)(),
         };
-        session.write(&app.directory)?;
-        *locked(&app.started_at) = Some(session.started_at);
+        session.write(&app.directory).map_err(StartError::Session)?;
+        app.session.get_or_init(|| session);
         Ok(())
     }
 
     /// The loopback port it accepts on.
     #[must_use]
     pub fn port(&self) -> u16 {
-        self.0.port
+        self.0.shared.port
     }
 
     /// What `server.json` says once [`Daemon::restore`] wrote it.
     #[must_use]
     pub fn session(&self) -> Option<Session> {
-        let started_at = (*locked(&self.0.started_at))?;
-        Some(Session {
-            pid: std::process::id(),
-            port: self.0.port,
-            token: self.0.token.clone(),
-            allow_hosts: self.0.allow_hosts.clone(),
-            version: VERSION.to_owned(),
-            started_at,
-        })
+        self.0.session.get().cloned()
     }
 
     /// `http://127.0.0.1:<port>`: the only origin the desktop's windows show.
     #[must_use]
     pub fn origin(&self) -> &Origin {
-        &self.0.origin
+        &self.0.shared.origin
     }
 
     /// The session token the desktop's window helper hands the UI.
     #[must_use]
     pub fn session_token(&self) -> &SessionToken {
-        &self.0.token
+        self.0.checks.token()
     }
 
     #[must_use]
@@ -427,22 +433,15 @@ impl Daemon {
         &self.0.directory
     }
 
-    /// The tray's view of the running profiles; only the desktop keeps it current.
-    #[must_use]
-    pub fn tray_status(&self) -> watch::Receiver<TrayStatus> {
-        self.0.shared.tray.status.subscribe()
-    }
-
-    /// Sign-ins and second launches, for the desktop shell.
-    #[must_use]
-    pub fn events(&self) -> broadcast::Receiver<HostEvent> {
-        self.0.shared.events.subscribe()
-    }
-
-    /// Whether the tray knows `profile`.
+    /// Whether the store has `profile`.
     #[must_use]
     pub fn has_profile(&self, profile: &ProfileId) -> bool {
-        self.0.shared.tray.has(profile)
+        self.0
+            .store
+            .facts()
+            .borrow()
+            .iter()
+            .any(|fact| fact.id == *profile)
     }
 
     /// Shows an error in the UI's error list.
@@ -452,12 +451,15 @@ impl Daemon {
 
     /// Asks the daemon's owner to shut it down: [`Daemon::stopping`] resolves.
     pub fn stop(&self) {
-        self.0.shared.stop.notify_one();
+        advance(&self.0.phase, Phase::StopAsked);
     }
 
-    /// Resolves once Quit was chosen or [`Daemon::stop`] was called.
+    /// Resolves once Quit was chosen or [`Daemon::stop`] was called, and not for a close that
+    /// began without either.
     pub async fn stopping(&self) {
-        self.0.shared.stop.notified().await;
+        let mut phase = self.0.phase.subscribe();
+        // The sender lives as long as the daemon this borrows.
+        let _ = phase.wait_for(|phase| *phase == Phase::StopAsked).await;
     }
 
     /// Stops accepting and lets open requests finish, closes the credential socket, lets the
@@ -476,77 +478,14 @@ impl Daemon {
     }
 }
 
-impl App {
-    pub(crate) fn update_tray(&self) {
-        if self.shared.desktop {
-            self.shared.tray.update(&self.cores);
-        }
-    }
-
-    async fn close_resources(&self) -> Result<(), CloseError> {
-        let mut failures = Vec::new();
-        self.shared.closing.store(true, Ordering::Release);
-        self.phase.send_replace(Phase::Draining);
-        if let Err(error) = self.agents.close().await {
-            failures.push(error.to_string());
-        }
-        if let Err(error) = self.cores.shutdown().await {
-            failures.push(error.message);
-        }
-        self.prices.close().await;
-        self.phase.send_replace(Phase::Closed);
-        self.store.close().await;
-        if let Err(error) = Session::remove(&self.directory, std::process::id()) {
-            failures.push(error.to_string());
-        }
-        if let Some(lock) = locked(&self.lock).take() {
-            lock.release();
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(CloseError(failures.join(" ")))
-        }
-    }
-}
-
-fn bind(port: u16) -> Result<TcpListener, StartError> {
-    let listener = std::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
-        .map_err(|error| match error.kind() {
-            io::ErrorKind::AddrInUse => StartError::PortInUse(port),
-            _ => StartError::Io(error),
-        })?;
-    listener.set_nonblocking(true)?;
-    Ok(TcpListener::from_std(listener)?)
-}
-
-/// The desktop tray follows each change the pool or the store's profile facts publish.
-fn follow_tray(app: &Arc<App>) {
-    let weak = Arc::downgrade(app);
-    let mut pool = app.cores.changes();
-    let mut facts = app.store.facts();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                published = pool.changed() => if published.is_err() { return },
-                // A closed store publishes nothing more: its branch is skipped.
-                Ok(()) = facts.changed() => {}
-            }
-            let Some(app) = weak.upgrade() else { return };
-            app.update_tray();
-        }
-    });
-}
-
 /// What the credential socket answers: the profile's key and the port, while its core runs or
 /// sleeps until the agent's first request.
 fn connection_source(
-    shared: &Arc<Shared>,
+    phase: watch::Receiver<Phase>,
     store: &Store,
     cores: &Arc<Cores>,
     port: u16,
 ) -> ConnectionSource {
-    let shared = Arc::clone(shared);
     let auth: watch::Receiver<Arc<AuthSnapshot>> = store.auth();
     let cores = Arc::clone(cores);
     Arc::new(move |profile: &ProfileId| {
@@ -558,7 +497,7 @@ fn connection_source(
                 .map(|entry| entry.client_key.clone())
         }
         .ok_or_else(|| AppError::new("Profile not found.", 404))?;
-        if shared.closing() || !cores.status(profile).serving {
+        if *phase.borrow() >= Phase::Draining || !cores.status(profile).serving {
             return Err(AppError::new(
                 "Start this profile before connecting an agent.",
                 409,

@@ -4,19 +4,24 @@
 //! [`Daemon::start`] opens the store and starts accepting; requests are served from then on.
 //! [`Daemon::restore`] selects the core, reaps orphans, starts the profiles that are kept
 //! running and restores agent connections, then writes `server.json`. [`Daemon::close`] undoes
-//! it all in order. The desktop app's shell drives the same daemon through its public methods.
+//! it all in order. The desktop app's shell drives the same daemon through its public methods
+//! and its [`Desktop`] part.
 #![forbid(unsafe_code)]
 
 mod api;
 mod assets;
+mod checks;
 mod daemon;
+mod desktop;
 mod failure;
-mod http;
+mod gateway_host;
+mod listener;
 pub mod panic;
 mod parse;
 mod session;
 
-pub use daemon::{CloseError, CoreOptions, Daemon, Options, StartError, VERSION, processes};
-pub use http::{DEV_HOST, valid_allow_host};
-pub use nsv_accounts::scheduler::{TIMING, Timing};
+pub use checks::{AllowedHost, DEV_HOST, InvalidHost};
+pub use daemon::{Boundaries, CloseError, CoreOptions, Daemon, Options, StartError, VERSION};
+pub use desktop::Desktop;
+pub use panic::runtime;
 pub use session::{ServerState, Session, SessionError, ShowError};

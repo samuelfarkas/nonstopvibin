@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use nsv_agents::agent_environment;
 use nsv_domain::time::epoch_ms;
 use nsv_files::{DataDir, write_atomic};
-use nsv_server::Session;
+use nsv_server::{AllowedHost, Session};
 
 use crate::{CliError, SERVER_PORT, complain, say, user};
 
@@ -108,7 +108,7 @@ fn remove_flag(command: &str, flag: &str, allowed: fn(u8) -> bool) -> String {
 pub(crate) fn update_unit(
     previous: &str,
     port: Option<u16>,
-    allow_hosts: Option<&[String]>,
+    allow_hosts: Option<&[AllowedHost]>,
     environment: &[(String, String)],
 ) -> Result<String, CliError> {
     let mut unit = previous.to_owned();
@@ -136,7 +136,7 @@ pub(crate) fn update_unit(
                 b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-'
             });
             for host in hosts {
-                let quoted = unit_quote(host, true)?;
+                let quoted = unit_quote(host.as_str(), true)?;
                 let _infallible = write!(command, " \"--allow-host\" {quoted}");
             }
         }
@@ -319,7 +319,7 @@ stops when you log out and does not start at boot. Ask an administrator to run:
 pub(crate) async fn install(
     packaged: bool,
     port: Option<u16>,
-    allow_hosts: Option<&[String]>,
+    allow_hosts: Option<&[AllowedHost]>,
 ) -> Result<(), CliError> {
     require_user_manager()?;
     if !packaged {
@@ -336,7 +336,7 @@ pub(crate) async fn install(
         port.unwrap_or(SERVER_PORT).to_string(),
     ];
     for host in allow_hosts.unwrap_or_default() {
-        args.extend(["--allow-host".to_owned(), host.clone()]);
+        args.extend(["--allow-host".to_owned(), host.to_string()]);
     }
     // The unit carries the shell's data directory, resolved, and the agent variables as set.
     let environment: Vec<(String, String)> = chosen

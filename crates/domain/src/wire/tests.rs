@@ -233,3 +233,19 @@ fn literal_true_rejects_false() {
     let window = json!({ "label": "x", "remainingPercent": 1, "resetsAt": null, "scoped": false });
     assert!(serde_json::from_value::<QuotaWindow>(window).is_err());
 }
+
+#[test]
+fn each_route_group_names_exactly_its_path_parameters() {
+    for (method, path, route) in ROUTES {
+        let parameters: Vec<&str> = path
+            .split('/')
+            .filter(|segment| segment.starts_with(':'))
+            .collect();
+        let expected: &[&str] = match route {
+            Route::Plain(_) => &[],
+            Route::Profile(_) => &[":profileId"],
+            Route::Account(_) => &[":profileId", ":accountId"],
+        };
+        assert_eq!(parameters, expected, "{method} {path}");
+    }
+}

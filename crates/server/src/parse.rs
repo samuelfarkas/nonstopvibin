@@ -9,7 +9,7 @@ use std::fmt::Display;
 
 use nsv_agents::{Issue, PROJECT_LENGTH, project_issues, selection_issues, setup_issues};
 use nsv_domain::error::AppError;
-use nsv_domain::id::{AccountId, is_uuid};
+use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{
     Agent, OAuthProvider, Protocol, Provider, RetentionDays, Strategy, registry,
@@ -707,12 +707,8 @@ pub(crate) fn decode_component(text: &str) -> Option<String> {
 }
 
 /// `z.string().uuid()` on a profile path segment.
-pub(crate) fn uuid(segment: &str) -> Result<(), Invalid> {
-    if is_uuid(segment) {
-        Ok(())
-    } else {
-        Err(Invalid(": Invalid UUID".to_owned()))
-    }
+pub(crate) fn profile_id(segment: &str) -> Result<ProfileId, Invalid> {
+    ProfileId::parse(segment).map_err(|_| Invalid(": Invalid UUID".to_owned()))
 }
 
 #[cfg(test)]

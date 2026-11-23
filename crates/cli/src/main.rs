@@ -10,12 +10,11 @@ mod service;
 use std::fmt::Display;
 use std::io::Write;
 use std::process::ExitCode;
-use std::time::Duration;
 
 use nsv_core::upstream::SIGN_IN_PORTS;
 use nsv_domain::endpoint::LOOPBACK_HOST;
 use nsv_files::DataDir;
-use nsv_server::{Session, VERSION, valid_allow_host};
+use nsv_server::{AllowedHost, Session, VERSION};
 
 use crate::args::Args;
 
@@ -105,16 +104,13 @@ Profiles, subscriptions and agent connections are managed in the web UI.",
     ))
 }
 
-fn parse_host(value: &str) -> Result<String, CliError> {
-    let host = value.trim_matches(char::is_whitespace).to_lowercase();
-    if valid_allow_host(&host) {
-        Ok(host)
-    } else {
-        Err(CliError::usage(format!(
+fn parse_host(value: &str) -> Result<AllowedHost, CliError> {
+    AllowedHost::parse(&value.trim_matches(char::is_whitespace).to_lowercase()).map_err(|_| {
+        CliError::usage(format!(
             "--allow-host needs an exact DNS name such as myserver.tailnet.ts.net (no scheme, port, wildcard or IP address); got {}.",
             serde_json::Value::String(value.to_owned())
-        )))
-    }
+        ))
+    })
 }
 
 fn parse_port(value: Option<&str>) -> Result<u16, CliError> {
@@ -201,19 +197,6 @@ fn url_text(session: &Session, ssh_connection: Option<&str>) -> String {
             .to_owned(),
     ]);
     lines.join("\n")
-}
-
-/// The runtime every command runs on: one thread, and at most four blocking threads that exit
-/// after two idle seconds.
-fn runtime() -> Result<tokio::runtime::Runtime, CliError> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_io()
-        .enable_time()
-        .max_blocking_threads(4)
-        .thread_keep_alive(Duration::from_secs(2))
-        .thread_name(nsv_server::panic::BLOCKING_THREAD)
-        .build()
-        .map_err(CliError::from_display)
 }
 
 /// Whether this invocation is the desktop app: bare in a graphical session, or with the
@@ -315,7 +298,9 @@ fn main() -> ExitCode {
             0
         })
     } else {
-        runtime().and_then(|runtime| runtime.block_on(command(&args)))
+        nsv_server::runtime()
+            .map_err(CliError::from_display)
+            .and_then(|runtime| runtime.block_on(command(&args)))
     };
     match result {
         Ok(code) => ExitCode::from(code),
@@ -376,7 +361,7 @@ mod golden {
 
     use super::{tunnel_command, url_text, user};
     use crate::service::{render_unit, update_unit};
-    use nsv_server::{Session, valid_allow_host};
+    use nsv_server::{AllowedHost, Session};
 
     fn cases(prefix: &str) -> Vec<Value> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/cli.json");
@@ -395,6 +380,13 @@ mod golden {
             .unwrap()
             .iter()
             .map(|item| item.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    fn hosts(value: &Value) -> Vec<AllowedHost> {
+        strings(value)
+            .iter()
+            .map(|host| AllowedHost::parse(host).unwrap())
             .collect()
     }
 
@@ -442,7 +434,7 @@ mod golden {
             let input = &case["input"];
             let hosts = input["allowHosts"]
                 .as_array()
-                .map(|_| strings(&input["allowHosts"]));
+                .map(|_| hosts(&input["allowHosts"]));
             let port = input["port"]
                 .as_u64()
                 .map(|port| u16::try_from(port).unwrap());
@@ -479,7 +471,7 @@ mod golden {
                 pid: u32::try_from(stored["pid"].as_u64().unwrap()).unwrap(),
                 port: u16::try_from(stored["port"].as_u64().unwrap()).unwrap(),
                 token: SessionToken::new(stored["token"].as_str().unwrap()),
-                allow_hosts: strings(&stored["allowHosts"]),
+                allow_hosts: hosts(&stored["allowHosts"]),
                 version: stored["version"].as_str().unwrap().to_owned(),
                 started_at: parse_iso(stored["startedAt"].as_str().unwrap()).unwrap(),
             };
@@ -494,7 +486,7 @@ mod golden {
         for case in cases("validAllowHost ") {
             let host = case["input"].as_str().unwrap();
             assert_eq!(
-                Value::Bool(valid_allow_host(host)),
+                Value::Bool(AllowedHost::parse(host).is_ok()),
                 case["output"],
                 "{}",
                 case["name"]

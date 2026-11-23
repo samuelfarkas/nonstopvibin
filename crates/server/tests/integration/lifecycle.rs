@@ -6,11 +6,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_agents::AgentDirectories;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
-use nsv_server::{CoreOptions, Daemon, Options, TIMING, Timing, processes};
+use nsv_server::{Boundaries, CoreOptions, Daemon, Options};
 use nsv_store::{Store, Vault};
 use nsv_testkit::TempDir;
 use serde_json::{Value, json};
@@ -27,6 +28,7 @@ fn pinned_core() -> PathBuf {
 struct Run {
     data: DataDir,
     options: Options,
+    boundaries: Boundaries,
 }
 
 fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Run {
@@ -35,18 +37,20 @@ fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Ru
         port: 0,
         allow_hosts: Vec::new(),
         development: false,
-        desktop: false,
+        desktop: None,
         client: root.path().join("client"),
         core,
         agents: AgentDirectories::new(root.path().join("home")),
-        backends: processes(),
-        outside: std::sync::Arc::new(ModelsDev::new()),
-        clock: now,
-        timing,
     };
     Run {
         data: DataDir::new(data),
         options,
+        boundaries: Boundaries {
+            outside: std::sync::Arc::new(ModelsDev::new()),
+            clock: now,
+            timing,
+            ..Boundaries::production().unwrap()
+        },
     }
 }
 
@@ -61,7 +65,9 @@ fn core(binary: PathBuf, pinned: bool, allow_missing: bool) -> CoreOptions {
 
 async fn start(run: Run) -> Daemon {
     let lock = run.data.lock().unwrap();
-    let daemon = Daemon::start(run.options, lock).await.unwrap();
+    let daemon = Daemon::start(run.options, run.boundaries, lock)
+        .await
+        .unwrap();
     daemon.restore().await.unwrap();
     daemon
 }
@@ -70,7 +76,7 @@ async fn start(run: Run) -> Daemon {
 /// directory is free again.
 async fn refused(run: Run) -> String {
     let lock = run.data.lock().unwrap();
-    let message = match Daemon::start(run.options, lock).await {
+    let message = match Daemon::start(run.options, run.boundaries, lock).await {
         Err(error) => error.to_string(),
         Ok(daemon) => {
             let Err(error) = daemon.restore().await else {

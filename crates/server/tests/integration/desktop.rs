@@ -7,7 +7,7 @@ use nsv_desktop::HostEvent;
 use nsv_domain::secret::{ApiKey, SessionToken};
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
-use nsv_server::{CoreOptions, Daemon, Options, Session, TIMING, processes};
+use nsv_server::{Boundaries, CoreOptions, Daemon, Desktop, Options, Session};
 use nsv_store::{Store, Vault};
 use nsv_testkit::{TempDir, set_mode};
 use serde_json::json;
@@ -40,7 +40,7 @@ async fn seeded(root: &TempDir) -> std::path::PathBuf {
     data
 }
 
-async fn daemon(root: &TempDir, desktop: bool) -> Daemon {
+async fn daemon(root: &TempDir, desktop: Option<Desktop>) -> Daemon {
     let data = seeded(root).await;
     let options = Options {
         port: 0,
@@ -55,13 +55,14 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon {
             allow_missing: true,
         },
         agents: AgentDirectories::new(root.path().join("home")),
-        backends: processes(),
+    };
+    let boundaries = Boundaries {
         outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
-        timing: *TIMING,
+        ..Boundaries::production().unwrap()
     };
     let lock = DataDir::new(&data).lock().unwrap();
-    let daemon = Daemon::start(options, lock).await.unwrap();
+    let daemon = Daemon::start(options, boundaries, lock).await.unwrap();
     daemon.restore().await.unwrap();
     daemon
 }
@@ -69,8 +70,9 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon {
 #[tokio::test]
 async fn a_second_launch_brings_the_desktop_window_forward() {
     let root = TempDir::new("desktop-show");
-    let daemon = daemon(&root, true).await;
-    let mut events = daemon.events();
+    let desktop = Desktop::default();
+    let daemon = daemon(&root, Some(desktop.clone())).await;
+    let mut events = desktop.events();
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
     let refused = send(daemon.port(), "POST", "/api/desktop/show", &[], b"").await;
     assert_eq!(refused.status, 401);
@@ -118,8 +120,8 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
         assert_eq!(refused.status, 403);
     }
     // The sleeping profile serves, so the tray shows it running.
-    assert_eq!(daemon.tray_status().borrow().running, ["Sleeper"]);
-    assert!(!daemon.tray_status().borrow().streaming);
+    assert_eq!(desktop.tray_status().borrow().running, ["Sleeper"]);
+    assert!(!desktop.tray_status().borrow().streaming);
     daemon.close().await.unwrap();
 }
 
@@ -128,9 +130,10 @@ async fn a_second_launch_brings_the_desktop_window_forward() {
 #[tokio::test]
 async fn a_second_launch_shows_the_running_window_through_server_json() {
     let root = TempDir::new("desktop-second");
-    let daemon = daemon(&root, true).await;
+    let desktop = Desktop::default();
+    let daemon = daemon(&root, Some(desktop.clone())).await;
     let data = DataDir::new(root.path().join("data"));
-    let mut events = daemon.events();
+    let mut events = desktop.events();
     Session::show_main(&data).await.unwrap();
     assert_eq!(events.try_recv().unwrap(), HostEvent::ShowMain);
     // A token the daemon does not hold is refused, and nothing shows.
@@ -157,7 +160,8 @@ async fn a_second_launch_shows_the_running_window_through_server_json() {
 #[tokio::test]
 async fn a_failed_open_reaches_the_errors_the_ui_shows() {
     let root = TempDir::new("desktop-report");
-    let daemon = daemon(&root, true).await;
+    let desktop = Desktop::default();
+    let daemon = daemon(&root, Some(desktop.clone())).await;
     daemon.report("Profile not found.");
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
     let state = send(
@@ -177,7 +181,7 @@ async fn a_failed_open_reaches_the_errors_the_ui_shows() {
 #[tokio::test]
 async fn the_headless_server_has_no_desktop_route() {
     let root = TempDir::new("headless-show");
-    let daemon = daemon(&root, false).await;
+    let daemon = daemon(&root, None).await;
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
     let missing = send(
         daemon.port(),

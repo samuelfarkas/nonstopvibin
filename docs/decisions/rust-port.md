@@ -97,7 +97,7 @@ lists each crate's direct workspace dependencies:
 | `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order, the second launch's `Session::show_main`.           | all above                                                                 |
 | `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the cli implements.                                                       | `desktop`, `domain`, `files`, `net`; `core` on macOS                      |
 | `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                                           | `desktop`, `domain`                                                       |
-| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection, the shell's host.                                                    | `agents`, `core`, `desktop`, `domain`, `files`, `net`, `server`, `shell`  |
+| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection, the shell's host.                                                    | `agents`, `core`, `desktop`, `domain`, `files`, `server`, `shell`         |
 | `testkit`  | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world, a shell host.                | `accounts`, `core`, `desktop`, `domain`, `files`, `net`, `shell`, `store` |
 
 - The gateway receives a request and a `Lease` (profile id, slug, client and core keys, upstream

@@ -5,8 +5,10 @@
 //! pool's owner, the scheduler, the store thread) leaves state no one will repair, so it starts
 //! the daemon's graceful shutdown, which still stops the cores, and the process exits non-zero.
 
+use std::io;
 use std::panic::PanicHookInfo;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use tokio::sync::Notify;
 
@@ -14,8 +16,8 @@ tokio::task_local! {
     static REQUEST: ();
 }
 
-/// The name the CLI gives the runtime's blocking threads.
-pub const BLOCKING_THREAD: &str = "nsv-blocking";
+/// The name of [`runtime`]'s blocking threads, whose panics their callers receive.
+const BLOCKING_THREAD: &str = "nsv-blocking";
 
 static FATAL: Notify = Notify::const_new();
 static PANICKED: AtomicBool = AtomicBool::new(false);
@@ -23,6 +25,21 @@ static PANICKED: AtomicBool = AtomicBool::new(false);
 /// Installs the hook. Call once, first thing in `main`.
 pub fn install_hook() {
     std::panic::set_hook(Box::new(hook));
+}
+
+/// The runtime the daemon and every command run on: one thread, and at most four blocking
+/// threads that exit after two idle seconds.
+///
+/// # Errors
+/// When the runtime's I/O driver cannot start.
+pub fn runtime() -> io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .enable_time()
+        .max_blocking_threads(4)
+        .thread_keep_alive(Duration::from_secs(2))
+        .thread_name(BLOCKING_THREAD)
+        .build()
 }
 
 fn hook(info: &PanicHookInfo<'_>) {

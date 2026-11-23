@@ -10,7 +10,7 @@ use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
 use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
-use nsv_server::{CoreOptions, Daemon, Options, TIMING};
+use nsv_server::{Boundaries, CoreOptions, Daemon, Desktop, Options};
 use nsv_testkit::fake::{Directory, FakeCores, response};
 use nsv_testkit::world::{
     ACCOUNT, ORGANIZATION_A, StubFetch, UPDATE, bundled_core, claude, release,
@@ -27,6 +27,7 @@ const FEED: &str = "https://feed.example.invalid/core-release.json";
 struct Running {
     root: TempDir,
     daemon: Daemon,
+    desktop: Desktop,
     fake: FakeCores,
     outside: Arc<StubFetch>,
     token: String,
@@ -40,11 +41,12 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
     let fake = FakeCores::default();
     let outside = Arc::new(StubFetch::new(|_| Ok(response(404, "{}"))));
     let backends_fake = fake.clone();
+    let desktop = Desktop::default();
     let options = Options {
         port: 0,
         allow_hosts: Vec::new(),
         development: false,
-        desktop: true,
+        desktop: Some(desktop.clone()),
         client: root.path().join("client"),
         core: CoreOptions {
             binary: bundled_core(root.path()),
@@ -53,20 +55,23 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
             allow_missing: false,
         },
         agents: AgentDirectories::new(root.path().join("home")),
+    };
+    let boundaries = Boundaries {
         backends: Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
             Arc::new(Directory(backends_fake.clone(), data.to_owned()))
         }),
         outside: Arc::<StubFetch>::clone(&outside),
         clock: now,
-        timing: *TIMING,
+        ..Boundaries::production().unwrap()
     };
     let lock = DataDir::new(&data).lock().unwrap();
-    let daemon = Daemon::start(options, lock).await.unwrap();
+    let daemon = Daemon::start(options, boundaries, lock).await.unwrap();
     daemon.restore().await.unwrap();
     let token = format!("Bearer {}", daemon.session_token().expose_secret());
     Running {
         root,
         daemon,
+        desktop,
         fake,
         outside,
         token,
@@ -193,7 +198,7 @@ async fn a_browser_callback_signs_in_and_brings_the_desktop_window_forward() {
         knobs.redirect = Some(format!("http://localhost:{port}/auth/callback"));
         knobs.credential = codex();
     });
-    let mut events = app.daemon.events();
+    let mut events = app.desktop.events();
     let oauth = format!("/profiles/{profile}/oauth");
     // The sign-in's callback listener binds it.
     drop(reserved);

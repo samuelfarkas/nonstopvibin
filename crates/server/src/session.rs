@@ -13,7 +13,7 @@ use nsv_net::{Loopback, LoopbackRequest, Method, loopback};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::http::valid_allow_host;
+use crate::checks::AllowedHost;
 
 /// What `server.json` holds.
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub struct Session {
     pub pid: u32,
     pub port: u16,
     pub token: SessionToken,
-    pub allow_hosts: Vec<String>,
+    pub allow_hosts: Vec<AllowedHost>,
     pub version: String,
     /// When the daemon started, in milliseconds since the epoch.
     pub started_at: i64,
@@ -50,13 +50,16 @@ pub enum ShowError {
 const STARTING: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(100);
 
+/// The largest answer the daemon reads from a loopback port: its state, or a profile's models.
+pub(crate) const LOOPBACK_LIMIT: u64 = 16 << 20;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Stored {
     pid: u32,
     port: u16,
     token: String,
-    allow_hosts: Vec<String>,
+    allow_hosts: Vec<AllowedHost>,
     version: String,
     started_at: String,
 }
@@ -93,10 +96,7 @@ impl Session {
         let Some(started_at) = parse_iso(&stored.started_at) else {
             return Ok(None);
         };
-        let valid = stored.pid > 0
-            && stored.port > 0
-            && !stored.token.is_empty()
-            && stored.allow_hosts.iter().all(|host| valid_allow_host(host));
+        let valid = stored.pid > 0 && stored.port > 0 && !stored.token.is_empty();
         Ok(valid.then(|| Self {
             pid: stored.pid,
             port: stored.port,
@@ -189,7 +189,7 @@ impl Session {
             headers: &[("Authorization", &authorization)],
             body: None,
             timeout: Duration::from_secs(2),
-            limit: 16 << 20,
+            limit: LOOPBACK_LIMIT,
         })
         .await
         .ok()?;
@@ -200,7 +200,9 @@ impl Session {
     }
 }
 
-/// What a CLI of any version reads from a running daemon's `GET /api/state`.
+/// What a CLI of any version reads from a running daemon's `GET /api/state`: only the two
+/// fields every version answers, so a daemon of another version still parses, where all of
+/// [`nsv_domain::wire::AppState`] would not.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerState {

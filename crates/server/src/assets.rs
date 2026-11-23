@@ -13,7 +13,6 @@ use nsv_domain::error::AppError;
 use nsv_domain::wire::JsNumber;
 use nsv_gateway::Body;
 
-use crate::daemon::App;
 use crate::parse::decode_component;
 
 const UNBUILT: &str = "Build the interface with bun run build before opening this page.";
@@ -137,10 +136,28 @@ fn unchanged(request: &Request<Incoming>, etag: &str) -> bool {
         })
 }
 
-impl App {
+/// The built interface's directory, and this launch's start of every `ETag`.
+pub(crate) struct Assets {
+    /// An absolute path.
+    client: PathBuf,
+    /// File times in a package are not trustworthy, so unhashed files revalidate after each
+    /// launch.
+    version: String,
+}
+
+impl Assets {
+    /// # Errors
+    /// No entropy for this launch's version.
+    pub(crate) fn new(client: PathBuf) -> std::io::Result<Self> {
+        Ok(Self {
+            client,
+            version: nsv_domain::random::uuid()?,
+        })
+    }
+
     /// `GET` or `HEAD` of a file of the interface; any path without an extension is the
     /// single-page app's `index.html`.
-    pub(crate) async fn asset(
+    pub(crate) async fn answer(
         &self,
         request: &Request<Incoming>,
         pathname: &str,
@@ -178,11 +195,7 @@ impl App {
             seconds * 1e3 + f64::from(modified.subsec_nanos()) / 1e6,
         ))
         .unwrap_or_default();
-        let etag = format!(
-            "W/\"{}-{}-{milliseconds}\"",
-            self.asset_version,
-            metadata.len()
-        );
+        let etag = format!("W/\"{}-{}-{milliseconds}\"", self.version, metadata.len());
         let unchanged = unchanged(request, &etag);
         let body = if unchanged || head {
             Body::empty()

@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    // A development daemon accepts this Host and Origin (DEV_HOST in crates/server/src/http.rs).
+    // A development daemon accepts this Host and Origin (DEV_HOST in crates/server/src/checks.rs).
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,

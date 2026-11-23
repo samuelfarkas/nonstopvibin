@@ -1771,7 +1771,6 @@ dependencies = [
  "nsv-desktop",
  "nsv-domain",
  "nsv-files",
- "nsv-net",
  "nsv-server",
  "nsv-shell",
  "nsv-store",

@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use nsv_agents::AgentDirectories;
 use nsv_files::DataDir;
-use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
+use nsv_server::{Boundaries, CoreOptions, Daemon, Options};
 use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 
@@ -230,7 +230,7 @@ async fn launch(root: &Path) -> (Daemon, Placeholders) {
         port: PORT,
         allow_hosts: Vec::new(),
         development: false,
-        desktop: false,
+        desktop: None,
         client: root.join("client"),
         core: CoreOptions {
             binary: root.join("no-core"),
@@ -239,13 +239,16 @@ async fn launch(root: &Path) -> (Daemon, Placeholders) {
             allow_missing: true,
         },
         agents,
-        backends: processes(),
+    };
+    let boundaries = Boundaries {
         outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
-        timing: *TIMING,
+        ..Boundaries::production().unwrap()
     };
     let data = DataDir::new(&data);
-    let daemon = Daemon::start(options, data.lock().unwrap()).await.unwrap();
+    let daemon = Daemon::start(options, boundaries, data.lock().unwrap())
+        .await
+        .unwrap();
     daemon.restore().await.unwrap();
     let socket = data.socket_directory();
     let mut placeholders = Placeholders::default();

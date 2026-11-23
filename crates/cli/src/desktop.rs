@@ -9,42 +9,46 @@ use nsv_server::Daemon;
 use nsv_shell::ShellHost;
 use tokio::sync::{broadcast, watch};
 
-pub(crate) struct Desktop(pub(crate) Daemon);
+/// The daemon, and the desktop part it was started with.
+pub(crate) struct Desktop {
+    pub(crate) daemon: Daemon,
+    pub(crate) desktop: nsv_server::Desktop,
+}
 
 impl ShellHost for Desktop {
     fn origin(&self) -> &Origin {
-        self.0.origin()
+        self.daemon.origin()
     }
 
     fn session_token(&self) -> &SessionToken {
-        self.0.session_token()
+        self.daemon.session_token()
     }
 
     fn data_directory(&self) -> &DataDir {
-        self.0.data_directory()
+        self.daemon.data_directory()
     }
 
     fn tray_status(&self) -> watch::Receiver<TrayStatus> {
-        self.0.tray_status()
+        self.desktop.tray_status()
     }
 
     fn events(&self) -> broadcast::Receiver<HostEvent> {
-        self.0.events()
+        self.desktop.events()
     }
 
     fn has_profile(&self, profile: &ProfileId) -> bool {
-        self.0.has_profile(profile)
+        self.daemon.has_profile(profile)
     }
 
     fn report(&self, message: &str) {
-        self.0.report(message);
+        self.daemon.report(message);
     }
 
     fn shutdown(&self) {
-        self.0.stop();
+        self.daemon.stop();
     }
 
     async fn close(&self) -> Result<(), String> {
-        self.0.close().await.map_err(|error| error.to_string())
+        self.daemon.close().await.map_err(|error| error.to_string())
     }
 }
