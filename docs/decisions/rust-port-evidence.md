@@ -91,3 +91,32 @@ per host; ranges cover both runs.
 
 The first Bun run overlapped another workload: its stream numbers are about twice the second
 run's. CPU per request comes from `/proc/<pid>/stat` ticks over 20–60 requests.
+
+## Linux allocator, interleaved A/B (caeab18)
+
+Release builds on the before/after harness, five daemons each with its own data dir and its own
+copy of the binary. Ten rounds in rotated order, n = 10 per cell, every request answered 200.
+Host load averages ranged from 0.7 to 6.6. Host CPU is schedstat time of the daemon per request.
+Cells show median and range.
+
+| Metric                     | glibc (cannot ship)  | static musl, mallocng | musl + mimalloc 3.3  | musl + mimalloc, THP off |
+| -------------------------- | -------------------- | --------------------- | -------------------- | ------------------------ |
+| Host CPU, 290 KB request   | 0.33 (0.32–0.37) ms  | 0.56 (0.52–0.73) ms   | 0.35 (0.31–0.43) ms  | 0.37 (0.33–0.46) ms      |
+| Host CPU, 1 MB request     | 0.80 (0.77–0.84) ms  | 1.06 (1.01–1.48) ms   | 0.81 (0.77–0.89) ms  | 0.86 (0.80–1.04) ms      |
+| Host CPU, 200-event stream | 7.47 (6.44–12.05) ms | 7.48 (6.99–9.12) ms   | 7.39 (6.53–14.64) ms | 7.68 (6.86–8.47) ms      |
+| Minor faults, 1 MB request | 2                    | 87                    | 0                    | 2                        |
+| p50 latency, 1 MB request  | 16.5 ms              | 16.8 ms               | 16.3 ms              | 17.1 ms                  |
+| Idle PSS                   | 9.1 MiB              | 10.8 MiB              | 18.9 MiB             | 9.7 MiB                  |
+| PSS right after 1 MB × 8   | 12.5 MiB             | 11.4 MiB              | 34.4 MiB             | 21.9 MiB                 |
+| PSS over eight such bursts | not run              | 11.1–11.9 MiB         | 30.9–40.3 MiB        | 15.5–30.9 MiB            |
+
+- Decision: musl's own allocator. Its extra CPU is page faults. mallocng serves large buffers
+  from fresh mmap pages and gives freed ones back, so a 1 MB request takes 87 minor faults
+  against 0–2 for the others, and system time doubles. The gap is 0.2–0.26 ms of a request that
+  costs 7–22 ms of core CPU. p50 latency and the paced stream show no difference.
+- mimalloc's memory cost has two causes. Its eagerly committed arenas get huge pages under
+  THP `always` (a build-time define turns that off), and it purges freed memory only on later
+  allocator activity after a 1 s delay, which an idle daemon never triggers. That delay can be
+  set only at run time, through the environment or unsafe code.
+- Memory stays bounded for every variant. The interleaved stream also shows that the earlier
+  musl stream figure (9.8–14.3 ms) came from host load, not the allocator.

@@ -108,9 +108,10 @@ Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 - `panic = "unwind"` with overflow checks. A request task's panic ends that request only. A panic
   in the pool, scheduler or store thread starts a graceful shutdown with a non-zero exit, and
   the panic hook logs the location, never the payload.
-- The allocator is chosen by measurement after the 1 MB × 8 burst. The options are glibc
-  default, glibc tuned, static musl and mimalloc. Bodies pass through as frames with hyper's
-  buffers capped.
+- Linux packages keep static musl's own allocator. In an interleaved A/B, mimalloc saved
+  0.2–0.26 ms of host CPU per large request but did not change request latency, and it doubled
+  PSS after bursts (rust-port-evidence.md). Bodies pass through as frames with hyper's buffers
+  capped.
 
 ### Data
 
