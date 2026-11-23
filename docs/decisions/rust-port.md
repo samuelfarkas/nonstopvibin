@@ -1,7 +1,7 @@
 # Decision record: one Rust binary replaces Electron and the TypeScript server
 
 Status: accepted, November 2026. Consulted: Fable (claude-fable-5-2), the architecture
-reviewer the owner named.
+reviewer the owner named. Measurements: [evidence](rust-port-evidence.md).
 
 ## Context
 
