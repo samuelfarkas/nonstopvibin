@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use nsv_domain::error::AppError;
+use nsv_domain::version::{AppVersion, Version};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
@@ -105,58 +106,6 @@ impl<'de> Deserialize<'de> for Sha256Digest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         Self::parse(&text).ok_or_else(|| serde::de::Error::custom("not a lowercase SHA-256"))
-    }
-}
-
-/// A canonical `X.Y.Z` version (no leading zeros), as a pin, a manifest and a
-/// `cores/<version>` directory write it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Version([u64; 3]);
-
-impl Version {
-    /// `None` unless `text` is `X.Y.Z` with decimal parts and no leading zeros.
-    #[must_use]
-    pub fn parse(text: &str) -> Option<Self> {
-        let mut parts = [0; 3];
-        let mut pieces = text.split('.');
-        for part in &mut parts {
-            let piece = pieces.next()?;
-            let canonical = piece == "0"
-                || (!piece.starts_with('0')
-                    && !piece.is_empty()
-                    && piece.bytes().all(|b| b.is_ascii_digit()));
-            if !canonical {
-                return None;
-            }
-            *part = piece.parse().ok()?;
-        }
-        pieces.next().is_none().then_some(Self(parts))
-    }
-}
-
-impl fmt::Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let [major, minor, patch] = self.0;
-        write!(f, "{major}.{minor}.{patch}")
-    }
-}
-
-impl fmt::Debug for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Version({self})")
-    }
-}
-
-impl Serialize for Version {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
-}
-
-impl<'de> Deserialize<'de> for Version {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        Self::parse(&text).ok_or_else(|| serde::de::Error::custom("not an X.Y.Z version"))
     }
 }
 
@@ -286,7 +235,7 @@ pub struct CorePin {
     pub version: Version,
     /// The oldest app version that may run this core.
     #[serde(rename = "minApp", default, skip_serializing_if = "Option::is_none")]
-    pub min_app: Option<Version>,
+    pub min_app: Option<AppVersion>,
     /// Each target's upstream archive SHA-256.
     pub checksums: Targets,
     /// Each target's extracted, unsigned executable SHA-256.

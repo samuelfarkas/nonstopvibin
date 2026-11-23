@@ -1,9 +1,8 @@
 use std::fs;
 
-use nsv_core::binary::{
-    Binary, CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin,
-};
+use nsv_core::binary::{Binary, CoreManifest, CorePin, CoreTarget, Sha256Digest, bundled_pin};
 use nsv_core::{CoreError, check_core_directory, verify_core};
+use nsv_domain::version::{AppVersion, Version};
 use nsv_testkit::TempDir;
 
 use crate::common::{CORE_SHA256, LINUX_X64, pin};
@@ -40,7 +39,7 @@ fn a_pin_ignores_unknown_keys_and_refuses_malformed_values() {
         "binaries": { "darwin_arm64": CORE_SHA256, "darwin_x64": CORE_SHA256, "linux_arm64": CORE_SHA256, "linux_x64": CORE_SHA256 },
     });
     let pin: CorePin = serde_json::from_value(base.clone()).unwrap();
-    assert_eq!(pin.min_app, Version::parse("0.3.0"));
+    assert_eq!(pin.min_app, AppVersion::parse("0.3.0"));
     for (pointer, value) in [
         ("/version", serde_json::json!("9.0")),
         ("/minApp", serde_json::json!("v1.0.0")),
@@ -68,7 +67,7 @@ fn a_pin_is_written_in_the_files_key_order() {
     let pin = bundled_pin().unwrap();
     assert_eq!(serde_json::to_string_pretty(pin).unwrap() + "\n", file);
     let later = CorePin {
-        min_app: Version::parse("0.3.0"),
+        min_app: AppVersion::parse("0.3.0"),
         ..pin.clone()
     };
     let text = serde_json::to_string_pretty(&later).unwrap();
@@ -76,25 +75,6 @@ fn a_pin_is_written_in_the_files_key_order() {
         text.starts_with("{\n  \"version\": \"8.1.0\",\n  \"minApp\": \"0.3.0\",\n  \"checksums\": {\n    \"darwin_arm64\": "),
         "{text}"
     );
-}
-
-#[test]
-fn versions_are_canonical_x_y_z() {
-    assert_eq!(Version::parse("8.10.0").unwrap().to_string(), "8.10.0");
-    assert_eq!(Version::parse("0.0.0").unwrap().to_string(), "0.0.0");
-    for refused in [
-        "8.1",
-        "8.1.0.1",
-        "v8.1.0",
-        "08.1.0",
-        "8.1.x",
-        "8..0",
-        "",
-        "8.1.0-beta.1",
-    ] {
-        assert_eq!(Version::parse(refused), None, "{refused}");
-    }
-    assert!(Version::parse("8.10.0") > Version::parse("8.9.99"));
 }
 
 #[test]

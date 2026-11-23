@@ -10,12 +10,13 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use nsv_domain::error::AppError;
+use nsv_domain::version::Version;
 use nsv_net::{Get, Https, NetError, Redirects, Response};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::CoreError;
-use crate::binary::{BINARY, CoreManifest, CorePin, CoreTarget, LICENSE, Sha256Digest, Version};
+use crate::binary::{BINARY, CoreManifest, CorePin, CoreTarget, LICENSE, Sha256Digest};
 use crate::pool::BoxFuture;
 
 /// The upstream repository, `CLIProxyAPI`'s GitHub owner and name.

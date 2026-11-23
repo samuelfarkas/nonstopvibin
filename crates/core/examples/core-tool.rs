@@ -24,9 +24,10 @@ use std::{env, fs};
 
 use nsv_core::binary::{
     BINARY, Binary, CHECKOUT_DIRECTORY, CoreManifest, CorePin, CoreTarget, LICENSE, MANIFEST,
-    PACKAGED_DIRECTORY, Sha256Digest, Targets, Version, bundled_pin, check_core_directory,
+    PACKAGED_DIRECTORY, Sha256Digest, Targets, bundled_pin, check_core_directory,
 };
 use nsv_core::install::{CORE_ARCHIVES, LATEST_RELEASE, RELEASES, download, extract, install_core};
+use nsv_domain::version::Version;
 use nsv_net::{Get, Https, Redirects};
 use serde::Deserialize;
 

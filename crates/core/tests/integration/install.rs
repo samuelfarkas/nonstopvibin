@@ -3,10 +3,11 @@ use std::path::Path;
 use std::process::Command;
 
 use nsv_core::CoreError;
-use nsv_core::binary::{CoreTarget, Version, bundled_pin};
+use nsv_core::binary::{CoreTarget, bundled_pin};
 use nsv_core::install::{
     ActiveCore, Staging, install_archive, install_core, prune, select_installed_core,
 };
+use nsv_domain::version::Version;
 use nsv_testkit::TempDir;
 
 use crate::common::{CORE_SHA256, LINUX_X64, digest, mode, pin};

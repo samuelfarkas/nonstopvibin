@@ -23,6 +23,7 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::secret::SessionToken;
 use nsv_domain::sync::locked;
 use nsv_domain::time::epoch_ms;
+use nsv_domain::version::AppVersion;
 use nsv_files::{DataDir, ServerLock};
 use nsv_gateway::{Body, Gateway, Refusal};
 use nsv_net::{Https, NetError};
@@ -309,6 +310,7 @@ impl Daemon {
                 feed: options.core.feed,
                 require_pinned_core: options.core.pinned,
                 allow_missing_core: options.core.allow_missing,
+                app: AppVersion::current(),
                 clock,
                 report: Arc::new(move |message| reported.errors.report(message)),
                 sign_in_accepted: Arc::new(move || {

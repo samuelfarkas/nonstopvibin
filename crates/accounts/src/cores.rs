@@ -12,6 +12,7 @@ use nsv_core::pool::{BoxFuture, Phase, Pool, PoolState};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::OAuthProvider;
+use nsv_domain::version::AppVersion;
 use nsv_domain::wire::{
     Account, AccountKind, AccountPatch, ApiAccountInput, CoreState, Model, OAuthSession,
     OAuthStatus, Profile, ProfilePatch, QuotaStatus, ResetCredits, ResetResult, Runtime,
@@ -57,6 +58,8 @@ pub struct CoresOptions {
     /// A browser sign-in callback was accepted: the desktop shell brings an open main window
     /// forward, never creating one.
     pub sign_in_accepted: Arc<dyn Fn() + Send + Sync>,
+    /// This build's version: [`AppVersion::current`].
+    pub app: AppVersion,
 }
 
 /// The pool's scheduler and the account features that drive it.
@@ -179,6 +182,7 @@ impl Cores {
             clock,
             report,
             sign_in_accepted,
+            app,
         } = options;
         let accounts = Arc::new(Accounts::new(store.clone()));
         let host = Arc::new(FeatureHost {
@@ -243,6 +247,7 @@ impl Cores {
                 backends: Arc::clone(&backends),
                 ready,
                 report,
+                app,
             },
         )?;
         // Set once, before anything is scheduled: `launch` comes after `new`.

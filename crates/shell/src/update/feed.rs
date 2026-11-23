@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use minisign_verify::{PublicKey, Signature};
-
-use super::version::Version;
+use nsv_domain::version::AppVersion;
 
 /// Why a release was refused; the text is what the daemon logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -24,11 +23,11 @@ const TAG_LINK: &str = concat!(
     "/releases/tag/v"
 );
 
-/// The newest release in `atom` that a build at `current` installs ([`Version::takes`]).
-pub(crate) fn newest(atom: &str, current: Version) -> Option<Version> {
+/// The newest release in `atom` that a build at `current` installs ([`AppVersion::takes`]).
+pub(crate) fn newest(atom: &str, current: AppVersion) -> Option<AppVersion> {
     atom.split(TAG_LINK)
         .skip(1)
-        .filter_map(|rest| Version::parse(rest.split('"').next().unwrap_or_default()))
+        .filter_map(|rest| AppVersion::parse(rest.split('"').next().unwrap_or_default()))
         .filter(|&release| current.takes(release))
         .max()
 }
@@ -43,7 +42,11 @@ pub(crate) struct Payload {
 }
 
 /// The payload ending in `extension` from a `latest-<platform>.yml` whose version is `version`.
-pub(crate) fn payload(feed: &str, version: Version, extension: &str) -> Result<Payload, Rejected> {
+pub(crate) fn payload(
+    feed: &str,
+    version: AppVersion,
+    extension: &str,
+) -> Result<Payload, Rejected> {
     let malformed = Rejected("the update feed is malformed");
     let mut feed_version = None;
     let mut files: Vec<BTreeMap<&str, &str>> = Vec::new();
@@ -69,7 +72,7 @@ pub(crate) fn payload(feed: &str, version: Version, extension: &str) -> Result<P
             files.last_mut().ok_or(malformed)?.insert(key, value);
         }
     }
-    if feed_version.and_then(Version::parse) != Some(version) {
+    if feed_version.and_then(AppVersion::parse) != Some(version) {
         return Err(Rejected("the update feed is for another version"));
     }
     let file = files
@@ -175,7 +178,7 @@ pub(crate) fn verify_signature(
     key: &PublicKey,
     sums: &[u8],
     signature: &str,
-    version: Version,
+    version: AppVersion,
 ) -> Result<(), Rejected> {
     let bad = Rejected("SHA256SUMS is not signed by the release key");
     let signature = Signature::decode(signature).map_err(|_| bad)?;
@@ -190,8 +193,8 @@ pub(crate) fn verify_signature(
 mod tests {
     use super::*;
 
-    fn v(text: &str) -> Version {
-        Version::parse(text).unwrap()
+    fn v(text: &str) -> AppVersion {
+        AppVersion::parse(text).unwrap()
     }
 
     // writeFeed's output for a mac release, as YAML.stringify writes it.

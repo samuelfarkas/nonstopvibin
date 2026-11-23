@@ -15,7 +15,6 @@ mod machine;
 #[cfg(target_os = "macos")]
 mod macos;
 mod source;
-mod version;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -24,6 +23,7 @@ use std::time::Duration;
 
 use minisign_verify::PublicKey;
 use nsv_desktop::pipe::{Choice, DialogKind};
+use nsv_domain::version::AppVersion;
 use sha2::{Digest, Sha256, Sha512};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 
@@ -35,7 +35,6 @@ use macos::Target;
 use self::feed::{Rejected, Sums};
 use self::machine::{Checked, Command, Machine};
 use self::source::Source;
-use self::version::Version;
 use crate::install::Install;
 use crate::log;
 use crate::platform::UpdateTarget;
@@ -79,7 +78,7 @@ pub(crate) enum Detected<T> {
 
 struct Updater {
     target: Target,
-    current: Version,
+    current: AppVersion,
     machine: Machine<Staged>,
     timer: Interval,
     check: Option<Pin<Box<dyn Future<Output = Checked<Staged>>>>>,
@@ -88,11 +87,7 @@ struct Updater {
 impl Updates {
     /// What this installation allows. Leftovers of an earlier update are removed.
     pub(crate) fn detect(install: &Install) -> Self {
-        #[expect(
-            clippy::expect_used,
-            reason = "the workspace version is X.Y.Z, which a version test parses"
-        )]
-        let current = Version::parse(env!("CARGO_PKG_VERSION")).expect("an X.Y.Z version");
+        let current = AppVersion::current();
         if !install.packaged || !cfg!(updates_enabled) {
             return Self(Mode::Off);
         }
@@ -208,7 +203,7 @@ enum Failure {
 }
 
 /// Finds the newest release this build takes, then downloads, verifies and stages it.
-async fn find(target: &Target, current: Version) -> Result<Option<Staged>, Failure> {
+async fn find(target: &Target, current: AppVersion) -> Result<Option<Staged>, Failure> {
     let key = release_key();
     let source = Source::new().map_err(Failure::Local)?;
     let atom = source

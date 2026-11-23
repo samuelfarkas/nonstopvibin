@@ -23,6 +23,7 @@ use nsv_core::install::Releases;
 use nsv_core::pool::{Backend, BoxFuture};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::version::AppVersion;
 use nsv_files::{DataDir, owner_only_directory};
 use nsv_net::{Loopback, NetError, Response};
 use nsv_store::{Store, Vault};
@@ -273,11 +274,12 @@ impl World {
             feed,
             timing,
             FakeCores::default(),
+            AppVersion::current(),
         )
         .await
     }
 
-    /// The features over `data`, as a relaunch opens them.
+    /// The features over `data` in an app at `app`, as a relaunch opens them.
     pub async fn open(
         directory: TempDir,
         data: &Path,
@@ -285,6 +287,7 @@ impl World {
         feed: Option<&str>,
         timing: Timing,
         fake: FakeCores,
+        app: AppVersion,
     ) -> Self {
         let store = open_store(data).await;
         let fetch = Arc::new(StubFetch::new(|_| Ok(response(404, "{}"))));
@@ -311,6 +314,7 @@ impl World {
                 sign_in_accepted: Arc::new(move || {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }),
+                app,
             })
             .unwrap(),
         );

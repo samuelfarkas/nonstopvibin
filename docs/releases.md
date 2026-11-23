@@ -53,8 +53,8 @@ git push origin vX.Y.Z
 The tag must equal `v` plus the package version. Normal versions, including `0.x`,
 are regular releases. `0.2.0-beta.1` / `v0.2.0-beta.1` creates a prerelease; only
 installed beta builds opt into prerelease discovery. Other prerelease names are
-not supported. The workflow applies `scripts/release-channel.ts`, and the
-updater's `crates/shell/src/update/version.rs` follows the same rule.
+not supported. The workflow applies `scripts/release-channel.ts`, and the app's
+`AppVersion` (`crates/domain/src/version.rs`) follows the same rule.
 
 Releases publish `latest-mac.yml` and `latest-linux.yml` even on GitHub
 prereleases, so installed Electron builds can still update through
@@ -170,7 +170,7 @@ release. To publish one:
    Checksums published beside the downloads establish integrity, not independent
    assurance of the publisher.
 3. If the core needs app changes, set `minApp` to the first NonstopVibin version
-   that has them; older apps keep their core. `core:pin` keeps an existing `minApp`.
+   (a release or a beta) that has them; older apps keep their core. `core:pin` keeps an existing `minApp`.
 4. Quit the running app and run `bun run core:install`. This installs the pin
    into `.vendor/core`. For another packaging target, pass `--target`, for example
    `bun run core:install --target linux_x64`.

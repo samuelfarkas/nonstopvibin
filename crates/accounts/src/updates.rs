@@ -17,13 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use nsv_core::binary::{BINARY, CorePin, CoreTarget, Version, bundled_pin, verify_core};
+use nsv_core::binary::{BINARY, CorePin, CoreTarget, bundled_pin, verify_core};
 use nsv_core::install::{
     ActiveCore, CORE_ARCHIVES, Staging, fetch_pin, install_core, prune, select_installed_core,
 };
 use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::sync::locked;
+use nsv_domain::version::{AppVersion, Version};
 use nsv_domain::wire::{CorePhase, CoreState};
 use nsv_store::Store;
 use tokio::sync::watch;
@@ -48,6 +49,8 @@ pub struct UpdateOptions {
     /// How long the new core gets to answer its check.
     pub ready: Duration,
     pub report: Report,
+    /// The app these cores run under, which a pin's `minApp` admits.
+    pub app: AppVersion,
 }
 
 /// Checks the feed, installs a reviewed core, or goes back to the bundled one.
@@ -68,7 +71,6 @@ struct Inner {
     cores: PathBuf,
     bundled: ActiveCore,
     target: CoreTarget,
-    app: Version,
     status: Mutex<Status>,
     /// The operation in progress.
     phase: watch::Sender<Option<CorePhase>>,
@@ -103,8 +105,6 @@ impl CoreUpdates {
             version: pin.version,
             binary: options.bundled.clone(),
         };
-        let app = Version::parse(env!("CARGO_PKG_VERSION"))
-            .ok_or_else(|| AppError::internal("The app version is not X.Y.Z."))?;
         Ok(Self(Arc::new(Inner {
             cores: store.directory().cores(),
             store,
@@ -119,7 +119,6 @@ impl CoreUpdates {
             }),
             bundled,
             target: CoreTarget::current()?,
-            app,
             phase: watch::Sender::new(None),
             closing: watch::Sender::new(false),
         })))
@@ -294,7 +293,10 @@ impl Inner {
     /// Whether `pin` is newer than the core in use and this app may run it. A pin names every
     /// target, so each one covers this platform.
     fn offers(&self, active: &ActiveCore, pin: &CorePin) -> bool {
-        pin.version > active.version && pin.min_app.is_none_or(|minimum| self.app >= minimum)
+        pin.version > active.version
+            && pin
+                .min_app
+                .is_none_or(|minimum| self.options.app >= minimum)
     }
 
     async fn activate(&self, core: ActiveCore) -> Result<(), AppError> {

@@ -1,5 +1,5 @@
-// The release tag grammar, which scripts/verify-release.mjs applies; the Rust updater reads the
-// same versions in crates/shell/src/update/version.rs.
+// The release tag grammar, which scripts/verify-release.mjs applies; the app reads the same
+// versions as crates/domain/src/version.rs `AppVersion`.
 const releaseVersion =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(-beta\.(?:0|[1-9]\d*))?$/;
 

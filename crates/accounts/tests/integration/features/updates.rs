@@ -6,12 +6,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_accounts::scheduler::TIMING;
-use nsv_core::binary::{CoreTarget, Version, bundled_pin};
+use nsv_core::binary::{CoreTarget, bundled_pin};
 use nsv_core::install::CORE_ARCHIVES;
 use nsv_core::pool::Phase;
 use nsv_domain::registry::OAuthProvider;
+use nsv_domain::version::{AppVersion, Version};
 use nsv_domain::wire::CorePhase;
-use nsv_testkit::world::{UPDATE, World, names, release};
+use nsv_testkit::TempDir;
+use nsv_testkit::fake::FakeCores;
+use nsv_testkit::world::{UPDATE, World, bundled_core, names, release};
 use serde_json::json;
 use tokio::sync::Notify;
 
@@ -90,7 +93,16 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     } = world;
     let data = store.directory().path().to_owned();
     store.close().await;
-    let world = World::open(directory, &data, bundled.clone(), Some(FEED), *TIMING, fake).await;
+    let world = World::open(
+        directory,
+        &data,
+        bundled.clone(),
+        Some(FEED),
+        *TIMING,
+        fake,
+        AppVersion::current(),
+    )
+    .await;
     world.cores.launch().await.unwrap();
     assert_eq!(world.cores.core_version(), UPDATE);
     world.cores.pool().start(&profile, false).await.unwrap();
@@ -216,6 +228,44 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
             502
         )
     );
+}
+
+#[tokio::test]
+async fn a_beta_build_starts_and_takes_cores_that_admit_its_prerelease() {
+    // `Cores::new` refused a `-beta.N` app version, so a beta build's daemon did not start.
+    let directory = TempDir::new("updates-beta");
+    let data = directory.path().join("data");
+    let bundled = bundled_core(directory.path());
+    let beta = AppVersion::parse("0.2.0-beta.1").unwrap();
+    let world = World::open(
+        directory,
+        &data,
+        bundled,
+        Some(FEED),
+        *TIMING,
+        FakeCores::default(),
+        beta,
+    )
+    .await;
+    world.cores.launch().await.unwrap();
+    let (_, pin) = release(world.directory.path(), b"update core");
+    for (min_app, offered) in [
+        ("0.2.0", None),
+        ("0.2.0-beta.2", None),
+        ("0.2.0-beta.1", Some(UPDATE)),
+        ("0.1.9", Some(UPDATE)),
+    ] {
+        let mut feed = pin.clone();
+        feed["minApp"] = json!(min_app);
+        *world.releases.feed.lock().unwrap() = feed;
+        world.cores.check_core().await.unwrap();
+        assert_eq!(
+            world.cores.core_state().available.as_deref(),
+            offered,
+            "{min_app}"
+        );
+    }
+    world.cores.shutdown().await.unwrap();
 }
 
 #[tokio::test]

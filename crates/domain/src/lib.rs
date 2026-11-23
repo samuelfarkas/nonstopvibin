@@ -17,6 +17,7 @@ pub mod sync;
 pub mod time;
 #[cfg(test)]
 mod typescript;
+pub mod version;
 pub mod wire;
 
 /// Lowercase hex of `bytes`, as Node's `digest("hex")` writes it.
