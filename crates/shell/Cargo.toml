@@ -40,6 +40,7 @@ tao.workspace = true
 tray-icon.workspace = true
 
 [dev-dependencies]
+nsv-testkit = { workspace = true, features = ["shell"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

@@ -82,20 +82,20 @@ option below. Only the host changes.
 
 Twelve crates under `crates/`, edition 2024, one `[workspace.lints]` table:
 
-| Crate      | Owns                                                                                                                               | Depends on        |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `domain`   | Ids, enums, wire types, the provider and agent registry, secret newtypes, the helper protocol. No I/O.                             | —                 |
-| `store`    | Data directory layout, owner and symlink checks, atomic writes, vault, SQLite thread, lock.                                        | `domain`          |
-| `net`      | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring).                                                        | `domain`          |
-| `core`     | Core binary pin and hash checks, config, spawn, watchdog, ledger, restart policy, pool, management client, the reviewed-pin fetch. | `store`, `net`    |
-| `accounts` | Accounts, quota, usage drain, the deadline scheduler, sign-in, credentials, core updates, pricing, model catalog.                  | `core`            |
-| `agents`   | The four agent setup writers, native config files, the credential socket.                                                          | `store`           |
-| `gateway`  | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                                       | `domain`          |
-| `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order.                                | all above         |
-| `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the server implements.                               | `domain`, `net`   |
-| `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                      | `domain`          |
-| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection.                                                 | `server`, `shell` |
-| `testkit`  | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world.         | `accounts`        |
+| Crate      | Owns                                                                                                                                     | Depends on          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `domain`   | Ids, enums, wire types, the provider and agent registry, secret newtypes, the helper protocol. No I/O.                                   | —                   |
+| `store`    | Data directory layout, owner and symlink checks, atomic writes, vault, SQLite thread, lock.                                              | `domain`            |
+| `net`      | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring).                                                              | `domain`            |
+| `core`     | Core binary pin and hash checks, config, spawn, watchdog, ledger, restart policy, pool, management client, the reviewed-pin fetch.       | `store`, `net`      |
+| `accounts` | Accounts, quota, usage drain, the deadline scheduler, sign-in, credentials, core updates, pricing, model catalog.                        | `core`              |
+| `agents`   | The four agent setup writers, native config files, the credential socket.                                                                | `store`             |
+| `gateway`  | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                                             | `domain`            |
+| `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order.                                      | all above           |
+| `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the server implements.                                     | `domain`, `net`     |
+| `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                            | `domain`            |
+| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection.                                                       | `server`, `shell`   |
+| `testkit`  | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world, a shell host. | `accounts`, `shell` |
 
 - The gateway receives a request and a `Lease` (profile id, slug, client and core keys, upstream
   address, in-flight guard). A `Lease` holds no management key, and the gateway crate cannot

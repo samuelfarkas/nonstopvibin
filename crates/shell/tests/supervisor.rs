@@ -12,8 +12,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use common::{Host, PROFILE, TOKEN, directory, exited, options, spawn_shell, wait_until};
+use common::{directory, exited, options, spawn_shell, wait_until};
 use nsv_shell::HostEvent;
+use nsv_testkit::shell::{Host, PROFILE, TOKEN};
 use serde_json::{Value, json};
 
 /// Helper number n says `say.n`, records its stdin in `heard.n` until the pipe closes, and
