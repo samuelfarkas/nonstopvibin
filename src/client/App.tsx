@@ -211,7 +211,6 @@ export function App() {
         </div>
       </aside>
       <main className="main">
-        <div className="window-drag" />
         {shownError && (
           <div className="global-alert" role="alert">
             <span>{shownError}</span>

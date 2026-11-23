@@ -431,7 +431,12 @@ impl App {
             .with_background_color(BACKGROUND)
             .build(target)
             .map_err(|error| error.to_string())?;
-        let script = bridge::script(&self.origin, &self.nonce, pane == Pane::Quota);
+        let script = bridge::script(
+            &self.origin,
+            &self.nonce,
+            pane == Pane::Quota,
+            cfg!(target_os = "macos") && pane == Pane::Main,
+        );
         let (ipc, loads, popup) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
         let origin = self.origin.clone();
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
@@ -682,6 +687,17 @@ impl App {
                     self.close_quota();
                 }
             }
+            // Only the macOS main window's bridge script sends it.
+            #[cfg(target_os = "macos")]
+            Call::DragWindow { x, y } => {
+                if let Some(main) = self.main.as_ref().filter(|_| ticket.pane == Pane::Main) {
+                    // Page points are window points scaled by the page zoom (`menu`).
+                    let zoom = 1.2_f64.powf(self.zoom_level);
+                    native::drag(&main.window, f64::from(x) * zoom, f64::from(y) * zoom);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            Call::DragWindow { .. } => {}
         }
     }
 

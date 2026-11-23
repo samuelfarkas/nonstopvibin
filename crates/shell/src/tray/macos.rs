@@ -91,6 +91,13 @@ pub fn run_desktop(daemon: impl FnOnce(TrayLink) -> u8 + Send + 'static) -> ! {
             Event::UserEvent(MainEvent::Exit(code)) => {
                 *control_flow = ControlFlow::ExitWithCode(code);
             }
+            // Opening the app while it runs (Finder, Spotlight, `open`): LaunchServices asks
+            // the running daemon to reopen instead of starting a second one.
+            Event::Reopen { .. } => {
+                if let Some(item) = &item {
+                    item.send(Action::OpenMain);
+                }
+            }
             Event::UserEvent(event) => {
                 if let Some(item) = &item {
                     item.handle(event);

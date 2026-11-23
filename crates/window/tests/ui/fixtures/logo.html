@@ -1,7 +1,10 @@
 <!doctype html>
 <meta charset="utf-8" />
 <title>logo fixture</title>
-<div class="desktop">
-  <div class="brand"><div id="root"></div></div>
+<!-- The brand area as App.tsx nests it: the sidebar keeps it below the macOS traffic lights. -->
+<div class="app desktop">
+  <aside class="sidebar">
+    <div class="brand"><div id="root"></div></div>
+  </aside>
 </div>
 <script type="module" src="./logo.tsx"></script>

@@ -5,11 +5,13 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use nsv_domain::helper::{DialogKind, Reason, Rect};
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSModalResponseOK, NSOpenPanel,
-    NSPasteboard, NSScreen,
+    NSAlert, NSAlertFirstButtonReturn, NSAlertStyle, NSApplication, NSEvent, NSEventMask,
+    NSEventType, NSModalResponseOK, NSOpenPanel, NSPasteboard, NSScreen,
 };
-use objc2_foundation::{NSRect, NSString};
+use objc2_foundation::{NSDate, NSPoint, NSRect, NSString};
+use tao::platform::macos::WindowExtMacOS;
 use tao::window::Window;
 
 use super::{FOLDER_BUTTON, FOLDER_TITLE, dialog_text};
@@ -18,11 +20,62 @@ use crate::app::{Proxy, Ticket, UserEvent, log, post};
 /// `NSPasteboardTypeString`'s value: the static itself is an extern symbol only unsafe code
 /// can read.
 const PLAIN_TEXT: &str = "public.utf8-plain-text";
+/// `NSEventTrackingRunLoopMode`'s value, for the same reason.
+const EVENT_TRACKING: &str = "NSEventTrackingRunLoopMode";
 
 /// Shows `window`, brings the helper to the front and gives the window the focus.
 pub(crate) fn present(window: &Window) {
     window.set_visible(true);
     window.set_focus();
+}
+
+/// Moves `window` with the pointer until the primary button is released: a press at (`x`, `y`),
+/// in points from the window's top left, in a drag region. The page reports the press after
+/// `mouseDown:` has returned, when the window server no longer starts a drag for it
+/// (`performWindowDragWithEvent:`, which tao's `drag_window` calls, leaves the window in place),
+/// so the helper tracks the drag itself, from the press, however late the report arrives.
+pub(crate) fn drag(window: &Window, x: f64, y: f64) {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        return;
+    };
+    // Released already: the press was a click.
+    if NSEvent::pressedMouseButtons() & 1 == 0 {
+        return;
+    }
+    let app = NSApplication::sharedApplication(main_thread);
+    // The press made the window key; any other key window means the pointer left it.
+    let Some(key) = app
+        .keyWindow()
+        .filter(|key| Retained::as_ptr(key).cast_mut().cast() == window.ns_window())
+    else {
+        return;
+    };
+    let frame = key.frame();
+    let start = key.convertPointToScreen(NSPoint::new(x, frame.size.height - y));
+    let until = NSDate::distantFuture();
+    let tracking = NSString::from_str(EVENT_TRACKING);
+    let follow = || {
+        let pointer = NSEvent::mouseLocation();
+        key.setFrameOrigin(NSPoint::new(
+            frame.origin.x + pointer.x - start.x,
+            frame.origin.y + pointer.y - start.y,
+        ));
+    };
+    // What the pointer did before the report arrived.
+    follow();
+    while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
+        NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseUp,
+        Some(&until),
+        &tracking,
+        true,
+    ) {
+        follow();
+        if event.r#type() == NSEventType::LeftMouseUp {
+            // The page saw the press; it sees the release too.
+            key.sendEvent(&event);
+            break;
+        }
+    }
 }
 
 /// The pasteboard server keeps the text after this process exits.

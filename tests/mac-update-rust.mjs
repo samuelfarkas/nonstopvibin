@@ -35,6 +35,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
+import { product } from "../scripts/distribution.ts";
 
 assert.equal(process.platform, "darwin", "Run the update test on macOS.");
 assert.equal(
@@ -46,14 +47,14 @@ assert.equal(
 const root = resolve(import.meta.dirname, "..");
 const release = join(root, "release");
 const results = join(root, "test-results/mac-update-rust");
-const bundle = `${pkg.build.productName}.app`;
+const bundle = `${product.name}.app`;
 const version = pkg.version;
 const old = "0.0.1";
 const port = 48731;
 const work = realpathSync(mkdtempSync(join(tmpdir(), "nv-mac-rust-update-")));
 const apps = join(work, "Applications");
 const installed = join(apps, bundle);
-const executable = join(installed, "Contents/MacOS", pkg.build.productName);
+const executable = join(installed, "Contents/MacOS", product.name);
 const appLog = join(work, "app.log");
 const env = {
   ...process.env,
@@ -215,7 +216,7 @@ try {
   command("ditto", [
     "-x",
     "-k",
-    join(source, "release", `${pkg.build.productName}-${old}-mac-arm64.zip`),
+    join(source, "release", `${product.name}-${old}-mac-arm64.zip`),
     apps,
   ]);
   assert.equal(plistVersion(installed), old);
