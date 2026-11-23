@@ -24,6 +24,7 @@ unicode-normalization.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+nsv-testkit.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 
 [lints]

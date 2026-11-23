@@ -10,9 +10,10 @@ use nsv_domain::secret::{ApiKey, CoreKey, ManagementKey};
 use nsv_domain::wire::{ApiAccount, Profile};
 use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
 use nsv_store::{Store, StoreError, Vault};
+use nsv_testkit::TempDir;
 use serde_json::{Map, Value, json};
 
-use crate::common::{TempDir, mode};
+use crate::common::mode;
 
 // ---- A reader for the emitter's YAML subset ----
 // Block mappings and sequences, two spaces per level, and JSON scalars: what the emitter

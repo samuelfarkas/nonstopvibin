@@ -2,38 +2,9 @@
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 
 use nsv_core::binary::{CorePin, CoreTarget, Sha256Digest};
-
-/// A directory under the system temporary directory, removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
-impl TempDir {
-    pub(crate) fn new(name: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nsv-core-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        // A crashed earlier run with the same process id may have left it.
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 pub(crate) fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path).unwrap().mode() & 0o777

@@ -2,40 +2,11 @@
 
 use std::fs::{self, Permissions};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 
 use nsv_domain::secret::KeyDigest;
 use nsv_store::files::owner_only_directory;
 use nsv_store::{AuthEntry, AuthSnapshot, Store, StoreError, Vault};
-
-/// A directory under the system temporary directory, removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
-impl TempDir {
-    pub(crate) fn new(name: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nsv-store-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        // A crashed earlier run with the same process id may have left it.
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 /// The entry whose live client key is `presented`, looked up by digest and compared in constant
 /// time as the gateway does; a snapshot the store could not read refuses every key.

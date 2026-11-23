@@ -2,8 +2,8 @@
 //! when a test moves it.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,37 +15,11 @@ use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{Account, ApiAccount};
 use nsv_store::{Store, Vault};
+use nsv_testkit::TempDir;
 use serde_json::json;
 use tokio::sync::watch;
 
 use crate::fake::Fake;
-
-/// A directory under the system temporary directory, removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
-impl TempDir {
-    pub(crate) fn new(name: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nsv-accounts-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
 
 /// The host: reports are kept, quota checks recorded and answered as a test says.
 #[derive(Default)]

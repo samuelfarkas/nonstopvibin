@@ -7,10 +7,11 @@ use std::sync::Arc;
 use nsv_accounts::catalog::{Catalog, CatalogError, ModelCatalog, enrich_models};
 use nsv_accounts::pricing::{UsagePrices, estimate_usd, normalized_tokens};
 use nsv_domain::wire::{ApiAccount, JsNumber, Model, UsageRecord};
+use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 
 use crate::common::{
-    NOW_ISO, StubFetch, TempDir, case, cases, fixed, open_store, profile, replaced, response,
+    NOW_ISO, StubFetch, case, cases, fixed, open_store, profile, replaced, response,
 };
 
 fn payload(cases: &[Value]) -> Vec<u8> {

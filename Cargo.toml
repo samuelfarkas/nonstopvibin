@@ -15,6 +15,7 @@ default-members = [
     "crates/server",
     "crates/shell",
     "crates/store",
+    "crates/testkit",
 ]
 
 [workspace.package]
@@ -35,6 +36,7 @@ nsv-net = { path = "crates/net" }
 nsv-server = { path = "crates/server" }
 nsv-shell = { path = "crates/shell" }
 nsv-store = { path = "crates/store" }
+nsv-testkit = { path = "crates/testkit" }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
 base64 = "0.23.1"
 getrandom = "0.4.3"

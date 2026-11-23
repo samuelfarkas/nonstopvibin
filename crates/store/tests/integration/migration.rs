@@ -12,11 +12,12 @@ use nsv_domain::secret::{ApiKey, ClientKey};
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{Account, ApiAccount, Profile, Quota, UsageRecord};
 use nsv_store::{Db, Store, StoreError};
+use nsv_testkit::TempDir;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::common::{TempDir, mode, open, owner, set_mode};
+use crate::common::{mode, open, owner, set_mode};
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

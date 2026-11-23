@@ -21,6 +21,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
+nsv-testkit.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 
 # The fake core is this test binary run as `cli-proxy-api --config <path>`, which libtest's

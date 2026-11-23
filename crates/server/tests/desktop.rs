@@ -17,9 +17,10 @@ use nsv_domain::wire::ApiAccount;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, processes};
 use nsv_shell::{HostEvent, ShellHost};
 use nsv_store::{ServerLock, Store, Vault};
+use nsv_testkit::TempDir;
 use serde_json::json;
 
-use crate::common::{ModelsDev, TempDir, now, send};
+use crate::common::{ModelsDev, now, send};
 
 /// A fresh data directory with one enabled API-key profile, which sleeps until a request.
 async fn seeded(root: &TempDir) -> std::path::PathBuf {

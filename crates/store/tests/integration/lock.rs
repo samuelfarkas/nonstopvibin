@@ -3,8 +3,9 @@ use std::os::unix::fs::{MetadataExt, symlink};
 
 use nsv_store::layout::server_lock_path;
 use nsv_store::{LockError, ServerLock};
+use nsv_testkit::TempDir;
 
-use crate::common::{TempDir, mode, set_mode};
+use crate::common::{mode, set_mode};
 
 #[test]
 fn one_owner_holds_a_directory_until_it_releases_and_the_inode_survives() {

@@ -2,8 +2,9 @@ use std::fs;
 
 use nsv_core::binary::{CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin};
 use nsv_core::{CoreError, check_core_directory, verify_core};
+use nsv_testkit::TempDir;
 
-use crate::common::{CORE_SHA256, LINUX_X64, TempDir, pin};
+use crate::common::{CORE_SHA256, LINUX_X64, pin};
 
 fn message(result: Result<(), CoreError>) -> (String, u16) {
     match result {

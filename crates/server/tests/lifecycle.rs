@@ -21,11 +21,12 @@ use nsv_domain::wire::ApiAccount;
 use nsv_server::{CoreOptions, Daemon, Options, TIMING, Timing, processes};
 use nsv_shell::ShellHost;
 use nsv_store::{ServerLock, Store, Vault};
+use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::common::{ModelsDev, REPOSITORY, RawResponse, TempDir, now, send};
+use crate::common::{ModelsDev, REPOSITORY, RawResponse, now, send};
 
 fn pinned_core() -> PathBuf {
     Path::new(REPOSITORY).join(".vendor/core/cli-proxy-api")

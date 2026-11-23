@@ -30,6 +30,7 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+nsv-testkit.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 
 [[test]]

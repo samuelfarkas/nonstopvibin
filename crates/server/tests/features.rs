@@ -45,11 +45,12 @@ use nsv_server::{CoreOptions, Daemon, Options, TIMING};
 use nsv_shell::{HostEvent, ShellHost};
 use nsv_store::ServerLock;
 use nsv_store::layout::credential_directory;
+use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::common::{StubFetch, TempDir, response};
+use crate::common::{StubFetch, response};
 use crate::fake_core::{Directory, FakeCores};
 use crate::golden::now;
 use crate::world::{ACCOUNT, ORGANIZATION_A, TestReleases, UPDATE, bundled_core, claude, release};
@@ -218,15 +219,6 @@ fn pasted(state: &str) -> Value {
     json!({ "url": format!("http://localhost:1455/auth/callback?code=synthetic&state={state}") })
 }
 
-/// A port above 20000 that was free a moment ago, for the sign-in's callback listener.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 #[tokio::test]
 async fn a_pasted_callback_signs_in_and_a_pending_sign_in_can_be_cancelled() {
     let app = running("http-signin", None).await;
@@ -272,7 +264,8 @@ async fn a_pasted_callback_signs_in_and_a_pending_sign_in_can_be_cancelled() {
 async fn a_browser_callback_signs_in_and_brings_the_desktop_window_forward() {
     let app = running("http-browser", None).await;
     let profile = app.profile("Desktop").await;
-    let port = free_port();
+    let reserved = Port::reserve();
+    let port = reserved.number();
     assert!(port > 20000, "{port}");
     app.fake.knobs(|knobs| {
         knobs.redirect = Some(format!("http://localhost:{port}/auth/callback"));
@@ -280,6 +273,8 @@ async fn a_browser_callback_signs_in_and_brings_the_desktop_window_forward() {
     });
     let mut events = app.daemon.events();
     let oauth = format!("/profiles/{profile}/oauth");
+    // The sign-in's callback listener binds it.
+    drop(reserved);
     let session = app
         .ok("POST", &oauth, Some(json!({ "provider": "codex" })))
         .await;

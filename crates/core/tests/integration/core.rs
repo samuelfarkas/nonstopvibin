@@ -18,11 +18,11 @@ use nsv_domain::wire::{ApiAccount, Profile};
 use nsv_net::{Loopback, LoopbackRequest, Method, Response, loopback};
 use nsv_store::layout::{core_config_path, credential_directory, profile_directory};
 use nsv_store::{Store, Vault};
+use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::common::TempDir;
 use crate::config::golden_config_cases;
 
 /// The pinned core of this checkout, checked against the bundled pin before it runs.
@@ -39,14 +39,6 @@ pub(crate) fn pinned_core() -> PathBuf {
     )
     .unwrap();
     directory.join("cli-proxy-api")
-}
-
-/// A free loopback port; the kernel's ephemeral range is above 20000.
-async fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    assert!(port > 20000, "{port}");
-    port
 }
 
 pub(crate) async fn call(
@@ -347,8 +339,11 @@ impl Running {
             })
             .await
             .unwrap();
-        let port = free_port().await;
+        let reserved = Port::reserve();
+        let port = reserved.number();
         let config = write_config(store, profile.id.clone(), port).await.unwrap();
+        // The core binds it.
+        drop(reserved);
         let core = spawn_core(binary, data, &profile.id).unwrap();
         let management = config.management_key.expose_secret().to_owned();
         let reported = reported_config(port, &management).await;
@@ -701,11 +696,14 @@ async fn the_pinned_core_reads_every_golden_config_as_written() {
     let profile = ProfileId::parse("00000000-0000-4000-8000-00000000c0fe").unwrap();
     let mut loaded = 0;
     for (name, mut config, _) in golden_config_cases() {
-        config.port = free_port().await;
+        let reserved = Port::reserve();
+        config.port = reserved.number();
         config.auth_dir = credential_directory(&data, &profile)
             .to_str()
             .unwrap()
             .to_owned();
+        // The core binds it.
+        drop(reserved);
         let reported = load(&binary, &data, &profile, &config).await;
         assert!(applied(&config, &reported), "{name}: {reported}");
         // The fixed entries the core reports back. It answered on the written port with the

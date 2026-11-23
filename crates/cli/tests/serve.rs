@@ -16,39 +16,25 @@ use std::time::{Duration, Instant};
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
 use nsv_store::{ServerLock, Store, Vault};
+use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-struct Root(PathBuf);
+/// A run's `home` and data directory.
+struct Root(TempDir);
 
 impl Root {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("nsv-serve-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(path.join("home")).unwrap();
-        Self(path)
+        let root = TempDir::new(&format!("serve-{name}"));
+        std::fs::create_dir_all(root.path().join("home")).unwrap();
+        Self(root)
     }
 
     fn data(&self) -> PathBuf {
-        self.0.join("data")
+        self.0.path().join("data")
     }
-}
-
-impl Drop for Root {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A loopback port nothing listens on now.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 struct Seeded {
@@ -228,12 +214,13 @@ impl Drop for Daemon {
 
 impl Daemon {
     /// Runs `serve` and waits until its `server.json` names it.
-    async fn serve(root: &Root, port: u16, extra: &[&str]) -> Self {
+    async fn serve(root: &Root, port: Port, extra: &[&str]) -> Self {
         Self::serve_with(command(root), root, port, extra).await
     }
 
     /// [`Daemon::serve`] with another executable or environment.
-    async fn serve_with(mut command: Command, root: &Root, port: u16, extra: &[&str]) -> Self {
+    async fn serve_with(mut command: Command, root: &Root, port: Port, extra: &[&str]) -> Self {
+        let port = port.release();
         let mut daemon = Self {
             child: command
                 .args(["serve", "--port", &port.to_string()])
@@ -310,7 +297,7 @@ fn command(root: &Root) -> Command {
     command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("HOME", root.0.join("home"))
+        .env("HOME", root.0.path().join("home"))
         .env("NONSTOPVIBIN_DATA_DIR", root.data())
         .stdin(Stdio::null());
     command
@@ -491,7 +478,7 @@ async fn a_dormant_profile_streams_through_the_gateway_and_each_signal_stops_in_
     for signal in ["INT", "TERM", "HUP"] {
         let root = Root::new(&format!("signal-{signal}"));
         let seeded = seed(&root.data(), 1, upstream).await;
-        let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+        let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
         let profile = &seeded[0];
         // Dormant: no core until the first request.
         assert_eq!(
@@ -557,17 +544,17 @@ async fn one_instance_runs_per_data_directory() {
     nsv_store::files::owner_only_directory(&root.data(), || Ok::<(), std::io::Error>(())).unwrap();
     nsv_store::files::write_atomic(
         &root.data().join("server.json"),
-        json!({ "pid": 4242, "port": free_port(), "token": "stale", "allowHosts": [], "version": "0.2.0", "startedAt": "2026-11-22T11:00:00.000Z" })
+        json!({ "pid": 4242, "port": Port::reserve().release(), "token": "stale", "allowHosts": [], "version": "0.2.0", "startedAt": "2026-11-22T11:00:00.000Z" })
             .to_string()
             .as_bytes(),
         0o600,
     )
     .unwrap();
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
 
     // A second serve, on another port, finds the first through server.json.
     let second = command(&root)
-        .args(["serve", "--port", &free_port().to_string()])
+        .args(["serve", "--port", &Port::reserve().release().to_string()])
         .output()
         .unwrap();
     assert_eq!(second.status.code(), Some(1));
@@ -587,7 +574,7 @@ async fn one_instance_runs_per_data_directory() {
     let held = ServerLock::acquire(&root.data()).unwrap();
     // Held by another process (this test), a start is refused before it opens anything.
     let refused = command(&root)
-        .args(["serve", "--port", &free_port().to_string()])
+        .args(["serve", "--port", &Port::reserve().release().to_string()])
         .output()
         .unwrap();
     assert_eq!(refused.status.code(), Some(1));
@@ -604,7 +591,7 @@ async fn one_instance_runs_per_data_directory() {
         std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&lock).unwrap()),
         inode
     );
-    let mut again = Daemon::serve(&root, free_port(), &[]).await;
+    let mut again = Daemon::serve(&root, Port::reserve(), &[]).await;
     again.signal("TERM");
     assert_eq!(again.exited().await.0, 0);
 }
@@ -614,8 +601,12 @@ async fn an_allowed_host_reaches_the_interface_and_management_but_never_the_gate
     let upstream = stub_upstream().await.port;
     let root = Root::new("allow-host");
     let seeded = seed(&root.data(), 1, upstream).await;
-    let mut daemon =
-        Daemon::serve(&root, free_port(), &["--allow-host", "Box.Tailnet.ts.net"]).await;
+    let mut daemon = Daemon::serve(
+        &root,
+        Port::reserve(),
+        &["--allow-host", "Box.Tailnet.ts.net"],
+    )
+    .await;
     let host = "box.tailnet.ts.net";
     let authorization = format!("Bearer {}", daemon.token);
     let api = |origin: &'static str| {
@@ -717,7 +708,7 @@ async fn profile_keys_never_manage_or_cross_profiles() {
     let upstream = stub_upstream().await.port;
     let root = Root::new("keys");
     let seeded = seed(&root.data(), 2, upstream).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let (first, second) = (&seeded[0], &seeded[1]);
     let bearer = format!("Bearer {}", first.key);
     let manage = send(
@@ -803,7 +794,7 @@ async fn only_a_websocket_switch_takes_the_upgrade_path() {
     let upstream = stub_upstream().await.port;
     let root = Root::new("switch");
     let seeded = seed(&root.data(), 1, upstream).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let bearer = format!("Bearer {}", seeded[0].key);
     // An Upgrade without `Connection: upgrade` is an ordinary request; a switch to anything
     // but WebSocket is refused rather than sent on as a bodiless GET.
@@ -890,7 +881,7 @@ async fn a_dormant_profile_s_first_websocket_starts_its_core_and_concurrent_requ
     let upstream = stub_upstream().await;
     let root = Root::new("websocket");
     let seeded = seed(&root.data(), 2, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let (first, second) = (&seeded[0], &seeded[1]);
     // Another profile's key is refused before anything wakes.
     let (crossed, _) = handshake(daemon.port, &first.slug, &second.key).await;
@@ -934,7 +925,7 @@ async fn a_profile_with_32_requests_in_flight_refuses_the_next_until_one_finishe
     upstream.hold();
     let root = Root::new("cap");
     let seeded = seed(&root.data(), 1, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let profile = &seeded[0];
     let bearer = format!("Bearer {}", profile.key);
     let target = format!("/p/{}/v1/chat/completions", profile.slug);
@@ -1003,7 +994,7 @@ async fn agent_checks_and_accounting_go_through_the_gateway_without_extra_infere
     let upstream = stub_upstream().await;
     let root = Root::new("check");
     let seeded = seed(&root.data(), 1, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let profile = &seeded[0];
     let id = profile_id(&daemon.api("GET", "/api/state").await.json(), &profile.slug);
     let authorization = format!("Bearer {}", daemon.token);
@@ -1095,7 +1086,7 @@ async fn clients_that_abort_are_not_reported_as_application_errors() {
     let upstream = stub_upstream().await;
     let root = Root::new("abort");
     let seeded = seed(&root.data(), 1, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     // A management client that closes mid-body.
     let mut partial = TcpStream::connect(("127.0.0.1", daemon.port))
         .await
@@ -1148,7 +1139,7 @@ async fn one_agent_connection_is_reauthenticated_for_each_request() {
     let upstream = stub_upstream().await;
     let root = Root::new("keep-alive");
     let seeded = seed(&root.data(), 2, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let mut stream = TcpStream::connect(("127.0.0.1", daemon.port))
         .await
         .unwrap();
@@ -1197,18 +1188,21 @@ async fn one_agent_connection_is_reauthenticated_for_each_request() {
 #[tokio::test]
 async fn simultaneous_starts_elect_one_owner() {
     let root = Root::new("race");
-    let spawn = |port: u16| Daemon {
-        child: command(&root)
-            .args(["serve", "--port", &port.to_string()])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-        port,
-        token: String::new(),
-        data: root.data(),
+    let spawn = |port: Port| {
+        let port = port.release();
+        Daemon {
+            child: command(&root)
+                .args(["serve", "--port", &port.to_string()])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+            port,
+            token: String::new(),
+            data: root.data(),
+        }
     };
-    let mut started = [spawn(free_port()), spawn(free_port())];
+    let mut started = [spawn(Port::reserve()), spawn(Port::reserve())];
     let mut loser = None;
     until("one contender to exit", 20, async || {
         loser = started
@@ -1241,7 +1235,7 @@ async fn a_stopping_daemon_keeps_its_directory_until_its_cores_have_stopped() {
     let upstream = stub_upstream().await;
     let root = Root::new("stopping");
     let seeded = seed(&root.data(), 1, upstream.port).await;
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     let profile = &seeded[0];
     let bearer = format!("Bearer {}", profile.key);
     let response = send(
@@ -1283,7 +1277,7 @@ async fn a_stopping_daemon_keeps_its_directory_until_its_cores_have_stopped() {
     })
     .await;
     let contender = command(&root)
-        .args(["serve", "--port", &free_port().to_string()])
+        .args(["serve", "--port", &Port::reserve().release().to_string()])
         .output()
         .unwrap();
     signal("CONT");
@@ -1297,7 +1291,7 @@ async fn a_stopping_daemon_keeps_its_directory_until_its_cores_have_stopped() {
     let (code, output) = daemon.exited().await;
     assert_eq!(code, 0, "{output}");
     assert_eq!(ledger(&data), 0, "a core outlived the shutdown");
-    let mut successor = Daemon::serve(&root, free_port(), &[]).await;
+    let mut successor = Daemon::serve(&root, Port::reserve(), &[]).await;
     successor.signal("TERM");
     assert_eq!(successor.exited().await.0, 0);
 }
@@ -1327,7 +1321,7 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
 
     let mut development = command(&root);
     development.env("NONSTOPVIBIN_DEVELOPMENT", "1");
-    let mut daemon = Daemon::serve_with(development, &root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve_with(development, &root, Port::reserve(), &[]).await;
     assert_eq!(
         vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
         200
@@ -1348,7 +1342,7 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
         )
     );
 
-    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve(&root, Port::reserve(), &[]).await;
     assert_eq!(
         vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
         403
@@ -1358,7 +1352,7 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
 
     // A packaged layout: the pinned core beside the daemon, or in the bundle's Resources.
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.vendor/core");
-    let package = root.0.join("package");
+    let package = root.0.path().join("package");
     let (executable, core) = if cfg!(target_os = "macos") {
         (
             package.join("Contents/MacOS/nonstopvibin"),
@@ -1379,11 +1373,11 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
     packaged
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
-        .env("HOME", root.0.join("home"))
+        .env("HOME", root.0.path().join("home"))
         .env("NONSTOPVIBIN_DATA_DIR", root.data())
         .env("NONSTOPVIBIN_DEVELOPMENT", "1")
         .stdin(Stdio::null());
-    let mut daemon = Daemon::serve_with(packaged, &root, free_port(), &[]).await;
+    let mut daemon = Daemon::serve_with(packaged, &root, Port::reserve(), &[]).await;
     assert_eq!(
         vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
         403

@@ -15,23 +15,16 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
+use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 
 const REPOSITORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const STATE_PORT: u16 = 24319;
 const STALE_PORT: u16 = 24399;
 const TOKEN: &str = "synthetic-session-token";
-
-struct Root(PathBuf);
-
-impl Drop for Root {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 /// Answers `GET /api/state` with this token, as a running daemon would; 401 otherwise.
 fn state_stub() {
@@ -149,16 +142,16 @@ fn run(root: &Path, args: &[String], environment: &serde_json::Map<String, Value
 
 #[test]
 fn the_cli_answers_as_the_typescript_cli_did() {
-    let root = Root(std::env::temp_dir().join(format!("nsv-cli-golden-{}", std::process::id())));
-    let _ = std::fs::remove_dir_all(&root.0);
-    std::fs::create_dir_all(root.0.join("home")).unwrap();
-    std::fs::create_dir_all(root.0.join("bin")).unwrap();
-    let systemctl = root.0.join("bin/systemctl");
+    let directory = TempDir::new("cli-golden");
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let systemctl = root.join("bin/systemctl");
     std::fs::write(
         &systemctl,
         format!(
             "#!/bin/sh\necho \"$@\" >> \"{}/systemctl.log\"\ncase \"$*\" in *is-active*) echo inactive; exit 3;; *show-environment*) exit 0;; *) exit 0;; esac\n",
-            root.0.display()
+            root.display()
         ),
     )
     .unwrap();
@@ -189,7 +182,7 @@ fn the_cli_answers_as_the_typescript_cli_did() {
     {
         total += 1;
         let name = case["name"].as_str().unwrap();
-        prepare(name, &root.0, &units);
+        prepare(name, root, &units);
         let args: Vec<String> = case["input"]["args"]
             .as_array()
             .unwrap()
@@ -197,7 +190,7 @@ fn the_cli_answers_as_the_typescript_cli_did() {
             .map(|arg| arg.as_str().unwrap().to_owned())
             .collect();
         let output = run(
-            &root.0,
+            root,
             &args,
             case["input"]["environment"].as_object().unwrap(),
         );

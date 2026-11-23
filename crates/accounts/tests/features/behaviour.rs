@@ -21,9 +21,10 @@ use nsv_domain::wire::{
 };
 use nsv_net::Loopback;
 use nsv_store::Store;
+use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 
-use crate::common::{NOW, StubFetch, StubSource, TempDir, fixed, open_store, profile, response};
+use crate::common::{NOW, StubFetch, StubSource, fixed, open_store, profile, response};
 
 /// Waits until the stub core has received `calls` calls in all.
 async fn called(source: &StubSource, calls: usize) {

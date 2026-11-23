@@ -3,8 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::future::{Future, ready};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use nsv_accounts::fetch::{Fetch, Request};
@@ -46,33 +45,6 @@ pub(crate) fn replaced(value: &Value, pairs: &[(&str, &str)]) -> Value {
         text = text.replace(placeholder, actual);
     }
     serde_json::from_str(&text).unwrap()
-}
-
-/// A directory under the system temporary directory, removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
-impl TempDir {
-    pub(crate) fn new(name: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nsv-accounts-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
 }
 
 pub(crate) async fn open_store(directory: &Path) -> Store {

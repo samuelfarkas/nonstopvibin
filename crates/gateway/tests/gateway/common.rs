@@ -16,6 +16,7 @@ use nsv_domain::id::{ProfileId, ProfileSlug};
 use nsv_domain::registry::Agent;
 use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
 use nsv_gateway::{Activity, Body, Catalog, Gateway, Host, ProfileAuth, Refusal, serve_connection};
+use nsv_testkit::dechunk;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -223,22 +224,6 @@ pub(crate) fn parse_head(raw: &[u8]) -> Option<(RawResponse, usize)> {
         },
         end + 4,
     ))
-}
-
-pub(crate) fn dechunk(mut rest: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    loop {
-        let Some(line) = rest.windows(2).position(|window| window == b"\r\n") else {
-            return out;
-        };
-        let size =
-            usize::from_str_radix(std::str::from_utf8(&rest[..line]).unwrap().trim(), 16).unwrap();
-        if size == 0 {
-            return out;
-        }
-        out.extend_from_slice(&rest[line + 2..line + 2 + size]);
-        rest = &rest[line + 2 + size + 2..];
-    }
 }
 
 /// Sends one request on a new connection and reads the response to EOF.

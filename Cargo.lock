@@ -1739,6 +1739,7 @@ dependencies = [
  "nsv-domain",
  "nsv-net",
  "nsv-store",
+ "nsv-testkit",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1772,6 +1773,7 @@ dependencies = [
  "nsv-server",
  "nsv-shell",
  "nsv-store",
+ "nsv-testkit",
  "serde_json",
  "tokio",
  "tracing",
@@ -1785,6 +1787,7 @@ dependencies = [
  "nsv-domain",
  "nsv-net",
  "nsv-store",
+ "nsv-testkit",
  "rustix",
  "serde",
  "serde_json",
@@ -1813,6 +1816,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "nsv-domain",
+ "nsv-testkit",
  "proptest",
  "serde",
  "serde_json",
@@ -1850,6 +1854,7 @@ dependencies = [
  "nsv-net",
  "nsv-shell",
  "nsv-store",
+ "nsv-testkit",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1896,6 +1901,7 @@ dependencies = [
  "base64",
  "getrandom 0.4.3",
  "nsv-domain",
+ "nsv-testkit",
  "rusqlite",
  "rustix",
  "serde",
@@ -1906,6 +1912,10 @@ dependencies = [
  "unicode-normalization",
  "zeroize",
 ]
+
+[[package]]
+name = "nsv-testkit"
+version = "0.2.0"
 
 [[package]]
 name = "nsv-window"

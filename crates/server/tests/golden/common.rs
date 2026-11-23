@@ -2,15 +2,15 @@
 //! raw HTTP and the recorder's placeholders.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nsv_accounts::fetch::{Fetch, Request};
 use nsv_core::binary::Sha256Digest;
 use nsv_core::install::Releases;
 use nsv_domain::error::AppError;
 use nsv_net::{HeaderMap, Loopback, NetError, Response, StatusCode};
+use nsv_testkit::dechunk;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -22,33 +22,6 @@ pub(crate) const NOW: i64 = 1_795_348_800_000;
 
 pub(crate) fn now() -> i64 {
     NOW
-}
-
-/// A directory under the system temporary directory, removed on drop.
-pub(crate) struct TempDir(PathBuf);
-
-impl TempDir {
-    pub(crate) fn new(name: &str) -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "nsv-server-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 /// The cases of `tests/golden/<area>.json`.
@@ -125,20 +98,6 @@ impl RawResponse {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
     }
-}
-
-fn dechunk(mut rest: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    while let Some(line) = rest.windows(2).position(|window| window == b"\r\n") {
-        let size =
-            usize::from_str_radix(std::str::from_utf8(&rest[..line]).unwrap().trim(), 16).unwrap();
-        if size == 0 {
-            break;
-        }
-        out.extend_from_slice(&rest[line + 2..line + 2 + size]);
-        rest = &rest[line + 2 + size + 2..];
-    }
-    out
 }
 
 /// One request on a new connection, as the recorder's `send` wrote it, read to EOF.

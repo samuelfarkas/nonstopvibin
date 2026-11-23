@@ -18,10 +18,11 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_net::{NetError, Response};
 use nsv_store::Store;
+use nsv_testkit::TempDir;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
-use crate::common::{StubFetch, TempDir, open_store, profile, response};
+use crate::common::{StubFetch, open_store, profile, response};
 use crate::fake_core::{Directory, FakeCores};
 
 thread_local! {

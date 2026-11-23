@@ -7,8 +7,9 @@ use nsv_core::binary::{CoreTarget, Version, bundled_pin};
 use nsv_core::install::{
     ActiveCore, Staging, install_archive, install_core, prune, select_installed_core,
 };
+use nsv_testkit::TempDir;
 
-use crate::common::{CORE_SHA256, LINUX_X64, TempDir, digest, mode, pin};
+use crate::common::{CORE_SHA256, LINUX_X64, digest, mode, pin};
 
 /// A gzipped tar holding `files` at its top level, as upstream releases are.
 fn archive(directory: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
