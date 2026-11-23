@@ -3,10 +3,12 @@
 //! during a download.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use nsv_accounts::scheduler::TIMING;
 use nsv_core::binary::{CoreTarget, Version, bundled_pin};
 use nsv_core::install::CORE_ARCHIVES;
+use nsv_core::pool::Phase;
 use nsv_domain::registry::OAuthProvider;
 use nsv_domain::wire::CorePhase;
 use nsv_testkit::world::{UPDATE, World, names, release};
@@ -108,6 +110,49 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     assert_eq!(
         (again.message.as_str(), again.status),
         ("NonstopVibin already runs its bundled core.", 409)
+    );
+    world.cores.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_other_start_slips_in_while_an_update_restarts_a_core_on_the_new_binary() {
+    let world = installed_world("updates-swap").await;
+    let profile = world.profile("Swap fixture").await;
+    world.cores.launch().await.unwrap();
+    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.updates.check().await.unwrap();
+    // The stop's usage drain waits, so another start arrives between its stop and its start.
+    let held = profile.clone();
+    let (release, _holding) = world
+        .fake
+        .hold("/usage-queue", move |profile| *profile == held);
+    let cores = Arc::clone(&world.cores);
+    let install = tokio::spawn(async move { cores.updates.install(UPDATE).await });
+    let mut pool = world.cores.pool().subscribe();
+    pool.wait_for(|state| {
+        state
+            .core(&profile)
+            .is_some_and(|core| matches!(core.phase, Phase::Stopping { .. }))
+    })
+    .await
+    .unwrap();
+    let cores = Arc::clone(&world.cores);
+    let start = profile.clone();
+    let other = tokio::spawn(async move { cores.pool().start(&start, false).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    release.send_replace(true);
+    install.await.unwrap().unwrap();
+    let refused = other.await.unwrap().unwrap_err();
+    assert_eq!(refused.status, 409);
+    let state = world.cores.pool().state();
+    assert!(state.running(&profile));
+    assert_eq!(
+        *state.core(&profile).unwrap().binary,
+        *world
+            .data()
+            .join("cores")
+            .join(UPDATE)
+            .join("cli-proxy-api")
     );
     world.cores.shutdown().await.unwrap();
 }

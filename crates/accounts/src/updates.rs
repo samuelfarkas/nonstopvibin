@@ -509,10 +509,8 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
             if current || !state.alive(&profile.id) {
                 continue;
             }
-            let restarted = async {
-                pool.stop(&profile.id).await?;
-                pool.start(&profile.id, false).await
-            };
+            // Nothing else starts it between its stop and its start on the new core.
+            let restarted = pool.while_stopped(&profile.id, std::future::ready(Ok(())));
             if let Err(error) = restarted.await {
                 if pool.closing() {
                     return Ok(());
