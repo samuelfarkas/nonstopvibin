@@ -36,6 +36,7 @@ pub(crate) fn pinned_core() -> PathBuf {
         bundled_pin().unwrap(),
         directory,
         CoreTarget::current().unwrap(),
+        nsv_core::binary::Binary::Pinned,
     )
     .unwrap();
     directory.join("cli-proxy-api")

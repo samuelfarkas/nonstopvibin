@@ -227,7 +227,8 @@ async fn installs_the_bundled_release_from_github() {
     .await
     .unwrap();
     nsv_core::verify_core(&root.path().join("cli-proxy-api"), Some(pin)).unwrap();
-    nsv_core::check_core_directory(pin, root.path(), target).unwrap();
+    nsv_core::check_core_directory(pin, root.path(), target, nsv_core::binary::Binary::Pinned)
+        .unwrap();
     assert!(root.path().join("LICENSE").exists());
     assert!(
         !root.path().join(target.archive(&pin.version)).exists(),

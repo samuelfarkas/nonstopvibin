@@ -15,10 +15,24 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::CoreError;
-use crate::binary::{BINARY, CoreManifest, CorePin, CoreTarget, Sha256Digest, Version};
+use crate::binary::{BINARY, CoreManifest, CorePin, CoreTarget, LICENSE, Sha256Digest, Version};
 
+/// The upstream repository, `CLIProxyAPI`'s GitHub owner and name.
+macro_rules! repository {
+    () => {
+        "router-for-me/CLIProxyAPI"
+    };
+}
+/// Upstream's releases page; each release is `tag/v<version>`.
+pub const RELEASES: &str = concat!("https://github.com/", repository!(), "/releases");
 /// Where upstream publishes each release's archives, under `v<version>/`.
-pub const CORE_ARCHIVES: &str = "https://github.com/router-for-me/CLIProxyAPI/releases/download";
+pub const CORE_ARCHIVES: &str = concat!("https://github.com/", repository!(), "/releases/download");
+/// GitHub's API answer for upstream's latest stable release.
+pub const LATEST_RELEASE: &str = concat!(
+    "https://api.github.com/repos/",
+    repository!(),
+    "/releases/latest"
+);
 /// Hosts a release download may be redirected to: GitHub serves assets from its CDN.
 pub const ARCHIVE_HOSTS: &[&str] = &[
     "github.com",
@@ -259,7 +273,7 @@ pub async fn install_archive(
         return Err(AppError::new(MISMATCH, 502).into());
     }
     if license {
-        extract(archive, "LICENSE", &directory.join("LICENSE"), 0o644).await?;
+        extract(archive, LICENSE, &directory.join(LICENSE), 0o644).await?;
     }
     CoreManifest::installed(pin, target, archive_sha256, binary_sha256).write(directory)?;
     Ok(())

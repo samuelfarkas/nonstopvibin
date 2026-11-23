@@ -9,22 +9,23 @@ use std::path::Path;
 use std::sync::{Arc, LazyLock};
 
 use nsv_domain::error::AppError;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 
 use crate::CoreError;
 
 /// `crates/core/core-release.json`, the reviewed pin this build bundles. Installed builds read
-/// the same file from `main` as their update feed, so it stays where the TypeScript readers
-/// (the build scripts) expect it.
+/// the same file from `main` as their update feed, so it stays where it is.
 const BUNDLED_PIN: &str = include_str!("../core-release.json");
 
 /// Written by `bun run core:install`, relative to the checkout.
 pub const CHECKOUT_DIRECTORY: &str = ".vendor/core";
-/// Relative to the desktop app's resources.
+/// Relative to the desktop app's resources and the server archive.
 pub const PACKAGED_DIRECTORY: &str = "core";
 pub const BINARY: &str = "cli-proxy-api";
 pub const MANIFEST: &str = "manifest.json";
+/// The release's licence, which an install beside a checkout keeps and packages ship.
+pub const LICENSE: &str = "LICENSE";
 
 /// A SHA-256, written as 64 lowercase hex digits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -94,6 +95,12 @@ impl fmt::Debug for Sha256Digest {
     }
 }
 
+impl Serialize for Sha256Digest {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 impl<'de> Deserialize<'de> for Sha256Digest {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
@@ -107,8 +114,7 @@ impl<'de> Deserialize<'de> for Sha256Digest {
 pub struct Version([u64; 3]);
 
 impl Version {
-    /// `None` unless `text` is `X.Y.Z` with decimal parts and no leading zeros. TypeScript also
-    /// took `08.1.0`, which nothing writes.
+    /// `None` unless `text` is `X.Y.Z` with decimal parts and no leading zeros.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         let mut parts = [0; 3];
@@ -138,6 +144,12 @@ impl fmt::Display for Version {
 impl fmt::Debug for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Version({self})")
+    }
+}
+
+impl Serialize for Version {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -171,6 +183,13 @@ impl CoreTarget {
         Self::ALL
             .into_iter()
             .find(|target| target.platform() == platform && target.arch() == arch)
+    }
+
+    /// The target a pin's key (`<platform>_<arch>`) names.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        key.split_once('_')
+            .and_then(|(platform, arch)| Self::new(platform, arch))
     }
 
     /// # Errors
@@ -225,8 +244,8 @@ impl CoreTarget {
     }
 }
 
-/// One SHA-256 per target.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// One SHA-256 per target, keyed `<platform>_<arch>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Targets {
     darwin_arm64: Sha256Digest,
     darwin_x64: Sha256Digest,
@@ -235,6 +254,19 @@ pub struct Targets {
 }
 
 impl Targets {
+    /// One digest per target, in [`CoreTarget::ALL`]'s order.
+    #[must_use]
+    pub const fn new(
+        [darwin_arm64, darwin_x64, linux_arm64, linux_x64]: [Sha256Digest; 4],
+    ) -> Self {
+        Self {
+            darwin_arm64,
+            darwin_x64,
+            linux_arm64,
+            linux_x64,
+        }
+    }
+
     #[must_use]
     pub const fn get(&self, target: CoreTarget) -> Sha256Digest {
         match target {
@@ -248,12 +280,12 @@ impl Targets {
 
 /// A reviewed core release, `crates/core/core-release.json`: bundled into each build and read
 /// from `main` by installed ones. Unknown keys are ignored, so a later field does not stop
-/// older apps from reading it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// older apps from reading it. Serialized in the file's key order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorePin {
     pub version: Version,
     /// The oldest app version that may run this core.
-    #[serde(rename = "minApp", default)]
+    #[serde(rename = "minApp", default, skip_serializing_if = "Option::is_none")]
     pub min_app: Option<Version>,
     /// Each target's upstream archive SHA-256.
     pub checksums: Targets,
@@ -274,43 +306,6 @@ pub fn bundled_pin() -> Result<&'static CorePin, PinError> {
         serde_json::from_str(BUNDLED_PIN).map_err(|error| PinError(Arc::new(error)))
     });
     PIN.as_ref().map_err(Clone::clone)
-}
-
-impl CorePin {
-    /// Whether `sha256` is the reviewed checksum of the upstream archive for the target that
-    /// `platform`/`arch` name.
-    #[must_use]
-    pub fn pins_archive(
-        &self,
-        platform: Option<&str>,
-        arch: Option<&str>,
-        sha256: Option<&str>,
-    ) -> bool {
-        matches(&self.checksums, platform, arch, sha256)
-    }
-
-    /// Whether `sha256` is the reviewed hash of the unsigned binary for that target.
-    #[must_use]
-    pub fn pins_binary(
-        &self,
-        platform: Option<&str>,
-        arch: Option<&str>,
-        sha256: Option<&str>,
-    ) -> bool {
-        matches(&self.binaries, platform, arch, sha256)
-    }
-}
-
-fn matches(
-    table: &Targets,
-    platform: Option<&str>,
-    arch: Option<&str>,
-    sha256: Option<&str>,
-) -> bool {
-    let target = platform.zip(arch).and_then(|(p, a)| CoreTarget::new(p, a));
-    target
-        .zip(sha256)
-        .is_some_and(|(target, sha256)| table.get(target).to_string() == sha256)
 }
 
 /// `manifest.json` beside the binary: `sha256` is the upstream archive's checksum and
@@ -397,8 +392,17 @@ impl CoreManifest {
     }
 }
 
+/// What [`check_core_directory`] holds a core's binary to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binary {
+    /// The pin's hash for the target.
+    Pinned,
+    /// The hash in its manifest: macOS signing rewrote the binary and then its manifest.
+    Signed,
+}
+
 /// Fails unless the core in `directory` is `pin`'s for `target`: the manifest's version and
-/// archive checksum, its target, its binary hash, then the binary. Packaging and the server
+/// archive checksum, its target, then its binary as `binary` says. Packaging and the server
 /// archive build run this before shipping a core.
 ///
 /// # Errors
@@ -407,22 +411,19 @@ pub fn check_core_directory(
     pin: &CorePin,
     directory: &Path,
     target: CoreTarget,
+    binary: Binary,
 ) -> Result<(), CoreError> {
     let manifest = CoreManifest::read(directory)?;
     let refuse = |message: String| Err(AppError::internal(message).into());
-    if manifest.version != Some(pin.version.to_string())
-        || !pin.pins_archive(
-            manifest.platform.as_deref(),
-            manifest.arch.as_deref(),
-            manifest.sha256.as_deref(),
-        )
-    {
+    let (platform, arch) = (
+        manifest.platform.as_deref().unwrap_or_default(),
+        manifest.arch.as_deref().unwrap_or_default(),
+    );
+    let archive_pinned = CoreTarget::new(platform, arch)
+        .is_some_and(|named| manifest.sha256 == Some(pin.checksums.get(named).to_string()));
+    if manifest.version != Some(pin.version.to_string()) || !archive_pinned {
         return refuse("The proxy core does not match the reviewed release pin.".to_owned());
     }
-    let (platform, arch) = (
-        manifest.platform.unwrap_or_default(),
-        manifest.arch.unwrap_or_default(),
-    );
     if platform != target.platform() || arch != target.arch() {
         return refuse(format!(
             "The proxy core is {platform}/{arch}, but the target is {}/{}. Run core:install for the target first.",
@@ -430,17 +431,27 @@ pub fn check_core_directory(
             target.arch()
         ));
     }
-    if manifest.binary_sha256 != Some(pin.binaries.get(target).to_string()) {
-        return refuse(
-            "The proxy core manifest does not match the reviewed binary pin. Run bun run core:install again."
-                .to_owned(),
-        );
-    }
-    if Sha256Digest::of_file(&directory.join(BINARY))? != pin.binaries.get(target) {
-        return refuse(
-            "The proxy core binary does not match the reviewed release pin. Run bun run core:install again."
-                .to_owned(),
-        );
+    let hash = || Sha256Digest::of_file(&directory.join(BINARY));
+    match binary {
+        Binary::Signed => {
+            if manifest.binary_sha256 != Some(hash()?.to_string()) {
+                return refuse("The signed core differs from its manifest.".to_owned());
+            }
+        }
+        Binary::Pinned => {
+            if manifest.binary_sha256 != Some(pin.binaries.get(target).to_string()) {
+                return refuse(
+                    "The proxy core manifest does not match the reviewed binary pin. Run bun run core:install again."
+                        .to_owned(),
+                );
+            }
+            if hash()? != pin.binaries.get(target) {
+                return refuse(
+                    "The proxy core binary does not match the reviewed release pin. Run bun run core:install again."
+                        .to_owned(),
+                );
+            }
+        }
     }
     Ok(())
 }

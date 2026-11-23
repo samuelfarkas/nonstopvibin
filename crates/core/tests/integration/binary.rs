@@ -1,6 +1,8 @@
 use std::fs;
 
-use nsv_core::binary::{CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin};
+use nsv_core::binary::{
+    Binary, CoreManifest, CorePin, CoreTarget, Sha256Digest, Version, bundled_pin,
+};
 use nsv_core::{CoreError, check_core_directory, verify_core};
 use nsv_testkit::TempDir;
 
@@ -61,6 +63,22 @@ fn a_pin_ignores_unknown_keys_and_refuses_malformed_values() {
 }
 
 #[test]
+fn a_pin_is_written_in_the_files_key_order() {
+    let file = include_str!("../../core-release.json");
+    let pin = bundled_pin().unwrap();
+    assert_eq!(serde_json::to_string_pretty(pin).unwrap() + "\n", file);
+    let later = CorePin {
+        min_app: Version::parse("0.3.0"),
+        ..pin.clone()
+    };
+    let text = serde_json::to_string_pretty(&later).unwrap();
+    assert!(
+        text.starts_with("{\n  \"version\": \"8.1.0\",\n  \"minApp\": \"0.3.0\",\n  \"checksums\": {\n    \"darwin_arm64\": "),
+        "{text}"
+    );
+}
+
+#[test]
 fn versions_are_canonical_x_y_z() {
     assert_eq!(Version::parse("8.10.0").unwrap().to_string(), "8.10.0");
     assert_eq!(Version::parse("0.0.0").unwrap().to_string(), "0.0.0");
@@ -100,6 +118,11 @@ fn targets_use_node_names_and_upstream_archive_names() {
     );
     assert_eq!(refused.status, 400);
     assert!(CoreTarget::new("linux", "ia32").is_none());
+    assert_eq!(
+        CoreTarget::from_key("darwin_x64"),
+        Some(CoreTarget::DarwinX64)
+    );
+    assert_eq!(CoreTarget::from_key("linux-x64"), None);
 }
 
 #[test]
@@ -160,7 +183,7 @@ fn core_directory(body: &str, fields: &serde_json::Value) -> TempDir {
 }
 
 #[test]
-fn check_core_directory_refuses_in_the_typescript_order() {
+fn check_core_directory_refuses_in_order() {
     let pin = pin("8.1.0", &"a".repeat(64), CORE_SHA256);
     let good = serde_json::json!({
         "version": "8.1.0", "platform": "linux", "arch": "x64",
@@ -168,7 +191,7 @@ fn check_core_directory_refuses_in_the_typescript_order() {
     });
     let check = |body: &str, fields: serde_json::Value, target| {
         let directory = core_directory(body, &fields);
-        check_core_directory(&pin, directory.path(), target)
+        check_core_directory(&pin, directory.path(), target, Binary::Pinned)
     };
     check("core", good.clone(), LINUX_X64).unwrap();
     let with = |key: &str, value: &str| {
@@ -206,10 +229,33 @@ fn check_core_directory_refuses_in_the_typescript_order() {
         )
     );
     assert_eq!(
-        message(check("tampered", good, LINUX_X64)),
+        message(check("tampered", good.clone(), LINUX_X64)),
         (
             "The proxy core binary does not match the reviewed release pin. Run bun run core:install again."
                 .to_owned(),
+            500
+        )
+    );
+
+    // Signing rewrote the binary and recorded its hash in the manifest.
+    let signed = |body: &str, fields: serde_json::Value| {
+        let directory = core_directory(body, &fields);
+        check_core_directory(&pin, directory.path(), LINUX_X64, Binary::Signed)
+    };
+    // The SHA-256 of "signed".
+    let resigned = with(
+        "binarySha256",
+        "4a3cdfae6f291c8f544daea5b72905cf9e74c1ed427d831ad0d7ca00c73c794d",
+    );
+    signed("signed", resigned.clone()).unwrap();
+    assert_eq!(
+        message(signed("altered", resigned)),
+        ("The signed core differs from its manifest.".to_owned(), 500)
+    );
+    assert_eq!(
+        message(signed("signed", with("version", "8.0.0"))),
+        (
+            "The proxy core does not match the reviewed release pin.".to_owned(),
             500
         )
     );
