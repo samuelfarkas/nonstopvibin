@@ -50,7 +50,6 @@ try {
   server.stdout.on("data", (chunk) => log.push(chunk));
   server.stderr.on("data", (chunk) => log.push(chunk));
   for (let attempt = 0; attempt < 30 && status() !== 0; attempt++) {
-    // A server that exited will not become ready.
     if (server.exitCode !== null || server.signalCode !== null) break;
     await delay(1000);
   }
