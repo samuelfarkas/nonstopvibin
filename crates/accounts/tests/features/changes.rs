@@ -11,7 +11,7 @@ use nsv_net::Method;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, watch};
 
-use crate::common::{case, cases};
+use crate::common::{case, cases, response};
 use crate::world::World;
 
 fn api_input(key: &str) -> ApiAccountInput {
@@ -316,6 +316,132 @@ async fn refresh_starts_a_kept_profile_first_and_checks_api_quota_even_when_it_c
         .unwrap();
     assert_eq!(quota.status, nsv_domain::wire::QuotaStatus::Unavailable);
     std::fs::remove_dir(&blocker).unwrap();
+}
+
+fn quota_of(account: &nsv_domain::wire::Account) -> Value {
+    serde_json::to_value(&account.quota).unwrap()
+}
+
+#[tokio::test]
+async fn refresh_answers_a_failed_start_and_keeps_the_last_good_check() {
+    let world = World::new("changes-refresh-exit").await;
+    let profile = world.profile("Refresh fixture").await;
+    world.fake.knobs(|knobs| {
+        knobs.upstream = Arc::new(|_| {
+            json!({ "status_code": 200, "body": { "rate_limit": { "primary_window": {
+                "used_percent": 40, "limit_window_seconds": 18000,
+            } } } })
+        });
+    });
+    let raw = json!({ "type": "codex", "access_token": "synthetic-codex", "refresh_token": "synthetic-refresh" });
+    world
+        .cores
+        .credentials
+        .import(&profile, object(&raw))
+        .await
+        .unwrap();
+    world.cores.refresh(&profile).await.unwrap();
+    let quota = async || quota_of(&world.cores.accounts.list(&profile).await.unwrap()[0]);
+    let checked = quota().await;
+    assert_eq!(checked["status"], "available", "{checked}");
+
+    world.cores.pool().stop(&profile).await.unwrap();
+    world.fake.knobs(|knobs| knobs.exits_on_launch = true);
+    let failed = world.cores.refresh(&profile).await.unwrap_err();
+    assert_eq!(failed.status, 503, "{failed:?}");
+    assert!(
+        failed.message.starts_with("Proxy exited (1)."),
+        "{}",
+        failed.message
+    );
+    assert_eq!(
+        quota().await,
+        checked,
+        "a failed start stores no failed check"
+    );
+
+    // Without a subscription the profile is not started.
+    world.fake.knobs(|knobs| knobs.exits_on_launch = false);
+    let empty = world.profile("Empty").await;
+    let launches = world.fake.launches().len();
+    world.cores.refresh(&empty).await.unwrap();
+    assert_eq!(world.fake.launches().len(), launches);
+    assert!(!world.cores.pool().alive(&empty));
+}
+
+#[tokio::test]
+async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
+    let world = World::new("changes-refresh-go").await;
+    let profile = world.profile("Go fixture").await;
+    // OpenCode Go quota is asked of the provider with the key; no core is involved.
+    world.fetch.answer(|url| {
+        Ok(if url.ends_with("/usage") {
+            response(200, r#"{"usage":{"rolling":{"usagePercent":40}}}"#)
+        } else {
+            response(404, "{}")
+        })
+    });
+    let go_checks = || {
+        world
+            .fetch
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| seen.request.url.ends_with("/usage"))
+            .count()
+    };
+    let go: ApiAccountInput = serde_json::from_value(json!({
+        "name": "Go", "provider": "opencode-go", "baseUrl": "https://opencode.ai/zen/go/v1",
+        "apiKey": "synthetic-go-key", "prefix": "",
+        "models": [{ "id": "glm-5.3", "protocol": "openai" }],
+    }))
+    .unwrap();
+    world
+        .cores
+        .credentials
+        .add_api_account(&profile, go)
+        .await
+        .unwrap();
+    assert!(world.cores.pool().running(&profile));
+    // Adding the account checked it once already.
+    let added = go_checks();
+    let held = world
+        .cores
+        .pool()
+        .while_stopped(&profile, {
+            let (cores, profile) = (Arc::clone(&world.cores), profile.clone());
+            async move {
+                let held = cores.refresh(&profile).await.unwrap_err();
+                assert_eq!(held.status, 409);
+                assert_eq!(
+                    held.message,
+                    "This profile is reconnecting a subscription. Try again in a moment."
+                );
+                Ok(())
+            }
+        })
+        .await;
+    held.unwrap();
+    assert_eq!(go_checks(), added + 1, "checked while the core is held");
+
+    world.cores.pool().stop(&profile).await.unwrap();
+    world.fake.knobs(|knobs| knobs.exits_on_launch = true);
+    let failed = world.cores.refresh(&profile).await.unwrap_err();
+    assert_eq!(failed.status, 503, "{failed:?}");
+    assert!(
+        failed.message.starts_with("Proxy exited (1)."),
+        "{}",
+        failed.message
+    );
+    assert_eq!(
+        go_checks(),
+        added + 2,
+        "checked although the core cannot start"
+    );
+    let accounts = world.cores.accounts.list(&profile).await.unwrap();
+    assert_eq!(quota_of(&accounts[0])["status"], "available");
+    assert_eq!(*world.reports.lock().unwrap(), Vec::<String>::new());
 }
 
 #[tokio::test]

@@ -38,6 +38,8 @@ pub(crate) struct Knobs {
     pub(crate) upstream: Arc<dyn Fn(&Value) -> Value + Send + Sync>,
     /// Holds each `/api-call` until the receiver turns true; the notify tells that one arrived.
     pub(crate) upstream_gate: Option<(Arc<Notify>, watch::Receiver<bool>)>,
+    /// Each core exits with code 1 as soon as it is launched, before it answers.
+    pub(crate) exits_on_launch: bool,
     /// Runs before each sign-in link is answered, given the profile of the core asked.
     pub(crate) auth_url_hook:
         Option<Arc<dyn Fn(ProfileId) -> BoxFuture<'static, ()> + Send + Sync>>,
@@ -56,6 +58,7 @@ impl Default for Knobs {
                 |_| json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } }),
             ),
             upstream_gate: None,
+            exits_on_launch: false,
             auth_url_hook: None,
         }
     }
@@ -171,6 +174,9 @@ impl FakeCores {
             pending: Mutex::new(HashMap::new()),
         });
         cores.launched.push(Arc::clone(&core));
+        if cores.knobs.exits_on_launch {
+            core.exit(1 << 8);
+        }
         Ok(core)
     }
 
