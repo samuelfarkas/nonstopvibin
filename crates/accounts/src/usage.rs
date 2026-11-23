@@ -33,7 +33,7 @@ pub fn parse_page(
             let entry = match entry {
                 Value::String(wrapped) => {
                     parsed = serde_json::from_str::<Value>(wrapped).map_err(|error| {
-                        AppError::new(format!("JSON Parse error: {error}"), 500)
+                        AppError::internal(format!("JSON Parse error: {error}"))
                     })?;
                     &parsed
                 }

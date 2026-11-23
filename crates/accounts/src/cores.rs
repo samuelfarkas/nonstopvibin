@@ -228,21 +228,21 @@ impl<F: Fetch + 'static, R: Releases> Cores<F, R> {
         let missing = self.allow_missing_core && !self.binary.exists();
         if !self.updates.select().await? && !missing {
             let pinned = if self.require_pinned_core {
-                Some(bundled_pin().map_err(|error| AppError::new(error.to_string(), 500))?)
+                Some(bundled_pin().map_err(AppError::internal)?)
             } else {
                 None
             };
             let binary = self.binary.clone();
             tokio::task::spawn_blocking(move || verify_core(&binary, pinned))
                 .await
-                .map_err(|error| AppError::new(error.to_string(), 500))??;
+                .map_err(AppError::internal)??;
         }
         // Orphans first: if the pending sign-ins cannot be removed, startup fails without
         // leaving one running.
         self.pool()
             .reap_orphans()
             .await
-            .map_err(|error| AppError::new(error.to_string(), 500))?;
+            .map_err(AppError::internal)?;
         SignIn::<F>::discard_pending(self.store.directory(), &self.backends).await?;
         self.scheduler.launch().await?;
         if self.updates.enabled() {

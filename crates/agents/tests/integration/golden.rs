@@ -55,8 +55,8 @@ fn personal() -> Profile {
 
 /// The golden error shape: a message the user sees, or only the status for zod and Node
 /// errors, whose text is not behaviour.
-fn error_matches(expected: &Value, actual: &AgentError) -> bool {
-    let status = expected["status"].as_u64() == Some(u64::from(actual.status()));
+fn error_matches(expected: &Value, actual: &AppError) -> bool {
+    let status = expected["status"].as_u64() == Some(u64::from(actual.status));
     match (&expected["message"], &expected["thrown"]) {
         (Value::String(message), Value::Null) => status && *message == actual.to_string(),
         _ => status,
@@ -307,7 +307,7 @@ async fn scenario(case: &Value) -> Vec<String> {
         .zip(case["output"].as_array().unwrap())
         .enumerate()
     {
-        let outcome = scenario.step(step).await;
+        let outcome = scenario.step(step).await.map_err(AppError::from);
         let after = scenario.files();
         let changed = placeholders.apply(&json!(changes(&before, &after)));
         before = after;
@@ -557,6 +557,7 @@ async fn agent_setup_matches_the_typescript_goldens() {
             assert!(name.starts_with("unprintable "), "{name}");
             continue;
         };
+        let outcome = outcome.map_err(AppError::from);
         replayed += 1;
         let matched = match (&outcome, &case["error"]) {
             (Err(error), Value::Object(_)) => error_matches(&case["error"], error),

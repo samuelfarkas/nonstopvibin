@@ -683,8 +683,9 @@ async fn updates_and_disconnects_keep_preferences_and_refuse_edits_and_symbolic_
     assert_eq!(
         f.install_in(&escape, Agent::Codex, &f.project, "m")
             .await
+            .map_err(AppError::from)
             .unwrap_err()
-            .status(),
+            .status,
         400
     );
     f.setup.close().await.unwrap();
@@ -1120,8 +1121,8 @@ async fn a_second_change_while_one_runs_is_refused() {
     );
     // `join!` polls the first change until it waits on its file work, holding the flag.
     assert_eq!(first.agent, Agent::Codex);
-    let refused = second.unwrap_err();
-    assert_eq!(refused.status(), 409);
+    let refused = AppError::from(second.unwrap_err());
+    assert_eq!(refused.status, 409);
     assert_eq!(
         refused.to_string(),
         "Agent setup is already changing. Try again."

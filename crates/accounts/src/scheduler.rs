@@ -371,7 +371,7 @@ impl Scheduler {
             result
         })
         .await
-        .map_err(|error| AppError::new(error.to_string(), 500))?
+        .map_err(AppError::internal)?
     }
 
     /// A UI read the state. Dormant cores start, so it shows them running. Account status and
@@ -1076,7 +1076,7 @@ impl Shared {
                 pending
             }
         };
-        let ended = || AppError::new("The usage queue read ended without an answer.", 500);
+        let ended = || AppError::internal("The usage queue read ended without an answer.");
         let answer = pending
             .wait_for(Option::is_some)
             .await

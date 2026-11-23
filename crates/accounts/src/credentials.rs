@@ -96,7 +96,7 @@ where
         result
     })
     .await
-    .map_err(|error| AppError::new(error.to_string(), 500))?
+    .map_err(AppError::internal)?
 }
 
 impl<F: Fetch + 'static> Credentials<F> {
@@ -246,10 +246,8 @@ impl<F: Fetch + 'static> Credentials<F> {
         let name = if let Some(id) = &reconnect {
             id.clone()
         } else {
-            let uuid = nsv_domain::random::uuid()
-                .map_err(|error| AppError::new(error.to_string(), 500))?;
-            AccountId::parse(&format!("{provider}-{uuid}.json"))
-                .map_err(|error| AppError::new(error.to_string(), 500))?
+            let uuid = nsv_domain::random::uuid().map_err(AppError::internal)?;
+            AccountId::parse(&format!("{provider}-{uuid}.json")).map_err(AppError::internal)?
         };
         let mut payload = raw.clone();
         let disabled = prior.map_or(&raw, |prior| &prior.raw).get("disabled") == Some(&json!(true));
@@ -271,12 +269,11 @@ impl<F: Fetch + 'static> Credentials<F> {
             // A core's own token refresh can overwrite a management upload, so the file is
             // swapped with the core stopped; its name stays for stable accounting.
             pool.while_stopped(profile, async move {
-                let content = serde_json::to_vec(&payload)
-                    .map_err(|error| AppError::new(error.to_string(), 500))?;
+                let content = serde_json::to_vec(&payload).map_err(AppError::internal)?;
                 tokio::task::spawn_blocking(move || write_atomic(&path, &content, 0o600))
                     .await
-                    .map_err(|error| AppError::new(error.to_string(), 500))?
-                    .map_err(|error| AppError::new(error.to_string(), 500))?;
+                    .map_err(AppError::internal)?
+                    .map_err(AppError::internal)?;
                 accounts.replaced(&id, &account, &payload).await
             })
             .await?;

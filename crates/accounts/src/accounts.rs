@@ -175,9 +175,9 @@ impl Accounts {
         let (identities, parsed, repaired) =
             tokio::task::spawn_blocking(move || scan(&directory, &named, &known, limit))
                 .await
-                .map_err(|error| AppError::new(error.to_string(), 500))?;
+                .map_err(AppError::internal)?;
         self.with(profile, |state| state.claude = parsed);
-        repaired.map_err(|error| AppError::new(error.to_string(), 500))?;
+        repaired.map_err(AppError::internal)?;
         let mut chatgpt = HashMap::new();
         let accounts: Vec<Account> = files
             .iter()
@@ -275,16 +275,13 @@ impl Accounts {
             let listing = match fs::read_dir(&directory) {
                 Ok(listing) => listing,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-                Err(error) => return Err(AppError::new(error.to_string(), 500)),
+                Err(error) => return Err(AppError::internal(error)),
             };
             let mut files = Vec::new();
             for entry in listing {
-                let entry = entry.map_err(|error| AppError::new(error.to_string(), 500))?;
+                let entry = entry.map_err(AppError::internal)?;
                 let name = entry.file_name().to_string_lossy().into_owned();
-                let file = entry
-                    .file_type()
-                    .map_err(|error| AppError::new(error.to_string(), 500))?
-                    .is_file();
+                let file = entry.file_type().map_err(AppError::internal)?.is_file();
                 if file && has_json_extension(&name) {
                     let raw = read_credential(&credential_file(&directory, &name)?, limit)?;
                     files.push(CredentialFile { id: name, raw });
@@ -293,7 +290,7 @@ impl Accounts {
             Ok(files)
         })
         .await
-        .map_err(|error| AppError::new(error.to_string(), 500))?
+        .map_err(AppError::internal)?
     }
 }
 
@@ -478,8 +475,7 @@ fn scan(
         let read = || -> Result<Version, AppError> {
             let path = credential_file(directory, name)?;
             // Stat before reading: a later rewrite always shows a newer version.
-            let metadata = fs::symlink_metadata(&path)
-                .map_err(|error| AppError::new(error.to_string(), 500))?;
+            let metadata = fs::symlink_metadata(&path).map_err(AppError::internal)?;
             let (modified, len) = (metadata.modified().ok(), metadata.len());
             if let Some(cached) = known.get(name)
                 && cached.modified == modified

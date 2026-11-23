@@ -409,7 +409,7 @@ pub fn check_core_directory(
     target: CoreTarget,
 ) -> Result<(), CoreError> {
     let manifest = CoreManifest::read(directory)?;
-    let refuse = |message: String| Err(AppError::new(message, 500).into());
+    let refuse = |message: String| Err(AppError::internal(message).into());
     if manifest.version != Some(pin.version.to_string())
         || !pin.pins_archive(
             manifest.platform.as_deref(),

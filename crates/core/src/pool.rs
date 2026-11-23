@@ -46,7 +46,6 @@ const QUEUE: usize = 64;
 const MANAGEMENT_LIMIT: u64 = 32 << 20;
 const MODELS_LIMIT: u64 = 16 << 20;
 
-const SHUTTING_DOWN: &str = "nonstopvibin is shutting down.";
 const STOPPED: &str = "This profile is stopped. Start it in nonstopvibin.";
 
 /// One launch of a profile's core. A restart makes a new one, so an unchanged id means the same
@@ -362,8 +361,8 @@ impl Pool {
         self.commands
             .send(command(reply))
             .await
-            .map_err(|_| gone())?;
-        answer.await.map_err(|_| gone())
+            .map_err(|_| AppError::shutting_down())?;
+        answer.await.map_err(|_| AppError::shutting_down())
     }
 
     /// Starts the profile's core and waits until it answers, or joins the start in flight.
@@ -403,7 +402,7 @@ impl Pool {
             .clone()
             .reserve_owned()
             .await
-            .map_err(|_| gone())?;
+            .map_err(|_| AppError::shutting_down())?;
         Ok(StopPermit(permit))
     }
 
@@ -442,8 +441,7 @@ impl Pool {
                 .and_then(|started| started);
             released.and(outcome)
         });
-        swap.await
-            .map_err(|error| AppError::new(error.to_string(), 500))?
+        swap.await.map_err(AppError::internal)?
     }
 
     /// Rewrites a running core's config and waits until the core has applied it. A core that is
@@ -646,22 +644,19 @@ impl Pool {
             match stop.await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => failures.push(error),
-                Err(error) => failures.push(AppError::new(error.to_string(), 500)),
+                Err(error) => failures.push(AppError::internal(error)),
             }
         }
         match failures.as_slice() {
             [] => Ok(()),
             [only] => Err(only.clone()),
-            all => Err(AppError::new(
-                format!(
-                    "Profiles did not stop cleanly: {}",
-                    all.iter()
-                        .map(|error| error.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ),
-                500,
-            )),
+            all => Err(AppError::internal(format!(
+                "Profiles did not stop cleanly: {}",
+                all.iter()
+                    .map(|error| error.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ))),
         }
     }
 
@@ -698,12 +693,8 @@ impl StopPermit {
             profile: profile.clone(),
             reply,
         });
-        async move { answer.await.map_err(|_| gone())? }
+        async move { answer.await.map_err(|_| AppError::shutting_down())? }
     }
-}
-
-fn gone() -> AppError {
-    AppError::new(SHUTTING_DOWN, 503)
 }
 
 /// `http://127.0.0.1:<port>/v0/management<path>` with the management key, as `httpManagement`.

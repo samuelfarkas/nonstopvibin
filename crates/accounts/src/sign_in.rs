@@ -192,8 +192,8 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|error| AppError::new(error.to_string(), 500))?
-        .map_err(|error| AppError::new(error.to_string(), 500))
+        .map_err(AppError::internal)?
+        .map_err(AppError::internal)
 }
 
 /// Deletes a directory tree; a missing one is no error.
@@ -401,7 +401,7 @@ impl<F: Fetch + 'static> SignIn<F> {
             backends(&DataDir::new(entry))
                 .reap_orphans()
                 .await
-                .map_err(|error| AppError::new(error.to_string(), 500))?;
+                .map_err(AppError::internal)?;
         }
         remove_tree(pending).await
     }
@@ -470,7 +470,7 @@ impl<F: Fetch + 'static> Inner<F> {
         reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
         if self.pool().closing() {
-            return Err(AppError::new("nonstopvibin is shutting down.", 503));
+            return Err(AppError::shutting_down());
         }
         let id = profile.clone();
         self.store.call(move |db| db.profile(&id)).await?;
@@ -906,7 +906,7 @@ impl<F: Fetch + 'static> Inner<F> {
                     Some(Progress::Read(
                         tokio::task::spawn_blocking(move || read_credential(&path, limit))
                             .await
-                            .map_err(|error| AppError::new(error.to_string(), 500))??,
+                            .map_err(AppError::internal)??,
                     ))
                 }
                 Progress::Read(credential) => {
@@ -944,8 +944,7 @@ impl<F: Fetch + 'static> Inner<F> {
     ) -> Result<OAuthReview, AppError> {
         let identity = claude_identity(&Value::Object(credential.clone()));
         let account = Account {
-            id: AccountId::parse("pending")
-                .map_err(|error| AppError::new(error.to_string(), 500))?,
+            id: AccountId::parse("pending").map_err(AppError::internal)?,
             name: registry().label(provider.as_str()),
             account_uuid: identity.account_uuid,
             organization_uuid: identity.organization_uuid,

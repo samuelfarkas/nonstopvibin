@@ -56,12 +56,12 @@ pub struct Store {
     vault: Vault,
 }
 
-/// What the API answers for a store failure: its own error, or a 500.
+/// What the API answers for a store failure: its own error, or a hidden 500.
 impl From<StoreError> for AppError {
     fn from(error: StoreError) -> Self {
         match error {
             StoreError::App(error) => error,
-            other => Self::new(other.to_string(), 500),
+            other => Self::internal(other),
         }
     }
 }

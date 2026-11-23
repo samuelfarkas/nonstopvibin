@@ -13,6 +13,7 @@ use nsv_accounts::identity::{SeatIdentity, claude_identity, same_seat, verify_cl
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
 use nsv_accounts::resets::{CodexResets, reset_credits, reset_result};
+use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId, is_uuid};
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{Account, ApiAccount, ApiAccountInput, Quota, QuotaStatus};
@@ -164,12 +165,10 @@ async fn api_accounts_validate_and_discover_as_typescript_did() {
                     case["name"]
                 );
             }
-            (Err(error), None) => assert_error(
-                &case["error"],
-                &error.to_string(),
-                error.status(),
-                &case["name"],
-            ),
+            (Err(error), None) => {
+                let error = AppError::from(error);
+                assert_error(&case["error"], &error.message, error.status, &case["name"]);
+            }
             (result, _) => panic!("{}: {result:?}", case["name"]),
         }
     }
@@ -320,12 +319,10 @@ async fn quota_refreshes_and_resets_replay_in_order() {
                 };
                 assert_eq!(&actual, expected, "{}", case["name"]);
             }
-            (Err(error), None) => assert_error(
-                &case["error"],
-                &error.to_string(),
-                error.status(),
-                &case["name"],
-            ),
+            (Err(error), None) => {
+                let error = AppError::from(error);
+                assert_error(&case["error"], &error.message, error.status, &case["name"]);
+            }
             (result, _) => panic!("{}: {result:?}", case["name"]),
         }
         replayed += 1;
@@ -384,12 +381,10 @@ async fn quota_refreshes_and_resets_replay_in_order() {
                 let actual = json!({ "result": result, "upstream": upstream, "requestStillPending": pending });
                 assert_eq!(&actual, expected, "{}", case["name"]);
             }
-            (Err(error), None) => assert_error(
-                &case["error"],
-                &error.to_string(),
-                error.status(),
-                &case["name"],
-            ),
+            (Err(error), None) => {
+                let error = AppError::from(error);
+                assert_error(&case["error"], &error.message, error.status, &case["name"]);
+            }
             (result, _) => panic!("{}: {result:?}", case["name"]),
         }
         replayed += 1;
@@ -465,8 +460,8 @@ fn imports_scan_known_folders_as_typescript_did() {
     }
 
     let unknown = case(&api, "import-source unknown id")["output"]["body"]["error"].clone();
-    let error = catalog.contents(&"0".repeat(64)).unwrap_err();
-    assert_eq!(error.status(), 404);
+    let error = AppError::from(catalog.contents(&"0".repeat(64)).unwrap_err());
+    assert_eq!(error.status, 404);
     assert_eq!(unknown["message"], error.to_string());
     // A file that grew past the limit after the scan is refused.
     fs::write(easy.join("kimi.json"), vec![b' '; 2_000_001]).unwrap();
@@ -474,9 +469,9 @@ fn imports_scan_known_folders_as_typescript_did() {
         .iter()
         .find(|source| source.file_name == "kimi.json")
         .unwrap();
-    let error = catalog.contents(&kimi.id).unwrap_err();
+    let error = AppError::from(catalog.contents(&kimi.id).unwrap_err());
     assert_eq!(
-        (error.status(), error.to_string().as_str()),
+        (error.status, error.message.as_str()),
         (
             400,
             "The selected account file is not a supported regular file."

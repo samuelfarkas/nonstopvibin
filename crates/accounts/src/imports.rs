@@ -26,13 +26,12 @@ pub enum ImportError {
     Json(#[from] serde_json::Error),
 }
 
-impl ImportError {
-    /// The HTTP status the API answers with.
-    #[must_use]
-    pub fn status(&self) -> u16 {
-        match self {
-            Self::App(error) => error.status,
-            Self::Io(_) | Self::Json(_) => 500,
+/// What the API answers for a file it cannot import.
+impl From<ImportError> for AppError {
+    fn from(error: ImportError) -> Self {
+        match error {
+            ImportError::App(error) => error,
+            other => Self::internal(other),
         }
     }
 }

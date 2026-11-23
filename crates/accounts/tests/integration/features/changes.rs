@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::ResetResultCode;
 use nsv_domain::wire::{AccountPatch, AccountStatus, ApiAccountInput};
@@ -505,8 +506,9 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     let stopped = resets
         .credits(source, &profile, &account)
         .await
+        .map_err(AppError::from)
         .unwrap_err();
-    assert_eq!((stopped.to_string(), stopped.status()), (message, status));
+    assert_eq!((stopped.message, stopped.status), (message, status));
 
     let raw = json!({
         "type": "codex", "access_token": "synthetic-codex", "id_token": { "chatgpt_account_id": "fixture-identity" },
@@ -562,8 +564,9 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     let uncertain = resets
         .consume(source, quotas, &profile, &account, "credit-one")
         .await
+        .map_err(AppError::from)
         .unwrap_err();
-    assert_eq!(uncertain.status(), 502);
+    assert_eq!(uncertain.status, 502);
     assert!(!uncertain.to_string().contains("sensitive"));
     let kept = world
         .store
@@ -600,9 +603,10 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     let busy = resets
         .consume(source, quotas, &profile, &account, "credit-one")
         .await
+        .map_err(AppError::from)
         .unwrap_err();
     assert_eq!(
-        (busy.to_string().as_str(), busy.status()),
+        (busy.message.as_str(), busy.status),
         ("A reset is already in progress for this subscription.", 409)
     );
     release.send_replace(true);

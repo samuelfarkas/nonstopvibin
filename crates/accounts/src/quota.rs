@@ -633,17 +633,6 @@ pub enum QuotaError {
     Store(#[from] StoreError),
 }
 
-impl QuotaError {
-    /// The HTTP status the API answers with.
-    #[must_use]
-    pub fn status(&self) -> u16 {
-        match self {
-            Self::App(error) | Self::Store(StoreError::App(error)) => error.status,
-            Self::Store(_) => 500,
-        }
-    }
-}
-
 /// What the API answers for a failed check.
 impl From<QuotaError> for AppError {
     fn from(error: QuotaError) -> Self {

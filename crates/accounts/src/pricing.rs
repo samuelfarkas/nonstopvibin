@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::js;
 use nsv_domain::registry::registry;
@@ -39,6 +40,16 @@ pub enum PricingError {
     Store(#[from] StoreError),
     #[error("Activity pricing is shutting down")]
     Closed,
+}
+
+/// What the API answers when pricing fails: a store's own error, or a hidden 500.
+impl From<PricingError> for AppError {
+    fn from(error: PricingError) -> Self {
+        match error {
+            PricingError::Store(error) => error.into(),
+            PricingError::Closed => Self::internal(PricingError::Closed),
+        }
+    }
 }
 
 /// How each provider's legacy counters overlap: which parts the core counted twice.

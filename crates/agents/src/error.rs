@@ -16,17 +16,18 @@ pub enum AgentError {
     Io(#[from] io::Error),
 }
 
-impl AgentError {
-    /// The HTTP status the API answers with.
-    #[must_use]
-    pub const fn status(&self) -> u16 {
-        match self {
-            Self::App(error) => error.status,
-            Self::Invalid(_) => 400,
-            Self::Io(_) => 500,
+/// What the API answers for an agent setup failure.
+impl From<AgentError> for AppError {
+    fn from(error: AgentError) -> Self {
+        match error {
+            AgentError::App(error) => error,
+            AgentError::Invalid(message) => Self::new(message, 400),
+            AgentError::Io(error) => Self::internal(error),
         }
     }
+}
 
+impl AgentError {
     /// A missing file or directory, which several reads treat as absent.
     pub(crate) fn is_missing(&self) -> bool {
         matches!(self, Self::Io(error) if error.kind() == io::ErrorKind::NotFound)

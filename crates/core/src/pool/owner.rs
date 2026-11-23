@@ -18,7 +18,7 @@ use tokio::time::Instant;
 use super::backend::{CoreHandle, exit_text};
 use super::{
     Context, Core, CoreEvent, CoreId, CoreKeys, Phase, Pool, PoolState, ProfileCore, RETRY,
-    SHUTTING_DOWN, management,
+    management,
 };
 use crate::config::write_config;
 
@@ -286,7 +286,7 @@ impl Owner {
             return;
         }
         if closing {
-            let _ = reply.send(Err(AppError::new(SHUTTING_DOWN, 503)));
+            let _ = reply.send(Err(AppError::shutting_down()));
             return;
         }
         if slot.held {
@@ -305,7 +305,7 @@ impl Owner {
             return;
         }
         let Some(sender) = self.sender.upgrade() else {
-            let _ = reply.send(Err(AppError::new(SHUTTING_DOWN, 503)));
+            let _ = reply.send(Err(AppError::shutting_down()));
             return;
         };
         self.next += 1;
@@ -474,10 +474,9 @@ async fn terminated(terminate: oneshot::Sender<Terminate>) -> Result<(), AppErro
     }
     match answer.await {
         Ok(Ok(())) | Err(_) => Ok(()),
-        Ok(Err(error)) => Err(AppError::new(
-            format!("Could not stop the proxy: {error}"),
-            500,
-        )),
+        Ok(Err(error)) => Err(AppError::internal(format!(
+            "Could not stop the proxy: {error}"
+        ))),
     }
 }
 
@@ -585,7 +584,7 @@ impl Launch {
                 return self.end_start(Err(AppError::new(error, 503))).await;
             }
             // Its core runs on until shutdown stops it.
-            Err(Unready::Abandoned) => self.end_start(Err(AppError::new(SHUTTING_DOWN, 503))).await,
+            Err(Unready::Abandoned) => self.end_start(Err(AppError::shutting_down())).await,
             Err(Unready::Late(last)) => {
                 self.tell(Command::Terminating {
                     profile: self.profile.clone(),
@@ -634,7 +633,7 @@ impl Launch {
             .await
             .map_err(AppError::from)?;
         if self.context.closing() {
-            return Err(AppError::new(SHUTTING_DOWN, 503));
+            return Err(AppError::shutting_down());
         }
         Ok((
             port,
@@ -711,7 +710,7 @@ impl Launch {
             published,
         })
         .await;
-        done.await.map_err(|_| AppError::new(SHUTTING_DOWN, 503))
+        done.await.map_err(|_| AppError::shutting_down())
     }
 
     fn pool(&self) -> Pool {

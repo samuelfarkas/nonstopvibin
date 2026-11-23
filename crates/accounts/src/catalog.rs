@@ -38,6 +38,16 @@ pub enum CatalogError {
     Store(#[from] StoreError),
 }
 
+/// What the API answers when the catalog cannot be read.
+impl From<CatalogError> for AppError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::App(error) => error,
+            CatalogError::Store(error) => error.into(),
+        }
+    }
+}
+
 /// A model definition as the catalog keeps it: only what agents and pricing read, and only
 /// models with text in and text out (others never match).
 #[derive(Debug, Clone, PartialEq)]

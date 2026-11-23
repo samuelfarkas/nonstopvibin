@@ -35,8 +35,6 @@ use crate::fetch::Fetch;
 use crate::scheduler::Scheduler;
 use crate::sign_in::{Backends, Report, SignIn};
 
-const SHUTTING_DOWN: &str = "nonstopvibin is shutting down.";
-
 pub struct UpdateOptions<R> {
     pub releases: R,
     /// The reviewed pin feed of an installed build: [`nsv_core::install::CORE_FEED`], or
@@ -88,7 +86,7 @@ struct Status {
 }
 
 fn io_error(error: &io::Error) -> AppError {
-    AppError::new(error.to_string(), 500)
+    AppError::internal(error)
 }
 
 async fn blocking<T: Send + 'static>(
@@ -96,7 +94,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|error| AppError::new(error.to_string(), 500))?
+        .map_err(AppError::internal)?
 }
 
 impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
@@ -109,13 +107,13 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
         credentials: Credentials<F>,
         options: UpdateOptions<R>,
     ) -> Result<Self, AppError> {
-        let pin = bundled_pin().map_err(|error| AppError::new(error.to_string(), 500))?;
+        let pin = bundled_pin().map_err(AppError::internal)?;
         let bundled = ActiveCore {
             version: pin.version,
             binary: options.bundled.clone(),
         };
         let app = Version::parse(env!("CARGO_PKG_VERSION"))
-            .ok_or_else(|| AppError::new("The app version is not X.Y.Z.", 500))?;
+            .ok_or_else(|| AppError::internal("The app version is not X.Y.Z."))?;
         Ok(Self(Arc::new(Inner {
             cores: store.directory().cores(),
             store,
@@ -219,9 +217,9 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
         let checked = checking
             .wait_for(Option::is_some)
             .await
-            .map_err(|_| AppError::new(SHUTTING_DOWN, 503))?
+            .map_err(|_| AppError::shutting_down())?
             .clone();
-        checked.unwrap_or_else(|| Err(AppError::new(SHUTTING_DOWN, 503)))
+        checked.unwrap_or_else(|| Err(AppError::shutting_down()))
     }
 
     /// `POST /core/install`: installs `version` if the feed still offers it, checks that it
@@ -260,7 +258,7 @@ impl<F: Fetch + 'static, R: Releases> CoreUpdates<F, R> {
                 // Startup checked the installed core instead; keep it unless this one is intact.
                 let binary = inner.bundled.binary.clone();
                 let pinned = if inner.options.require_pinned_core {
-                    Some(bundled_pin().map_err(|error| AppError::new(error.to_string(), 500))?)
+                    Some(bundled_pin().map_err(AppError::internal)?)
                 } else {
                     None
                 };
@@ -329,7 +327,7 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
             return Err(AppError::new("Only installed builds update the core.", 409));
         }
         if self.pool().closing() || *self.closing.borrow() {
-            return Err(AppError::new(SHUTTING_DOWN, 503));
+            return Err(AppError::shutting_down());
         }
         let began = self.phase.send_if_modified(|current| {
             let idle = current.is_none();
@@ -360,7 +358,7 @@ impl<F: Fetch + 'static, R: Releases> Inner<F, R> {
         let mut closing = self.closing.subscribe();
         tokio::select! {
             result = work => result,
-            _ = closing.wait_for(|closing| *closing) => Err(AppError::new(SHUTTING_DOWN, 503)),
+            _ = closing.wait_for(|closing| *closing) => Err(AppError::shutting_down()),
         }
     }
 

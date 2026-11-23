@@ -92,8 +92,9 @@ async fn the_socket_is_owner_only_and_a_live_one_is_not_taken_over() {
     let refused = second
         .restore(std::slice::from_ref(&instance.profile), 4318)
         .await
+        .map_err(AppError::from)
         .unwrap_err();
-    assert_eq!(refused.status(), 409);
+    assert_eq!(refused.status, 409);
     assert_eq!(
         refused.to_string(),
         "Another nonstopvibin instance is serving these agent connections."

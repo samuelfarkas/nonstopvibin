@@ -37,23 +37,12 @@ pub enum ApiAccountError {
     Id(#[from] InvalidId),
 }
 
-impl ApiAccountError {
-    /// The HTTP status the API answers with.
-    #[must_use]
-    pub fn status(&self) -> u16 {
-        match self {
-            Self::App(error) => error.status,
-            _ => 500,
-        }
-    }
-}
-
 /// What the API answers for an account it cannot add.
 impl From<ApiAccountError> for AppError {
     fn from(error: ApiAccountError) -> Self {
         match error {
             ApiAccountError::App(error) => error,
-            other => Self::new(other.to_string(), other.status()),
+            other => Self::internal(other),
         }
     }
 }
