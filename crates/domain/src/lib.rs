@@ -30,7 +30,6 @@ pub fn hex(bytes: &[u8]) -> String {
         })
 }
 
-/// The SHA-256 of `bytes` in lowercase hex.
 #[must_use]
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))

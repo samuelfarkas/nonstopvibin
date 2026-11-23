@@ -21,8 +21,6 @@ macro_rules! id {
         pub struct $name(Arc<str>);
 
         impl $name {
-            /// Validates `value` as this kind of identifier.
-            ///
             /// # Errors
             /// When `value` does not have the identifier's shape.
             pub fn parse(value: &str) -> Result<Self, InvalidId> {

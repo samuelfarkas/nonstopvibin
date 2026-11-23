@@ -87,8 +87,6 @@ secret!(
 macro_rules! generated {
     ($($name:ident = $prefix:expr),*) => {$(
         impl $name {
-            /// A new random value.
-            ///
             /// # Errors
             /// The random source failed.
             pub fn generate() -> io::Result<Self> {

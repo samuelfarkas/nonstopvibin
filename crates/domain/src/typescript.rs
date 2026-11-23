@@ -111,7 +111,6 @@ fn renderer_urls() -> String {
     serde_json::to_string_pretty(&samples).unwrap() + "\n"
 }
 
-/// Each file of a directory by name.
 fn files(directory: &Path) -> BTreeMap<String, String> {
     std::fs::read_dir(directory)
         .unwrap()
