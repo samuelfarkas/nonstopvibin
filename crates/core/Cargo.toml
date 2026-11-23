@@ -18,10 +18,16 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
+
+# The fake core is this test binary run as `cli-proxy-api --config <path>`, which libtest's
+# argument parser would refuse; its main runs the tests itself.
+[[test]]
+name = "processes"
+harness = false
 
 [lints]
 workspace = true
