@@ -16,6 +16,6 @@ mod parse;
 mod session;
 
 pub use daemon::{CloseError, CoreOptions, Daemon, Options, StartError, VERSION, processes};
-pub use http::valid_allow_host;
+pub use http::{DEV_HOST, valid_allow_host};
 pub use nsv_accounts::scheduler::{TIMING, Timing};
 pub use session::{ServerState, Session, SessionError};

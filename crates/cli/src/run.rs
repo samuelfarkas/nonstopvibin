@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_net::Https;
-use nsv_server::{CoreOptions, Daemon, Options, Session, TIMING, panic, processes};
+use nsv_server::{CoreOptions, DEV_HOST, Daemon, Options, Session, TIMING, panic, processes};
 use nsv_store::{LockError, ServerLock};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -23,10 +23,7 @@ fn core_feed() -> String {
     std::env::var("NONSTOPVIBIN_CORE_FEED")
         .ok()
         .filter(|feed| !feed.is_empty())
-        .unwrap_or_else(|| {
-            "https://raw.githubusercontent.com/samuelfarkas/nonstopvibin/main/src/server/core-release.json"
-                .to_owned()
-        })
+        .unwrap_or_else(|| nsv_core::install::CORE_FEED.to_owned())
 }
 
 /// Where the core and the interface are: beside the real executable in a package (in
@@ -155,7 +152,9 @@ fn https() -> Result<Https, CliError> {
     Https::new().map_err(CliError::from_display)
 }
 
-/// `serve`: the headless server in the foreground.
+/// `serve`: the headless server in the foreground. With `NONSTOPVIBIN_DEVELOPMENT=1`, a build
+/// run from its source checkout (`bun run dev`) also accepts the Vite development server's
+/// Host and Origin and starts without its core; packaged builds ignore the variable.
 pub(crate) async fn serve(
     directory: PathBuf,
     port: u16,
@@ -173,7 +172,9 @@ pub(crate) async fn serve(
     }
     let lock = ServerLock::acquire(&directory).map_err(CliError::from_display)?;
     let layout = Layout::detect();
-    if !layout.core.exists() {
+    let development = !layout.packaged
+        && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
+    if !development && !layout.core.exists() {
         return Err(CliError::new(format!(
             "The proxy core is missing at {}. Reinstall NonstopVibin from its release archive.",
             layout.core.display()
@@ -183,15 +184,16 @@ pub(crate) async fn serve(
         directory,
         port,
         allow_hosts,
-        development: false,
+        development,
         desktop: false,
         client: layout.client,
         core: CoreOptions {
             binary: layout.core,
-            pinned: true,
+            // `core:install` writes the pinned core, which development may replace by hand.
+            pinned: !development,
             // A source checkout shares the data folder: an installed core would shadow its pin.
             feed: layout.packaged.then(core_feed),
-            allow_missing: false,
+            allow_missing: development,
         },
         agents: agents()?,
         backends: processes(),
@@ -204,6 +206,10 @@ pub(crate) async fn serve(
     };
     // journald must never receive the session token.
     match daemon.session() {
+        Some(session) if development => say(&format!(
+            "Open the local interface: http://{DEV_HOST}/#session={}",
+            session.token.expose_secret()
+        )),
         Some(session) if std::io::IsTerminal::is_terminal(&std::io::stdout()) => say(&url_text(
             &session,
             std::env::var("SSH_CONNECTION").ok().as_deref(),

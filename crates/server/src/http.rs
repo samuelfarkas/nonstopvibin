@@ -39,7 +39,7 @@ use crate::parse::Invalid;
 /// The text of every 500: the cause goes to the error list, not to the client.
 const OPERATION_FAILED: &str = "The operation failed. Check the profile status and try again.";
 /// The Vite development server, whose Host and Origin a development run accepts.
-const DEV_HOST: &str = "127.0.0.1:5173";
+pub const DEV_HOST: &str = "127.0.0.1:5173";
 
 /// Whether the listener accepts, and whether open connections may finish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

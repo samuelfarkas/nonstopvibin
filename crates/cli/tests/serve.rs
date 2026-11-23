@@ -229,8 +229,13 @@ impl Drop for Daemon {
 impl Daemon {
     /// Runs `serve` and waits until its `server.json` names it.
     async fn serve(root: &Root, port: u16, extra: &[&str]) -> Self {
+        Self::serve_with(command(root), root, port, extra).await
+    }
+
+    /// [`Daemon::serve`] with another executable or environment.
+    async fn serve_with(mut command: Command, root: &Root, port: u16, extra: &[&str]) -> Self {
         let mut daemon = Self {
-            child: command(root)
+            child: command
                 .args(["serve", "--port", &port.to_string()])
                 .args(extra)
                 .stdout(Stdio::piped())
@@ -1227,4 +1232,91 @@ async fn a_stopping_daemon_keeps_its_directory_until_its_cores_have_stopped() {
     let mut successor = Daemon::serve(&root, free_port(), &[]).await;
     successor.signal("TERM");
     assert_eq!(successor.exited().await.0, 0);
+}
+
+/// `bun run dev`: the Vite server on 127.0.0.1:5173 proxies `/api` to a daemon started with
+/// `NONSTOPVIBIN_DEVELOPMENT=1`, which then accepts that Host and Origin. Without the variable,
+/// or in a packaged build, they are refused as before.
+#[tokio::test]
+async fn only_a_development_checkout_build_accepts_the_vite_server() {
+    let root = Root::new("development");
+    let vite = |port: u16, token: String, origin: &'static str| async move {
+        let authorization = format!("Bearer {token}");
+        send(
+            port,
+            "GET",
+            "/api/state",
+            &[
+                ("Host", "127.0.0.1:5173"),
+                ("Origin", origin),
+                ("Authorization", &authorization),
+            ],
+            "",
+        )
+        .await
+        .status
+    };
+
+    let mut development = command(&root);
+    development.env("NONSTOPVIBIN_DEVELOPMENT", "1");
+    let mut daemon = Daemon::serve_with(development, &root, free_port(), &[]).await;
+    assert_eq!(
+        vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
+        200
+    );
+    assert_eq!(
+        vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5174").await,
+        403
+    );
+    daemon.signal("TERM");
+    let mut stdout = String::new();
+    std::io::Read::read_to_string(&mut daemon.child.stdout.take().unwrap(), &mut stdout).unwrap();
+    assert_eq!(daemon.exited().await.0, 0);
+    assert_eq!(
+        stdout.trim_end(),
+        format!(
+            "Open the local interface: http://127.0.0.1:5173/#session={}",
+            daemon.token
+        )
+    );
+
+    let mut daemon = Daemon::serve(&root, free_port(), &[]).await;
+    assert_eq!(
+        vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
+        403
+    );
+    daemon.signal("TERM");
+    assert_eq!(daemon.exited().await.0, 0);
+
+    // A packaged layout: the daemon with the pinned core beside it.
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.vendor/core");
+    let package = root.0.join("package");
+    std::fs::create_dir_all(package.join("core")).unwrap();
+    for file in ["cli-proxy-api", "manifest.json"] {
+        std::fs::hard_link(checkout.join(file), package.join("core").join(file))
+            .or_else(|_| {
+                std::fs::copy(checkout.join(file), package.join("core").join(file)).map(drop)
+            })
+            .unwrap();
+    }
+    std::fs::copy(
+        env!("CARGO_BIN_EXE_nonstopvibin"),
+        package.join("nonstopvibin"),
+    )
+    .unwrap();
+    let mut packaged = Command::new(package.join("nonstopvibin"));
+    packaged
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", root.0.join("home"))
+        .env("NONSTOPVIBIN_DATA_DIR", root.data())
+        .env("NONSTOPVIBIN_DEVELOPMENT", "1")
+        .stdin(Stdio::null());
+    let mut daemon = Daemon::serve_with(packaged, &root, free_port(), &[]).await;
+    assert_eq!(
+        vite(daemon.port, daemon.token.clone(), "http://127.0.0.1:5173").await,
+        403
+    );
+    daemon.signal("TERM");
+    assert_eq!(daemon.exited().await.0, 0);
 }
