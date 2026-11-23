@@ -1288,23 +1288,26 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
     daemon.signal("TERM");
     assert_eq!(daemon.exited().await.0, 0);
 
-    // A packaged layout: the daemon with the pinned core beside it.
+    // A packaged layout: the pinned core beside the daemon, or in the bundle's Resources.
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.vendor/core");
     let package = root.0.join("package");
-    std::fs::create_dir_all(package.join("core")).unwrap();
+    let (executable, core) = if cfg!(target_os = "macos") {
+        (
+            package.join("Contents/MacOS/nonstopvibin"),
+            package.join("Contents/Resources/core"),
+        )
+    } else {
+        (package.join("nonstopvibin"), package.join("core"))
+    };
+    std::fs::create_dir_all(&core).unwrap();
+    std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
     for file in ["cli-proxy-api", "manifest.json"] {
-        std::fs::hard_link(checkout.join(file), package.join("core").join(file))
-            .or_else(|_| {
-                std::fs::copy(checkout.join(file), package.join("core").join(file)).map(drop)
-            })
+        std::fs::hard_link(checkout.join(file), core.join(file))
+            .or_else(|_| std::fs::copy(checkout.join(file), core.join(file)).map(drop))
             .unwrap();
     }
-    std::fs::copy(
-        env!("CARGO_BIN_EXE_nonstopvibin"),
-        package.join("nonstopvibin"),
-    )
-    .unwrap();
-    let mut packaged = Command::new(package.join("nonstopvibin"));
+    std::fs::copy(env!("CARGO_BIN_EXE_nonstopvibin"), &executable).unwrap();
+    let mut packaged = Command::new(&executable);
     packaged
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

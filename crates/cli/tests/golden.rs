@@ -182,10 +182,13 @@ fn the_cli_answers_as_the_typescript_cli_did() {
 
     let mut total = 0;
     let mut differing = Vec::new();
-    for case in cases
-        .iter()
-        .filter(|case| case["name"].as_str().unwrap().starts_with("cli "))
-    {
+    for case in cases.iter().filter(|case| {
+        let name = case["name"].as_str().unwrap();
+        // On macOS a bare launch is the desktop app (main.rs `opens_desktop`): the case would
+        // open it and wait. main.rs `the_legacy_background_flag_starts_the_desktop_app_without_a_display`
+        // covers which bare commands open it.
+        name.starts_with("cli ") && !(cfg!(target_os = "macos") && name == "cli no arguments")
+    }) {
         total += 1;
         let name = case["name"].as_str().unwrap();
         prepare(name, &root.0, &units);
