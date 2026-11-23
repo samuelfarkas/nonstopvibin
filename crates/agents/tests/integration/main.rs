@@ -4,4 +4,5 @@
 #![cfg(test)]
 
 mod common;
+mod fixture;
 mod golden;
