@@ -88,8 +88,8 @@ async fn seed(data: &Path, count: usize, upstream: u16) -> Vec<Seeded> {
     seeded
 }
 
-/// An OpenAI-compatible upstream that answers every chat completion with 11 prompt and 3
-/// completion tokens, a streamed one in three deltas. A chat whose prompt is `hang` gets no
+/// An OpenAI-compatible upstream that answers every chat completion with 11 prompt (5 of them
+/// cached) and 3 completion tokens, a streamed one in three deltas. A chat whose prompt is `hang` gets no
 /// answer.
 struct Upstream {
     port: u16,
@@ -167,7 +167,7 @@ async fn stub_upstream() -> Upstream {
                     let body = json!({
                         "id": "chatcmpl-stub", "object": "chat.completion", "created": 1, "model": "stub-model",
                         "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hello from the stub" }, "finish_reason": "stop" }],
-                        "usage": { "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14 },
+                        "usage": { "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14, "prompt_tokens_details": { "cached_tokens": 5 } },
                     })
                     .to_string();
                     let response = format!(
@@ -191,7 +191,7 @@ async fn stub_upstream() -> Upstream {
                             "id": "chatcmpl-stub", "object": "chat.completion.chunk", "created": 1,
                             "model": "stub-model",
                             "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
-                            "usage": { "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14 },
+                            "usage": { "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14, "prompt_tokens_details": { "cached_tokens": 5 } },
                         });
                         write!(event, "data: {done}\n\ndata: [DONE]\n\n").unwrap();
                     }
@@ -962,8 +962,8 @@ async fn agent_checks_and_accounting_go_through_the_gateway_without_extra_infere
         "No models are available. Refresh the profile catalog."
     );
 
-    // A plain and a streamed chat, each 14 tokens of which 3 are output, are stored once each,
-    // without the account key or the prompt.
+    // A plain and a streamed chat, each 14 tokens of which 5 are cached and 3 output, are
+    // stored once each, without the account key or the prompt.
     let bearer = format!("Bearer {}", profile.key);
     let target = format!("/p/{}/v1/chat/completions", profile.slug);
     for stream in [false, true] {
@@ -991,6 +991,7 @@ async fn agent_checks_and_accounting_go_through_the_gateway_without_extra_infere
     .await;
     assert_eq!(summary["totalTokens"], 28, "{summary}");
     assert_eq!(summary["outputTokens"], 6, "{summary}");
+    assert_eq!(summary["cachedTokens"], 10, "{summary}");
     let mut stored = Vec::new();
     for entry in std::fs::read_dir(&daemon.data).unwrap() {
         let path = entry.unwrap().path();
