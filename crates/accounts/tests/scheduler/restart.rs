@@ -1,6 +1,7 @@
 //! tests/core-restart.test.ts: the scheduler starts again a profile the app keeps running (it
 //! has a subscription) whose core is not running. Refresh is the quota routes' and stays out.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use nsv_accounts::scheduler::{TIMING, Timing};
@@ -142,10 +143,9 @@ async fn a_core_that_exits_right_after_each_start_is_restarted_with_the_same_bac
         ..Script::default()
     };
     world.fake.script(&profile, vec![crashes; 12]);
-    world
-        .run(world.pool().start(&profile, false))
-        .await
-        .unwrap();
+    // The start needs no clock. Moving it could end the core's 10 ms while the start still
+    // syncs its accounts off the runtime, and the start would then rightly fail.
+    world.pool().start(&profile, false).await.unwrap();
     world.scheduler.launch().await.unwrap();
     world
         .until("ten launches", Duration::from_secs(60), |world| {
@@ -502,6 +502,33 @@ async fn shutdown_abandons_a_restarted_profiles_quota_check_and_stores_nothing_f
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_quota_answer_that_comes_as_shutdown_begins_is_not_stored() {
+    // Each round's restart hears of shutdown in the wakeup that brings its quota answer. If
+    // either could win that tie, all sixteen rounds would pick shutdown only once in 65,536 runs.
+    // One profile a round: the fake's cores do not hold their ports, so concurrent starts could
+    // be given the same one.
+    for _ in 0..16 {
+        let world = World::new(timing(100, 300_000, 10)).await;
+        subscribed(&world, "Quota fixture").await;
+        world.host.quota_at_shutdown.store(true, Ordering::SeqCst);
+        world.scheduler.launch().await.unwrap();
+        // The restart waits out the coalescing period. Its start and account sync need no
+        // clock, and moving it on while they run could only time them out.
+        world.pass(Duration::from_millis(100)).await;
+        for _ in 0..1_000 {
+            if !world.host.quota_checks.lock().unwrap().is_empty() {
+                break;
+            }
+            world.settle().await;
+        }
+        assert_eq!(world.host.quota_checks.lock().unwrap().len(), 1);
+        world.run(world.scheduler.shutdown()).await.unwrap();
+        assert_eq!(*world.host.quota_stored.lock().unwrap(), []);
+        assert!(world.reports().is_empty(), "{:?}", world.reports());
+    }
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_failed_quota_check_after_an_automatic_start_is_reported() {
     let world = World::new(timing(100, 300_000, 10)).await;
     subscribed(&world, "Quota fixture").await;
@@ -599,10 +626,7 @@ async fn a_profile_the_launch_started_that_exited_before_scheduling_is_reported_
     world.fake.script(
         &early,
         [
-            Script {
-                exits_after: Some(Duration::from_millis(100)),
-                ..Script::default()
-            },
+            Script::default(),
             Script {
                 answers: None,
                 ..Script::default()
@@ -616,7 +640,16 @@ async fn a_profile_the_launch_started_that_exited_before_scheduling_is_reported_
             ..Script::default()
         }],
     );
-    world.run(world.scheduler.launch()).await.unwrap();
+    let mut launch = std::pin::pin!(world.scheduler.launch());
+    let mut pool = world.pool().subscribe();
+    // Early's start needs no clock, so Late cannot answer before it ends. Moving the clock
+    // while its accounts sync could make its start fail, which the launch would report.
+    tokio::select! {
+        _ = &mut launch => panic!("the launch ended before Late answered"),
+        _ = pool.wait_for(|pool| pool.running(&early) && !pool.starting(&early)) => {}
+    }
+    world.fake.kill(&early);
+    world.run(launch).await.unwrap();
     assert!(
         !world.fake.latest(&early).unwrap().alive(),
         "Early exited during the launch"

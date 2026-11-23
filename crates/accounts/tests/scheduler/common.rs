@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -55,6 +55,8 @@ pub(crate) struct TestHost {
     pub(crate) quota_checks: Mutex<Vec<ProfileId>>,
     /// While set, quota checks wait for it to turn true.
     pub(crate) quota_gate: Mutex<Option<watch::Receiver<bool>>>,
+    /// Quota checks answer when shutdown begins, in the wakeup that tells of it.
+    pub(crate) quota_at_shutdown: AtomicBool,
     /// Quota checks answer this error.
     pub(crate) quota_error: Mutex<Option<String>>,
     /// Quota checks that ran to their end and stored.
@@ -72,16 +74,23 @@ impl Host for TestHost {
 
     fn refresh_quotas(
         &self,
-        _pool: Pool,
+        pool: Pool,
         profile: ProfileId,
     ) -> BoxFuture<'static, Result<(), AppError>> {
         self.quota_checks.lock().unwrap().push(profile.clone());
         let gate = self.quota_gate.lock().unwrap().clone();
+        let shutdown = self
+            .quota_at_shutdown
+            .load(Ordering::SeqCst)
+            .then(|| pool.subscribe());
         let error = self.quota_error.lock().unwrap().clone();
         let stored = Arc::clone(&self.quota_stored);
         Box::pin(async move {
             if let Some(mut gate) = gate {
                 let _ = gate.wait_for(|open| *open).await;
+            }
+            if let Some(mut pool) = shutdown {
+                let _ = pool.wait_for(|pool| pool.closing).await;
             }
             if let Some(error) = error {
                 return Err(AppError::new(error, 502));
@@ -227,7 +236,8 @@ impl World {
         );
     }
 
-    /// Lets every task run until nothing moves without the clock.
+    /// Lets every task run until nothing moves without the clock. Work on the blocking pool,
+    /// such as an account sync's credential scan, may still be running after it.
     pub(crate) async fn settle(&self) {
         for _ in 0..24 {
             for _ in 0..16 {

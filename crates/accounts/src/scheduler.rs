@@ -713,11 +713,13 @@ impl Shared {
                 }
                 track.checking = true;
             }
-            // It missed its quota checks while down; shutdown abandons the one in flight.
+            // It missed its quota checks while down; shutdown abandons the one in flight, and
+            // an answer that comes as shutdown begins is not stored either.
             let mut closing = shared.pool.subscribe();
             let checked = tokio::select! {
-                checked = shared.host.refresh_quotas(shared.pool.clone(), profile.clone()) => Some(checked),
+                biased;
                 _ = closing.wait_for(|pool| pool.closing) => None,
+                checked = shared.host.refresh_quotas(shared.pool.clone(), profile.clone()) => Some(checked),
             };
             let mut state = shared.lock();
             if let Some(Err(error)) = checked
