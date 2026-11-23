@@ -349,8 +349,6 @@ pub fn frame(mut read: Vec<u8>) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(read))
 }
 
-/// The message on one line.
-///
 /// # Errors
 /// A line that is not a `T`.
 pub fn decode<T: DeserializeOwned>(line: &[u8]) -> io::Result<T> {

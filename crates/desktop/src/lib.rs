@@ -14,7 +14,6 @@ pub use command::Command;
 pub struct TrayStatus {
     /// The running profiles' names, in the order the tooltip lists them.
     pub running: Vec<String>,
-    /// Whether any request is streaming.
     pub streaming: bool,
 }
 
