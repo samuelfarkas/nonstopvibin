@@ -13,7 +13,7 @@ use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use nsv_accounts::catalog::{ModelCatalog, profile_models};
-use nsv_accounts::scheduler::Scheduler;
+use nsv_accounts::cores::Cores;
 use nsv_agents::{CatalogAnswer, curated, gateway_catalog};
 use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
@@ -325,14 +325,14 @@ pub(crate) struct GatewayHost {
     pub(crate) auth: watch::Receiver<Arc<AuthSnapshot>>,
     /// The gateway's entries for the store's latest snapshot, built when it changes.
     pub(crate) profiles: Mutex<Option<GatewayProfiles>>,
-    pub(crate) scheduler: Scheduler,
+    pub(crate) cores: Arc<Cores>,
     pub(crate) catalog: Arc<ModelCatalog>,
     pub(crate) store: Store,
 }
 
 impl GatewayHost {
     async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, AppError> {
-        let models = self.scheduler.pool().models(profile).await?;
+        let models = self.cores.models(profile).await?;
         let offered = curated(agent, models, false, |models| async move {
             Ok(profile_models(&self.catalog, &self.store, profile, &models).await?)
         })
@@ -359,13 +359,12 @@ impl Host for GatewayHost {
     }
 
     async fn wake(&self, profile: &ProfileId) -> Result<SocketAddr, Refusal> {
-        self.scheduler
+        self.cores
             .wake(profile)
             .await
             .map_err(|error| failure::refusal(error, &self.shared.errors))?;
         let port = self
-            .scheduler
-            .pool()
+            .cores
             .port(profile)
             .map_err(|error| failure::refusal(error, &self.shared.errors))?;
         Ok(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
@@ -382,16 +381,13 @@ impl Host for GatewayHost {
             Activity::Opened { .. } => true,
             Activity::Closed { last } => !last,
         };
-        self.scheduler.activity(profile, open);
+        self.cores.activity(profile, open);
         let edge = matches!(
             activity,
             Activity::Opened { first: true } | Activity::Closed { last: true }
         );
         if self.shared.desktop && edge {
-            self.shared.tray.opened(profile, open);
-            self.shared
-                .tray
-                .update(&self.scheduler.pool().state(), &self.scheduler);
+            self.shared.tray.update(&self.cores);
         }
     }
 }

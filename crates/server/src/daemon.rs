@@ -1,7 +1,6 @@
 //! The daemon's parts and their order: what starts before the port accepts, what restores once
 //! it does, and how it shuts down.
 
-use std::collections::BTreeSet;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -14,10 +13,10 @@ use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
-use nsv_accounts::scheduler::{Scheduler, Timing};
+use nsv_accounts::scheduler::Timing;
 use nsv_accounts::sign_in::Backends;
 use nsv_agents::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
-use nsv_core::pool::{Backend, PoolState, Processes, READY};
+use nsv_core::pool::{Backend, Processes, READY};
 use nsv_desktop::{HostEvent, TrayStatus};
 use nsv_domain::endpoint::{self, Origin};
 use nsv_domain::error::AppError;
@@ -127,13 +126,11 @@ impl Errors {
     }
 }
 
-/// The tray's view: running profiles by name, and whether any request streams. Only the
+/// The tray's view: serving profiles by name, and whether any request streams. Only the
 /// desktop keeps it current.
 pub(crate) struct Tray {
     status: watch::Sender<TrayStatus>,
     facts: watch::Receiver<ProfileFacts>,
-    /// Profiles with a gateway request or WebSocket open.
-    open: Mutex<BTreeSet<ProfileId>>,
 }
 
 impl Tray {
@@ -141,7 +138,6 @@ impl Tray {
         Self {
             status: watch::Sender::new(TrayStatus::default()),
             facts,
-            open: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -149,27 +145,21 @@ impl Tray {
         self.facts.borrow().iter().any(|fact| fact.id == *profile)
     }
 
-    pub(crate) fn opened(&self, profile: &ProfileId, open: bool) {
-        let mut set = locked(&self.open);
-        if open {
-            set.insert(profile.clone());
-        } else {
-            set.remove(profile);
-        }
-    }
-
     /// `Application.status()`: a dormant profile still serves, since its core starts on the next
     /// request. Tells the tray only when something it shows changed.
-    pub(crate) fn update(&self, pool: &PoolState, scheduler: &Scheduler) {
+    pub(crate) fn update(&self, cores: &Cores) {
         let facts = Arc::clone(&self.facts.borrow());
-        let open = locked(&self.open).clone();
-        let mut status = TrayStatus::default();
-        for fact in facts.iter() {
-            if pool.running(&fact.id) || scheduler.is_dormant(&fact.id) {
-                status.running.push(fact.name.clone());
-                status.streaming |= open.contains(&fact.id);
+        let status = cores.statuses(|status| {
+            let mut tray = TrayStatus::default();
+            for fact in facts.iter() {
+                let status = status(&fact.id);
+                if status.serving {
+                    tray.running.push(fact.name.clone());
+                    tray.streaming |= status.streaming;
+                }
             }
-        }
+            tray
+        });
         self.status.send_if_modified(|current| {
             let changed = *current != status;
             *current = status;
@@ -221,7 +211,7 @@ pub(crate) struct App {
     pub(crate) store: Store,
     /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
     /// and core updates.
-    pub(crate) cores: Cores,
+    pub(crate) cores: Arc<Cores>,
     pub(crate) gateway: Gateway<GatewayHost>,
     pub(crate) agents: AgentSetup,
     pub(crate) catalog: Arc<ModelCatalog>,
@@ -295,7 +285,7 @@ impl Daemon {
             stop: Notify::new(),
         });
         let (reported, accepted) = (Arc::clone(&shared), Arc::clone(&shared));
-        let cores = Cores::new(CoresOptions {
+        let cores = Arc::new(Cores::new(CoresOptions {
             store: store.clone(),
             binary: options.core.binary,
             backends: options.backends,
@@ -308,7 +298,7 @@ impl Daemon {
             clock: options.clock,
             report: Arc::new(move |message| reported.errors.report(message)),
             sign_in_accepted: Arc::new(move || accepted.sign_in_accepted()),
-        })?;
+        })?);
         let catalog = Arc::new(ModelCatalog::new(
             Arc::clone(&options.outside),
             options.clock,
@@ -318,13 +308,13 @@ impl Daemon {
             shared: Arc::clone(&shared),
             auth: store.auth(),
             profiles: Mutex::default(),
-            scheduler: cores.scheduler.clone(),
+            cores: Arc::clone(&cores),
             catalog: Arc::clone(&catalog),
             store: store.clone(),
         });
         let agents = AgentSetup::new(
             lock.directory(),
-            connection_source(&shared, &store, &cores.scheduler, port),
+            connection_source(&shared, &store, &cores, port),
             options.agents.clone(),
         );
         let token = SessionToken::generate()?;
@@ -489,9 +479,7 @@ impl Daemon {
 impl App {
     pub(crate) fn update_tray(&self) {
         if self.shared.desktop {
-            self.shared
-                .tray
-                .update(&self.cores.pool().state(), &self.cores.scheduler);
+            self.shared.tray.update(&self.cores);
         }
     }
 
@@ -535,7 +523,7 @@ fn bind(port: u16) -> Result<TcpListener, StartError> {
 /// The desktop tray follows each change the pool or the store's profile facts publish.
 fn follow_tray(app: &Arc<App>) {
     let weak = Arc::downgrade(app);
-    let mut pool = app.cores.pool().subscribe();
+    let mut pool = app.cores.changes();
     let mut facts = app.store.facts();
     tokio::spawn(async move {
         loop {
@@ -555,12 +543,12 @@ fn follow_tray(app: &Arc<App>) {
 fn connection_source(
     shared: &Arc<Shared>,
     store: &Store,
-    scheduler: &Scheduler,
+    cores: &Arc<Cores>,
     port: u16,
 ) -> ConnectionSource {
     let shared = Arc::clone(shared);
     let auth: watch::Receiver<Arc<AuthSnapshot>> = store.auth();
-    let scheduler = scheduler.clone();
+    let cores = Arc::clone(cores);
     Arc::new(move |profile: &ProfileId| {
         let key = {
             let snapshot = auth.borrow();
@@ -570,8 +558,7 @@ fn connection_source(
                 .map(|entry| entry.client_key.clone())
         }
         .ok_or_else(|| AppError::new("Profile not found.", 404))?;
-        let serving = scheduler.pool().state().running(profile) || scheduler.is_dormant(profile);
-        if shared.closing() || !serving {
+        if shared.closing() || !cores.status(profile).serving {
             return Err(AppError::new(
                 "Start this profile before connecting an agent.",
                 409,

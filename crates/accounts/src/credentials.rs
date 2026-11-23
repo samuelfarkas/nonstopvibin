@@ -31,7 +31,6 @@ use crate::api_accounts::api_account;
 use crate::fetch::Outside;
 use crate::identity::{claude_identity, same_seat};
 use crate::quota::Quotas;
-use crate::scheduler::Scheduler;
 use crate::source::PoolSource;
 use crate::task::detached;
 
@@ -76,7 +75,7 @@ impl Clone for Credentials {
 
 struct Inner {
     store: Store,
-    scheduler: Scheduler,
+    pool: Pool,
     accounts: Arc<Accounts>,
     quotas: Arc<Quotas<PoolSource>>,
     outside: Arc<dyn Outside>,
@@ -87,23 +86,19 @@ impl Credentials {
     #[must_use]
     pub fn new(
         store: Store,
-        scheduler: Scheduler,
+        pool: Pool,
         accounts: Arc<Accounts>,
         quotas: Arc<Quotas<PoolSource>>,
         outside: Arc<dyn Outside>,
     ) -> Self {
         Self(Arc::new(Inner {
             store,
-            scheduler,
+            pool,
             accounts,
             quotas,
             outside,
             queue: Arc::new(Mutex::new(())),
         }))
-    }
-
-    fn pool(&self) -> &Pool {
-        self.0.scheduler.pool()
     }
 
     /// Runs `change` after every change queued before it.
@@ -247,7 +242,7 @@ impl Credentials {
                 };
             }
         }
-        let pool = self.pool();
+        let pool = &self.0.pool;
         if prior.is_some() {
             let path = credential_path(self.0.store.directory(), profile, name.as_str())?;
             let accounts = Arc::clone(&self.0.accounts);
@@ -275,7 +270,6 @@ impl Credentials {
             .await?;
             self.0.accounts.sync(pool, profile).await?;
         }
-        self.0.scheduler.catch_up();
         let mut account = self
             .0
             .accounts
@@ -373,9 +367,8 @@ impl Credentials {
                     db.save_api_account(&profile, &saved, Some(&store_key))
                 })
                 .await?;
-            this.0.scheduler.catch_up();
-            this.pool().start(&id, false).await?;
-            this.pool().configure(&id).await
+            this.0.pool.start(&id, false).await?;
+            this.0.pool.configure(&id).await
         })
         .await?;
         self.0.quotas.refresh(profile, &account.id).await?;
@@ -425,7 +418,7 @@ impl Credentials {
                 Ok(true)
             })
             .await?;
-        let pool = self.pool();
+        let pool = &self.0.pool;
         if api {
             return pool.configure(profile).await;
         }
@@ -483,7 +476,7 @@ impl Credentials {
 
     async fn remove(&self, profile: &ProfileId, account: &AccountId) -> Result<(), AppError> {
         let listed = self.listed(profile, account).await?;
-        let pool = self.pool();
+        let pool = &self.0.pool;
         if listed.kind == AccountKind::ApiKey {
             let (id, account) = (profile.clone(), account.clone());
             self.0
@@ -506,7 +499,6 @@ impl Credentials {
             .await?;
             self.0.accounts.sync(pool, profile).await?;
         }
-        self.0.scheduler.catch_up();
         Ok(())
     }
 

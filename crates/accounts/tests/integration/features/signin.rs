@@ -61,10 +61,10 @@ async fn oauth_sessions_are_profile_bound_cancellable_and_one_at_a_time() {
     world.fake.knobs(|knobs| {
         knobs.redirect = Some("http://localhost:0/auth/callback".to_owned());
     });
-    let sign_in = &world.cores.sign_in;
+    let sign_in = &world.cores;
     let (first, second) = tokio::join!(
-        sign_in.begin(&company, OAuthProvider::Codex, None),
-        sign_in.begin(&personal, OAuthProvider::Codex, None),
+        sign_in.begin_sign_in(&company, OAuthProvider::Codex, None),
+        sign_in.begin_sign_in(&personal, OAuthProvider::Codex, None),
     );
     let (session, refused) = match (first, second) {
         (Ok(session), Err(refused)) | (Err(refused), Ok(session)) => (session, refused),
@@ -89,7 +89,7 @@ async fn oauth_sessions_are_profile_bound_cancellable_and_one_at_a_time() {
     );
     assert_eq!(
         sign_in
-            .status(&session.profile_id, &session.state)
+            .sign_in_status(&session.profile_id, &session.state)
             .await
             .unwrap(),
         OAuthStatus::Wait
@@ -101,10 +101,16 @@ async fn oauth_sessions_are_profile_bound_cancellable_and_one_at_a_time() {
     };
     let (message, status) = golden_error("GET oauth unknown state");
     for refused in [
-        sign_in.status(other, &session.state).await.unwrap_err(),
-        sign_in.cancel(other, &session.state).await.unwrap_err(),
         sign_in
-            .status(&session.profile_id, "nope")
+            .sign_in_status(other, &session.state)
+            .await
+            .unwrap_err(),
+        sign_in
+            .cancel_sign_in(other, &session.state)
+            .await
+            .unwrap_err(),
+        sign_in
+            .sign_in_status(&session.profile_id, "nope")
             .await
             .unwrap_err(),
     ] {
@@ -113,17 +119,20 @@ async fn oauth_sessions_are_profile_bound_cancellable_and_one_at_a_time() {
             (message.as_str(), status)
         );
     }
-    assert_eq!(sign_in.session(&session.profile_id), Some(session.clone()));
     assert_eq!(
-        sign_in.session(other),
+        sign_in.sign_in_session(&session.profile_id),
+        Some(session.clone())
+    );
+    assert_eq!(
+        sign_in.sign_in_session(other),
         None,
         "GET oauth-session answers null"
     );
     sign_in
-        .cancel(&session.profile_id, &session.state)
+        .cancel_sign_in(&session.profile_id, &session.state)
         .await
         .unwrap();
-    assert_eq!(sign_in.session(&session.profile_id), None);
+    assert_eq!(sign_in.sign_in_session(&session.profile_id), None);
     assert_eq!(sign_in.callback_port(), None);
     assert_eq!(
         world.fake.calls(&session.profile_id, "/oauth-session"),
@@ -133,10 +142,13 @@ async fn oauth_sessions_are_profile_bound_cancellable_and_one_at_a_time() {
         )]
     );
     let next = sign_in
-        .begin(&personal, OAuthProvider::Codex, None)
+        .begin_sign_in(&personal, OAuthProvider::Codex, None)
         .await
         .unwrap();
-    sign_in.cancel(&personal, &next.state).await.unwrap();
+    sign_in
+        .cancel_sign_in(&personal, &next.state)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -147,9 +159,9 @@ async fn cancellation_closes_callbacks_queued_behind_it_and_a_matching_callback_
         knobs.redirect = Some("http://127.0.0.1:0/callback".to_owned());
         knobs.credential = codex();
     });
-    let sign_in = world.cores.sign_in.clone();
+    let sign_in = Arc::clone(&world.cores);
     let session = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     let port = sign_in.callback_port().unwrap();
@@ -158,8 +170,9 @@ async fn cancellation_closes_callbacks_queued_behind_it_and_a_matching_callback_
         .fake
         .knobs(|knobs| knobs.cancel_gate = Some((Arc::clone(&entered), released)));
     let cancel = tokio::spawn({
-        let (sign_in, profile, state) = (sign_in.clone(), profile.clone(), session.state.clone());
-        async move { sign_in.cancel(&profile, &state).await }
+        let (sign_in, profile, state) =
+            (Arc::clone(&sign_in), profile.clone(), session.state.clone());
+        async move { sign_in.cancel_sign_in(&profile, &state).await }
     });
     entered.notified().await;
     // Its handler queues the callback behind the cancellation.
@@ -180,7 +193,7 @@ async fn cancellation_closes_callbacks_queued_behind_it_and_a_matching_callback_
     world.fake.knobs(|knobs| knobs.cancel_gate = None);
 
     let next = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     let port = sign_in.callback_port().unwrap();
@@ -216,14 +229,14 @@ async fn cancellation_closes_callbacks_queued_behind_it_and_a_matching_callback_
         "an accepted callback closes the listener"
     );
     assert_eq!(
-        sign_in.status(&profile, &next.state).await.unwrap(),
+        sign_in.sign_in_status(&profile, &next.state).await.unwrap(),
         OAuthStatus::Ok {
             account: None,
             reconnected: None
         }
     );
-    assert_eq!(sign_in.session(&profile), None);
-    let accounts = world.cores.accounts.list(&profile).await.unwrap();
+    assert_eq!(sign_in.sign_in_session(&profile), None);
+    let accounts = world.cores.accounts(&profile).await.unwrap();
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].provider, "codex");
     assert!(accounts[0].quota.is_some(), "its quota was checked");
@@ -238,9 +251,9 @@ async fn a_busy_callback_port_is_refused_and_ends_the_pending_authorization() {
     world.fake.knobs(|knobs| {
         knobs.redirect = Some(format!("http://localhost:{port}/auth/callback"));
     });
-    let sign_in = &world.cores.sign_in;
+    let sign_in = &world.cores;
     let refused = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap_err();
     assert_eq!(
@@ -252,15 +265,18 @@ async fn a_busy_callback_port_is_refused_and_ends_the_pending_authorization() {
             409
         )
     );
-    assert_eq!(sign_in.session(&profile), None);
+    assert_eq!(sign_in.sign_in_session(&profile), None);
     assert_eq!(world.fake.calls(&profile, "/oauth-session").len(), 1);
     drop(busy);
     let session = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     assert_eq!(sign_in.callback_port(), Some(port));
-    sign_in.cancel(&profile, &session.state).await.unwrap();
+    sign_in
+        .cancel_sign_in(&profile, &session.state)
+        .await
+        .unwrap();
     for unsupported in [
         "https://localhost:1455/cb",
         "http://example.invalid:1455/cb",
@@ -270,7 +286,7 @@ async fn a_busy_callback_port_is_refused_and_ends_the_pending_authorization() {
             .fake
             .knobs(|knobs| knobs.redirect = Some(unsupported.to_owned()));
         let refused = sign_in
-            .begin(&profile, OAuthProvider::Codex, None)
+            .begin_sign_in(&profile, OAuthProvider::Codex, None)
             .await
             .unwrap_err();
         assert_eq!(
@@ -292,9 +308,9 @@ async fn a_pasted_redirect_url_completes_a_headless_sign_in_once() {
         world.profile("Other").await,
     );
     world.fake.knobs(|knobs| knobs.credential = codex());
-    let sign_in = &world.cores.sign_in;
+    let sign_in = &world.cores;
     let session = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     assert_eq!(
@@ -304,60 +320,76 @@ async fn a_pasted_redirect_url_completes_a_headless_sign_in_once() {
     );
     let redirect =
         |state: &str| format!("http://localhost:1455/auth/callback?code=synthetic&state={state}");
-    let malformed = sign_in.callback(&profile, "not a url").await.unwrap_err();
+    let malformed = sign_in
+        .sign_in_callback(&profile, "not a url")
+        .await
+        .unwrap_err();
     assert_eq!(
         (malformed.message.as_str(), malformed.status),
         ("Malformed sign-in callback.", 400)
     );
     for (owner, state) in [(&profile, "nope"), (&other, session.state.as_str())] {
-        let refused = sign_in.callback(owner, &redirect(state)).await.unwrap_err();
+        let refused = sign_in
+            .sign_in_callback(owner, &redirect(state))
+            .await
+            .unwrap_err();
         assert_eq!(refused.status, 404);
     }
     sign_in
-        .callback(&profile, &redirect(&session.state))
+        .sign_in_callback(&profile, &redirect(&session.state))
         .await
         .unwrap();
     assert_eq!(world.fake.calls(&profile, "/oauth-callback").len(), 1);
     assert!(matches!(
-        sign_in.status(&profile, &session.state).await.unwrap(),
+        sign_in
+            .sign_in_status(&profile, &session.state)
+            .await
+            .unwrap(),
         OAuthStatus::Ok { .. }
     ));
     let late = sign_in
-        .callback(&profile, &redirect(&session.state))
+        .sign_in_callback(&profile, &redirect(&session.state))
         .await
         .unwrap_err();
     assert_eq!(late.status, 404);
-    assert_eq!(world.cores.accounts.list(&profile).await.unwrap().len(), 1);
+    assert_eq!(world.cores.accounts(&profile).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn a_failed_authorization_ends_the_sign_in_and_an_expired_one_is_cleaned_up() {
     let world = World::new("oauth-expiry").await;
     let profile = world.profile("Expiry").await;
-    let sign_in = &world.cores.sign_in;
+    let sign_in = &world.cores;
     world.fake.knobs(|knobs| knobs.auth_fails = true);
     let session = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     assert_eq!(
-        sign_in.status(&profile, &session.state).await.unwrap(),
+        sign_in
+            .sign_in_status(&profile, &session.state)
+            .await
+            .unwrap(),
         OAuthStatus::Error {
             error: "Sign-in did not complete. Start a new sign-in.".to_owned()
         }
     );
-    assert_eq!(sign_in.session(&profile), None);
+    assert_eq!(sign_in.sign_in_session(&profile), None);
     world.fake.knobs(|knobs| {
         knobs.auth_fails = false;
         knobs.expires_in = Some(json!(1));
     });
     let session = sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     assert_eq!(session.expires_at - session.started_at, 1000);
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert_eq!(sign_in.session(&profile), None, "the expiry timer ended it");
+    assert_eq!(
+        sign_in.sign_in_session(&profile),
+        None,
+        "the expiry timer ended it"
+    );
     assert_eq!(
         world.fake.calls(&profile, "/oauth-session"),
         [(
@@ -390,19 +422,17 @@ async fn a_pending_sign_in_keeps_an_idle_core_running() {
     .await;
     let profile = world.profile("Lazy").await;
     world.cores.launch().await.unwrap();
-    world.cores.scheduler.wake(&profile).await.unwrap();
+    world.cores.wake(&profile).await.unwrap();
     let session = world
         .cores
-        .sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
     tokio::time::sleep(idle * 4).await;
     assert!(world.cores.pool().running(&profile), "a pending sign-in");
     world
         .cores
-        .sign_in
-        .cancel(&profile, &session.state)
+        .cancel_sign_in(&profile, &session.state)
         .await
         .unwrap();
     tokio::time::sleep(idle * 4).await;
@@ -458,13 +488,13 @@ async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_i
     let queued = Arc::new(std::sync::Mutex::new(Some(queued)));
     world.fake.knobs(|knobs| {
         let (credentials, fake, entered) = (
-            world.cores.credentials.clone(),
+            Arc::clone(&world.cores),
             world.fake.clone(),
             Arc::clone(&entered),
         );
         knobs.auth_url_hook = Some(Arc::new(move |session| {
             let (credentials, fake, entered, queued) = (
-                credentials.clone(),
+                Arc::clone(&credentials),
                 fake.clone(),
                 Arc::clone(&entered),
                 Arc::clone(&queued),
@@ -476,7 +506,7 @@ async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_i
                 // The action queues a credential change as it ends, after shutdown began.
                 let mut change = Box::pin(async move {
                     credentials
-                        .queue(async move {
+                        .after_credential_changes(async move {
                             tokio::task::yield_now().await;
                             Ok(!fake.calls(&session, "/oauth-session").is_empty())
                         })
@@ -497,8 +527,7 @@ async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_i
         let (cores, profile) = (Arc::clone(&world.cores), profile.clone());
         async move {
             cores
-                .sign_in
-                .begin(&profile, OAuthProvider::Codex, None)
+                .begin_sign_in(&profile, OAuthProvider::Codex, None)
                 .await
         }
     });
@@ -527,7 +556,7 @@ async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_cor
     let (entered, (release, released)) = (Arc::new(Notify::new()), watch::channel(false));
     let change = tokio::spawn({
         let (credentials, pool, profile, entered) = (
-            world.cores.credentials.clone(),
+            Arc::clone(&world.cores),
             world.cores.pool().clone(),
             profile.clone(),
             Arc::clone(&entered),
@@ -535,7 +564,7 @@ async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_cor
         let mut released = released;
         async move {
             credentials
-                .queue(async move {
+                .after_credential_changes(async move {
                     entered.notify_one();
                     let _released = released.wait_for(|released| *released).await;
                     Ok(pool.state().holding(&profile))
@@ -584,8 +613,7 @@ async fn authorize(
     });
     let session = world
         .cores
-        .sign_in
-        .begin(profile, OAuthProvider::Claude, reconnect.cloned())
+        .begin_sign_in(profile, OAuthProvider::Claude, reconnect.cloned())
         .await
         .unwrap();
     let mut callback = Url::parse("http://localhost:54545/callback").unwrap();
@@ -595,8 +623,7 @@ async fn authorize(
         .append_pair("code", "synthetic-code");
     world
         .cores
-        .sign_in
-        .callback(profile, callback.as_str())
+        .sign_in_callback(profile, callback.as_str())
         .await
         .unwrap();
     session
@@ -609,8 +636,7 @@ async fn review(
 ) -> (OAuthAction, Value) {
     match world
         .cores
-        .sign_in
-        .status(profile, &session.state)
+        .sign_in_status(profile, &session.state)
         .await
         .unwrap()
     {
@@ -627,8 +653,7 @@ async fn confirm(
     review(world, profile, session).await;
     match world
         .cores
-        .sign_in
-        .confirm(profile, &session.state)
+        .confirm_sign_in(profile, &session.state)
         .await
         .unwrap()
     {
@@ -667,18 +692,21 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
         world.profile("First profile").await,
         world.profile("Second profile").await,
     );
-    let sign_in = world.cores.sign_in.clone();
-    let accounts = Arc::clone(&world.cores.accounts);
+    let sign_in = Arc::clone(&world.cores);
+    let accounts = Arc::clone(&world.cores);
 
     // A pending organization is invisible to active profiles until confirmation.
     let session = authorize(&world, &first, claude(ORGANIZATION_A, "a"), None).await;
-    assert_eq!(accounts.list(&first).await.unwrap().len(), 0);
+    assert_eq!(accounts.accounts(&first).await.unwrap().len(), 0);
     let (action, shown) = review(&world, &first, &session).await;
     assert_eq!(action, OAuthAction::Add);
     assert_eq!(shown["account"]["organizationName"], "Example A");
     assert!(!shown.to_string().contains("synthetic-access"));
-    assert_eq!(accounts.list(&first).await.unwrap().len(), 0);
-    let elsewhere = sign_in.confirm(&second, &session.state).await.unwrap_err();
+    assert_eq!(accounts.accounts(&first).await.unwrap().len(), 0);
+    let elsewhere = sign_in
+        .confirm_sign_in(&second, &session.state)
+        .await
+        .unwrap_err();
     assert_eq!(elsewhere.status, 404);
     let account = confirm(&world, &first, &session).await;
     let (first_id, first_index) = (account.id.clone(), account.auth_index.clone().unwrap());
@@ -699,7 +727,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     let second_id = account.id.clone();
     assert_ne!(second_id, first_id);
     assert_ne!(account.auth_index.as_deref(), Some(first_index.as_str()));
-    let listed = accounts.list(&first).await.unwrap();
+    let listed = accounts.accounts(&first).await.unwrap();
     assert_eq!(listed.len(), 2);
     assert!(
         listed
@@ -710,7 +738,6 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     // Reconnecting keeps the id, paused state, label, priority, quota and the other seat.
     world
         .cores
-        .credentials
         .set_account(
             &first,
             &first_id,
@@ -766,7 +793,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     assert_eq!(account.quota.unwrap().checked_at, kept.checked_at);
     assert!(file(&world, &first, &first_id).contains("synthetic-access-reauthorized"));
     assert_eq!(file(&world, &first, &second_id), other_before);
-    assert_eq!(accounts.list(&first).await.unwrap().len(), 2);
+    assert_eq!(accounts.accounts(&first).await.unwrap().len(), 2);
 
     // Reconnecting a stopped profile keeps it stopped.
     world.cores.pool().stop(&first).await.unwrap();
@@ -804,14 +831,20 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
             .unwrap()
             .starts_with("This is not the organization")
     );
-    let blocked = sign_in.confirm(&first, &session.state).await.unwrap_err();
+    let blocked = sign_in
+        .confirm_sign_in(&first, &session.state)
+        .await
+        .unwrap_err();
     assert!(
         blocked.message.starts_with("This is not the organization"),
         "{blocked:?}"
     );
     assert_eq!(blocked.status, 409);
     assert_eq!(file(&world, &first, &first_id), before);
-    sign_in.cancel(&first, &session.state).await.unwrap();
+    sign_in
+        .cancel_sign_in(&first, &session.state)
+        .await
+        .unwrap();
 
     // The same seat can be added and reconnected independently in another profile.
     let session = authorize(
@@ -835,7 +868,6 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     assert_eq!(confirm(&world, &second, &session).await.id, other.id);
     let duplicate = world
         .cores
-        .credentials
         .import(
             &second,
             claude(ORGANIZATION_A, "independent-token")
@@ -854,7 +886,6 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     );
     let imported = world
         .cores
-        .credentials
         .import(
             &second,
             claude(ORGANIZATION_B, "imported")
@@ -866,8 +897,8 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
         .unwrap();
     assert_eq!(remaining(&imported.quota.unwrap()), Some(75.0));
     assert_eq!(file(&world, &first, &first_id), before);
-    assert_eq!(accounts.list(&first).await.unwrap().len(), 2);
-    assert_eq!(accounts.list(&second).await.unwrap().len(), 2);
+    assert_eq!(accounts.accounts(&first).await.unwrap().len(), 2);
+    assert_eq!(accounts.accounts(&second).await.unwrap().len(), 2);
 
     // Provider verification can be retried without signing in again.
     let session = authorize(&world, &first, claude(ORGANIZATION_B, "retry-token"), None).await;
@@ -875,10 +906,13 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     world
         .fetch
         .answer(|_| Ok(response(503, "synthetic private provider body")));
-    let failed = sign_in.status(&first, &session.state).await.unwrap_err();
+    let failed = sign_in
+        .sign_in_status(&first, &session.state)
+        .await
+        .unwrap_err();
     assert!(failed.message.contains("HTTP 503"), "{failed:?}");
     assert!(!failed.message.contains("private provider body"));
-    assert!(sign_in.session(&first).is_some());
+    assert!(sign_in.sign_in_session(&first).is_some());
     world.fetch.answer(move |_| {
         Ok(response(
             200,
@@ -895,13 +929,19 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
         answer + 2,
         "only the verification was asked again"
     );
-    sign_in.cancel(&first, &session.state).await.unwrap();
+    sign_in
+        .cancel_sign_in(&first, &session.state)
+        .await
+        .unwrap();
 
     // Cancellation and expiry reject late callbacks and leave no staging store.
     let session = authorize(&world, &first, claude(ORGANIZATION_B, "cancelled"), None).await;
-    sign_in.cancel(&first, &session.state).await.unwrap();
+    sign_in
+        .cancel_sign_in(&first, &session.state)
+        .await
+        .unwrap();
     let late = sign_in
-        .callback(
+        .sign_in_callback(
             &first,
             &format!("http://localhost/?state={}", session.state),
         )
@@ -910,27 +950,30 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     assert_eq!(late.status, 404);
     assert_eq!(world.pending().len(), 0);
     let expired = sign_in
-        .begin(&first, OAuthProvider::Claude, None)
+        .begin_sign_in(&first, OAuthProvider::Claude, None)
         .await
         .unwrap();
     skew(3_600_000);
-    let refused = sign_in.confirm(&first, &expired.state).await.unwrap_err();
+    let refused = sign_in
+        .confirm_sign_in(&first, &expired.state)
+        .await
+        .unwrap_err();
     assert_eq!(
         (refused.message.as_str(), refused.status),
         ("This sign-in expired. Start a new sign-in.", 410)
     );
     let next = sign_in
-        .begin(&first, OAuthProvider::Claude, None)
+        .begin_sign_in(&first, OAuthProvider::Claude, None)
         .await
         .unwrap();
     skew(0);
-    sign_in.cancel(&first, &next.state).await.unwrap();
+    sign_in.cancel_sign_in(&first, &next.state).await.unwrap();
     assert_eq!(world.pending().len(), 0);
 
     // Seat metadata persists across a restart without renaming.
     world.cores.pool().stop(&first).await.unwrap();
     world.cores.pool().start(&first, false).await.unwrap();
-    let listed = accounts.list(&first).await.unwrap();
+    let listed = accounts.accounts(&first).await.unwrap();
     let ids: Vec<&str> = listed.iter().map(|account| account.id.as_str()).collect();
     assert!(ids.contains(&first_id.as_str()) && ids.contains(&second_id.as_str()));
     let reread = listed
@@ -942,12 +985,12 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     // Shutdown cleans up a pending sign-in even after its core has stopped.
     world.cores.pool().start(&second, false).await.unwrap();
     sign_in
-        .begin(&first, OAuthProvider::Codex, None)
+        .begin_sign_in(&first, OAuthProvider::Codex, None)
         .await
         .unwrap();
     world.cores.pool().stop(&first).await.unwrap();
     world.cores.shutdown().await.unwrap();
-    assert_eq!(sign_in.session(&first), None);
+    assert_eq!(sign_in.sign_in_session(&first), None);
     assert!(!world.cores.pool().alive(&second));
     assert_eq!(names(&world.data().join("oauth-pending")).len(), 0);
 }

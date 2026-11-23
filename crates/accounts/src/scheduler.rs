@@ -111,6 +111,17 @@ pub trait Host: Send + Sync + 'static {
     ) -> BoxFuture<'static, Result<(), AppError>>;
 }
 
+/// What the scheduler adds to a profile's status.
+#[derive(Debug, Default)]
+pub(crate) struct Tracked {
+    /// Its core sleeps until a request or a UI needs it.
+    pub(crate) dormant: bool,
+    /// What it shows once the scheduler stopped starting it.
+    pub(crate) gave_up: Option<Arc<str>>,
+    /// A gateway request or `WebSocket` connection is open.
+    pub(crate) open: bool,
+}
+
 /// When a profile's queue is drained next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Next {
@@ -152,7 +163,7 @@ struct Track {
     /// When the restart policy wants to hear the time.
     wake: Option<Due>,
     /// What the profile shows once the scheduler stopped starting it.
-    shown: Option<String>,
+    shown: Option<Arc<str>>,
     /// No OAuth account: its core is stopped until a request or a UI needs it.
     dormant: bool,
     /// When a gateway request last started or ended, or its core last started.
@@ -453,12 +464,28 @@ impl Scheduler {
 
     /// What a profile shows once the scheduler stopped starting it.
     #[must_use]
-    pub fn gave_up(&self, profile: &ProfileId) -> Option<String> {
+    pub fn gave_up(&self, profile: &ProfileId) -> Option<Arc<str>> {
         self.0
             .lock()
             .tracks
             .get(profile)
             .and_then(|track| track.shown.clone())
+    }
+
+    /// `read` with what the scheduler knows of each profile, under one lock: `read` must not
+    /// call back into the scheduler.
+    pub(crate) fn tracked<T>(&self, read: impl FnOnce(&dyn Fn(&ProfileId) -> Tracked) -> T) -> T {
+        let state = self.0.lock();
+        read(&|profile| {
+            state
+                .tracks
+                .get(profile)
+                .map_or_else(Tracked::default, |track| Tracked {
+                    dormant: track.dormant,
+                    gave_up: track.shown.clone(),
+                    open: track.open,
+                })
+        })
     }
 
     /// When the scheduler next wakes; `None` while nothing is due.
@@ -665,7 +692,7 @@ impl Shared {
                 Action::Start => start = true,
                 Action::Wake(due) => track.wake = Some(due),
                 Action::Report(text) => reports.push(text),
-                Action::Show(text) => track.shown = text,
+                Action::Show(text) => track.shown = text.map(Arc::from),
             }
         }
         for text in reports {
@@ -1124,6 +1151,11 @@ impl Hooks for PoolHooks {
         let mut state = shared.lock();
         let pool = shared.pool.state();
         let now = Instant::now();
+        // Facts the store published before the change that caused this event come first, as
+        // a route that changed them and then started a core would have it.
+        if shared.follow(&mut state, &pool, now) {
+            shared.schedule(&mut state, &pool, now);
+        }
         // Whoever started it, a running core is no longer dormant, its idle time starts now,
         // and it holds no cooldowns.
         if let CoreEvent::Started { running: true, .. } = event {

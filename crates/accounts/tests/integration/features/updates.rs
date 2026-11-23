@@ -35,15 +35,15 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     let profile = world.profile("Update fixture").await;
     world.cores.launch().await.unwrap();
     world.cores.pool().start(&profile, false).await.unwrap();
-    let updates = &world.cores.updates;
-    updates.check().await.unwrap();
-    assert_eq!(updates.state().available.as_deref(), Some(UPDATE));
-    assert_eq!(updates.version(), bundled_version());
-    updates.install(UPDATE).await.unwrap();
-    let state = updates.state();
+    let updates = &world.cores;
+    updates.check_core().await.unwrap();
+    assert_eq!(updates.core_state().available.as_deref(), Some(UPDATE));
+    assert_eq!(updates.core_version(), bundled_version());
+    updates.install_core(UPDATE).await.unwrap();
+    let state = updates.core_state();
     assert_eq!(
         (
-            updates.version().as_str(),
+            updates.core_version().as_str(),
             state.bundled.as_str(),
             state.available,
             state.phase
@@ -92,21 +92,21 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     store.close().await;
     let world = World::open(directory, &data, bundled.clone(), Some(FEED), *TIMING, fake).await;
     world.cores.launch().await.unwrap();
-    assert_eq!(world.cores.updates.version(), UPDATE);
+    assert_eq!(world.cores.core_version(), UPDATE);
     world.cores.pool().start(&profile, false).await.unwrap();
     assert_eq!(
         *world.cores.pool().state().core(&profile).unwrap().binary,
         *installed
     );
-    world.cores.updates.use_bundled().await.unwrap();
-    assert_eq!(world.cores.updates.version(), bundled_version());
+    world.cores.use_bundled_core().await.unwrap();
+    assert_eq!(world.cores.core_version(), bundled_version());
     assert_eq!(names(&cores).len(), 0);
     assert_eq!(
         *world.cores.pool().state().core(&profile).unwrap().binary,
         *bundled
     );
     assert!(world.cores.pool().running(&profile));
-    let again = world.cores.updates.use_bundled().await.unwrap_err();
+    let again = world.cores.use_bundled_core().await.unwrap_err();
     assert_eq!(
         (again.message.as_str(), again.status),
         ("NonstopVibin already runs its bundled core.", 409)
@@ -120,14 +120,14 @@ async fn no_other_start_slips_in_while_an_update_restarts_a_core_on_the_new_bina
     let profile = world.profile("Swap fixture").await;
     world.cores.launch().await.unwrap();
     world.cores.pool().start(&profile, false).await.unwrap();
-    world.cores.updates.check().await.unwrap();
+    world.cores.check_core().await.unwrap();
     // The stop's usage drain waits, so another start arrives between its stop and its start.
     let held = profile.clone();
     let (release, _holding) = world
         .fake
         .hold("/usage-queue", move |profile| *profile == held);
     let cores = Arc::clone(&world.cores);
-    let install = tokio::spawn(async move { cores.updates.install(UPDATE).await });
+    let install = tokio::spawn(async move { cores.install_core(UPDATE).await });
     let mut pool = world.cores.pool().subscribe();
     pool.wait_for(|state| {
         state
@@ -160,11 +160,11 @@ async fn no_other_start_slips_in_while_an_update_restarts_a_core_on_the_new_bina
 #[tokio::test]
 async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_refused() {
     let world = installed_world("updates-refused").await;
-    let updates = &world.cores.updates;
+    let updates = &world.cores;
     let cores = world.data().join("cores");
     let (_, pin) = release(world.directory.path(), b"update core");
     *world.releases.archive.lock().unwrap() = b"not the reviewed archive".to_vec();
-    let tampered = updates.install(UPDATE).await.unwrap_err();
+    let tampered = updates.install_core(UPDATE).await.unwrap_err();
     assert_eq!(
         (tampered.message.as_str(), tampered.status),
         (
@@ -173,7 +173,7 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
         )
     );
     assert_eq!(
-        (updates.version(), updates.state().phase),
+        (updates.core_version(), updates.core_state().phase),
         (bundled_version(), None)
     );
     assert_eq!(names(&cores).len(), 0);
@@ -183,10 +183,10 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
     same["version"] = json!(bundled_version());
     for refused in [too_new, same] {
         *world.releases.feed.lock().unwrap() = refused.clone();
-        updates.check().await.unwrap();
-        assert_eq!(updates.state().available, None);
+        updates.check_core().await.unwrap();
+        assert_eq!(updates.core_state().available, None);
         let version = refused["version"].as_str().unwrap();
-        let install = updates.install(version).await.unwrap_err();
+        let install = updates.install_core(version).await.unwrap_err();
         assert_eq!(
             (install.message, install.status),
             (format!("CLIProxyAPI {version} is no longer offered."), 409)
@@ -195,7 +195,7 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
     let (archive, broken) = release(world.directory.path(), b"broken core");
     *world.releases.feed.lock().unwrap() = broken;
     *world.releases.archive.lock().unwrap() = archive;
-    let failed = updates.install(UPDATE).await.unwrap_err();
+    let failed = updates.install_core(UPDATE).await.unwrap_err();
     assert_eq!(failed.status, 502);
     assert!(
         failed
@@ -204,11 +204,11 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
         "{failed:?}"
     );
     assert!(failed.message.ends_with(" Nothing was changed."));
-    assert_eq!(updates.version(), bundled_version());
+    assert_eq!(updates.core_version(), bundled_version());
     assert_eq!(names(&cores).len(), 0);
     assert_eq!(world.pending().len(), 0);
     *world.releases.feed.lock().unwrap() = json!({ "version": UPDATE });
-    let unreadable = updates.check().await.unwrap_err();
+    let unreadable = updates.check_core().await.unwrap_err();
     assert_eq!(
         (unreadable.message.as_str(), unreadable.status),
         (
@@ -221,9 +221,9 @@ async fn a_core_off_the_pin_too_new_for_this_app_not_newer_or_not_starting_is_re
 #[tokio::test]
 async fn going_back_to_a_bundled_core_that_fails_its_check_keeps_the_update() {
     let world = installed_world("updates-damaged").await;
-    world.cores.updates.install(UPDATE).await.unwrap();
+    world.cores.install_core(UPDATE).await.unwrap();
     std::fs::write(&world.bundled, b"damaged").unwrap();
-    let refused = world.cores.updates.use_bundled().await.unwrap_err();
+    let refused = world.cores.use_bundled_core().await.unwrap_err();
     assert_eq!(
         (refused.message.as_str(), refused.status),
         (
@@ -231,22 +231,23 @@ async fn going_back_to_a_bundled_core_that_fails_its_check_keeps_the_update() {
             503
         )
     );
-    assert_eq!(world.cores.updates.version(), UPDATE);
+    assert_eq!(world.cores.core_version(), UPDATE);
     assert_eq!(names(&world.data().join("cores")), [UPDATE]);
 }
 
 #[tokio::test]
 async fn development_runs_never_select_install_or_delete_installed_cores() {
     let world = World::new("updates-development").await;
-    let updates = &world.cores.updates;
+    let updates = &world.cores;
     let kept = world.data().join("cores").join(UPDATE);
     std::fs::create_dir_all(&kept).unwrap();
-    assert!(!updates.select().await.unwrap());
+    updates.launch().await.unwrap();
+    assert_eq!(updates.core_version(), bundled_version());
     assert!(kept.exists());
     for refused in [
-        updates.check().await,
-        updates.install(UPDATE).await,
-        updates.use_bundled().await,
+        updates.check_core().await,
+        updates.install_core(UPDATE).await,
+        updates.use_bundled_core().await,
     ] {
         let refused = refused.unwrap_err();
         assert_eq!(
@@ -254,21 +255,20 @@ async fn development_runs_never_select_install_or_delete_installed_cores() {
             ("Only installed builds update the core.", 409)
         );
     }
-    assert!(!updates.state().updates);
+    assert!(!updates.core_state().updates);
 }
 
 #[tokio::test]
 async fn a_switch_waits_for_no_sign_in_and_shutdown_aborts_a_download() {
     let world = installed_world("updates-sign-in").await;
     let profile = world.profile("Signing in").await;
-    let updates = world.cores.updates.clone();
+    let updates = Arc::clone(&world.cores);
     let session = world
         .cores
-        .sign_in
-        .begin(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex, None)
         .await
         .unwrap();
-    let refused = updates.install(UPDATE).await.unwrap_err();
+    let refused = updates.install_core(UPDATE).await.unwrap_err();
     assert_eq!(
         (refused.message.as_str(), refused.status),
         ("Finish or cancel the sign-in first.", 409)
@@ -276,25 +276,24 @@ async fn a_switch_waits_for_no_sign_in_and_shutdown_aborts_a_download() {
     let cores = world.data().join("cores");
     assert_eq!(names(&cores).len(), 0, "the staged core was discarded");
     assert_eq!(
-        (updates.version(), updates.state().phase),
+        (updates.core_version(), updates.core_state().phase),
         (bundled_version(), None)
     );
     world
         .cores
-        .sign_in
-        .cancel(&profile, &session.state)
+        .cancel_sign_in(&profile, &session.state)
         .await
         .unwrap();
 
     let (waiting, release) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
     *world.releases.hold.lock().unwrap() = Some((Arc::clone(&waiting), release));
     let install = tokio::spawn({
-        let updates = updates.clone();
-        async move { updates.install(UPDATE).await }
+        let updates = Arc::clone(&updates);
+        async move { updates.install_core(UPDATE).await }
     });
     waiting.notified().await;
-    assert_eq!(updates.state().phase, Some(CorePhase::Downloading));
-    for busy in [updates.use_bundled().await, updates.check().await] {
+    assert_eq!(updates.core_state().phase, Some(CorePhase::Downloading));
+    for busy in [updates.use_bundled_core().await, updates.check_core().await] {
         let busy = busy.unwrap_err();
         assert_eq!(
             (busy.message.as_str(), busy.status),
@@ -308,5 +307,5 @@ async fn a_switch_waits_for_no_sign_in_and_shutdown_aborts_a_download() {
         ("nonstopvibin is shutting down.", 503)
     );
     assert_eq!(names(&cores).len(), 0);
-    assert_eq!(updates.state().phase, None);
+    assert_eq!(updates.core_state().phase, None);
 }

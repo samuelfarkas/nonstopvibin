@@ -43,7 +43,6 @@ use crate::fetch::Outside;
 use crate::identity::{claude_identity, verify_claude_identity};
 use crate::quota::Quotas;
 use crate::sandbox::Sandbox;
-use crate::scheduler::Scheduler;
 use crate::source::PoolSource;
 use crate::task::detached;
 
@@ -115,7 +114,7 @@ impl Clone for SignIn {
 
 struct Inner {
     store: Store,
-    scheduler: Scheduler,
+    pool: Pool,
     accounts: Arc<Accounts>,
     credentials: Credentials,
     quotas: Arc<Quotas<PoolSource>>,
@@ -200,7 +199,7 @@ impl SignIn {
     #[must_use]
     pub fn new(
         store: Store,
-        scheduler: Scheduler,
+        pool: Pool,
         accounts: Arc<Accounts>,
         credentials: Credentials,
         quotas: Arc<Quotas<PoolSource>>,
@@ -208,7 +207,7 @@ impl SignIn {
     ) -> Self {
         Self(Arc::new(Inner {
             store,
-            scheduler,
+            pool,
             accounts,
             credentials,
             quotas,
@@ -374,10 +373,6 @@ impl SignIn {
 }
 
 impl Inner {
-    fn pool(&self) -> &Pool {
-        self.scheduler.pool()
-    }
-
     fn now(&self) -> u64 {
         u64::try_from((self.options.clock)()).unwrap_or(0)
     }
@@ -435,7 +430,7 @@ impl Inner {
         provider: OAuthProvider,
         reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
-        if self.pool().closing() {
+        if self.pool.closing() {
             return Err(AppError::shutting_down());
         }
         let id = profile.clone();
@@ -536,7 +531,7 @@ impl Inner {
             &self.store,
             format!("{}-", provider.as_str()),
             "Pending sign-in",
-            self.pool().state().binary.to_path_buf(),
+            self.pool.state().binary.to_path_buf(),
             &self.options.backends,
             self.options.ready,
         )
@@ -557,7 +552,7 @@ impl Inner {
         provider: OAuthProvider,
         profile: &ProfileId,
     ) -> Result<OAuthSession, AppError> {
-        let (pool, core) = sandbox.map_or((self.pool(), profile), |sandbox| {
+        let (pool, core) = sandbox.map_or((&self.pool, profile), |sandbox| {
             (&sandbox.pool, &sandbox.profile)
         });
         pool.start(core, false).await?;
@@ -704,7 +699,7 @@ impl Inner {
                 "/oauth-session?state={}",
                 encode_uri_component(&session.state)
             );
-            let pool = self.pool();
+            let pool = &self.pool;
             if pool
                 .management(
                     &session.profile_id,
@@ -723,8 +718,6 @@ impl Inner {
         }
         self.close_callback(None, false);
         self.session.send_replace(None);
-        // Its profile's core may stop for being idle again.
-        self.scheduler.catch_up();
         Ok(())
     }
 
@@ -761,7 +754,7 @@ impl Inner {
                 None => Ok(OAuthStatus::Wait),
             };
         }
-        let pool = self.pool();
+        let pool = &self.pool;
         let authorization = Self::authorization(pool, profile, key).await?;
         if matches!(authorization, Authorization::Wait) {
             return Ok(OAuthStatus::Wait);
@@ -773,7 +766,6 @@ impl Inner {
         self.close_callback(None, false);
         if matches!(authorization, Authorization::Error) {
             self.accounts.sync(pool, profile).await?;
-            self.scheduler.catch_up();
             return Ok(failed());
         }
         let provider = session.provider.as_str();
@@ -782,7 +774,6 @@ impl Inner {
                 !account.disabled && account.provider == provider
             })
             .await?;
-        self.scheduler.catch_up();
         Ok(OAuthStatus::Ok {
             account: None,
             reconnected: None,
@@ -976,7 +967,7 @@ impl Inner {
                 return Err(AppError::new(NOT_FOUND, 404));
             }
             Some(sandbox) => (&sandbox.pool, &sandbox.profile),
-            None => (self.pool(), profile),
+            None => (&self.pool, profile),
         };
         let body = json!({ "provider": core_name(session.provider), "redirect_url": redirect });
         pool.management(

@@ -31,7 +31,6 @@ use tokio::sync::watch;
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::sandbox::Sandbox;
-use crate::scheduler::Scheduler;
 use crate::sign_in::{Backends, Report, SignIn};
 use crate::task::{blocking, detached};
 
@@ -62,7 +61,7 @@ impl Clone for CoreUpdates {
 
 struct Inner {
     store: Store,
-    scheduler: Scheduler,
+    pool: Pool,
     sign_in: SignIn,
     credentials: Credentials,
     options: UpdateOptions,
@@ -94,7 +93,7 @@ impl CoreUpdates {
     /// The bundled pin or this platform is unknown, which a build rules out.
     pub fn new(
         store: Store,
-        scheduler: Scheduler,
+        pool: Pool,
         sign_in: SignIn,
         credentials: Credentials,
         options: UpdateOptions,
@@ -109,7 +108,7 @@ impl CoreUpdates {
         Ok(Self(Arc::new(Inner {
             cores: store.directory().cores(),
             store,
-            scheduler,
+            pool,
             sign_in,
             credentials,
             options,
@@ -292,10 +291,6 @@ impl Inner {
         locked(&self.status)
     }
 
-    fn pool(&self) -> &Pool {
-        self.scheduler.pool()
-    }
-
     /// Whether `pin` is newer than the core in use and this app may run it. A pin names every
     /// target, so each one covers this platform.
     fn offers(&self, active: &ActiveCore, pin: &CorePin) -> bool {
@@ -303,7 +298,7 @@ impl Inner {
     }
 
     async fn activate(&self, core: ActiveCore) -> Result<(), AppError> {
-        self.pool().use_binary(core.binary.clone()).await?;
+        self.pool.use_binary(core.binary.clone()).await?;
         self.status().active = core;
         Ok(())
     }
@@ -331,7 +326,7 @@ impl Inner {
         if self.options.feed.is_none() {
             return Err(AppError::new("Only installed builds update the core.", 409));
         }
-        if self.pool().closing() || *self.closing.borrow() {
+        if self.pool.closing() || *self.closing.borrow() {
             return Err(AppError::shutting_down());
         }
         let began = self.phase.send_if_modified(|current| {
@@ -479,7 +474,7 @@ impl Inner {
         }
         self.activate(core.clone()).await?;
         let profiles = self.store.call(|db| db.profiles()).await?;
-        let pool = self.pool();
+        let pool = &self.pool;
         for profile in profiles {
             // Starts are refused once shutdown begins; that is no failure of the core.
             if pool.closing() {

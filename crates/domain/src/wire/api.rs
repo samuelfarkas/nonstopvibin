@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::True;
+use super::{Profile, True};
 use crate::registry::{OAuthProvider, Protocol, Provider, RetentionDays, Strategy};
 use crate::secret::ApiKey;
 
@@ -64,6 +64,21 @@ pub struct ProfilePatch {
     pub strategy: Option<Strategy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_affinity: Option<bool>,
+}
+
+impl ProfilePatch {
+    /// Changes the fields it names.
+    pub fn apply(self, profile: &mut Profile) {
+        if let Some(name) = self.name {
+            profile.name = name;
+        }
+        if let Some(strategy) = self.strategy {
+            profile.strategy = strategy;
+        }
+        if let Some(affinity) = self.session_affinity {
+            profile.session_affinity = affinity;
+        }
+    }
 }
 
 /// `PATCH /profiles/:profileId/accounts/:accountId`.

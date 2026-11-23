@@ -39,7 +39,7 @@ async fn an_api_subscription_can_join_several_profiles_but_only_once_each() {
         world.profile("Company").await,
         world.profile("Personal").await,
     );
-    let credentials = &world.cores.credentials;
+    let credentials = &world.cores;
     credentials
         .add_api_account(&company, api_input("shared-key"))
         .await
@@ -64,14 +64,14 @@ async fn an_api_subscription_can_join_several_profiles_but_only_once_each() {
         .add_api_account(&personal, api_input("shared-key"))
         .await
         .unwrap();
-    let listed = world.cores.accounts.list(&company).await.unwrap();
+    let listed = world.cores.accounts(&company).await.unwrap();
     assert_eq!(listed.len(), 2);
     assert!(
         listed
             .iter()
             .all(|account| account.status == AccountStatus::Configured)
     );
-    assert_eq!(world.cores.accounts.list(&personal).await.unwrap().len(), 1);
+    assert_eq!(world.cores.accounts(&personal).await.unwrap().len(), 1);
     let refused = credentials
         .add_api_account(
             &company,
@@ -91,7 +91,7 @@ async fn an_api_subscription_can_join_several_profiles_but_only_once_each() {
 async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() {
     let world = World::new("changes-edits").await;
     let profile = world.profile("Edits").await;
-    let credentials = &world.cores.credentials;
+    let credentials = &world.cores;
     let raw = json!({ "type": "codex", "access_token": "synthetic-codex", "refresh_token": "synthetic-refresh" });
     let account = credentials.import(&profile, object(&raw)).await.unwrap();
     let name = account.id.as_str();
@@ -124,7 +124,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
         ),
         (json!(true), json!(3), json!("Work"))
     );
-    let listed = &world.cores.accounts.list(&profile).await.unwrap()[0];
+    let listed = &world.cores.accounts(&profile).await.unwrap()[0];
     assert_eq!(
         (listed.status, listed.name.as_str(), listed.priority),
         (AccountStatus::Paused, "Work", 3)
@@ -149,7 +149,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
         .await
         .unwrap();
     assert_eq!(
-        world.cores.accounts.list(&profile).await.unwrap()[0].status,
+        world.cores.accounts(&profile).await.unwrap()[0].status,
         AccountStatus::Ready
     );
 
@@ -157,9 +157,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
         .add_api_account(&profile, api_input("edit-key"))
         .await
         .unwrap();
-    let api = world.cores.accounts.list(&profile).await.unwrap()[1]
-        .id
-        .clone();
+    let api = world.cores.accounts(&profile).await.unwrap()[1].id.clone();
     credentials
         .set_account(
             &profile,
@@ -172,7 +170,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
         )
         .await
         .unwrap();
-    let listed = &world.cores.accounts.list(&profile).await.unwrap()[1];
+    let listed = &world.cores.accounts(&profile).await.unwrap()[1];
     assert_eq!(
         (listed.status, listed.name.as_str()),
         (AccountStatus::Paused, "Company API")
@@ -223,7 +221,7 @@ async fn account_pause_resume_rename_and_removal_reach_the_core_and_the_store() 
         .await
         .unwrap();
     credentials.remove_account(&profile, &api).await.unwrap();
-    assert_eq!(world.cores.accounts.list(&profile).await.unwrap().len(), 0);
+    assert_eq!(world.cores.accounts(&profile).await.unwrap().len(), 0);
     assert!(
         !world
             .credential_file(&profile, account.id.as_str())
@@ -239,7 +237,7 @@ async fn imports_are_validated_and_deduplicated_within_a_profile_only() {
         world.profile("Codex A").await,
         world.profile("Codex B").await,
     ];
-    let credentials = &world.cores.credentials;
+    let credentials = &world.cores;
     for invalid in [
         json!({ "type": "nope", "access_token": "x" }),
         json!({ "type": "codex" }),
@@ -272,14 +270,14 @@ async fn imports_are_validated_and_deduplicated_within_a_profile_only() {
                 .status,
             409
         );
-        assert_eq!(world.cores.accounts.list(profile).await.unwrap().len(), 1);
+        assert_eq!(world.cores.accounts(profile).await.unwrap().len(), 1);
     }
     assert_ne!(ids[0], ids[1]);
     let gone = credentials
-        .import_credential(
+        .reconnect(
             &profiles[0],
             object(&raw),
-            Some(AccountId::parse("gone.json").unwrap()),
+            AccountId::parse("gone.json").unwrap(),
         )
         .await
         .unwrap_err();
@@ -295,7 +293,6 @@ async fn refresh_starts_a_kept_profile_first_and_checks_api_quota_even_when_it_c
     let profile = world.profile("Refresh").await;
     world
         .cores
-        .credentials
         .add_api_account(&profile, api_input("refresh-key"))
         .await
         .unwrap();
@@ -312,7 +309,7 @@ async fn refresh_starts_a_kept_profile_first_and_checks_api_quota_even_when_it_c
     std::fs::create_dir(&blocker).unwrap();
     let failed = world.cores.refresh(&profile).await.unwrap_err();
     assert_eq!(failed.status, 500, "{failed:?}");
-    let quota = world.cores.accounts.list(&profile).await.unwrap()[0]
+    let quota = world.cores.accounts(&profile).await.unwrap()[0]
         .quota
         .clone()
         .unwrap();
@@ -336,14 +333,9 @@ async fn refresh_answers_a_failed_start_and_keeps_the_last_good_check() {
         });
     });
     let raw = json!({ "type": "codex", "access_token": "synthetic-codex", "refresh_token": "synthetic-refresh" });
-    world
-        .cores
-        .credentials
-        .import(&profile, object(&raw))
-        .await
-        .unwrap();
+    world.cores.import(&profile, object(&raw)).await.unwrap();
     world.cores.refresh(&profile).await.unwrap();
-    let quota = async || quota_of(&world.cores.accounts.list(&profile).await.unwrap()[0]);
+    let quota = async || quota_of(&world.cores.accounts(&profile).await.unwrap()[0]);
     let checked = quota().await;
     assert_eq!(checked["status"], "available", "{checked}");
 
@@ -387,12 +379,7 @@ async fn go_account(world: &World, profile: &ProfileId) -> impl Fn() -> usize {
         "models": [{ "id": "glm-5.3", "protocol": "openai" }],
     }))
     .unwrap();
-    world
-        .cores
-        .credentials
-        .add_api_account(profile, go)
-        .await
-        .unwrap();
+    world.cores.add_api_account(profile, go).await.unwrap();
     let fetch = Arc::clone(&world.fetch);
     move || {
         fetch
@@ -475,7 +462,7 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
         added + 2,
         "checked although the core cannot start"
     );
-    let accounts = world.cores.accounts.list(&profile).await.unwrap();
+    let accounts = world.cores.accounts(&profile).await.unwrap();
     assert_eq!(quota_of(&accounts[0])["status"], "available");
     assert_eq!(*world.reports.lock().unwrap(), Vec::<String>::new());
 }
@@ -488,7 +475,7 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
 async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_with_the_same_id() {
     let world = World::new("changes-resets").await;
     let profile = world.profile("Reset fixture").await;
-    let resets = &world.cores.resets;
+    let resets = &world.cores;
     let account = AccountId::parse("fixture.json").unwrap();
     let (message, status) = {
         let cases = cases("api");
@@ -500,7 +487,7 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
         )
     };
     let stopped = resets
-        .credits(&profile, &account)
+        .reset_credits(&profile, &account)
         .await
         .map_err(AppError::from)
         .unwrap_err();
@@ -516,12 +503,7 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     )
     .unwrap();
     world.cores.pool().start(&profile, false).await.unwrap();
-    world
-        .cores
-        .accounts
-        .sync(world.cores.pool(), &profile)
-        .await
-        .unwrap();
+    world.cores.sync_accounts(&profile).await.unwrap();
 
     let redemptions = Arc::new(Mutex::new(Vec::<String>::new()));
     let fail = Arc::new(AtomicBool::new(true));
@@ -555,10 +537,10 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
             });
         });
     }
-    let credits = resets.credits(&profile, &account).await.unwrap();
+    let credits = resets.reset_credits(&profile, &account).await.unwrap();
     assert_eq!(credits.available_count, 1);
     let uncertain = resets
-        .consume(&profile, &account, "credit-one")
+        .consume_reset(&profile, &account, "credit-one")
         .await
         .map_err(AppError::from)
         .unwrap_err();
@@ -582,11 +564,11 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
     let pending = tokio::spawn({
         let (cores, profile, account) =
             (Arc::clone(&world.cores), profile.clone(), account.clone());
-        async move { cores.resets.consume(&profile, &account, "credit-one").await }
+        async move { cores.consume_reset(&profile, &account, "credit-one").await }
     });
     entered.notified().await;
     let busy = resets
-        .consume(&profile, &account, "credit-one")
+        .consume_reset(&profile, &account, "credit-one")
         .await
         .map_err(AppError::from)
         .unwrap_err();
