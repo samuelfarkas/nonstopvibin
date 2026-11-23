@@ -7,6 +7,7 @@
 //! closed for agents still running with it.
 
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ use nsv_domain::wire::{self, AgentSetupInput, Profile};
 use nsv_files::{DataDir, write_atomic};
 use tokio::sync::Mutex;
 
-use crate::connection::{Context, definition, native_provider, text};
+use crate::connection::{Context, XDG_CONFIG_HOME, definition, native_provider, text};
 use crate::credential::credential_helper;
 use crate::error::{AgentError, conflicting, invalid, refused};
 use crate::files::{
@@ -43,18 +44,28 @@ pub struct Connection {
 /// is. It runs on the socket task and on blocking threads, so it must not block.
 pub type ConnectionSource = Arc<dyn Fn(&ProfileId) -> Result<Connection, AppError> + Send + Sync>;
 
-/// The home directory, and each agent's configuration directory when it was moved from it.
+/// The home directory, and the agents' configuration directories that were moved from it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentDirectories {
     pub home: PathBuf,
-    pub codex: Option<PathBuf>,
-    pub opencode: Option<PathBuf>,
-    pub pi: Option<PathBuf>,
+    /// Where the environment moved an agent's directory ([`agent_environment`]).
+    ///
+    /// [`agent_environment`]: crate::agent_environment
+    pub moved: BTreeMap<Agent, PathBuf>,
 }
 
 impl AgentDirectories {
-    /// The user's home, with `CODEX_HOME`, `OPENCODE_CONFIG_DIR` (or `$XDG_CONFIG_HOME/opencode`)
-    /// and `PI_CODING_AGENT_DIR` where they are set.
+    /// `home`, with every agent's directory where it is by default.
+    #[must_use]
+    pub fn new(home: PathBuf) -> Self {
+        Self {
+            home,
+            moved: BTreeMap::new(),
+        }
+    }
+
+    /// The user's home, and each agent's directory that its variable or `$XDG_CONFIG_HOME`
+    /// moves.
     ///
     /// # Errors
     /// When there is no home directory.
@@ -63,19 +74,15 @@ impl AgentDirectories {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
         Ok(Self {
             home,
-            codex: configured(Agent::Codex),
-            opencode: configured(Agent::Opencode),
-            pi: configured(Agent::Pi),
+            moved: Agent::ALL
+                .iter()
+                .filter_map(|&agent| Some((agent, configured(agent)?)))
+                .collect(),
         })
     }
 
     fn custom(&self, agent: Agent) -> Option<&Path> {
-        match agent {
-            Agent::Codex => self.codex.as_deref(),
-            Agent::Opencode => self.opencode.as_deref(),
-            Agent::Pi => self.pi.as_deref(),
-            Agent::Claude => None,
-        }
+        self.moved.get(&agent).map(PathBuf::as_path)
     }
 }
 
@@ -85,7 +92,7 @@ fn configured(agent: Agent) -> Option<PathBuf> {
     let set = |name: &str| env::var_os(name).filter(|value| !value.is_empty());
     set(directory.variable)
         .map(PathBuf::from)
-        .or_else(|| Some(Path::new(&set("XDG_CONFIG_HOME")?).join(directory.xdg?)))
+        .or_else(|| Some(Path::new(&set(XDG_CONFIG_HOME)?).join(directory.xdg?)))
 }
 
 /// The first 24 hexadecimal digits of SHA-256: Claude manifest names.
@@ -342,7 +349,10 @@ fn locale_order(left: &str, right: &str) -> Ordering {
         .then_with(|| right.cmp(left))
 }
 
-fn manifest_name(agent: Agent, project: Option<&str>) -> String {
+/// The file a connection's manifest is kept in, in its profile's folder: one per project for an
+/// agent connected per project.
+#[must_use]
+pub fn manifest_name(agent: Agent, project: Option<&str>) -> String {
     match project {
         Some(project) if !project.is_empty() && registry().agents.get(agent).project => {
             format!("{}-{}.json", agent.as_str(), short_hash(project.as_bytes()))

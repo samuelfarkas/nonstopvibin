@@ -6,13 +6,18 @@ use nsv_domain::registry::{Agent, registry};
 use nsv_domain::wire::{AgentSelection, AgentSetupInput};
 use serde_json::{Map, Value};
 
+use crate::connection::definition;
 use crate::error::{AgentError, invalid};
 use crate::files::FILE_LIMIT;
 use crate::json;
 
-/// Manifest versions releases have written; version 1 has its own schema.
-const VERSIONS: std::ops::RangeInclusive<u8> = 1..=7;
-const PROJECT_MESSAGE: &str = "Choose a project for Claude Code only.";
+/// The newest manifest version a connection records; releases wrote every version from 1, which
+/// has its own schema.
+fn newest_version() -> u8 {
+    Agent::ALL
+        .iter()
+        .fold(1, |newest, &agent| newest.max(definition(agent).version))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Manifest {
@@ -49,7 +54,9 @@ impl Manifest {
     /// Parses a manifest a release wrote; a version 1 manifest becomes the current shape.
     pub(crate) fn parse(mut object: Map<String, Value>) -> Result<Self, AgentError> {
         let version = match object.get("version").and_then(Value::as_u64) {
-            Some(version) => u8::try_from(version).ok().filter(|v| VERSIONS.contains(v)),
+            Some(version) => u8::try_from(version)
+                .ok()
+                .filter(|v| (1..=newest_version()).contains(v)),
             None => None,
         }
         .ok_or_else(|| invalid("version", "Invalid input"))?;
@@ -206,10 +213,7 @@ fn legacy_input(value: Value) -> Result<(AgentSetupInput, Vec<String>), AgentErr
         project_directory: optional_project(object.get("projectDirectory"))?,
         other_providers: None,
     };
-    validate_project(input.project_directory.as_deref())?;
-    if !takes_project(input.agent, input.project_directory.as_deref(), true) {
-        return Err(invalid("", PROJECT_MESSAGE));
-    }
+    validate_setup(&input)?;
     Ok((input, vec![model]))
 }
 
@@ -261,23 +265,59 @@ pub(crate) fn validate_models(models: &[String]) -> Result<(), AgentError> {
     Ok(())
 }
 
-fn validate_project(project: Option<&str>) -> Result<(), AgentError> {
-    let Some(project) = project else {
-        return Ok(());
-    };
-    if !(1..=4096).contains(&js::utf16_len(project)) {
-        return Err(invalid(
-            "projectDirectory",
-            "Project directories have 1 to 4096 characters.",
-        ));
+/// A rule of a connection's input that both the routes and the manifests enforce:
+/// [`validate_setup`] refuses with the first one an input breaks, and the server's zod-shaped
+/// parse reports each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Issue {
+    /// The project directory is shorter or longer than [`PROJECT_LENGTH`].
+    ProjectLength,
+    /// The project directory is relative or holds a control character.
+    ProjectNotAbsolute,
+    /// A project for an agent that takes none, or, when connecting, none for Claude Code.
+    Project,
+    /// `otherProviders` for an agent without a curated catalog.
+    OtherProviders,
+}
+
+/// How long a project directory may be, in UTF-16 code units as JavaScript counts them.
+pub const PROJECT_LENGTH: std::ops::RangeInclusive<usize> = 1..=4096;
+
+impl Issue {
+    /// The input field it concerns; empty for the input as a whole.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::ProjectLength | Self::ProjectNotAbsolute => "projectDirectory",
+            Self::Project | Self::OtherProviders => "",
+        }
+    }
+
+    /// What the user is told.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::ProjectLength => "Project directories have 1 to 4096 characters.",
+            Self::ProjectNotAbsolute => "Choose an absolute project directory.",
+            Self::Project => "Choose a project for Claude Code only.",
+            Self::OtherProviders => {
+                "Only Claude Code and Codex choose whether to offer other providers."
+            }
+        }
+    }
+}
+
+/// What a project directory breaks, in zod's order.
+#[must_use]
+pub fn project_issues(project: &str) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    if !PROJECT_LENGTH.contains(&js::utf16_len(project)) {
+        issues.push(Issue::ProjectLength);
     }
     if !project.starts_with('/') || !without_controls(project) {
-        return Err(invalid(
-            "projectDirectory",
-            "Choose an absolute project directory.",
-        ));
+        issues.push(Issue::ProjectNotAbsolute);
     }
-    Ok(())
+    issues
 }
 
 /// Claude Code connects one project at a time; the other agents take none. Connecting
@@ -290,37 +330,46 @@ fn takes_project(agent: Agent, project: Option<&str>, requires: bool) -> bool {
     }
 }
 
-/// `agentSetupSchema`'s rules for a connection the app makes, beyond the shape serde checks.
-///
-/// # Errors
-/// [`AgentError::Invalid`] (400) when the input breaks one.
-pub fn validate_setup(input: &AgentSetupInput) -> Result<(), AgentError> {
-    validate_project(input.project_directory.as_deref())?;
+/// What a connection the app makes breaks beyond its project directory's own rules.
+#[must_use]
+pub fn setup_issues(input: &AgentSetupInput) -> Vec<Issue> {
+    let mut issues = Vec::new();
     if !takes_project(input.agent, input.project_directory.as_deref(), true) {
-        return Err(invalid("", PROJECT_MESSAGE));
+        issues.push(Issue::Project);
     }
     if !registry().curated(input.agent) && input.other_providers.is_some() {
-        return Err(invalid(
-            "",
-            "Only Claude Code and Codex choose whether to offer other providers.",
-        ));
+        issues.push(Issue::OtherProviders);
     }
-    Ok(())
+    issues
 }
 
-/// `agentSelectionSchema`'s rules for looking a connection up or disconnecting it.
-///
-/// # Errors
-/// [`AgentError::Invalid`] (400) when the selection breaks one.
-pub fn validate_selection(selection: &AgentSelection) -> Result<(), AgentError> {
-    validate_project(selection.project_directory.as_deref())?;
+/// What a lookup or a disconnection breaks beyond its project directory's own rules.
+#[must_use]
+pub fn selection_issues(selection: &AgentSelection) -> Vec<Issue> {
     if takes_project(
         selection.agent,
         selection.project_directory.as_deref(),
         false,
     ) {
-        Ok(())
+        Vec::new()
     } else {
-        Err(invalid("", PROJECT_MESSAGE))
+        vec![Issue::Project]
+    }
+}
+
+/// `agentSetupSchema`'s rules for a connection the app makes, beyond the shape serde checks.
+///
+/// # Errors
+/// [`AgentError::Invalid`] (400) with the first [`Issue`] the input breaks.
+pub fn validate_setup(input: &AgentSetupInput) -> Result<(), AgentError> {
+    let project = input.project_directory.as_deref().map(project_issues);
+    match project
+        .into_iter()
+        .flatten()
+        .chain(setup_issues(input))
+        .next()
+    {
+        Some(issue) => Err(invalid(issue.path(), issue.message())),
+        None => Ok(()),
     }
 }

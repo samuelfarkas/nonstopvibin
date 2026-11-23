@@ -10,8 +10,9 @@ use hyper::body::Incoming;
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use nsv_accounts::accounts::listed;
+use nsv_accounts::catalog::profile_models;
 use nsv_accounts::fetch::Fetch;
-use nsv_agents::offered_models;
+use nsv_agents::connection_models;
 use nsv_core::install::Releases;
 use nsv_domain::endpoint::{profile_endpoint, profile_path};
 use nsv_domain::error::AppError;
@@ -20,14 +21,14 @@ use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
-    AppState, ClientKeyResponse, Profile, ProfileState, ROUTES, Route, Runtime,
+    AppState, ClientKeyResponse, Model, Profile, ProfileState, ROUTES, Route, Runtime,
 };
 use nsv_gateway::{Body, Refusal};
 use nsv_net::{Loopback, LoopbackRequest, loopback};
 use serde_json::{Value, json};
 
 use crate::daemon::{App, VERSION};
-use crate::http::{enrich, json};
+use crate::http::json;
 use crate::parse;
 
 /// The largest management request body.
@@ -280,13 +281,11 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             Route::Models => {
                 let metadata = call.query("metadata").as_deref() == Some("1");
                 let id = call.profile()?;
-                // The catalog comes from the core: a dormant one starts for it.
-                self.cores.scheduler.wake(&id).await?;
-                let models = self.cores.scheduler.pool().models(&id).await?;
+                let models = self.core_models(&id).await?;
                 if metadata {
                     json(
                         StatusCode::OK,
-                        &enrich(&self.catalog, &self.store, &id, &models).await?,
+                        &profile_models(&self.catalog, &self.store, &id, &models).await?,
                     )
                 } else {
                     json(StatusCode::OK, &models)
@@ -330,40 +329,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
             Route::AgentInstall => {
                 let input = parse::agent_setup(&body(request).await?)?;
                 let id = call.profile()?;
-                self.cores.scheduler.wake(&id).await?;
-                let models = self.cores.scheduler.pool().models(&id).await?;
-                if models.is_empty() {
-                    return Err(AppError::new("This profile has no available models.", 400));
-                }
-                let enriched = if registry().curated(input.agent) {
-                    None
-                } else {
-                    Some(enrich(&self.catalog, &self.store, &id, &models).await?)
-                };
-                let offered = offered_models(
-                    input.agent,
-                    models,
-                    input.other_providers.unwrap_or(true),
-                    |_| async { enriched.unwrap_or_default() },
-                )
+                let models = self.core_models(&id).await?;
+                let ids = connection_models(&input, models, |models| async move {
+                    Ok(profile_models(&self.catalog, &self.store, &id, &models).await?)
+                })
                 .await?;
-                // Only an agent with a native vendor can be left without models.
-                if offered.is_empty() {
-                    return Err(AppError::new(
-                        format!(
-                            "This profile has no {} models. Add one, or offer models from other providers.",
-                            registry()
-                                .agents
-                                .get(input.agent)
-                                .native
-                                .as_deref()
-                                .unwrap_or("")
-                        ),
-                        400,
-                    ));
-                }
                 let profile = self.profile(call).await?;
-                let ids = offered.into_iter().map(|model| model.id).collect();
                 json(
                     StatusCode::OK,
                     &self.agents.install(&profile, input, ids).await?,
@@ -480,6 +451,12 @@ impl<F: Fetch + Releases + Clone + 'static> App<F> {
                 json(StatusCode::OK, &ok())
             }
         }
+    }
+
+    /// The models a profile's core lists; a dormant core starts for them.
+    async fn core_models(&self, id: &ProfileId) -> Result<Vec<Model>, AppError> {
+        self.cores.scheduler.wake(id).await?;
+        self.cores.scheduler.pool().models(id).await
     }
 
     async fn profile(&self, call: &Call<'_>) -> Result<Profile, AppError> {

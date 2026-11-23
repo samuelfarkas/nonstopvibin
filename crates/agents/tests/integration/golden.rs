@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use nsv_agents::{
-    AgentDirectories, AgentError, AgentSetup, Connection, catalog_entries, offered_models,
-    validate_setup,
+    AgentDirectories, AgentError, AgentSetup, CatalogAnswer, Connection, curated, gateway_catalog,
+    manifest_name, validate_setup,
 };
 use nsv_domain::error::AppError;
 use nsv_domain::registry::Agent;
@@ -63,12 +63,6 @@ fn error_matches(expected: &Value, actual: &AppError) -> bool {
     }
 }
 
-fn short_hash(text: &str) -> String {
-    let mut hex = nsv_domain::sha256_hex(text.as_bytes());
-    hex.truncate(24);
-    hex
-}
-
 #[derive(Clone, Copy)]
 struct Gateway {
     port: u16,
@@ -97,7 +91,13 @@ impl<'a> Scenario<'a> {
         for (path, content) in input["files"].as_object().into_iter().flatten() {
             file(&home.join(path), content.as_str().unwrap(), 0o644);
         }
-        let moved = |agent: &str| input["moved"][agent].as_str().map(|path| home.join(path));
+        let moved = Agent::ALL
+            .iter()
+            .filter_map(|&agent| {
+                let path = input["moved"][agent.as_str()].as_str()?;
+                Some((agent, home.join(path)))
+            })
+            .collect();
         let gateway = Arc::new(Mutex::new(Gateway {
             port: 4318,
             running: true,
@@ -124,9 +124,7 @@ impl<'a> Scenario<'a> {
             }),
             AgentDirectories {
                 home: home.clone(),
-                codex: moved("codex"),
-                opencode: moved("opencode"),
-                pi: moved("pi"),
+                moved,
             },
         );
         Self {
@@ -164,9 +162,14 @@ impl<'a> Scenario<'a> {
                 .as_str()
                 .or(step["project"].as_str());
             if let Some(rest) = project.and_then(|project| project.strip_prefix("<home>")) {
+                // Claude Code's manifests are named by their project.
+                let stem = |project: String| {
+                    let name = manifest_name(Agent::Claude, Some(&project));
+                    name.trim_end_matches(".json").to_owned()
+                };
                 pairs.push((
-                    short_hash(&format!("{home}{rest}")),
-                    short_hash(&format!("{recorded}{rest}")),
+                    stem(format!("{home}{rest}")),
+                    stem(format!("{recorded}{rest}")),
                 ));
             }
         }
@@ -454,17 +457,20 @@ async fn catalog(
             .find(|case| case["name"] == offered.as_str())
             .unwrap();
         let models: Vec<CatalogModel> = serde_json::from_value(offered["output"].clone()).unwrap();
-        return Ok(json!(catalog_entries(
-            Agent::from_id(agent).unwrap(),
-            &models
-        )?));
+        let CatalogAnswer::Entries(body) =
+            gateway_catalog(Agent::from_id(agent).unwrap(), &models)?
+        else {
+            panic!("{name} answers entries");
+        };
+        let body: Value = serde_json::from_str(&body).unwrap();
+        return Ok(body["models"].clone());
     }
     let input = &case["input"];
     let agent = Agent::from_id(input["agent"].as_str().unwrap()).unwrap();
     let models: Vec<Model> = serde_json::from_value(input["models"].clone()).unwrap();
     let other = input["otherProviders"].as_bool().unwrap_or(false);
-    let offered = offered_models(agent, models, other, |models| async move {
-        models
+    let offered = curated(agent, models, other, |models| async move {
+        Ok(models
             .into_iter()
             .map(|model| {
                 priced
@@ -477,7 +483,7 @@ async fn catalog(
                         metadata: None,
                     })
             })
-            .collect()
+            .collect())
     })
     .await?;
     Ok(json!(offered))

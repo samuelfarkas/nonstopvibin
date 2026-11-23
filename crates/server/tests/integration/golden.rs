@@ -225,12 +225,7 @@ fn pairs(value: &Value) -> Vec<(String, String)> {
 /// The daemon on the fixture, as the recorder started the `Application`.
 async fn launch(root: &Path) -> (Daemon<ModelsDev>, Placeholders) {
     let (data, agent_home) = (root.join("data"), root.join("agent-home"));
-    let agents = AgentDirectories {
-        home: agent_home.clone(),
-        codex: None,
-        opencode: None,
-        pi: None,
-    };
+    let agents = AgentDirectories::new(agent_home.clone());
     let options = Options {
         port: PORT,
         allow_hosts: Vec::new(),

@@ -2,20 +2,23 @@
 
 use std::future::Future;
 
+use nsv_domain::error::AppError;
 use nsv_domain::registry::{Agent, registry};
-use nsv_domain::wire::{CatalogModel, Model, ModelMetadata};
+use nsv_domain::wire::{AgentSetupInput, CatalogModel, Model, ModelMetadata};
 use serde_json::{Value, json};
 
 use crate::error::{AgentError, refused};
 use crate::json;
 
-/// The models an agent is offered: its vendor's own unless the user adds other providers, or,
-/// for an agent without a vendor, every model models.dev lists with tool support and prices.
-/// `enrich` adds models.dev metadata; it is called only for agents without a vendor.
+const NO_MODELS: &str = "This profile has no available models.";
+
+/// The curated-catalog flow: the models an agent is offered from its profile's `models`. An
+/// agent with a curated catalog gets its vendor's own, or every model with `other_providers`;
+/// the others get every model `enrich` finds tool support and prices for on models.dev.
 ///
 /// # Errors
-/// A 400 when an agent without a vendor would get no model.
-pub async fn offered_models<F, Enriched>(
+/// A 400 when an agent without a curated catalog would get no model; `enrich`'s error.
+pub async fn curated<F, Enriched>(
     agent: Agent,
     models: Vec<Model>,
     other_providers: bool,
@@ -23,7 +26,7 @@ pub async fn offered_models<F, Enriched>(
 ) -> Result<Vec<CatalogModel>, AgentError>
 where
     F: FnOnce(Vec<Model>) -> Enriched,
-    Enriched: Future<Output = Vec<CatalogModel>>,
+    Enriched: Future<Output = Result<Vec<CatalogModel>, AppError>>,
 {
     if registry().curated(agent) {
         return Ok(models
@@ -38,7 +41,7 @@ where
             })
             .collect());
     }
-    let enriched = enrich(models).await;
+    let enriched = enrich(models).await?;
     // Image models, retired IDs and hidden helpers have no tool support or pricing on
     // models.dev; they are left out and the app lists them next to the connection, so nothing
     // is omitted silently.
@@ -50,7 +53,7 @@ where
     });
     if usable.is_empty() {
         return Err(refused(if unusable.is_empty() {
-            "This profile has no available models.".to_owned()
+            NO_MODELS.to_owned()
         } else {
             let ids: Vec<&str> = unusable.iter().map(|model| model.id.as_str()).collect();
             format!(
@@ -63,12 +66,85 @@ where
     Ok(usable)
 }
 
+/// The model IDs a new connection offers: [`curated`], with other providers unless the input
+/// leaves them out.
+///
+/// # Errors
+/// A 400 when the profile has no model or none the agent is offered; [`curated`]'s errors.
+pub async fn connection_models<F, Enriched>(
+    input: &AgentSetupInput,
+    models: Vec<Model>,
+    enrich: F,
+) -> Result<Vec<String>, AgentError>
+where
+    F: FnOnce(Vec<Model>) -> Enriched,
+    Enriched: Future<Output = Result<Vec<CatalogModel>, AppError>>,
+{
+    if models.is_empty() {
+        return Err(refused(NO_MODELS));
+    }
+    let other_providers = input.other_providers.unwrap_or(true);
+    let offered = curated(input.agent, models, other_providers, enrich).await?;
+    // Only an agent with a native vendor can be left without models.
+    if offered.is_empty() {
+        return Err(refused(format!(
+            "This profile has no {} models. Add one, or offer models from other providers.",
+            registry()
+                .agents
+                .get(input.agent)
+                .native
+                .as_deref()
+                .unwrap_or("")
+        )));
+    }
+    Ok(offered.into_iter().map(|model| model.id).collect())
+}
+
+/// What the gateway answers an agent's own model-list request with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogAnswer {
+    /// The `OpenAI` model list the agent reads itself (`{ "object": "list", "data" }`).
+    List(String),
+    /// Entries for generated pi and `OpenCode` code (`{ "models" }`).
+    Entries(String),
+}
+
+/// The gateway's answer for `agent`, from what [`curated`] offers it without other providers.
+///
+/// # Errors
+/// A 400 when generated code needs a model's models.dev metadata and it has none.
+pub fn gateway_catalog(
+    agent: Agent,
+    offered: &[CatalogModel],
+) -> Result<CatalogAnswer, AgentError> {
+    if let Some(entries) = catalog_entries(agent, offered)? {
+        return Ok(CatalogAnswer::Entries(
+            json!({ "models": entries }).to_string(),
+        ));
+    }
+    let data: Vec<Value> = offered
+        .iter()
+        .map(|model| {
+            let mut entry = json!({ "object": "model" });
+            if let (Some(entry), Ok(Value::Object(fields))) =
+                (entry.as_object_mut(), serde_json::to_value(model))
+            {
+                entry.extend(fields);
+            }
+            entry
+        })
+        .collect();
+    Ok(CatalogAnswer::List(
+        json!({ "object": "list", "data": data }).to_string(),
+    ))
+}
+
 /// The catalog entries generated pi and `OpenCode` code is served (`{ models: entries }`);
 /// `None` for agents whose own request asks and get the `OpenAI` model list.
 ///
 /// # Errors
 /// A 400 when a model lacks models.dev metadata.
-pub fn catalog_entries(
+fn catalog_entries(
     agent: Agent,
     models: &[CatalogModel],
 ) -> Result<Option<Vec<Value>>, AgentError> {

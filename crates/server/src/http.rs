@@ -15,19 +15,17 @@ use hyper::{Request, Response, StatusCode};
 use nsv_accounts::catalog::{ModelCatalog, profile_models};
 use nsv_accounts::fetch::Fetch;
 use nsv_accounts::scheduler::Scheduler;
-use nsv_agents::{catalog_entries, offered_models};
+use nsv_agents::{CatalogAnswer, curated, gateway_catalog};
 use nsv_core::install::Releases;
 use nsv_domain::endpoint::{LOOPBACK_HOST, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
-use nsv_domain::registry::{Agent, registry};
+use nsv_domain::registry::Agent;
 use nsv_domain::secret::KeyDigest;
 use nsv_domain::sync::locked;
-use nsv_domain::wire::{CatalogModel, Model};
 use nsv_gateway::{Activity, Body, Catalog, Host, ProfileAuth, Refusal, serve_connection};
 use nsv_store::{AuthSnapshot, Store};
 use serde::Serialize;
-use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
@@ -340,47 +338,15 @@ pub(crate) struct GatewayHost<F> {
 impl<F: Fetch + Clone + 'static> GatewayHost<F> {
     async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, AppError> {
         let models = self.scheduler.pool().models(profile).await?;
-        let enriched = if registry().curated(agent) {
-            None
-        } else {
-            Some(enrich(&self.catalog, &self.store, profile, &models).await?)
-        };
-        let offered = offered_models(agent, models, false, |_| async {
-            enriched.unwrap_or_default()
+        let offered = curated(agent, models, false, |models| async move {
+            Ok(profile_models(&self.catalog, &self.store, profile, &models).await?)
         })
         .await?;
-        // The agent's own request gets the OpenAI list; generated code gets its entries.
-        if let Some(entries) = catalog_entries(agent, &offered)? {
-            return Ok(Catalog::Entries(
-                json!({ "models": entries }).to_string().into(),
-            ));
-        }
-        let data: Vec<serde_json::Value> = offered
-            .iter()
-            .map(|model| {
-                let mut entry = json!({ "object": "model" });
-                if let (Some(entry), Ok(serde_json::Value::Object(fields))) =
-                    (entry.as_object_mut(), serde_json::to_value(model))
-                {
-                    entry.extend(fields);
-                }
-                entry
-            })
-            .collect();
-        Ok(Catalog::List(
-            json!({ "object": "list", "data": data }).to_string().into(),
-        ))
+        Ok(match gateway_catalog(agent, &offered)? {
+            CatalogAnswer::List(body) => Catalog::List(body.into()),
+            CatalogAnswer::Entries(body) => Catalog::Entries(body.into()),
+        })
     }
-}
-
-/// A profile's models with models.dev metadata matched through its API accounts.
-pub(crate) async fn enrich<F: Fetch + 'static>(
-    catalog: &ModelCatalog<F>,
-    store: &Store,
-    profile: &ProfileId,
-    models: &[Model],
-) -> Result<Vec<CatalogModel>, AppError> {
-    Ok(profile_models(catalog, store, profile, models).await?)
 }
 
 impl<F: Fetch + Clone + 'static> Host for GatewayHost<F> {

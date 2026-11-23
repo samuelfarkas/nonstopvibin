@@ -11,11 +11,9 @@ use crate::connection::{
     ConfigDirectory, Definition, native_provider, owned_file, same_text, shell_quote, text,
 };
 use crate::credential::client_key_source;
-use crate::pi_controls::PI_PROFILE_CONTROLS;
+use crate::pi_controls::{PI_PROFILE_CONTROLS, unprintable};
 
-/// Characters a pi notice or label must not show, as a JavaScript regular expression literal:
-/// controls, format characters and separators.
-const UNPRINTABLE: &str = r"/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu";
+const UNPRINTABLE: &str = unprintable!();
 
 const DIRECTORY: ConfigDirectory = ConfigDirectory {
     variable: "PI_CODING_AGENT_DIR",

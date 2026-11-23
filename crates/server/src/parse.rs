@@ -7,6 +7,7 @@
 
 use std::fmt::Display;
 
+use nsv_agents::{Issue, PROJECT_LENGTH, project_issues, selection_issues, setup_issues};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, is_uuid};
 use nsv_domain::js;
@@ -307,27 +308,19 @@ pub(crate) fn profile_patch(value: &Value) -> Result<ProfilePatch, Invalid> {
     issues.finish(patch)
 }
 
-/// `projectSchema`: an absolute directory without control characters.
+/// `projectSchema`: the agents' project rules, its length in zod's own words.
 fn project(issues: &mut Issues, value: &Value) -> Option<String> {
     let text = string(issues, Some(value), "projectDirectory")?;
-    length(issues, text, "projectDirectory", 1, 4096);
-    let controls = text.chars().any(|c| c < ' ' || c == '\u{7f}');
-    if !text.starts_with('/') || controls {
-        issues.check("projectDirectory", "Choose an absolute project directory.");
+    for issue in project_issues(text) {
+        if issue == Issue::ProjectLength {
+            let (min, max) = PROJECT_LENGTH.into_inner();
+            length(issues, text, issue.path(), min, max);
+        } else {
+            issues.check(issue.path(), issue.message());
+        }
     }
     Some(text.to_owned())
 }
-
-/// `takesProject(requires)`: Claude Code connects one project; the others take none.
-fn takes_project(agent: Agent, project: Option<&str>, requires: bool) -> bool {
-    if registry().agents.get(agent).project {
-        !requires || project.is_some_and(|project| !project.is_empty())
-    } else {
-        project.is_none()
-    }
-}
-
-const PROJECT_MESSAGE: &str = "Choose a project for Claude Code only.";
 
 /// `agentSetupSchema`: `POST /profiles/:profileId/agent-setup`.
 pub(crate) fn agent_setup(value: &Value) -> Result<AgentSetupInput, Invalid> {
@@ -356,14 +349,8 @@ pub(crate) fn agent_setup(value: &Value) -> Result<AgentSetupInput, Invalid> {
             other_providers: other?,
         };
         if !issues.aborted {
-            if !takes_project(input.agent, input.project_directory.as_deref(), true) {
-                issues.check("", PROJECT_MESSAGE);
-            }
-            if !registry().curated(input.agent) && input.other_providers.is_some() {
-                issues.check(
-                    "",
-                    "Only Claude Code and Codex choose whether to offer other providers.",
-                );
+            for issue in setup_issues(&input) {
+                issues.check(issue.path(), issue.message());
             }
         }
         Some(input)
@@ -388,14 +375,10 @@ pub(crate) fn agent_selection(value: &Value) -> Result<AgentSelection, Invalid> 
             agent: agent?,
             project_directory: project?,
         };
-        if !issues.aborted
-            && !takes_project(
-                selection.agent,
-                selection.project_directory.as_deref(),
-                false,
-            )
-        {
-            issues.check("", PROJECT_MESSAGE);
+        if !issues.aborted {
+            for issue in selection_issues(&selection) {
+                issues.check(issue.path(), issue.message());
+            }
         }
         Some(selection)
     });

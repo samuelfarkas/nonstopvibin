@@ -760,7 +760,7 @@ async fn special_files_and_shared_roots_are_refused() {
         &DataDir::new(f.root.root.join("other-data")),
         f.broker.source(),
         AgentDirectories {
-            codex: Some(shared),
+            moved: [(Agent::Codex, shared)].into(),
             ..home_only(&f.home)
         },
     );

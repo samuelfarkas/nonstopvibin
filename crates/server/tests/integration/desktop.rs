@@ -54,12 +54,7 @@ async fn daemon(root: &TempDir, desktop: bool) -> Daemon<ModelsDev> {
             feed: None,
             allow_missing: true,
         },
-        agents: AgentDirectories {
-            home: root.path().join("home"),
-            codex: None,
-            opencode: None,
-            pi: None,
-        },
+        agents: AgentDirectories::new(root.path().join("home")),
         backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,

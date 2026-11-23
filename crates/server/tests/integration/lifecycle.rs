@@ -38,12 +38,7 @@ fn options(root: &TempDir, data: &Path, core: CoreOptions, timing: Timing) -> Ru
         desktop: false,
         client: root.path().join("client"),
         core,
-        agents: AgentDirectories {
-            home: root.path().join("home"),
-            codex: None,
-            opencode: None,
-            pi: None,
-        },
+        agents: AgentDirectories::new(root.path().join("home")),
         backends: processes(),
         fetch: ModelsDev::new(),
         clock: now,

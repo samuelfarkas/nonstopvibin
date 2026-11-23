@@ -20,8 +20,10 @@ mod pi_controls;
 mod setup;
 mod socket;
 
-pub use catalog::{catalog_entries, offered_models};
-pub use connection::{AGENT_ENVIRONMENT, native_provider};
+pub use catalog::{CatalogAnswer, connection_models, curated, gateway_catalog};
+pub use connection::{agent_environment, native_provider};
 pub use error::AgentError;
-pub use manifest::{validate_selection, validate_setup};
-pub use setup::{AgentDirectories, AgentSetup, Connection, ConnectionSource};
+pub use manifest::{
+    Issue, PROJECT_LENGTH, project_issues, selection_issues, setup_issues, validate_setup,
+};
+pub use setup::{AgentDirectories, AgentSetup, Connection, ConnectionSource, manifest_name};

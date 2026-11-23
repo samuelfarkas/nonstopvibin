@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, SystemTime};
 
-use nsv_agents::AGENT_ENVIRONMENT;
+use nsv_agents::agent_environment;
 use nsv_domain::time::epoch_ms;
 use nsv_files::{DataDir, write_atomic};
 use nsv_server::Session;
@@ -347,7 +347,7 @@ pub(crate) async fn install(
             )
         })
         .into_iter()
-        .chain(AGENT_ENVIRONMENT.into_iter().filter_map(|key| {
+        .chain(agent_environment().into_iter().filter_map(|key| {
             let value = std::env::var(key).ok().filter(|value| !value.is_empty())?;
             Some((key.to_owned(), value))
         }))

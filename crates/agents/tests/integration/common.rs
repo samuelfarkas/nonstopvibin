@@ -136,12 +136,7 @@ pub(crate) fn setup(data: &Path, broker: &Broker, directories: AgentDirectories)
 }
 
 pub(crate) fn home_only(home: &Path) -> AgentDirectories {
-    AgentDirectories {
-        home: home.to_owned(),
-        codex: None,
-        opencode: None,
-        pi: None,
-    }
+    AgentDirectories::new(home.to_owned())
 }
 
 /// Every ordinary file under `root` (symbolic links skipped): path with `root` replaced by

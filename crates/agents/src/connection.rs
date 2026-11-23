@@ -11,8 +11,16 @@ use crate::error::{AgentError, conflict};
 use crate::manifest::Manifest;
 use crate::{claude, codex, opencode, pi};
 
+/// [`PROVIDER_PREFIX`] as a literal, which `concat!` splices into pi's controls.
+macro_rules! provider_prefix {
+    () => {
+        "nonstopvibin-"
+    };
+}
+pub(crate) use provider_prefix;
+
 /// Starts every provider name a connected agent lists; pi's controls recognise ours by it.
-pub(crate) const PROVIDER_PREFIX: &str = "nonstopvibin-";
+pub(crate) const PROVIDER_PREFIX: &str = provider_prefix!();
 
 /// The provider a connected agent lists for a profile.
 #[must_use]
@@ -90,14 +98,25 @@ pub(crate) const fn definition(agent: Agent) -> &'static Definition {
     }
 }
 
-/// Environment variables that move agent configuration; a service must forward them. In the
-/// order the TypeScript server listed them.
-pub const AGENT_ENVIRONMENT: [&str; 4] = [
-    "CODEX_HOME",
-    "OPENCODE_CONFIG_DIR",
-    "XDG_CONFIG_HOME",
-    "PI_CODING_AGENT_DIR",
-];
+/// Moves the configuration of agents whose [`ConfigDirectory`] names an `xdg` directory.
+pub(crate) const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+
+/// The environment variables that move agent configuration, which a service must forward: each
+/// agent's own, then [`XDG_CONFIG_HOME`] if an agent follows it.
+#[must_use]
+pub fn agent_environment() -> Vec<&'static str> {
+    let directories = Agent::ALL
+        .iter()
+        .filter_map(|&agent| definition(agent).directory.as_ref());
+    let mut names: Vec<&str> = directories
+        .clone()
+        .map(|directory| directory.variable)
+        .collect();
+    if directories.clone().any(|directory| directory.xdg.is_some()) {
+        names.push(XDG_CONFIG_HOME);
+    }
+    names
+}
 
 #[expect(
     clippy::unnecessary_wraps,

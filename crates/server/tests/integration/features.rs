@@ -97,12 +97,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
             feed: feed.map(str::to_owned),
             allow_missing: false,
         },
-        agents: AgentDirectories {
-            home: root.path().join("home"),
-            codex: None,
-            opencode: None,
-            pi: None,
-        },
+        agents: AgentDirectories::new(root.path().join("home")),
         backends: Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
             Arc::new(Directory(backends_fake.clone(), data.to_owned()))
         }),
