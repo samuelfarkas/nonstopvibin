@@ -1,15 +1,6 @@
 //! The daemon as the desktop shell sees it: a second launch's `POST /api/desktop/show`, which
 //! only the desktop serves, and the tray's status, where a sleeping profile still counts as
 //! running because its core starts on the next request.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-
-#[path = "golden/common.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the golden replay; this binary uses part of it"
-)]
-mod common;
 
 use nsv_agents::AgentDirectories;
 use nsv_domain::secret::ApiKey;

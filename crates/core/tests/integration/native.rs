@@ -1,7 +1,8 @@
 //! The pinned core under a generated config in front of a stub Anthropic provider, ported from
 //! tests/native-anthropic.test.ts and tests/cross-harness.test.ts. The gateway forwards to the
-//! core unchanged (golden/gateway.json and crates/cli/tests/serve.rs hold that hop), so each
-//! case here talks to the core with its client key and reads what reached the provider.
+//! core unchanged (golden/gateway.json and crates/cli/tests/integration/serve.rs hold that
+//! hop), so each case here talks to the core with its client key and reads what reached the
+//! provider.
 
 use std::path::Path;
 use std::time::{Duration, Instant};

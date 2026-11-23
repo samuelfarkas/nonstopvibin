@@ -13,7 +13,7 @@ use nsv_domain::wire::{Account, AccountStatus};
 use nsv_store::layout::credential_directory;
 use serde_json::{Value, json};
 
-use crate::common::{World, short};
+use super::common::{World, short};
 
 async fn metadata(world: &World, profile: &ProfileId) -> Vec<Account> {
     let profile = profile.clone();

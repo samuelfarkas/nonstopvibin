@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::common::{World, short};
+use super::common::{World, short};
 
 const IDLE: Duration = Duration::from_secs(3);
 

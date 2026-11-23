@@ -26,7 +26,7 @@ use nsv_testkit::fake::response;
 use nsv_testkit::world::{StubFetch, open_store, profile};
 use serde_json::{Value, json};
 
-use crate::common::{NOW, StubSource, fixed};
+use super::common::{NOW, StubSource, fixed};
 
 /// Waits until the stub core has received `calls` calls in all.
 async fn called(source: &StubSource, calls: usize) {

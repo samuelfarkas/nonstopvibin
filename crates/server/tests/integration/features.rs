@@ -1,15 +1,6 @@
 //! Sign-in, credentials, resets, API accounts and core updates through the daemon's HTTP API:
 //! the daemon assembles its own `Cores` over the fake cores, stub provider fetch and stub
 //! releases of `nsv_testkit`. No provider is contacted and no real core runs.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-
-#[path = "golden/common.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the golden replay; this binary uses part of it"
-)]
-mod golden;
 
 use std::future::Future;
 use std::path::Path;
@@ -36,7 +27,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use crate::golden::now;
+use crate::common::now;
 
 const FEED: &str = "https://feed.example.invalid/core-release.json";
 
@@ -142,7 +133,7 @@ impl Running {
             headers.push(("Content-Type".to_owned(), "application/json".to_owned()));
             body.to_string().into_bytes()
         });
-        let answer = golden::send(
+        let answer = crate::common::send(
             self.daemon.port(),
             method,
             &format!("/api{path}"),

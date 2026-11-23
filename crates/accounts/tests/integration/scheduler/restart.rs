@@ -12,7 +12,7 @@ use serde_json::json;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::common::World;
+use super::common::World;
 
 fn timing(coalesce: i64, backoff: i64, limit: u32) -> Timing {
     Timing {

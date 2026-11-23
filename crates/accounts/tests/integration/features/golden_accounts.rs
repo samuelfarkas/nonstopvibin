@@ -1,6 +1,6 @@
 //! Replays the quota, reset, identity and API-account cases of `tests/golden/accounts.json`
 //! (`tests/golden/areas/accounts.ts`) and the import scan of `api.json`. The `sync`,
-//! `credentialPath` and `list` cases are replayed in tests/scheduler.
+//! `credentialPath` and `list` cases are replayed in `scheduler::golden`.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -21,7 +21,7 @@ use nsv_testkit::fake::response;
 use nsv_testkit::world::{StubFetch, open_store, profile};
 use serde_json::{Value, json};
 
-use crate::common::{NOW, NOW_ISO, StubSource, case, cases, fixed, headers};
+use super::common::{NOW, NOW_ISO, StubSource, case, cases, fixed, headers};
 
 fn named<'a>(cases: &'a [Value], prefix: &str) -> Vec<&'a Value> {
     cases

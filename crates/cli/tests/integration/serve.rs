@@ -3,8 +3,6 @@
 //! native-anthropic suites: signals and orderly shutdown, one instance per data directory, a
 //! stale `server.json`, a killed daemon's lock, `--allow-host`, dormant cores, profile-key
 //! isolation and a streamed request through the gateway to a stub upstream.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,6 @@
 //! tests/golden/usage.json's usage queue cases and tests/golden/accounts.json's account list
 //! and credential path cases, recorded from the TypeScript server. Identity, quota, reset,
-//! API-account, pricing and catalog cases are replayed in tests/features.
+//! API-account, pricing and catalog cases are replayed in `features`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -12,7 +12,7 @@ use nsv_domain::id::ProfileId;
 use nsv_store::layout::credential_directory;
 use serde_json::{Value, json};
 
-use crate::common::{World, short};
+use super::common::{World, short};
 
 fn cases(file: &str) -> Vec<Value> {
     let path = format!("{}/../../tests/golden/{file}", env!("CARGO_MANIFEST_DIR"));

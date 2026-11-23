@@ -19,7 +19,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, watch};
 use url::Url;
 
-use crate::common::{case, cases};
+use super::common::{case, cases};
 
 /// A raw request to the callback listener; what came back before the connection closed.
 async fn request(port: u16, method: &str, target: String) -> String {

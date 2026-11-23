@@ -7,8 +7,6 @@
 //!
 //! Linux only: the recording is the Linux headless CLI. Its `status` names the systemd unit and
 //! its `service` commands drive systemd, and on macOS a bare launch opens the desktop app.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
 #![cfg(target_os = "linux")]
 
 use std::collections::HashMap;

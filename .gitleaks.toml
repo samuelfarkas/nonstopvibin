@@ -13,6 +13,6 @@ regexes = ['''"Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ=="''']
 [[allowlists]]
 description = "RFC 6455 public example nonce in the Rust WebSocket handshake test (ported from the TypeScript fixtures above, which history still holds)"
 condition = "AND"
-paths = ['''^crates/cli/tests/serve\.rs$''']
+paths = ['''^crates/cli/tests/(integration/)?serve\.rs$''']
 regexTarget = "line"
 regexes = ['''\("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="\),''']

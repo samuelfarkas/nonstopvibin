@@ -2,15 +2,6 @@
 //! tests/server-lifecycle.test.ts, server-mode.test.ts, integration.test.ts and
 //! lazy-cores.test.ts: a failed start leaves the data directory free, unhashed assets
 //! revalidate across launches and edits, and an idle core stops and starts again over HTTP.
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
-
-#[path = "golden/common.rs"]
-#[expect(
-    dead_code,
-    reason = "shared with the golden replay; this binary uses part of it"
-)]
-mod common;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

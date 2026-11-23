@@ -33,9 +33,5 @@ url.workspace = true
 nsv-testkit = { workspace = true, features = ["accounts"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 
-[[test]]
-name = "golden"
-path = "tests/golden/main.rs"
-
 [lints]
 workspace = true

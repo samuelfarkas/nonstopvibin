@@ -13,7 +13,7 @@ use nsv_domain::id::ProfileId;
 use nsv_testkit::fake::Script;
 use tokio::time::Instant;
 
-use crate::common::{World, short};
+use super::common::{World, short};
 
 /// A profile whose core has started, with the scheduler running.
 async fn running(world: &World, name: &str) -> ProfileId {

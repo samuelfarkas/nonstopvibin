@@ -1,7 +1,5 @@
 //! A daemon that cannot start says why and exits 1, as desktop-lifetime.cjs checked for the
 //! Electron app. `serve` and the desktop app share the start (`nsv_server::daemon`).
-// Marks the whole binary as test code for the workspace's test-only lint exceptions.
-#![cfg(test)]
 
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
