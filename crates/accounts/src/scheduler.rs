@@ -275,9 +275,10 @@ impl Scheduler {
             enabled
                 .into_iter()
                 .filter(|(profile, _)| {
-                    let lazy = self.0.lazy(profile);
-                    state.track(profile).dormant = lazy;
-                    !lazy
+                    // A core already running (started before launch) is no longer dormant.
+                    let dormant = self.0.lazy(profile) && !self.0.pool.alive(profile);
+                    state.track(profile).dormant = dormant;
+                    !dormant
                 })
                 .collect()
         };
