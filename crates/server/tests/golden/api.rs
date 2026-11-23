@@ -318,6 +318,13 @@ async fn replay(case: &Value, placeholders: &mut Placeholders) -> Result<(), Str
     if name == "GET import-sources" {
         without_import_ids(&mut actual);
         without_import_ids(&mut wanted);
+        // A source lists its files in directory order, which the file system decides: ext4
+        // (where TypeScript recorded) hashes names, APFS sorts them.
+        for list in [&mut actual, &mut wanted] {
+            if let Some(items) = list.as_array_mut() {
+                items.sort_by_key(ToString::to_string);
+            }
+        }
     }
     let etag = response.header("etag").map(|etag| placeholders.text(etag));
     let same = u64::from(response.status) == expected["status"].as_u64().unwrap()
