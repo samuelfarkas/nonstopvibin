@@ -54,7 +54,8 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-/// A git checkout does not keep the fixture's modes; re-apply the ones the TypeScript build left.
+/// A git checkout keeps neither the fixture's modes nor its empty directories (two profiles'
+/// `auth/`); re-create them as the TypeScript build left them.
 fn copy_fixture(root: &Path, expected: &Value) -> PathBuf {
     let data = root.join("data");
     copy_tree(&Path::new(FIXTURE).join("data"), &data);
@@ -62,6 +63,9 @@ fn copy_fixture(root: &Path, expected: &Value) -> PathBuf {
     for file in expected["files"].as_array().unwrap() {
         let path = file["path"].as_str().unwrap();
         if path.starts_with("data/") {
+            if file["type"] == "directory" {
+                std::fs::create_dir_all(root.join(path)).unwrap();
+            }
             let mode = u32::from_str_radix(file["mode"].as_str().unwrap(), 8).unwrap();
             set_mode(&root.join(path), mode);
         }
