@@ -15,7 +15,7 @@ bun crates/window/tests/ui/fixtures/build.mjs
 cargo build -p nsv-cli -p nsv-window $cargo_args
 if [ "$(uname)" = Darwin ]; then
   # shellcheck disable=SC2086
-  exec cargo test -p nsv-window --test ui $cargo_args -- --test-threads=1 "$@"
+  exec cargo test -p nsv-window --test ui $cargo_args -- --include-ignored --test-threads=1 "$@"
 fi
 # A screen as wide as the main window, as tests/gui.sh uses.
 export DISPLAY=:98
@@ -24,4 +24,4 @@ xvfb=$!
 trap 'kill $xvfb' EXIT
 for _ in $(seq 50); do [ -e /tmp/.X11-unix/X98 ] && break; sleep 0.1; done
 # shellcheck disable=SC2086
-dbus-run-session -- cargo test -p nsv-window --test ui $cargo_args -- --test-threads=1 "$@"
+dbus-run-session -- cargo test -p nsv-window --test ui $cargo_args -- --include-ignored --test-threads=1 "$@"

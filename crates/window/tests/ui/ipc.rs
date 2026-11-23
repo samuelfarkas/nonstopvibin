@@ -15,6 +15,7 @@ use crate::{SERIAL, check_once, data_directory};
 const PAGE: &str = r#"<!doctype html><meta charset="utf-8"><title>ipc</title><body></body>"#;
 
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 #[expect(
     clippy::print_stderr,
     reason = "whether WebKit loaded the off-origin frame is worth seeing"

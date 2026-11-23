@@ -214,6 +214,7 @@ fn fixtures(page: &'static str) -> Content {
 }
 
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn focus_rings_follow_the_keyboard_not_the_mouse() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("focus.html"), "focus");
@@ -221,6 +222,7 @@ fn focus_rings_follow_the_keyboard_not_the_mouse() {
 }
 
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn the_logo_replays_once_and_rests() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("logo.html"), "logo-animation");
@@ -230,6 +232,7 @@ fn the_logo_replays_once_and_rests() {
 /// The built entry loads the main or tray root as a separate chunk; when that request fails
 /// the window shows the recovery view instead of staying blank.
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn a_failed_root_chunk_shows_the_recovery_view() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let root_chunk = |path: &str| {
@@ -257,6 +260,7 @@ fn a_failed_root_chunk_shows_the_recovery_view() {
 
 /// A failed /state poll must not install the close guard in the tray view.
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn failed_polls_leave_the_tray_closable() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let content = Content::Files(built("client"), "index.html");
@@ -276,6 +280,7 @@ fn failed_polls_leave_the_tray_closable() {
 /// The built app with one running profile keeps page geometry identical across pages and
 /// widths.
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn pages_keep_their_geometry_at_every_width() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     built("client");
@@ -290,6 +295,7 @@ fn pages_keep_their_geometry_at_every_width() {
 /// tray's "Open main window" makes them: drafts defer closing, a background failure stays
 /// readable, and the settings page edits one profile and one global draft at a time.
 #[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
 fn drafts_and_settings_survive_closing_the_window() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     built("client");
