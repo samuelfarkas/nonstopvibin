@@ -16,7 +16,9 @@ use nsv_domain::registry::{
 };
 use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{
-    AccountPatch, AgentSelection, AgentSetupInput, ApiAccountInput, ApiModelInput, ProfilePatch,
+    AccountPatch, AgentSelection, AgentSetupInput, ApiAccountInput, ApiModelInput, CallbackBody,
+    CoreInstallBody, CreateProfileBody, CreditBody, ImportBody, ImportSourceBody, OAuthStartBody,
+    ProfilePatch, RetentionBody, StateBody,
 };
 use serde_json::{Map, Value};
 
@@ -237,7 +239,7 @@ pub(crate) fn empty(value: &Value) -> Result<(), Invalid> {
 }
 
 /// `PUT /usage-retention`: `{ days: 0 | 30 | 90 | 365 }`.
-pub(crate) fn retention(value: &Value) -> Result<RetentionDays, Invalid> {
+pub(crate) fn retention(value: &Value) -> Result<RetentionBody, Invalid> {
     let mut issues = Issues::default();
     let days = object(&mut issues, Some(value), "").and_then(|map| {
         let days = map.get("days").and_then(Value::as_f64).and_then(|days| {
@@ -251,13 +253,13 @@ pub(crate) fn retention(value: &Value) -> Result<RetentionDays, Invalid> {
             issues.fatal("days", "Invalid input");
         }
         strict(&mut issues, map, "", &["days"]);
-        days
+        days.map(|days| RetentionBody { days })
     });
     issues.finish(days)
 }
 
 /// `POST /profiles`: the trimmed name.
-pub(crate) fn profile_name(value: &Value) -> Result<String, Invalid> {
+pub(crate) fn profile_name(value: &Value) -> Result<CreateProfileBody, Invalid> {
     let mut issues = Issues::default();
     let name = object(&mut issues, Some(value), "").and_then(|map| {
         let name = trimmed(
@@ -268,7 +270,7 @@ pub(crate) fn profile_name(value: &Value) -> Result<String, Invalid> {
             registry().limits.name_length,
         );
         strict(&mut issues, map, "", &["name"]);
-        name
+        name.map(|name| CreateProfileBody { name })
     });
     issues.finish(name)
 }
@@ -396,8 +398,18 @@ pub(crate) fn state_query(state: Option<&str>) -> Result<String, Invalid> {
     issues.finish(text)
 }
 
-/// A body of one bounded string field, such as `{ state }` or `{ creditId }`.
-pub(crate) fn single(value: &Value, key: &str, max: usize) -> Result<String, Invalid> {
+/// `POST /profiles/:profileId/oauth-confirm`.
+pub(crate) fn state(value: &Value) -> Result<StateBody, Invalid> {
+    single(value, "state", 500).map(|state| StateBody { state })
+}
+
+/// `POST /profiles/:profileId/accounts/:accountId/reset-credits/consume`.
+pub(crate) fn credit(value: &Value) -> Result<CreditBody, Invalid> {
+    single(value, "creditId", 500).map(|credit_id| CreditBody { credit_id })
+}
+
+/// A body of one bounded string field.
+fn single(value: &Value, key: &str, max: usize) -> Result<String, Invalid> {
     let mut issues = Issues::default();
     let field = object(&mut issues, Some(value), "").and_then(|map| {
         let text = string(&mut issues, map.get(key), key).map(|text| {
@@ -417,7 +429,7 @@ fn url(issues: &mut Issues, text: &str, path: &str) {
 }
 
 /// `POST /profiles/:profileId/callback`: `{ url }`.
-pub(crate) fn callback(value: &Value) -> Result<String, Invalid> {
+pub(crate) fn callback(value: &Value) -> Result<CallbackBody, Invalid> {
     let mut issues = Issues::default();
     let field = object(&mut issues, Some(value), "").and_then(|map| {
         let text = string(&mut issues, map.get("url"), "url").map(|text| {
@@ -426,13 +438,13 @@ pub(crate) fn callback(value: &Value) -> Result<String, Invalid> {
             text.to_owned()
         });
         strict(&mut issues, map, "", &["url"]);
-        text
+        text.map(|url| CallbackBody { url })
     });
     issues.finish(field)
 }
 
 /// `POST /profiles/:profileId/oauth`.
-pub(crate) fn oauth_start(value: &Value) -> Result<(OAuthProvider, Option<AccountId>), Invalid> {
+pub(crate) fn oauth_start(value: &Value) -> Result<OAuthStartBody, Invalid> {
     let offered: Vec<OAuthProvider> = OAuthProvider::ALL
         .iter()
         .copied()
@@ -459,13 +471,16 @@ pub(crate) fn oauth_start(value: &Value) -> Result<(OAuthProvider, Option<Accoun
             AccountId::parse(text).ok()
         });
         strict(&mut issues, map, "", &["provider", "reconnectAccountId"]);
-        Some((provider?, reconnect?))
+        Some(OAuthStartBody {
+            provider: provider?,
+            reconnect_account_id: reconnect?,
+        })
     });
     issues.finish(body)
 }
 
 /// `POST /profiles/:profileId/import`: credential files by name.
-pub(crate) fn import(value: &Value) -> Result<Map<String, Value>, Invalid> {
+pub(crate) fn import(value: &Value) -> Result<ImportBody, Invalid> {
     let mut issues = Issues::default();
     let contents = object(&mut issues, Some(value), "").and_then(|map| {
         let contents = match map.get("contents") {
@@ -476,13 +491,13 @@ pub(crate) fn import(value: &Value) -> Result<Map<String, Value>, Invalid> {
             }
         };
         strict(&mut issues, map, "", &["contents"]);
-        contents
+        contents.map(|contents| ImportBody { contents })
     });
     issues.finish(contents)
 }
 
 /// `POST /profiles/:profileId/import-source`: an id a scan handed out.
-pub(crate) fn import_source(value: &Value) -> Result<String, Invalid> {
+pub(crate) fn import_source(value: &Value) -> Result<ImportSourceBody, Invalid> {
     let mut issues = Issues::default();
     let id = object(&mut issues, Some(value), "").and_then(|map| {
         let id = string(&mut issues, map.get("sourceId"), "sourceId").map(|id| {
@@ -491,13 +506,13 @@ pub(crate) fn import_source(value: &Value) -> Result<String, Invalid> {
             id.to_owned()
         });
         strict(&mut issues, map, "", &["sourceId"]);
-        id
+        id.map(|source_id| ImportSourceBody { source_id })
     });
     issues.finish(id)
 }
 
 /// `POST /core/install`: a reviewed core version.
-pub(crate) fn core_version(value: &Value) -> Result<String, Invalid> {
+pub(crate) fn core_install(value: &Value) -> Result<CoreInstallBody, Invalid> {
     let mut issues = Issues::default();
     let version = object(&mut issues, Some(value), "").and_then(|map| {
         let version = string(&mut issues, map.get("version"), "version").map(|version| {
@@ -510,7 +525,7 @@ pub(crate) fn core_version(value: &Value) -> Result<String, Invalid> {
             version.to_owned()
         });
         strict(&mut issues, map, "", &["version"]);
-        version
+        version.map(|version| CoreInstallBody { version })
     });
     issues.finish(version)
 }
@@ -723,7 +738,7 @@ mod tests {
     #[test]
     fn names_are_trimmed_and_counted_in_utf16() {
         assert_eq!(
-            profile_name(&json!({ "name": "  Work  " })).unwrap(),
+            profile_name(&json!({ "name": "  Work  " })).unwrap().name,
             "Work"
         );
         assert_eq!(
@@ -738,9 +753,37 @@ mod tests {
         );
         // U+0085 is not JavaScript whitespace.
         assert_eq!(
-            profile_name(&json!({ "name": "\u{85}" })).unwrap(),
+            profile_name(&json!({ "name": "\u{85}" })).unwrap().name,
             "\u{85}"
         );
+    }
+
+    #[test]
+    fn a_parsed_body_serializes_back_to_the_request_the_client_typed() {
+        // The client's request types are generated from these structs, and this module reads
+        // their keys by hand: a body that comes back unchanged ties the two.
+        fn same<T: serde::Serialize>(parse: fn(&Value) -> Result<T, Invalid>, body: &Value) {
+            assert_eq!(&serde_json::to_value(parse(body).unwrap()).unwrap(), body);
+        }
+        same(retention, &json!({ "days": 90 }));
+        same(profile_name, &json!({ "name": "Work" }));
+        same(core_install, &json!({ "version": "8.1.0" }));
+        same(oauth_start, &json!({ "provider": "claude" }));
+        same(
+            oauth_start,
+            &json!({ "provider": "claude", "reconnectAccountId": "claude-a.json" }),
+        );
+        same(state, &json!({ "state": "abc" }));
+        same(
+            callback,
+            &json!({ "url": "http://localhost:1455/auth/callback?code=x" }),
+        );
+        same(
+            import,
+            &json!({ "contents": { "codex-a.json": { "type": "codex" } } }),
+        );
+        same(import_source, &json!({ "sourceId": "a".repeat(64) }));
+        same(credit, &json!({ "creditId": "credit-1" }));
     }
 
     #[test]

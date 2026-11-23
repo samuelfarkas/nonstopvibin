@@ -262,7 +262,7 @@ impl Api {
                 self.state_reply().await
             }
             PlainRoute::Retention => {
-                let days = parse::retention(&body(request).await?)?;
+                let days = parse::retention(&body(request).await?)?.days;
                 self.store
                     .call(move |db| db.set_usage_retention_days(days))
                     .await?;
@@ -273,7 +273,7 @@ impl Api {
                 self.state_reply().await
             }
             PlainRoute::CoreInstall => {
-                let version = parse::core_version(&body(request).await?)?;
+                let version = parse::core_install(&body(request).await?)?.version;
                 cores.install_core(&version).await?;
                 self.state_reply().await
             }
@@ -289,7 +289,7 @@ impl Api {
                 json(StatusCode::OK, &sources)
             }
             PlainRoute::CreateProfile => {
-                let name = parse::profile_name(&body(request).await?)?;
+                let name = parse::profile_name(&body(request).await?)?.name;
                 let profile = cores.create_profile(name).await?;
                 json(StatusCode::CREATED, &profile)
             }
@@ -355,8 +355,10 @@ impl Api {
                 self.agent_check(id).await
             }
             ProfileRoute::SignIn => {
-                let (provider, reconnect) = parse::oauth_start(&body(request).await?)?;
-                let session = cores.begin_sign_in(id, provider, reconnect).await?;
+                let start = parse::oauth_start(&body(request).await?)?;
+                let session = cores
+                    .begin_sign_in(id, start.provider, start.reconnect_account_id)
+                    .await?;
                 json(StatusCode::OK, &session)
             }
             ProfileRoute::SignInStatus => {
@@ -370,23 +372,23 @@ impl Api {
                 json(StatusCode::OK, &ok())
             }
             ProfileRoute::SignInConfirm => {
-                let state = parse::single(&body(request).await?, "state", 500)?;
+                let state = parse::state(&body(request).await?)?.state;
                 let status = cores.confirm_sign_in(id, &state).await?;
                 json(StatusCode::OK, &status)
             }
             ProfileRoute::SignInSession => json(StatusCode::OK, &cores.sign_in_session(id)),
             ProfileRoute::Callback => {
-                let url = parse::callback(&body(request).await?)?;
+                let url = parse::callback(&body(request).await?)?.url;
                 cores.sign_in_callback(id, &url).await?;
                 json(StatusCode::OK, &ok())
             }
             ProfileRoute::Import => {
-                let contents = parse::import(&body(request).await?)?;
+                let contents = parse::import(&body(request).await?)?.contents;
                 cores.import(id, contents).await?;
                 self.state_reply().await
             }
             ProfileRoute::ImportSource => {
-                let source = parse::import_source(&body(request).await?)?;
+                let source = parse::import_source(&body(request).await?)?.source_id;
                 let imports = Arc::clone(&self.imports);
                 let contents =
                     tokio::task::spawn_blocking(move || locked(&imports).contents(&source))
@@ -427,7 +429,7 @@ impl Api {
                 json(StatusCode::OK, &credits)
             }
             AccountRoute::ConsumeReset => {
-                let credit = parse::single(&body(request).await?, "creditId", 500)?;
+                let credit = parse::credit(&body(request).await?)?.credit_id;
                 let result = cores
                     .consume_reset(id, &account_id(account)?, &credit)
                     .await?;

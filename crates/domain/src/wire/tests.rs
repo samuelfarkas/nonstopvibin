@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::registry::{Agent, Protocol, RetentionDays};
+use crate::registry::{Agent, Protocol};
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -216,15 +216,8 @@ fn request_bodies_are_strict() {
     assert_eq!(input.api_key.expose_secret(), "sk-visible");
     assert!(!format!("{input:?}").contains("sk-visible"));
     assert!(serde_json::from_value::<ProfilePatch>(json!({ "enabled": true })).is_err());
-    assert!(serde_json::from_value::<RetentionBody>(json!({ "days": 7 })).is_err());
     let selection: AgentSelection = serde_json::from_value(json!({ "agent": "pi" })).unwrap();
     assert_eq!(selection.agent, Agent::Pi);
-    assert_eq!(
-        serde_json::from_value::<RetentionBody>(json!({ "days": 90 }))
-            .unwrap()
-            .days,
-        RetentionDays::Days90
-    );
 }
 
 #[test]

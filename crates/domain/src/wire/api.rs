@@ -5,6 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Profile, True};
+use crate::id::AccountId;
 use crate::registry::{OAuthProvider, Protocol, Provider, RetentionDays, Strategy};
 use crate::secret::ApiKey;
 
@@ -126,58 +127,52 @@ pub struct ApiModelInput {
 }
 
 /// `POST /profiles`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CreateProfileBody {
     pub name: String,
 }
 
 /// `PUT /usage-retention`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RetentionBody {
     pub days: RetentionDays,
 }
 
 /// `POST /core/install`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CoreInstallBody {
     pub version: String,
 }
 
 /// `POST /profiles/:profileId/oauth`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
 pub struct OAuthStartBody {
     pub provider: OAuthProvider,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reconnect_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconnect_account_id: Option<AccountId>,
 }
 
 /// `POST /profiles/:profileId/oauth-confirm`, and the `state` query of the OAuth routes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct StateBody {
     pub state: String,
 }
 
 /// `POST /profiles/:profileId/callback`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CallbackBody {
     pub url: String,
 }
 
 /// `POST /profiles/:profileId/import`: credential files by name.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, PartialEq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ImportBody {
     #[cfg_attr(test, ts(type = "Record<string, import(\"../../types.ts\").Json>"))]
@@ -193,16 +188,16 @@ impl std::fmt::Debug for ImportBody {
 }
 
 /// `POST /profiles/:profileId/import-source`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ImportSourceBody {
     pub source_id: String,
 }
 
 /// `POST /profiles/:profileId/accounts/:accountId/reset-credits`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct CreditBody {
     pub credit_id: String,
