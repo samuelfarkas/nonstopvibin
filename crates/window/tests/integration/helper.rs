@@ -343,6 +343,32 @@ fn quota_popup_closes_when_it_loses_the_focus() {
     assert_all_gone(&ran);
 }
 
+/// The popup gives way to the main window in the same helper, which is not exiting.
+#[test]
+fn the_popup_gives_way_to_the_main_window() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let x = X::open();
+    let mut server = Server::start();
+    let data = directory("handover");
+    let mut helper = Helper::start(binary(), &server.origin(), quota_view(), &data);
+    let (_popup, ran) = focused_popup(&x, &mut server, &helper);
+    helper.send(&ToHelper::Show {
+        view: View::Main { profile: None },
+    });
+    assert_eq!(
+        helper.next_event(),
+        FromHelper::Closed {
+            view: ViewKind::Quota,
+            bounds: None,
+            last: false,
+        }
+    );
+    shown_window(&x, "NonstopVibin");
+    helper.send(&ToHelper::Quit);
+    assert!(helper.wait().success());
+    assert_all_gone(&ran);
+}
+
 #[test]
 #[expect(
     clippy::print_stderr,
