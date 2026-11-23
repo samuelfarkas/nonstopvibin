@@ -119,6 +119,8 @@ Eleven crates under `crates/`, edition 2024, one `[workspace.lints]` table:
   (base64 of `nonce(12) ‖ tag(16) ‖ ciphertext`, AES-256-GCM), core ledger and lock files stay as
   they are. This PR adds no table and no column.
 - Timestamps keep the exact `toISOString()` shape, because SQL compares them as text.
+- Stricter than main: `vault.key` and the database must be ordinary files the user owns, never
+  followed through a link (main followed links and checked no owner or file type).
 - `tests/fixtures/ts-data-dir` is a data directory main wrote. The Rust test reads it against
   literals, then writes through every store operation. A CI job opens the result with the last
   TypeScript `Store` to prove downgrade.

@@ -113,6 +113,58 @@ async fn vault_keys_must_be_32_bytes_and_are_kept_owner_only() {
 }
 
 #[tokio::test]
+async fn vault_keys_are_refused_through_links_fifos_or_at_the_wrong_length() {
+    let temp = TempDir::new("vault-key-unsafe");
+    let directory = temp.path();
+    let path = directory.join("vault.key");
+    let elsewhere = directory.join("elsewhere");
+    fs::write(&elsewhere, [7_u8; 32]).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    let linked = Vault::open(directory).unwrap_err();
+    assert!(matches!(linked, VaultError::UnsafeKey));
+    assert_eq!(
+        linked.to_string(),
+        "vault.key must be an ordinary file you own, not a link. Restore vault.key from your backup."
+    );
+    assert_eq!(mode(&elsewhere), 0o644);
+
+    fs::remove_file(&path).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    assert!(matches!(
+        Vault::open(directory).unwrap_err(),
+        VaultError::UnsafeKey
+    ));
+
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, [7_u8; 33]).unwrap();
+    assert!(matches!(
+        Vault::open(directory).unwrap_err(),
+        VaultError::InvalidKey
+    ));
+}
+
+#[tokio::test]
+async fn a_linked_database_is_refused() {
+    let temp = TempDir::new("linked-database");
+    let directory = temp.path();
+    let vault = Vault::open(directory).unwrap();
+    let elsewhere = directory.join("elsewhere.sqlite");
+    fs::write(&elsewhere, b"").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, directory.join("nonstopvibin.sqlite")).unwrap();
+    let refused = Store::open(directory, vault).await.err().unwrap();
+    assert!(matches!(refused, StoreError::UnsafeDatabase));
+    assert_eq!(
+        refused.to_string(),
+        "nonstopvibin.sqlite must be an ordinary file you own, without links."
+    );
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"");
+}
+
+#[tokio::test]
 async fn profile_writes_refresh_the_cached_profile_names_the_tray_reads() {
     let temp = TempDir::new("names");
     let store = open(temp.path()).await;

@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, Permissions};
-use std::os::unix::fs::PermissionsExt;
+use std::io;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -24,7 +25,7 @@ use tokio::sync::watch;
 use unicode_normalization::UnicodeNormalization;
 use zeroize::Zeroizing;
 
-use crate::files::owner_only_directory;
+use crate::files::{EntryKind, own_entry, owner_only_directory};
 use crate::layout::database_path;
 use crate::store::StoreError;
 use crate::vault::Vault;
@@ -163,6 +164,14 @@ impl Db {
     ) -> Result<(Self, watch::Receiver<Arc<AuthSnapshot>>), StoreError> {
         owner_only_directory(directory, || Ok::<(), StoreError>(()))?;
         let path = database_path(directory);
+        // chmod and SQLite follow a symbolic link, so refuse one before either runs.
+        match fs::symlink_metadata(&path) {
+            Ok(status) if !own_entry(&status, EntryKind::File, 0) || status.nlink() != 1 => {
+                return Err(StoreError::UnsafeDatabase);
+            }
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
         let connection = Connection::open(&path)?;
         fs::set_permissions(&path, Permissions::from_mode(0o600))?;
         connection.execute_batch(SCHEMA)?;

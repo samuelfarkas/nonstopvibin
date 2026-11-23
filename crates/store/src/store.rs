@@ -34,6 +34,9 @@ pub enum StoreError {
     Registry(#[from] RegistryError),
     #[error(transparent)]
     Io(#[from] io::Error),
+    /// A symbolic link, a hard link or another user's entry at the database path.
+    #[error("nonstopvibin.sqlite must be an ordinary file you own, without links.")]
+    UnsafeDatabase,
     /// The store was closed, or its thread ended.
     #[error("the store has stopped")]
     Closed,

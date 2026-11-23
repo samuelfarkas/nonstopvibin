@@ -3,8 +3,8 @@
 //! associated data, exactly as the TypeScript `fileKeyCodec` wrote it.
 
 use std::fmt;
-use std::fs::{self, OpenOptions, Permissions};
-use std::io::{self, Write};
+use std::fs::{File, OpenOptions, Permissions};
+use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
@@ -13,8 +13,10 @@ use aes_gcm::aead::array::Array;
 use aes_gcm::{AeadInOut, Aes256Gcm, KeyInit};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use rustix::fs::{Mode, OFlags};
 use zeroize::Zeroizing;
 
+use crate::files::{EntryKind, own_entry};
 use crate::layout::{database_path, vault_key_path};
 use crate::random_bytes;
 
@@ -29,6 +31,11 @@ pub enum VaultError {
     MissingKey,
     #[error("The local vault key is invalid. Restore vault.key from your backup.")]
     InvalidKey,
+    /// A symbolic link, a FIFO or another user's file at `vault.key`.
+    #[error(
+        "vault.key must be an ordinary file you own, not a link. Restore vault.key from your backup."
+    )]
+    UnsafeKey,
     /// A stored value that is not base64, is too short, fails authentication or is not UTF-8.
     #[error("Unsupported state or unable to authenticate data")]
     Undecryptable,
@@ -51,29 +58,48 @@ impl fmt::Debug for Vault {
 
 impl Vault {
     /// Opens `vault.key` in `directory`. A missing key is created (0600, never replacing a file)
-    /// only while no database exists: a new key cannot decrypt an existing database. The key's
+    /// only while no database exists: a new key cannot decrypt an existing database. The key
+    /// must be a regular file owned by this user, never followed through a symbolic link; its
     /// mode is set to 0600 on every open. Blocks on the file system.
     ///
     /// # Errors
-    /// [`VaultError::MissingKey`] for a database without its key, [`VaultError::InvalidKey`] for
-    /// a key that is not 32 bytes, or a file-system error.
+    /// [`VaultError::MissingKey`] for a database without its key, [`VaultError::UnsafeKey`] for
+    /// a link, a non-regular file or another user's file, [`VaultError::InvalidKey`] for a key
+    /// that is not 32 bytes, or a file-system error.
     pub fn open(directory: &Path) -> Result<Self, VaultError> {
         let path = vault_key_path(directory);
-        if !path.exists() {
-            if database_path(directory).exists() {
-                return Err(VaultError::MissingKey);
+        let mut file = match open_key(&path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if database_path(directory).exists() {
+                    return Err(VaultError::MissingKey);
+                }
+                let key = Zeroizing::new(random_bytes::<32>()?);
+                OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)?
+                    .write_all(key.as_slice())?;
+                open_key(&path)?
             }
-            let key = Zeroizing::new(random_bytes::<32>()?);
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)?
-                .write_all(key.as_slice())?;
+            // A symbolic link fails with ELOOP under O_NOFOLLOW.
+            Err(error) if error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
+                return Err(VaultError::UnsafeKey);
+            }
+            opened => opened?,
+        };
+        let status = file.metadata()?;
+        if !own_entry(&status, EntryKind::File, 0) {
+            return Err(VaultError::UnsafeKey);
         }
-        fs::set_permissions(&path, Permissions::from_mode(0o600))?;
-        let key = Zeroizing::new(fs::read(&path)?);
-        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| VaultError::InvalidKey)?;
+        if status.len() != 32 {
+            return Err(VaultError::InvalidKey);
+        }
+        file.set_permissions(Permissions::from_mode(0o600))?;
+        let mut key = Zeroizing::new([0_u8; 32]);
+        file.read_exact(key.as_mut_slice())?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| VaultError::InvalidKey)?;
         Ok(Self(Arc::new(cipher)))
     }
 
@@ -112,4 +138,14 @@ impl Vault {
             .map_err(|_| VaultError::Undecryptable)?;
         String::from_utf8(body.to_vec()).map_err(|_| VaultError::Undecryptable)
     }
+}
+
+/// Opens the key without following a symbolic link or blocking on a FIFO.
+fn open_key(path: &Path) -> io::Result<File> {
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    Ok(File::from(descriptor))
 }
