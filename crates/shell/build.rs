@@ -5,7 +5,10 @@
 use std::path::Path;
 
 fn main() -> Result<(), String> {
-    let build = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../build");
+    // Read when the script runs, not baked in when it compiles: cargo reuses the compiled
+    // script for a checkout at another path.
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR is unset")?;
+    let build = Path::new(&manifest).join("../../build");
     let key = build.join("update-signing.pub");
     // The folder: cargo then notices the key file appear.
     println!("cargo::rerun-if-changed={}", build.display());
