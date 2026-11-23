@@ -28,6 +28,7 @@ import {
   repo,
   report,
   run,
+  stageClient,
   stageCore,
   stageLicences,
   version,
@@ -64,6 +65,7 @@ for (const arch of arches) {
       join(binaries, "nonstopvibin"),
       join(out, entries.executable),
     );
+    await stageClient(join(out, entries.client));
     await stageLicences(join(out, entries.licenses), [build]);
     await writeFile(
       join(out, entries.installer),

@@ -229,6 +229,15 @@ function checkLicences(directory: string): void {
   }
 }
 
+/** The built interface in `folder` under `root`: present, with its index.html. */
+function clientEntries(root: string, folder: string): string[] {
+  assert.ok(
+    existsSync(join(root, folder, "index.html")),
+    `Missing ${folder}/index.html: the package has no interface.`,
+  );
+  return tree(join(root, folder)).map((entry) => `${folder}/${entry}`);
+}
+
 const coreEntries = (folder: string) =>
   coreFiles.map((file) => `${folder}/${file}`);
 const licenceEntries = (folder: string) =>
@@ -244,6 +253,7 @@ export function verifyServerTree(root: string, arch: string): void {
       entries.installer,
       entries.readme,
       ...coreEntries(entries.core),
+      ...clientEntries(root, entries.client),
       ...licenceEntries(entries.licenses),
     ],
     "server archive contents",
@@ -287,7 +297,11 @@ export const desktopFile = `${product.executable}.desktop`;
 export const iconFile = `${product.executable}.png`;
 export const appImageExtras = ["AppRun", ".DirIcon", desktopFile, iconFile];
 export function verifyAppDir(root: string, arch: string): void {
-  assertTree(root, [...linuxApp, ...appImageExtras], "AppImage contents");
+  assertTree(
+    root,
+    [...linuxApp, ...clientEntries(root, "client"), ...appImageExtras],
+    "AppImage contents",
+  );
   checkLinuxApp(root, arch);
 }
 
@@ -301,7 +315,11 @@ export const debExtras = [
 export function verifyDebTree(root: string, arch: string): void {
   assertTree(
     root,
-    [...linuxApp.map((file) => `${debApp}/${file}`), ...debExtras],
+    [
+      ...linuxApp.map((file) => `${debApp}/${file}`),
+      ...clientEntries(root, `${debApp}/client`),
+      ...debExtras,
+    ],
     "deb contents",
   );
   checkLinuxApp(join(root, debApp), arch);
@@ -341,6 +359,7 @@ export function verifyMacBundle(
         ? [`${squirrel.framework}/Versions/A/_CodeSignature/CodeResources`]
         : []),
       ...coreEntries(`${resources}/${coreLayout.packaged}`),
+      ...clientEntries(app, `${resources}/client`),
       ...licenceEntries(`${resources}/licenses`),
       ...(signed ? ["Contents/_CodeSignature/CodeResources"] : []),
       ...(stapled ? [ticket] : []),

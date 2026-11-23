@@ -38,6 +38,16 @@ architecture of both binaries, the core's version, platform and hashes against
 archive's SHA-256. Run the CLI from source with `bun src/server/cli.ts`; it then
 uses `.vendor/core` and `dist/client`. See [Run on a Linux server](server.md).
 
+The Rust daemon runs from source with `cargo run -p nsv-cli -- serve` after
+`bun run build` and `bun run core:install`. A binary without `core/` beside its
+real path is a development run: it serves this checkout's `dist/client` and
+starts `.vendor/core/cli-proxy-api`, both found from the crate's path at compile
+time, and never installs core updates. It reads the interface from disk on each
+request, so after `bun run build` a reload shows the new UI without a restart.
+The packaging scripts copy `dist/client` to `client/` beside the executable
+(`Contents/Resources/client` in the macOS bundle), and
+`scripts/verify-rust-package.ts` rejects a package without `client/index.html`.
+
 The desktop check uses temporary data and a synthetic profile. It verifies window recreation, draft preservation, IPC bootstrap, continued proxy access with both windows closed, renderer process exit, denied web permission requests, and that a profile core stops when the app receives SIGTERM, SIGINT, SIGHUP or SIGKILL. For memory comparisons, use a packaged build with the same enabled profiles and distinguish idle, UI-open, and request-load measurements; summed RSS includes shared pages. No universal RAM target is enforced.
 
 Use `bun ci` to restore the exact dependency versions, `bun add <package>` to add one, and `bun update` for intentional updates. Commit `bun.lock` with `package.json`. CI reads the Bun version from `packageManager` and uses a frozen install. No global Vite, TypeScript, or Electron CLI is needed.

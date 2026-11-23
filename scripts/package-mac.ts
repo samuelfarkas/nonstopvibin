@@ -39,6 +39,7 @@ import {
   report,
   run,
   sha256,
+  stageClient,
   stageCore,
   stageLicences,
   version,
@@ -303,6 +304,7 @@ try {
   await copyFile(join(binaries, product.executable), join(macOS, product.name));
   await copyFile(join(binaries, product.helper), join(macOS, product.helper));
   await copyFile(join(repo, "build/icon.icns"), join(resources, "icon.icns"));
+  await stageClient(join(resources, "client"));
   await stageLicences(join(resources, "licenses"), [build]);
   await writeFile(join(app, "Contents/Info.plist"), appPlist);
   await stageRelaunch(app);

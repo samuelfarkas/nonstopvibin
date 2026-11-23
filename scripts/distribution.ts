@@ -139,12 +139,13 @@ export const rustLicenses = [
 ] as const;
 
 /**
- * The Rust server archive's top-level entries. The daemon embeds the UI, so there is no
- * `client/`; it finds `core/` beside its real path.
+ * The Rust server archive's top-level entries. The daemon finds `core/` and the UI's
+ * `client/` beside its real path.
  */
 export const rustServerArchive = {
   executable: "nonstopvibin",
   core: "core",
+  client: "client",
   licenses: "licenses",
   installer: "install.sh",
   readme: "README.md",

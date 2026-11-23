@@ -120,7 +120,7 @@ const installed = JSON.parse(
   await readFile(join(project, ".vendor/core/manifest.json"), "utf8"),
 );
 test(
-  "the server archive check rejects a dynamic daemon, another architecture, an unreviewed core, changed licences and wrong modes",
+  "the server archive check rejects a missing interface, a dynamic daemon, another architecture, an unreviewed core, changed licences and wrong modes",
   {
     skip:
       installed.platform !== "linux" && "needs a linux core from core:install",
@@ -150,6 +150,17 @@ test(
       await writeFile(join(root, "README.md"), "readme");
       for (const file of ["nonstopvibin", "install.sh", "core/cli-proxy-api"])
         await chmod(join(root, file), 0o755);
+      assert.throws(
+        () => verifyServerTree(root, arch),
+        /Missing client\/index.html/,
+      );
+      await mkdir(join(root, "client/assets"), { recursive: true });
+      await writeFile(join(root, "client/assets/index-abc123.js"), "ui");
+      assert.throws(
+        () => verifyServerTree(root, arch),
+        /Missing client\/index.html/,
+      );
+      await writeFile(join(root, "client/index.html"), "<!doctype html>");
       verifyServerTree(root, arch);
 
       await writeFile(join(root, "nonstopvibin"), elf(machine, true));

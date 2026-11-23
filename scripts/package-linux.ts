@@ -25,6 +25,7 @@ import {
   repo,
   report,
   run,
+  stageClient,
   stageCore,
   stageLicences,
   version,
@@ -75,7 +76,8 @@ async function files(folder: string): Promise<string[]> {
 await mkdir(releaseDir, { recursive: true });
 const work = await mkdtemp(join(tmpdir(), "nv-linux-"));
 try {
-  // The app folder both packages install: the daemon, its helper beside it, core/ and licenses/.
+  // The app folder both packages install: the daemon, its helper beside it, core/, client/
+  // and licenses/.
   const app = join(work, "app");
   await mkdir(join(work, "core-stage"));
   await stageCore(
@@ -92,6 +94,7 @@ try {
     join(binaries.helper, product.helper),
     join(app, product.helper),
   );
+  await stageClient(join(app, "client"));
   await stageLicences(join(app, "licenses"), [daemon, helper]);
   for (const file of [
     product.executable,

@@ -2,7 +2,14 @@
 // the cargo build, the verified core, the licences and the electron-updater feed.
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  cp,
+  mkdir,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import YAML from "yaml";
 import pkg from "../package.json" with { type: "json" };
@@ -11,6 +18,7 @@ import {
   coreFiles,
   coreLayout,
 } from "../src/server/core-binary.ts";
+import { checkoutLayout } from "../src/server/host-defaults.ts";
 import {
   rustLicenseText,
   rustStdNotices,
@@ -73,6 +81,17 @@ export async function stageCore(
   await mkdir(destination, { recursive: true });
   for (const file of coreFiles)
     await copyFile(join(core, file), join(destination, file));
+}
+
+/** Copies the Vite build (`bun run build`) to `destination`, the `client/` the daemon serves. */
+export async function stageClient(destination: string): Promise<void> {
+  const client = join(repo, checkoutLayout.client);
+  await stat(join(client, "index.html")).catch(() => {
+    throw new Error(
+      `Missing ${checkoutLayout.client}/index.html; run bun run build first.`,
+    );
+  });
+  await cp(client, destination, { recursive: true });
 }
 
 /** Writes the licence folder every Rust package ships (distribution.ts `rustLicenses`). */
