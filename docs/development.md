@@ -3,54 +3,124 @@
 For client prerequisites, model catalogs, removal, and troubleshooting, see
 [Quick agent setup](agent-setup.md).
 
-Requires Git and [Bun 1.4.2](https://bun.com/docs/installation), pinned in `package.json` for CI. Bun 1.3.14 cannot run this app's `node:sqlite` API. Electron provides the installed desktop app's runtime. Install on the OS/architecture you are targeting:
+NonstopVibin is a Rust workspace in `crates/` and a React interface in `src/`.
+[The decision record](decisions/rust-port.md) explains the process model and what
+each crate owns.
+
+## Prerequisites
+
+Install these on the OS and architecture you are targeting:
+
+- Git and [Bun 1.4.2](https://bun.com/docs/installation). `package.json` pins Bun
+  for CI.
+- [rustup](https://rustup.rs). `rust-toolchain.toml` pins Rust 1.100.0 with
+  clippy and rustfmt, and rustup installs it on the first `cargo` command.
+- On macOS, Xcode Command Line Tools (`xcode-select --install`).
+- On Linux, the WebKitGTK 4.1 and GTK 3 development files for the window
+  helper. On Debian and Ubuntu, install `libwebkit2gtk-4.1-dev` and
+  `libgtk-3-dev`. The Linux packages and the server archive also need
+  `musl-tools` and the `x86_64-unknown-linux-musl` or
+  `aarch64-unknown-linux-musl` Rust target.
+
+## Run from source
 
 ```sh
 bun run setup       # Locked dependencies + checksum-verified proxy core
-bun run dev         # API + Vite; open the session URL printed in the terminal
+bun run dev         # Daemon + Vite; open the session URL printed in the terminal
 ```
 
-Development defaults to `~/.nonstopvibin`, the same data folder as the desktop app. Quit the desktop app before using that data, or run `NONSTOPVIBIN_DATA_DIR=.test-runtime/dev NONSTOPVIBIN_PORT=4319 bun run dev` for isolated development. Older `.runtime` data is not imported automatically. Bun loads local `.env` files automatically. Vite updates the renderer as you edit; restart `bun run dev` after server changes. Ctrl+C stops both development processes. For a clearly labeled simulation with no real subscription credentials, run `bun run preview`, then open its printed URL.
+`bun run dev` runs `cargo run --bin nonstopvibin -- serve` with
+`NONSTOPVIBIN_DEVELOPMENT=1` and Vite beside it. In this mode a build from the
+checkout also accepts the Vite server's Host and Origin, and starts without a core
+when `.vendor/core` is missing. Vite proxies `/api` to the daemon and updates the
+interface as you edit. Restart `bun run dev` after Rust changes. Ctrl+C stops
+both processes.
+
+Development defaults to `~/.nonstopvibin`, the same data folder as the desktop app,
+and the daemon refuses to start while another one holds that folder. Quit the
+desktop app first, or run
+`NONSTOPVIBIN_DATA_DIR=.test-runtime/dev NONSTOPVIBIN_PORT=4319 bun run dev` for
+isolated development. Older `.runtime` data is not imported automatically.
+
+`bun run start` builds the window helper and runs the desktop app from the
+checkout, with its tray and window. To run the headless server from source, run
+`bun run build:client` once, then `cargo run --bin nonstopvibin -- serve`.
+`cargo run --bin nonstopvibin -- --help` lists the server commands.
+
+A binary without `core/` beside its real path is a development run. It serves
+this checkout's `dist/client` and starts `.vendor/core/cli-proxy-api`, both found
+from the crate's path at compile time, and it never installs core updates. It
+reads the interface from disk on each request, so after `bun run build:client` a
+reload shows the new UI without a restart.
+
+## Checks and builds
 
 ```sh
-bun run quality     # TypeScript + Oxlint + Oxfmt checks (also run in CI)
-bun run format      # Format source, tests, scripts, and project configuration
-bun test            # Add --watch to rerun while editing
-bun run build
-bun run start       # Launch the built Electron app
-bun run test:desktop # Isolated Electron lifecycle check (requires a desktop)
-bun run test:ui      # Isolated Electron focus, logo, page layout, and tray close-guard checks (requires a desktop)
-bun run test:server  # Installs and runs the linux-x64 server archive (Linux x64, after dist:server)
-bun run test:update:mac # Updates an older build to release/ in place (GitHub Actions macOS runner, after dist:built)
-bun run package      # App folder in release/ for local checks
-bun run dist:mac     # DMG and ZIP, on macOS
-bun run dist:linux   # AppImage and deb, on Linux
-bun run dist:server  # Headless Linux server archives (x64 and arm64), any host
+bun run quality       # TypeScript, Oxlint, Oxfmt and registry drift checks
+bun run format        # Format TypeScript sources, tests, scripts and configuration
+bun test              # TypeScript tests; add --watch to rerun while editing
+cargo test -p nsv-domain --locked   # One crate's tests; --workspace for all
+bun run test          # bun test, then cargo test for the whole workspace
+bun run build         # The interface, then the Rust binaries in release mode
+bun run build:client  # The interface alone, into dist/client
+bun run test:ui       # UI checks in the real window helper (Xvfb on Linux)
+bun run test:server   # Installs and runs the server archive (Linux, after dist:server)
+bun run dist:mac      # DMG and ZIP, on macOS
+bun run dist:linux    # AppImage and deb, on Linux
+bun run dist:server   # Headless server archive for this host's architecture
 ```
 
-`dist:server` runs `bun run build`, then `scripts/build-server.mjs`, which
-cross-compiles `src/server/cli.ts` with `bun build --compile` for each Linux
-target (pass `x64` or `arm64` to build one), stages the pinned Linux core in a
+CI also runs `cargo fmt --all --check`,
+`cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo machete`
+for unused dependencies. Run them before pushing Rust changes.
+
+Some tests need a display or a session bus. On Linux, run them under Xvfb and
+`dbus-run-session`, as CI does:
+
+```sh
+xvfb-run -a dbus-run-session -- cargo test --workspace --locked
+sh crates/shell/tests/gui.sh --locked
+```
+
+`crates/shell/tests/gui.sh` runs the shell's tests that drive a real window
+helper. `bun run test:ui` runs `crates/window/tests/ui.sh`, which builds the
+interface, the daemon and the helper, then checks focus, the logo, page layout,
+the close guard and, on Linux, the error dialogs and signals. On macOS the
+terminal needs the Accessibility permission.
+
+`dist:server` runs `scripts/package-server.ts` after `bun run build:client`. It
+builds the static musl daemon with cargo, stages the pinned Linux core in a
 temporary directory (your own `.vendor/core` is untouched), and writes
-`release/nonstopvibin-server-<version>-linux-<arch>.tar.gz`. It checks the ELF
-architecture of both binaries, the core's version, platform and hashes against
-`src/server/core-release.json`, and the exact archive contents, then prints each
-archive's SHA-256. Run the CLI from source with `bun src/server/cli.ts`; it then
-uses `.vendor/core` and `dist/client`. See [Run on a Linux server](server.md).
+`release/nonstopvibin-server-<version>-linux-<arch>.tar.gz`. Pass `x64` or
+`arm64` to choose the architecture; each needs its musl target and a C compiler
+for it, so CI builds each on a native runner. See
+[Run on a Linux server](server.md).
 
-The Rust daemon runs from source with `cargo run -p nsv-cli -- serve` after
-`bun run build` and `bun run core:install`. A binary without `core/` beside its
-real path is a development run: it serves this checkout's `dist/client` and
-starts `.vendor/core/cli-proxy-api`, both found from the crate's path at compile
-time, and never installs core updates. It reads the interface from disk on each
-request, so after `bun run build` a reload shows the new UI without a restart.
-The packaging scripts copy `dist/client` to `client/` beside the executable
-(`Contents/Resources/client` in the macOS bundle), and
-`scripts/verify-rust-package.ts` rejects a package without `client/index.html`.
+The app update tests run on CI runners, not on a workstation:
 
-The desktop check uses temporary data and a synthetic profile. It verifies window recreation, draft preservation, IPC bootstrap, continued proxy access with both windows closed, renderer process exit, denied web permission requests, and that a profile core stops when the app receives SIGTERM, SIGINT, SIGHUP or SIGKILL. For memory comparisons, use a packaged build with the same enabled profiles and distinguish idle, UI-open, and request-load measurements; summed RSS includes shared pages. No universal RAM target is enforced.
+- `bun run test:update:mac` updates an Electron build, made from a checkout of
+  main 4ea188a in `NSV_ELECTRON_CHECKOUT`, to the packaged Rust app.
+- `bun tests/mac-update-rust.mjs` updates an older Rust build in place.
+- `tests/linux-update.sh` updates an installed AppImage in place. Run it in a
+  Linux container or VM; its header lists what it needs.
 
-Use `bun ci` to restore the exact dependency versions, `bun add <package>` to add one, and `bun update` for intentional updates. Commit `bun.lock` with `package.json`. CI reads the Bun version from `packageManager` and uses a frozen install. No global Vite, TypeScript, or Electron CLI is needed.
+`tests/downgrade/read-with-ts.ts` proves that the last TypeScript store opens a
+data directory the Rust store wrote. CI runs it against a checkout of main 4ea188a, the last TypeScript release.
+
+For memory comparisons, use a packaged build with the same enabled profiles and
+distinguish idle, UI-open, and request-load measurements. Measure the daemon and
+the window helper separately; summed RSS includes shared pages. The figures in
+[the evidence record](decisions/rust-port-evidence.md) say how each was measured.
+
+## Dependencies and linting
+
+Use `bun ci` to restore the exact JavaScript dependency versions, `bun add <package>`
+to add one, and `bun update` for intentional updates. Commit `bun.lock` with
+`package.json`, and `Cargo.lock` with any `Cargo.toml` change. Rust dependencies
+are declared once in the root `Cargo.toml` under `[workspace.dependencies]`, and
+`cargo deny` checks them against `deny.toml`. CI reads the Bun version from
+`packageManager` and uses a frozen install. No global Vite or TypeScript CLI is
+needed.
 
 Linting uses [Oxlint](https://oxc.rs/docs/guide/usage/linter), including the migrated
 JavaScript/TypeScript rules and React Hooks checks, with zero warnings allowed.
@@ -60,6 +130,7 @@ style without sorting imports or package keys. Configuration lives in
 skills, and the separate `.deepsec` workspace are excluded. VS Code and Cursor
 recommend the official Oxc extension; install it to use the included format-on-save
 settings. `bun run check` checks TypeScript alone; `bun run format:check` checks formatting.
+Rust uses the workspace lints in `Cargo.toml`, `clippy.toml` and `rustfmt.toml`.
 
 The [anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint plugin (v0.1.2, commit
 `e8c4880`, MIT) is vendored under `tools/oxlint/anti-slop/` and loaded through
@@ -67,41 +138,68 @@ The [anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint plugin (v0.1.2, co
 vendored copy matches upstream except for one documented local change in
 `rules/no-runtime-typeof.ts`: the `typeof x === "undefined"` exemption requires
 an identifier operand. It remains excluded from linting and formatting.
-`src/server/json.ts` holds the shared `Json` boundary accessors the rules steer
-toward instead of `unknown`, `typeof`, and casts.
 
-Linux does not require a desktop secret service. GNOME may require an AppIndicator extension to show a tray icon; the View menu's quota command remains available. A desktop Linux session remains untested. The arm64 AppImage runtime needs `libz.so` from `zlib1g-dev`; this does not affect the published x64 artifacts. CI ([checks.yml](../.github/workflows/checks.yml)) builds, tests, and runs the Electron lifecycle smoke check, including the core-lifetime check, on Linux and macOS, plus the `test:ui` checks on macOS. The Linux smoke uses Xvfb and the Chromium sandbox helper; it does not replace testing installation and tray behavior in a desktop session.
+## Wire types and the registry
+
+The interface's wire types in `src/shared` have Rust twins in `nsv-domain`.
+`cargo test -p nsv-domain` writes the `ts-rs` output to `tests/types/generated`,
+and `bun run check` asserts that each pair is mutually assignable. Commit the
+generated files. Provider, agent and vocabulary data stays in TypeScript. After
+changing it, run `bun run registry:export`, which rewrites
+`crates/domain/data/registry.json`; `bun run quality` fails while the two differ.
+
+## Linux desktop
+
+Linux does not require a desktop secret service. GNOME may require an AppIndicator
+extension to show a tray icon; the View menu's quota command remains available. If
+the window helper cannot start, for example without WebKitGTK, the daemon opens the
+session link in the system browser. A desktop Linux session remains untested. CI
+([checks.yml](../.github/workflows/checks.yml)) runs the workspace tests and the
+window helper's UI checks under Xvfb and a session bus on Linux, and packages and
+tests updates on Linux and macOS. Xvfb does not replace testing installation and
+tray behavior in a desktop session.
+
+## The proxy core
 
 The core installer pins the version and all four supported archive checksums in
-`src/server/core-release.json`, then checks the downloaded release against those pins. Packaging also checks the core platform, architecture, and binary hash, preventing a Mac core from accidentally being included in a Linux build. `bun run core:pin [version]` writes a pin from an upstream release; reinstall it and run the tests before packaging. Development runs never install or select core updates: they share the data folder with the desktop app, and an installed core would shadow the pin under test. [Updating the CLIProxyAPI core](releases.md#updating-the-cliproxyapi-core) describes how installed builds receive one.
+`crates/core/core-release.json`, then checks the downloaded release against those
+pins. Packaging also checks the core platform, architecture, and binary hash,
+preventing a Mac core from accidentally being included in a Linux build.
+`bun run core:pin [version]` writes a pin from an upstream release; reinstall it
+with `bun run core:install` and run the tests before packaging. Development runs
+never install or select core updates: they share the data folder with the desktop
+app, and an installed core would shadow the pin under test.
+[Updating the CLIProxyAPI core](releases.md#updating-the-cliproxyapi-core)
+describes how installed builds receive one.
 
 ## Contributor guidance
 
 The project includes reviewed skills in `.agents/skills`; no global installation is
 required. Read [AGENTS.md](../AGENTS.md) for task routing and
-[stack guidance](stack-guidance.md) for Electron, SQLite, Bun, TypeScript,
+[stack guidance](stack-guidance.md) for Rust, SQLite, Bun, TypeScript,
 React, and Vite. `bun run setup` uses the checked-in copies without downloading
 latest skill content. Sources, exact reviewed revisions, and the update policy are
 recorded in [security tooling](security-tooling.md). UI work follows the
 [visual system](design/DESIGN.md); app and tray icons are described in
 [icons](design/icons.md).
 
-## Package metadata
-
-Debian packaging uses the project homepage in `package.json`. The AppImage target
-alone can be built with `bun run build` followed by
-`bun run electron-builder --linux AppImage --publish never` on Linux.
-
 ## Package checks
 
-Packaging runs `scripts/validate-core.cjs` before building the archive and
-`scripts/verify-package.cjs` afterwards. These reject the wrong core version,
-target or hash, unexpected application files, credential files, stale desktop
-output, and missing licenses. Distribution commands use `--publish never`; they
-only create local artifacts. The desktop bundle is minified with function/class names retained for diagnostics. Native Chromium translations and ICU date/number locale data remain intact. Runtime dependencies are bundled into desktop/client output; duplicate `node_modules` are excluded, with full dependency license texts generated in `dist/licenses/THIRD-PARTY.txt`. The build rejects unbundled non-native desktop imports or missing dependency licenses. Packaged builds disable `ELECTRON_RUN_AS_NODE`,
-`NODE_OPTIONS`, `--inspect` arguments, and extra `file://` privileges; ASAR integrity fuses remain disabled because unsigned builds failed
-to launch with them. Follow the [macOS release signing guide](release-signing.md)
-for package checks, then see [SECURITY.md](../SECURITY.md) for release requirements.
+The packaging scripts (`scripts/package-mac.ts`, `package-linux.ts` and
+`package-server.ts`) build the Rust binaries, copy `dist/client` to `client/`
+beside the daemon (`Contents/Resources/client` in the macOS bundle), and stage the
+pinned core and licenses. `scripts/verify-rust-package.ts` then checks each
+artifact: the exact file layout, the pinned core's version and hash, each
+executable's platform and architecture, a static Linux daemon, macOS executables
+that link only system libraries, the licenses, and no private files. Run it on a
+built `.tar.gz`, `.AppImage`, `.deb` or, on macOS, `.zip` with
+`bun scripts/verify-rust-package.ts <artifact>`. Packaging creates local artifacts
+only and publishes nothing. `bun run build:client` writes the interface's
+dependency licenses to `dist/licenses/THIRD-PARTY.txt`, and
+`scripts/rust-licenses.ts` writes the Rust crates' licenses to
+`licenses/THIRD-PARTY-RUST.txt` in each package. Follow the
+[macOS release signing guide](release-signing.md) for signing, then see
+[SECURITY.md](../SECURITY.md) for release requirements.
 
 Run `bun run security:install`, `bun run security:secrets`,
 `bun run security:history`, and `bun run security:deps` before sharing source.
