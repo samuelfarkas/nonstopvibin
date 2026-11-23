@@ -37,6 +37,12 @@
   popup closes when it loses focus or on Escape.
 - On Linux, if the window cannot start, for example without WebKitGTK 4.1, the
   app opens its session link in the system browser.
+- The agent gateway checks the raw request target and refuses, with 404, targets that
+  the old server normalised: raw non-ASCII bytes, `*`, `.` segments and `\`. Only a
+  WebSocket upgrade is forwarded as one; other upgrade requests get 400.
+- `vault.key` and the database must be ordinary files you own, never symbolic links, and
+  the key must be 32 bytes; the app refuses to start otherwise. Credential and agent
+  configuration writes reach the disk before they replace the old file.
 - The server archive's `nonstopvibin` is a static musl executable. The bundled
   core still needs glibc.
 - The reviewed core pin moved to `crates/core/core-release.json`. Installed

@@ -231,6 +231,46 @@ Electron and Bun paths until the switch commits, which:
 - `tests/mac-update.mjs` builds its old version with electron-builder from the checkout.
   After switch 2 it must install a published Electron release's zip instead.
 
+## Behaviour that differs from main
+
+Everything else is meant to behave as main 4ea188a does; the goldens and the ported tests check
+it. These differences are deliberate, each with its reason in the commit or test that made it.
+
+- **Gateway targets.** The gateway checks the raw request target instead of the path the WHATWG
+  URL parser produced, and refuses with 404 (403 under a foreign profile prefix) what main
+  normalised or what Bun's parser answered 400: raw non-ASCII bytes, `*`, `.` segments and `\`.
+  Nothing is forwarded either way (22 of the 1,290 gateway goldens, listed in
+  `crates/gateway/tests/gateway/golden.rs`). An empty POST reaches the core with no
+  `Content-Length: 0`, which HTTP reads as no body.
+- **Upgrades.** Only a WebSocket upgrade (`Upgrade: websocket` with `Connection: upgrade`) takes
+  the upgrade path; another protocol gets 400. Main forwarded any upgrade as a bodyless GET.
+- **Data files.** `vault.key` and the database must be ordinary files the user owns, never links;
+  the key must be 32 bytes. Main checked less. Decryption requires canonical base64 and UTF-8,
+  which every value main wrote is.
+- **Durability.** Credential and agent-configuration writes are synced before their rename.
+- **Error statuses and text.** A core the pool cannot reach answers 502, not 500; a sign-in link
+  or pasted URL that is not a URL answers 502 or 400, not 500. Messages that came from Bun or
+  Node (`ENOENT …`, `Invalid URL`) are now Rust's own; every `AppError` message is unchanged.
+- **Small parsing edges.** Usage counters are whole numbers (a fractional counter loses its
+  fraction); a date-time without an offset reads as UTC (V8 used local time); a hand-edited
+  retention value such as `"3e1"` reads as keep everything; an empty `HOME` is used as is.
+- **Agent configuration.** Merged Claude settings keep the user's key order; numbers above
+  2^53 in the user's JSON stay exact (main rounded them).
+- **Credential socket.** A client that stalls is disconnected instead of answered 408; an
+  oversized request head gets 431.
+- **Desktop.** The Dock icon shows only while the main window exists; the desktop app writes
+  `server.json` and holds `server.lock.sqlite`; the quota popup closes on focus loss and Escape
+  (the Swift click monitor is gone); on Linux a missing WebKitGTK opens the session link in the
+  browser; WebKit's default context menu is suppressed; on macOS the helper moves the window
+  for drag regions, which gives up edge tiling and double-click zoom on those regions. The
+  interface's `localStorage` starts empty once, so it forgets the last selected profile and page.
+- **Start and quit failures.** The could-not-start and failed-quit dialogs carry the real reason
+  as the one free-text field on the helper pipe (capped, control and bidirectional characters
+  stripped, shown as plain native text). On Linux without WebKitGTK a desktop notification
+  carries it instead.
+- **Updates.** The update keeps `NONSTOPVIBIN_DATA_DIR` and `NONSTOPVIBIN_PORT`; once the
+  release key is committed, a minisign signature over `SHA256SUMS` is required too.
+
 ## What would change these decisions
 
 | Result                                                                     | Then                                                                          |
