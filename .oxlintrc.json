@@ -8,15 +8,6 @@
     "builtin": true
   },
   "ignorePatterns": [
-    "node_modules/",
-    "dist/",
-    "release/",
-    ".vendor/",
-    ".codex/",
-    ".claude/",
-    "test-results/",
-    ".runtime/",
-    ".test-runtime/",
     ".deepsec/",
     ".agents/",
     "tools/oxlint/anti-slop/",
