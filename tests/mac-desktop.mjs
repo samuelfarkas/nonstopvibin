@@ -88,9 +88,14 @@ const byPid = (pid) => `se.processes.whose({ unixId: ${pid} })[0]`;
 /** The helper's windows by title, with their frames. */
 function windows(pid = pidOf(helperPath)) {
   if (!pid) return [];
-  return json(
-    `${SE} return ${byPid(pid)}.windows().map((w) => ({ name: w.name(), position: w.position(), size: w.size() }));`,
-  );
+  // An exiting helper can leave System Events before it leaves ps (-1719, invalid index).
+  return json(`${SE}
+    try {
+      return ${byPid(pid)}.windows().map((w) => ({ name: w.name(), position: w.position(), size: w.size() }));
+    } catch (error) {
+      if (error.errorNumber === -1719) return [];
+      throw error;
+    }`);
 }
 const windowNamed = (title) => windows().find((w) => w.name === title);
 
@@ -262,6 +267,15 @@ function colour({ data }) {
 
 // --- The rest of the desktop ---------------------------------------------------------------
 
+/** Windows above normal ones and below the Dock (such as the Dock's own overlays) at a point. */
+const covering = (x, y) =>
+  json(`ObjC.import('CoreGraphics');
+    const list = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0)));
+    return list.filter((w) => {
+      const b = w.kCGWindowBounds;
+      return w.kCGWindowLayer > 0 && w.kCGWindowLayer < 20 &&
+        ${x} >= b.X && ${x} < b.X + b.Width && ${y} >= b.Y && ${y} < b.Y + b.Height;
+    }).map((w) => [w.kCGWindowOwnerName, w.kCGWindowLayer]);`);
 const dockItems = () =>
   json(`${SE} return se.processes.byName('Dock').lists[0].uiElements.name();`);
 function finderInFront() {
@@ -504,12 +518,20 @@ try {
     await waitFor("the popup to close", () => !windowNamed(QUOTA), 3000);
   });
 
-  await check("a click elsewhere closes the popup", async () => {
+  await check("a click on the desktop closes the popup", async () => {
     clickTray();
     await waitFor("the quota popup", () => windowNamed(QUOTA));
     await delay(500);
     click(300, 450);
     await waitFor("the popup to close", () => !windowNamed(QUOTA), 3000);
+    // macOS 14 and later answer a click on the wallpaper by revealing the desktop under a
+    // full-screen Dock window, which takes the next click: give it that click now.
+    if (await poll(() => covering(300, 450).length > 0, 1000)) click(300, 450);
+    await waitFor(
+      "the windows to come back",
+      () => !covering(300, 450).length,
+      5000,
+    );
   });
 
   await check(
@@ -586,6 +608,11 @@ try {
         before.position[0] + before.size[0] - 200,
         before.position[1] + 12,
       ];
+      ok(
+        !covering(x, y).length,
+        "nothing covers the main window",
+        covering(x, y),
+      );
       drag(x, y, x - 60, y + 40);
       await delay(500);
       const after = windowNamed(MAIN);
