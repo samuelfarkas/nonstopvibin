@@ -270,7 +270,6 @@ impl Cores {
         &self.pool
     }
 
-    /// The profile's status.
     #[must_use]
     pub fn status(&self, profile: &ProfileId) -> ProfileStatus {
         self.statuses(|status| status(profile))

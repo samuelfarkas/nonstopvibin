@@ -57,7 +57,6 @@ pub trait QuotaSource: Send + Sync {
     ) -> impl Future<Output = Result<Value, AppError>> + Send;
 }
 
-/// One pool shared by quotas and resets.
 impl<T: QuotaSource> QuotaSource for Arc<T> {
     fn accounts(
         &self,

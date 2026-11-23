@@ -1,5 +1,3 @@
-//! Stubs and helpers shared by the feature tests.
-
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::future::{Future, ready};

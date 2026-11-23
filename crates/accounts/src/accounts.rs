@@ -286,7 +286,6 @@ fn has_json_extension(name: &str) -> bool {
     name.ends_with(".json")
 }
 
-/// An API-key account as `list` shows it.
 /// [`Accounts::list`] inside a store call, for a caller that reads more in the same call.
 ///
 /// # Errors
@@ -304,6 +303,7 @@ pub fn listed(db: &Db, profile: &ProfileId) -> Result<Vec<Account>, StoreError> 
         .collect()
 }
 
+/// An API-key account as `list` shows it.
 fn api_listing(account: ApiAccount) -> Account {
     Account {
         id: account.id,

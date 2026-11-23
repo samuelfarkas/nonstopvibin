@@ -112,7 +112,6 @@ impl Host for Reports {
     }
 }
 
-/// PIDs recorded in the data directory's core ledger.
 /// A process's command line from ps, not /proc, which macOS lacks. No argument the core gets
 /// holds a space.
 fn command_line(pid: u32) -> String {
@@ -123,6 +122,7 @@ fn command_line(pid: u32) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// PIDs recorded in the data directory's core ledger.
 fn ledger(data: &Path) -> Vec<u32> {
     std::fs::read_dir(DataDir::new(data).core_ledger()).map_or_else(
         |_| Vec::new(),

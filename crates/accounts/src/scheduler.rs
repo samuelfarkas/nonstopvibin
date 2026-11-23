@@ -799,7 +799,6 @@ impl Shared {
                 consider(at);
             }
         }
-        // Only what the restart policy asked for: nothing for a profile that cannot start.
         for track in state.tracks.values() {
             match track.wake {
                 Some(Due::Now) => consider(now),

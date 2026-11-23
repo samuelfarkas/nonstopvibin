@@ -1,6 +1,6 @@
 //! Replays the pricing, totals and models.dev cases of `tests/golden/usage.json`
 //! (`tests/golden/areas/usage.ts`). The `queue entry` and `queue page` cases record the usage
-//! drain, which the pool owns.
+//! drain, which the scheduler owns; `scheduler::golden` replays them.
 
 use std::sync::Arc;
 
