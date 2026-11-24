@@ -1,0 +1,34 @@
+[package]
+name = "nsv-cli"
+description = "The nonstopvibin binary: command line, headless server and desktop mode."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nonstopvibin"
+path = "src/main.rs"
+
+[dependencies]
+nsv-agents.workspace = true
+nsv-core.workspace = true
+nsv-files.workspace = true
+nsv-server.workspace = true
+nsv-shell.workspace = true
+# preserve_order: `url --json` and server.json keep JSON.stringify's key order.
+serde_json = { workspace = true, features = ["preserve_order"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+nsv-domain.workspace = true
+nsv-store.workspace = true
+nsv-testkit.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "time"] }
+
+[lints]
+workspace = true

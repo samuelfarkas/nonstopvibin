@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/setup
       - run: bun scripts/verify-release.mjs "$GITHUB_REF_NAME"
   security:
     needs: preflight
@@ -26,6 +26,8 @@ jobs:
   release:
     needs: [build, security]
     runs-on: ubuntu-24.04
+    # Holds MINISIGN_SECRET_KEY (and the signing secrets); restrict it to v* tags.
+    environment: release
     timeout-minutes: 15
     permissions:
       contents: write
@@ -35,7 +37,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: ./.github/actions/setup
       - run: bun ci --ignore-scripts
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -44,7 +46,11 @@ jobs:
           pattern: nonstopvibin-*
           merge-multiple: true
       - run: bun scripts/verify-release.mjs "$GITHUB_REF_NAME" release
-      - run: cd release && sha256sum * > SHA256SUMS
+      - name: Write and sign SHA256SUMS for the Rust updater
+        run: bun scripts/sign-release.ts release
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/*

@@ -1,0 +1,26 @@
+[package]
+name = "nsv-domain"
+description = "Ids, wire types, the provider and agent registry, secret newtypes, JavaScript semantics and the daemon's addresses. No file, network or process I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+getrandom = { workspace = true, features = ["std"] }
+secrecy.workspace = true
+serde.workspace = true
+# `domain::js` reads and writes objects in JavaScript's key order.
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ts-rs.workspace = true
+
+[lints]
+workspace = true

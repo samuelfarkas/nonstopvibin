@@ -1,0 +1,40 @@
+[package]
+name = "nsv-window"
+description = "The window helper: the native webview window, the UI bridge and dialogs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nonstopvibin-window"
+path = "src/main.rs"
+
+[dependencies]
+nsv-desktop.workspace = true
+nsv-domain.workspace = true
+serde_json.workspace = true
+tao.workspace = true
+wry.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true
+# The main window's menu bar.
+muda = { workspace = true, features = ["gtk3"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-foundation.workspace = true
+
+[dev-dependencies]
+nsv-testkit.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11-dl.workspace = true
+
+[lints]
+workspace = true

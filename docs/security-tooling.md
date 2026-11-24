@@ -2,8 +2,14 @@
 
 ## Checks
 
-- `bun run quality` runs strict TypeScript checks, Oxlint, and Oxfmt.
+- `bun run quality` runs strict TypeScript checks, Oxlint, Oxfmt, and the
+  registry drift check.
+- CI runs `cargo fmt --check`, `cargo clippy` with warnings as errors, and
+  `cargo machete` on the Rust workspace. Each crate forbids `unsafe` code except
+  the macOS shell's scoped `SMAppService` calls.
 - `bun run security:deps` runs Bun's dependency audit at high severity.
+- The security workflow runs `cargo deny check` (RustSec advisories, licenses,
+  bans and sources, configured in `deny.toml`) and `cargo audit`.
 - Gitleaks 8.30.1 scans the working tree and Git history. The installer verifies
   pinned official archive hashes before placing it under `.vendor/security`.
 - DeepSec 2.3.10 has a separate locked Bun workspace under `.deepsec`. Its local

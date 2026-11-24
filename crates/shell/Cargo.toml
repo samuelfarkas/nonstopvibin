@@ -1,0 +1,55 @@
+[package]
+name = "nsv-shell"
+description = "The desktop shell: tray, window-helper supervision, login item and app updates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64.workspace = true
+minisign-verify.workspace = true
+nsv-desktop.workspace = true
+nsv-domain.workspace = true
+nsv-files.workspace = true
+nsv-net.workspace = true
+png.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+url.workspace = true
+
+# Linux links no GUI library: the tray is a StatusNotifierItem on the session bus.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni.workspace = true
+zbus.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda.workspace = true
+nsv-core.workspace = true
+objc2.workspace = true
+objc2-app-kit = { workspace = true, features = ["NSButton", "NSControl", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWorkspace"] }
+objc2-foundation.workspace = true
+objc2-service-management.workspace = true
+tao.workspace = true
+tray-icon.workspace = true
+
+[build-dependencies]
+minisign-verify.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+nsv-testkit = { workspace = true, features = ["shell"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+ksni.workspace = true
+zbus.workspace = true
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
 import { agents, type Agent } from "./agents.ts";
+import type { Protocol } from "./generated/domain/Protocol.ts";
 
-export const protocols = ["openai", "anthropic", "responses"] as const;
-export type Protocol = (typeof protocols)[number];
-/** Server rules an API-key preset can name: see `modelProtocols` (api-accounts.ts) and `upstreamHeaders` (config.ts). */
+export type { Protocol };
+/** Server rules an API-key preset can name: see `model_protocol` (crates/accounts/src/api_accounts.rs) and `upstream_headers` (crates/core/src/config.rs). */
 export type Upstream = "opencode-go";
 
 interface ProviderFields {
@@ -200,8 +200,6 @@ export function providerEntry(id: string): ProviderEntry | undefined {
 export function isOAuthProvider(id: string): id is OAuthProvider {
   return providerEntry(id)?.signIn !== undefined;
 }
-export const isCredentialFile = (type: string) =>
-  providerEntry(type)?.credentialFile === true;
 export type OrganizationProvider = {
   [K in Provider]: Entries[K] extends { organizations: true } ? K : never;
 }[Provider];
@@ -213,9 +211,6 @@ export const oauthProviders = providerIds.flatMap((id) => {
   const { signIn, ...entry } = providerEntry(id);
   return signIn && isOAuthProvider(id) ? [{ ...entry, ...signIn, id }] : [];
 });
-export const apiKeyProviders = providerIds.filter(
-  (id) => providerEntry(id).apiKey,
-);
 export const apiPresets = providerIds.flatMap((id) => {
   const { preset, visible } = providerEntry(id);
   return preset ? [{ ...preset, id, visible }] : [];

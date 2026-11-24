@@ -96,9 +96,12 @@ sign-in, Tailscale, upgrades, and the [protected-upstream contract](docs/server.
 
 ## Build from source
 
-This is a prerelease. Install [Bun 1.4.2](https://bun.com/docs/installation) and
-Git. On macOS, also install Xcode Command Line Tools (`xcode-select --install`).
-From a checkout of this repository:
+This is a prerelease. Install Git, [Bun 1.4.2](https://bun.com/docs/installation),
+and [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version, and
+rustup installs it on the first `cargo` command. On macOS, also install Xcode
+Command Line Tools (`xcode-select --install`). On Linux, install the WebKitGTK 4.1
+and GTK 3 development files, for example `libwebkit2gtk-4.1-dev` and
+`libgtk-3-dev` on Debian and Ubuntu. From a checkout of this repository:
 
 ```sh
 bun run setup
@@ -107,6 +110,8 @@ bun run start
 ```
 
 Setup installs locked dependencies and downloads the pinned CLIProxyAPI core.
+`bun run build` builds the React interface into `dist/client` and the Rust
+binaries in release mode. `bun run start` runs the desktop app from the checkout.
 To create an installer, run the matching command on the target system:
 
 | Release target       | Command              | Output in `release/` |
@@ -114,6 +119,8 @@ To create an installer, run the matching command on the target system:
 | macOS, Apple Silicon | `bun run dist:mac`   | DMG and ZIP          |
 | Linux, x86_64        | `bun run dist:linux` | AppImage and deb     |
 
+The Linux packages link the daemon statically against musl, so `dist:linux` also
+needs `musl-tools` and `rustup target add x86_64-unknown-linux-musl`.
 Packaged apps do not require Bun. Starting with 0.2.0, packaged macOS and AppImage
 builds check GitHub Releases for updates; deb installations update manually.
 Installed builds, deb included, also update the proxy core from Settings once a
@@ -121,10 +128,26 @@ reviewed core pin reaches `main`. See [releases and app updates](docs/releases.m
 Installation and tray behavior in an interactive Linux desktop session still need
 verification. See [release requirements](SECURITY.md) before distributing builds.
 
-For development, use `bun run dev`; `bun run preview` starts an isolated app with
-sample accounts. Development shares `~/.nonstopvibin` with the desktop app by
-default, so quit the app first or use a separate data directory as described in
-[Development](docs/development.md). See [Contributing](CONTRIBUTING.md) for checks.
+For development, use `bun run dev`. Development shares `~/.nonstopvibin` with the
+desktop app by default, so quit the app first or use a separate data directory as
+described in [Development](docs/development.md). See [Contributing](CONTRIBUTING.md)
+for checks.
+
+## Resource use
+
+The app is one Rust daemon, `nonstopvibin`, plus one CLIProxyAPI core per running
+profile. The daemon serves the agent gateway, the management API, and the
+interface. A separate `nonstopvibin-window` process shows the window and exits
+when you close it, so no web engine runs while the app sits in the menu bar.
+
+On the same synthetic workload with three profiles, the daemon starts in
+milliseconds where the Bun server and the Electron app it replaced took tens to
+hundreds, uses a fraction of their memory while idle and after a burst of large
+requests, and does not wake up while idle, as the headless server and as the
+desktop app with its tray. Opening the window starts the window process, which
+exits soon after the last close. [The measurements](docs/decisions/rust-port-evidence.md)
+hold the figures for the host process (not the cores), the method, CPU per request,
+and macOS gaps.
 
 ## Data and privacy
 

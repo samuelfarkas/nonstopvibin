@@ -14,6 +14,43 @@
 
 ### Changed
 
+- NonstopVibin is now one Rust daemon, `nonstopvibin`, instead of Electron and the
+  TypeScript server. It serves the agent gateway, the management API and the same
+  React interface, runs the CLI and, on the desktop, the tray. A separate
+  `nonstopvibin-window` process shows the window and the quota popup and exits
+  when the last one closes, so no web engine runs while the app sits in the menu
+  bar. On Linux x64 the daemon starts in 2–3 ms and idles at 9–11 MiB with no
+  wakeups, against 179–185 MiB for Electron without a window and 44 MiB for the
+  Bun server. Data, profiles, agent connections and the update feed are
+  unchanged, and installed builds update onto the Rust app. See
+  [the decision record](docs/decisions/rust-port.md) and
+  [the measurements](docs/decisions/rust-port-evidence.md).
+- App updates check a minisign signature over the release's `SHA256SUMS` once the
+  release key is committed, beside the SHA-512 check, and on macOS the new
+  bundle's code signature and core. An update now starts the new version with
+  the old one's environment, so `NONSTOPVIBIN_DATA_DIR` and `NONSTOPVIBIN_PORT`
+  survive it.
+- The desktop app now writes `server.json` and holds `server.lock.sqlite` in the
+  data folder, as the server does. A second launch uses them to show the running
+  app's window. On Linux the window keeps its web storage in `webview/` there.
+- On macOS the Dock icon shows only while the main window is open. The quota
+  popup closes when it loses focus or on Escape.
+- On Linux, if the window cannot start, for example without WebKitGTK 4.1, the
+  app opens its session link in the system browser.
+- The agent gateway checks the raw request target and refuses, with 404, targets that
+  the old server normalised: raw non-ASCII bytes, `*`, `.` segments and `\`. Only a
+  WebSocket upgrade is forwarded as one; other upgrade requests get 400.
+- `vault.key` and the database must be ordinary files you own, never symbolic links, and
+  the key must be 32 bytes; the app refuses to start otherwise. Credential and agent
+  configuration writes reach the disk before they replace the old file.
+- The server archive's `nonstopvibin` is a static musl executable. The bundled
+  core still needs glibc.
+- The reviewed core pin moved to `crates/core/core-release.json`. Installed
+  TypeScript builds read the old path on `main`, so they offer no new core until
+  they update to the Rust app.
+- Building from source needs a Rust toolchain (rustup reads
+  `rust-toolchain.toml`) and, on Linux, the WebKitGTK 4.1 and GTK 3 development
+  files.
 - The macOS app now installs its own updates. Releases are ad-hoc signed, and an
   installed app accepts any new version with its bundle identifier, so updates no
   longer fail Squirrel.Mac's signature check. Releases need no Apple signing secrets. The
@@ -25,6 +62,12 @@
   hashes for all four targets. It brings upstream's stream failover, Antigravity and
   Codex fixes. On its first start each profile core writes a generated `server-id`
   into that profile's config file; NonstopVibin does not use it.
+
+### Removed
+
+- `bun run preview`, the sample-data simulator, left with the TypeScript server.
+- Releases no longer publish blockmaps. Installed Electron builds download the
+  whole update instead of a difference.
 
 ## [0.2.0] - 2026-11-17
 

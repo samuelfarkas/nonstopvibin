@@ -1,0 +1,63 @@
+host: 127.0.0.1
+port: 8317
+auth-dir: /tmp/nsv-ts-fixture/data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth
+api-keys:
+  - core-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+remote-management:
+  allow-remote: false
+  secret-key: management-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  disable-control-panel: true
+  disable-auto-update-panel: true
+debug: false
+commercial-mode: true
+logging-to-file: false
+request-log: false
+error-logs-max-files: 10
+usage-statistics-enabled: true
+redis-usage-queue-retention-seconds: 86400
+request-retry: 1
+max-retry-interval: 5
+ws-auth: true
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: false
+  antigravity-credits: false
+routing:
+  strategy: round-robin
+  session-affinity: false
+  session-affinity-ttl: 1h
+plugins:
+  enabled: false
+openai-compatibility:
+  - name: custom-6cea0169ffed188e88f7b2ae5a07c4db360a0601077d667dc54149720e7ac87e
+    prefix: local
+    base-url: http://127.0.0.1:11434/v1
+    headers: &a1 {}
+    api-key-entries:
+      - api-key: synthetic api key one
+    models:
+      - name: qwen3-coder:30b
+        alias: qwen3-coder:30b
+claude-api-key:
+  - api-key: synthetic api key one
+    prefix: local
+    base-url: http://127.0.0.1:11434
+    headers: *a1
+    models:
+      - name: local-claude-proxy
+        alias: local-claude-proxy
+  - api-key: synthetic api key two
+    prefix: anthropic
+    base-url: https://api.anthropic.com
+    headers: {}
+    models:
+      - name: claude-sonnet-4-5
+        alias: claude-sonnet-4-5
+codex-api-key:
+  - api-key: synthetic api key one
+    prefix: local
+    base-url: http://127.0.0.1:11434/v1
+    headers: *a1
+    models:
+      - name: local-responses
+        alias: local-responses

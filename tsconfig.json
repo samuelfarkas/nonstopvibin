@@ -17,5 +17,11 @@
     "noUnusedParameters": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["src", "tests", "vite.config.ts", "scripts/**/*.ts"]
+  "include": ["src", "tests", "vite.config.ts", "scripts/**/*.ts"],
+  "exclude": [
+    "tests/golden/record.ts",
+    "tests/golden/lib.ts",
+    "tests/golden/areas",
+    "tests/fixtures/ts-data-dir/generate.ts"
+  ]
 }

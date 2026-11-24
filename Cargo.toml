@@ -1,0 +1,131 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# Every crate except `window`, the only one that links WebKitGTK: plain `cargo build`, `test`
+# and `clippy` work on a host without the GUI dev packages. `--workspace` (or `-p nsv-window`)
+# needs libwebkit2gtk-4.1-dev and libgtk-3-dev on Linux.
+default-members = [
+    "crates/accounts",
+    "crates/agents",
+    "crates/cli",
+    "crates/core",
+    "crates/desktop",
+    "crates/domain",
+    "crates/files",
+    "crates/gateway",
+    "crates/net",
+    "crates/server",
+    "crates/shell",
+    "crates/store",
+    "crates/testkit",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+publish = false
+repository = "https://github.com/samuelfarkas/nonstopvibin"
+
+[workspace.dependencies]
+nsv-accounts = { path = "crates/accounts" }
+nsv-agents = { path = "crates/agents" }
+nsv-core = { path = "crates/core" }
+nsv-desktop = { path = "crates/desktop" }
+nsv-domain = { path = "crates/domain" }
+nsv-files = { path = "crates/files" }
+nsv-gateway = { path = "crates/gateway" }
+nsv-net = { path = "crates/net" }
+nsv-server = { path = "crates/server" }
+nsv-shell = { path = "crates/shell" }
+nsv-store = { path = "crates/store" }
+nsv-testkit = { path = "crates/testkit" }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "zeroize"] }
+base64 = "0.23.1"
+getrandom = "0.4.3"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
+minisign-verify = "0.3.0"
+proptest = "1.12.0"
+rusqlite = { version = "0.43.0", default-features = false, features = ["bundled", "cache"] }
+rustix = { version = "1.1.6", default-features = false, features = ["std", "fs", "process"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+ts-rs = { version = "12.0.1", default-features = false, features = ["no-serde-warnings", "serde-compat"] }
+unicode-normalization = "0.1.26"
+webpki-roots = "1.0.12"
+zeroize = "1.9.2"
+# Desktop GUI only: the shell (crates/shell, linked into the nonstopvibin binary) and the window
+# helper (crates/window, its own binary). The shell links no GTK: on Linux its tray is ksni over
+# zbus (D-Bus); on macOS it uses tray-icon, and objc2-service-management for the login item.
+# Only the window helper links gtk, wry (WebKitGTK on Linux) and x11-dl.
+gtk = "0.18.2"
+ksni = "0.3.7"
+muda = { version = "0.21.2", default-features = false }
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAlert", "NSApplication", "NSEvent", "NSOpenPanel", "NSPanel", "NSPasteboard", "NSResponder", "NSSavePanel", "NSScreen", "NSWindow"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSArray", "NSString", "NSURL", "objc2-core-services"] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
+png = "0.18.1"
+tao = { version = "0.37.3", default-features = false, features = ["rwh_06", "x11"] }
+tray-icon = { version = "0.26.1", default-features = false }
+url = "2.5.9"
+wry = "0.57.3"
+x11-dl = "2.21.0"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[workspace.lints.rust]
+# Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+trivial_casts = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Beyond pedantic: no panics reachable from input, no silent lint exceptions, no stray output.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unreachable = "warn"
+todo = "warn"
+unimplemented = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+exit = "warn"
+mem_forget = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+iter_over_hash_type = "warn"
+infinite_loop = "warn"
+clone_on_ref_ptr = "warn"
+
+# The core tool and the tests hash 80 MB cores; unoptimized SHA-256 takes over a second each.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3
+# Unwind: a panicking request task ends that request only; the pool, scheduler and store
+# threads turn a panic into a graceful shutdown that stops the cores (docs/decisions/rust-port.md).
+panic = "unwind"
+overflow-checks = true

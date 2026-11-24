@@ -1,5 +1,11 @@
-import type { Account, SeatIdentity } from "../shared/types.ts";
+import type { Account } from "../shared/types.ts";
 import { providerLabel } from "../shared/providers.ts";
+
+/** The organization fields an account and an import source share. */
+type SeatIdentity = Pick<
+  Account,
+  "accountUuid" | "organizationUuid" | "organizationName"
+>;
 
 export function groupAccountsByProvider(
   accounts: Account[],
@@ -74,4 +80,22 @@ export function age(value?: string): string {
   return mins < 1
     ? "checked just now"
     : `checked ${mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`} ago`;
+}
+
+const standardCount = new Intl.NumberFormat("en", { maximumFractionDigits: 1 });
+const compactCount = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+export function count(n: number): string {
+  return (n >= 100_000 ? compactCount : standardCount).format(n);
+}
+export function dateLabel(value: string, format: Intl.DateTimeFormat): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Invalid Date" : format.format(date);
+}
+export function csvCell(value: string): string {
+  return `"${value
+    .replace(/^(\s*)([=+@\t\r-])/, "$1'$2")
+    .replaceAll('"', '""')}"`;
 }

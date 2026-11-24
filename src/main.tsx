@@ -7,7 +7,6 @@ import "@fontsource-variable/space-grotesk";
 import "./client/styles.css";
 import "./client/focus.ts";
 
-// Shown when a root fails to load or render.
 const fatal = (
   <div className="fatal">
     <h1>Something interrupted the interface.</h1>

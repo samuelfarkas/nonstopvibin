@@ -3,22 +3,12 @@
   "printWidth": 80,
   "sortPackageJson": false,
   "ignorePatterns": [
-    "node_modules/",
-    "dist/",
-    "release/",
-    ".vendor/",
-    ".research/",
-    ".playwright-cli/",
-    ".codex/",
-    ".claude/",
-    "test-results/",
-    "playwright-report/",
-    ".runtime/",
-    ".test-runtime/",
     ".deepsec/",
     ".agents/",
-    "artifacts/",
-    "coverage/",
-    "tools/oxlint/anti-slop/"
+    "tools/oxlint/anti-slop/",
+    "tests/fixtures/ts-data-dir/data/",
+    "tests/fixtures/ts-data-dir/agent-home/",
+    "src/shared/generated/",
+    "tests/golden/*.json"
   ]
 }

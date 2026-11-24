@@ -11,7 +11,7 @@ Optional body explaining the problem, resulting behavior, and relevant limits.
 Optional trailers, such as Fixes: #123
 ```
 
-This fits the repository's React renderer, Electron desktop, local server, and
+This fits the repository's React interface, Rust daemon and desktop shell, and
 release tooling: the type explains intent and an optional scope identifies the
 area. It keeps history searchable without adding a commit hook or dependency.
 
@@ -46,7 +46,7 @@ feat(quota): support confirmed Codex reset redemption
 fix(server): refuse to replace a missing vault key
 perf(desktop): suspend tray work while hidden
 docs: document commit and release conventions
-build(deps): update electron-updater
+build(deps): update hyper
 ```
 
 Use `!` before the colon for an incompatible change and a `BREAKING CHANGE:` footer

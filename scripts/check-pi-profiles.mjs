@@ -16,8 +16,45 @@ import http from "node:http";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { createRequire } from "node:module";
-import { piProfileControls } from "../src/server/pi-profile-controls.ts";
-import { piExtension } from "../src/server/agent-pi.ts";
+import {
+  fill,
+  firstWrite,
+  goldenText,
+} from "../tests/support/agents-golden.ts";
+
+const piProfileControls = goldenText("pi profile controls source");
+const goldenExtension = firstWrite(
+  "scenario pi lifecycle",
+  "<home>/.pi/agent/extensions/nonstopvibin-work.js",
+);
+
+/** The golden extension (profile "work", port 4318) rewritten for another profile. */
+function piExtension(profile, helper, port, preferences) {
+  // Paths are written JSON- and shell-quoted; these need no escaping in either.
+  for (const path of [helper, preferences]) assert.match(path, /^[\w/.-]+$/);
+  assert.match(profile.name, /^[\w-]+$/);
+  const [head, tail] = goldenExtension.split(piProfileControls);
+  assert.ok(tail !== undefined, "golden extension embeds the controls");
+  const substitutions = [
+    ["<data>/agent-connections/work/pi-key-4318", helper],
+    ["<data>/agent-connections/pi-preferences", preferences],
+    ["Work: R&D 'quoted'", profile.name],
+    [
+      "http://127.0.0.1:4318/p/work",
+      `http://127.0.0.1:${port}/p/${profile.slug}`,
+    ],
+    ["nonstopvibin-work", `nonstopvibin-${profile.slug}`],
+    ['"slug":"work"', JSON.stringify({ slug: profile.slug }).slice(1, -1)],
+  ];
+  const [start, end] = [head, tail].map((part) => fill(part, substitutions));
+  for (const [from] of substitutions)
+    assert.ok(
+      head.includes(from) || tail.includes(from),
+      `golden pi extension contains ${from}`,
+    );
+  assert.doesNotMatch(start + end, /4318|<data>|<home>/);
+  return start + piProfileControls + end;
+}
 
 if (!process.argv[2])
   throw new Error("Pass the installed pi-coding-agent package directory.");

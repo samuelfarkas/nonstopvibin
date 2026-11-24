@@ -1,0 +1,42 @@
+host: 127.0.0.1
+port: 8318
+auth-dir: /tmp/nsv-ts-fixture/data/profiles/d120c6b8-8067-4659-8593-37de2c72d1cf/auth
+api-keys:
+  - core-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+remote-management:
+  allow-remote: false
+  secret-key: management-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  disable-control-panel: true
+  disable-auto-update-panel: true
+debug: false
+commercial-mode: true
+logging-to-file: false
+request-log: false
+error-logs-max-files: 10
+usage-statistics-enabled: true
+redis-usage-queue-retention-seconds: 86400
+request-retry: 1
+max-retry-interval: 5
+ws-auth: true
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: false
+  antigravity-credits: false
+routing:
+  strategy: fill-first
+  session-affinity: true
+  session-affinity-ttl: 1h
+plugins:
+  enabled: false
+openai-compatibility:
+  - name: gemini-28d75b2af29e0036039250f83d8947d038c3a885de418f94fb9427df13c0b839
+    prefix: gem
+    base-url: https://generativelanguage.googleapis.com/v1beta/openai
+    headers: {}
+    api-key-entries:
+      - api-key: synthetic api key six
+    models:
+      - name: gemini-2.5-pro
+        alias: gemini-2.5-pro
+claude-api-key: []
+codex-api-key: []

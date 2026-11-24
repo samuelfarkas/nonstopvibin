@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>focus fixture</title>
+<!-- Markup with the components' class names; tests/integration/ui/checks/focus.js drives it. -->
+<!-- The macOS main window draws its traffic lights over the page's top-left corner, which the
+     app leaves clear (styles.css, `.desktop .sidebar`): a click there would hit them. -->
+<style>
+  body {
+    padding-top: 44px;
+  }
+</style>
+<button id="first">Refresh</button>
+<details>
+  <summary class="tray-profile">Profile</summary>
+  Quota
+</details>
+<details>
+  <summary class="tray-account-summary">Account</summary>
+  Quota
+</details>
+<div class="agent-tabs"><button>Agent</button></div>
+<div class="activity-page">
+  <details><summary>Activity</summary></details>
+</div>
+<input aria-label="Profile name" />
+<div class="select-item" tabindex="0" data-highlighted>Option</div>
+<input type="checkbox" aria-label="Enabled" />
+<script type="module" src="./focus.ts"></script>

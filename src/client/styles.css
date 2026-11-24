@@ -767,7 +767,7 @@ input[role="switch"]:disabled {
   gap: 8px;
 }
 .nv-logo-button {
-  -webkit-app-region: no-drag;
+  --app-region: no-drag;
   border: 0;
   padding: 0;
   background: transparent;
@@ -1068,24 +1068,13 @@ input[role="switch"]:disabled {
   position: relative;
   min-height: 100vh;
 }
-.window-drag {
-  display: none;
-}
-.desktop .window-drag {
-  display: block;
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 30px;
-  -webkit-app-region: drag;
-  pointer-events: none;
-}
 .desktop .sidebar {
   padding-top: 44px;
 }
+/* Drag regions move the macOS main window, which has no title bar; the window helper reads
+   the inherited value where a press lands. */
 .desktop .brand {
-  -webkit-app-region: drag;
+  --app-region: drag;
 }
 .page-header {
   display: flex;
@@ -1106,10 +1095,10 @@ input[role="switch"]:disabled {
   z-index: var(--z-sticky);
 }
 .desktop .page-header {
-  -webkit-app-region: drag;
+  --app-region: drag;
 }
 .desktop .page-header button {
-  -webkit-app-region: no-drag;
+  --app-region: no-drag;
 }
 .page-title {
   display: flex;

@@ -31,8 +31,8 @@ Readability at actual size on a large monitor wins over matching tiny mockup tex
   112.5% at 1920 CSS pixels and 125% at 2560. No device-pixel/DPI guessing.
   Main-window labels and metadata are at least 14px; account values are 20px.
   Native View > Zoom is available for individual display preferences.
-- Tray exception: the fixed-width menu-bar panel (`trayWidth` in
-  `src/desktop/main.ts`) uses 14px names and 12px
+- Tray exception: the fixed-width quota popup (`QUOTA_WIDTH` in
+  `crates/window/src/layout.rs`) uses 14px names and 12px
   metadata. It does not inherit the main window's large-display scale.
 - Radii: `--radius` 6px controls, `--radius-lg` 10px panels/modals. Nothing
   rounder.

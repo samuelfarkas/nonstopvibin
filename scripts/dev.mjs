@@ -1,7 +1,18 @@
+// `bun run dev`: the Rust daemon from this checkout in development mode, which accepts the
+// Vite server's Host and Origin, and Vite with hot reload proxying /api to it. Open the link
+// the daemon prints.
 import { spawn } from "node:child_process";
+const port = process.env.NONSTOPVIBIN_PORT || "4318";
 const children = [
-  spawn(process.execPath, ["run", "dev:server"], { stdio: "inherit" }),
-  spawn(process.execPath, ["run", "dev:web"], { stdio: "inherit" }),
+  spawn(
+    "cargo",
+    ["run", "--quiet", "--bin", "nonstopvibin", "--", "serve", "--port", port],
+    {
+      stdio: "inherit",
+      env: { ...process.env, NONSTOPVIBIN_DEVELOPMENT: "1" },
+    },
+  ),
+  spawn(process.execPath, ["run", "vite"], { stdio: "inherit" }),
 ];
 let stopping = false;
 function stop() {

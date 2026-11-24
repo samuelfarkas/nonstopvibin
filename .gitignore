@@ -48,3 +48,10 @@ id_ed25519
 
 # Keep .deepsec config, lockfile, and curated context; its own ignore rules
 # exclude scanner state, findings, traces, credentials, and reports.
+
+# Rust build output
+/target/
+
+# The migration fixture: a data directory the TypeScript version wrote, with fixed synthetic keys.
+!/tests/fixtures/ts-data-dir/data/nonstopvibin.sqlite
+!/tests/fixtures/ts-data-dir/data/vault.key

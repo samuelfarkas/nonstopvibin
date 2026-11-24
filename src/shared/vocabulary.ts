@@ -1,10 +1,8 @@
 // Limits, values and rules the server and the renderer must agree on. Data and pure
-// functions only: the renderer loads this module, so it imports nothing at run time.
+// functions only: the renderer loads this module, so it imports only generated data.
 
-export const strategies = ["round-robin", "fill-first"] as const;
-/** Days of usage history kept; 0 keeps everything. */
-export const retentionDays = [0, 30, 90, 365] as const;
-export type RetentionDays = (typeof retentionDays)[number];
+export { retentionDays, strategies } from "./generated/domain/vocabulary.ts";
+export type { RetentionDays } from "./generated/domain/RetentionDays.ts";
 /** Profile and account names. */
 export const nameLength = 60;
 /** API-key model prefixes. */
@@ -17,20 +15,8 @@ export const credentialFileBytes = 2_000_000;
 export const allHistoryDays = 3650;
 /** Usage records per page: the core's drain, history pages and the Activity sample. */
 export const usagePageSize = 500;
-/**
- * Whether the app keeps a profile's core running, starting it again when it is not: it has
- * a subscription, whose quota and routing need the core. Every way to add one starts the
- * profile, so a profile with one is a profile the user meant to run.
- */
-export const keepsRunning = (subscriptions: number): boolean =>
-  subscriptions > 0;
-/** How often the server refreshes every account's quota. */
+/** How often the server refreshes every account's quota while the UI polls. */
 export const quotaRefreshMs = 120_000;
+/** How often the UI polls the state; the server keeps polling cores for three missed polls. */
+export const pollMs = 4000;
 export const quotaStaleMs = 2 * quotaRefreshMs + 60_000;
-export const resetResultCodes = [
-  "reset",
-  "already_redeemed",
-  "nothing_to_reset",
-  "no_credit",
-] as const;
-export type ResetResultCode = (typeof resetResultCodes)[number];

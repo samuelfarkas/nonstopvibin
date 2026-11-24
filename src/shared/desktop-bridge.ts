@@ -1,10 +1,11 @@
-// The privileged calls the desktop shell offers the renderer. The preload script
-// builds `window.nonstopvibin` from `bridgeChannels`; the main process registers
-// one validated handler per method, typed against `DesktopBridge`. Types and
-// strings only: the sandboxed preload bundles this module.
+// `window.nonstopvibin`: the privileged calls the desktop app offers its own pages. The
+// helper's bridge script defines one method per name of `Method::ALL`
+// (crates/desktop/src/bridge.rs), which `bun run wire:export` writes to ./generated/desktop.
 
-/** Every method takes at most one argument, which main validates. */
-export interface DesktopBridge {
+import type { BridgeMethod } from "./generated/desktop/BridgeMethod.ts";
+
+/** Every method takes at most one argument, which the daemon validates. */
+interface Methods {
   bootstrap(): Promise<{ token: string }>;
   openExternal(url: string): Promise<void>;
   copy(text: string): Promise<void>;
@@ -15,24 +16,8 @@ export interface DesktopBridge {
   revealData(): Promise<void>;
   chooseProject(): Promise<string | null>;
 }
-export type BridgeMethod = keyof DesktopBridge;
-export type BridgeArgument<M extends BridgeMethod> = Parameters<
-  DesktopBridge[M]
->[0];
-export type BridgeResult<M extends BridgeMethod> = Awaited<
-  ReturnType<DesktopBridge[M]>
->;
-export const bridgeChannels = {
-  bootstrap: "nv:bootstrap",
-  openExternal: "nv:open-external",
-  copy: "nv:copy",
-  showWindow: "nv:show-window",
-  releaseWindow: "nv:release-window",
-  setLoginItem: "nv:login-item",
-  getLoginItem: "nv:get-login-item",
-  revealData: "nv:reveal-data",
-  chooseProject: "nv:choose-project",
-} as const satisfies Record<BridgeMethod, `nv:${string}`>;
+/** A missing method fails to index `Methods`, and an extra one is not on the bridge. */
+export type DesktopBridge = { [M in BridgeMethod]: Methods[M] };
 
 declare global {
   interface Window {

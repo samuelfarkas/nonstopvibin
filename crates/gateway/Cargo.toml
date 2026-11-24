@@ -1,0 +1,25 @@
+[package]
+name = "nsv-gateway"
+description = "The agent gateway: key extraction, routing, header rewrite, and HTTP, SSE and WebSocket pass-through."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server"] }
+nsv-domain.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt"] }
+
+[dev-dependencies]
+nsv-testkit.workspace = true
+proptest.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["macros", "time"] }
+
+[lints]
+workspace = true

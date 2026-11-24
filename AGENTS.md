@@ -1,8 +1,11 @@
 # Working on nonstopvibin
 
-React/Vite owns the renderer; Electron owns desktop privileges; the local server
-and CLIProxyAPI core own credentials and routing. Use Bun and `bun.lock`;
-`.deepsec` has its own dependencies and lockfile.
+React/Vite owns the interface. The Rust daemon `nonstopvibin` owns credentials,
+routing, the gateway, the management API and the tray. The window helper
+`nonstopvibin-window` is the only code that links WebKit. One CLIProxyAPI core per
+running profile does the upstream work. Rust crates live in `crates/` with
+`Cargo.lock`; the interface and build scripts use Bun and `bun.lock`; `.deepsec`
+has its own dependencies and lockfile.
 
 ## Working style and completion
 
@@ -13,25 +16,30 @@ coding when configuring Codex; increase it for problems that warrant deeper work
 
 Done means the requested behavior works, touched files are formatted, relevant
 checks pass, and any remaining blockers or unverified behavior are reported.
-For code/config changes, `bun run quality` is the completion gate; use affected
-`bun test` tests for behavior changes and `bun run build` for runtime/build
+For code/config changes, `bun run quality` is the completion gate; it includes
+`cargo fmt --check`, clippy with `-D warnings` and the wire-type drift check. Rust
+changes also need `cargo test -p <crate> --locked` for each affected crate
+(`bun run test` runs every test). Use affected `bun test`
+tests for TypeScript behavior changes and `bun run build` for runtime/build
 boundaries. Documentation-only changes need formatting and diff review.
 Fix failures caused by the change; repeat or broaden checks only for new edits,
 failures, or unresolved risks. Local integration tests use synthetic providers and
 the verified core; run and repair them without repeated approval or real accounts.
 
-Run `bunx --no-install oxfmt --write <touched-files>` on supported files before
-finishing; CI enforces formatting through `bun run quality`.
+Run `bunx --no-install oxfmt --write <touched-files>` on supported files and
+`cargo fmt` on Rust before finishing; CI enforces both.
 
 Always squash-merge pull requests, with a title that follows the
 [commit conventions](docs/commits.md). Never use a merge commit or a rebase merge.
 
 ## Performance
 
-Extract every last drop of performance from Electron: no wasted CPU, memory,
-I/O, IPC, renderer work, or idle wakeups. Keep startup fast and the main process
+Extract every last drop of performance from the daemon and the window helper: no
+wasted CPU, memory, I/O, IPC, rendering, or idle wakeups. The daemon idles at 0
+wakeups per second; keep it there. Keep startup fast and the runtime thread
 responsive; avoid blocking work, redundant renders, polling where events suffice,
-and resources that outlive their use. Measure relevant before/after behavior for
+and resources that outlive their use. The window helper must exit when its last
+window closes. Measure relevant before/after behavior for
 performance changes and pursue demonstrated bottlenecks. Preserve correctness,
 security, and accessibility while optimizing.
 
@@ -40,8 +48,10 @@ security, and accessibility while optimizing.
 - Profile keys never grant management access. Preserve profile identity across
   HTTP, SSE, WebSocket, retries, refreshes, accounting, and quota exhaustion.
 - Keep the gateway on loopback with Host/Origin checks and endpoint allowlists.
-- Validate privileged IPC senders and arguments; retain renderer sandboxing,
-  context isolation, and disabled Node integration.
+- Validate bridge calls in the window helper (main frame, daemon origin, known
+  method) and validate their arguments again in the daemon. Keep navigation to
+  other origins, new windows and downloads denied; only a `blob:` file the page
+  makes on the daemon's origin (Activity's CSV export) downloads.
 - SQLite secrets use an owner-only local `vault.key` in desktop and development.
   Keep the key, database, and core credentials owner-only and out of distributions.
   This does not protect against software running as the same OS user.
@@ -60,7 +70,8 @@ use `bun run security:tooling`. SECURITY.md says where the release checks are de
 
 Skills live in `.agents/skills`; use specific workflow triggers and load only the
 relevant sub-guides. Keep descriptions short and root documents as routers.
-React guidance here is client-side, not Next.js/RSC; the Vite skill's beta examples
+[The Rust port decision record](docs/decisions/rust-port.md) explains the process
+model and crate layout. React guidance here is client-side, not Next.js/RSC; the Vite skill's beta examples
 must be checked against installed types when used. Skill provenance and update
 procedures are in [security tooling](docs/security-tooling.md): keep vendored
 copies, hashes, and attribution together; setup must not reinstall latest skills.

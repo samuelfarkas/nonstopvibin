@@ -1,0 +1,70 @@
+# cargo-deny: advisories, licenses, bans and sources for the Rust workspace.
+# CI runs `cargo deny check`; see docs/security-tooling.md.
+
+[graph]
+all-features = true
+# The targets releases ship (scripts/distribution.ts): macOS on Apple silicon, the static musl
+# daemon on Linux x64 and arm64, and the glibc window helper beside it.
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+# Every RustSec advisory fails, including unmaintained and unsound crates.
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = [
+  # zbus 6 absorbed these crates; ksni 0.3.7, the Linux tray, still needs zbus 5. Notices that
+  # they moved, not vulnerabilities.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6, which ksni does not support yet" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6, which ksni does not support yet" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6, which ksni does not support yet" },
+  # The window helper on Linux (nsv-window) links GTK 3 through wry and tao, whose bindings stay
+  # on glib 0.18; the fix shipped only in glib 0.20. The shell and server link no GTK.
+  { id = "RUSTSEC-2024-0429", reason = "glib 0.18 VariantStrIter: reached only through Variant::array_iter_str, which neither nsv-window nor any crate it links (wry, tao, webkit2gtk, gtk, gdk, gio and the rest) calls" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained, not vulnerable: a build-time proc macro of glib-macros 0.18 (nsv-window on Linux, via gtk), never linked into a binary" },
+]
+
+[licenses]
+# Permissive licenses compatible with shipping an MIT application binary.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.93
+exceptions = [
+  # The Linux tray: a public-domain dedication, more permissive than MIT.
+  { crate = "ksni", allow = ["Unlicense"] },
+  # The window helper (nsv-window): wry needs dirs, which needs option-ext. MPL-2.0 is file-level
+  # copyleft; the crate is used unmodified, so the application's own code stays MIT.
+  { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# One TLS stack (rustls with ring): a second one must not arrive through a default feature.
+deny = [
+  { crate = "openssl-sys", reason = "rustls with ring is the only TLS stack" },
+  { crate = "native-tls", reason = "rustls with ring is the only TLS stack" },
+  { crate = "aws-lc-sys", reason = "rustls with ring is the only TLS stack" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

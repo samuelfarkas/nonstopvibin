@@ -76,25 +76,29 @@ export function ProviderIcon({ provider }: { provider: string }) {
     </span>
   );
 }
-export function Status({
-  value,
-}: {
-  value: ProfileState["runtime"] | Account["status"];
-}) {
+type StatusValue = ProfileState["runtime"] | Account["status"];
+/** Every runtime and account status, so tsc asks for a badge when the server adds one. */
+const statuses: Record<
+  StatusValue,
+  { label: string; tone: "good" | "bad" | "" }
+> = {
+  stopped: { label: "Stopped", tone: "" },
+  starting: { label: "Starting…", tone: "" },
+  running: { label: "Running", tone: "good" },
+  error: { label: "Error", tone: "bad" },
+  Ready: { label: "Ready", tone: "good" },
+  "Needs attention": { label: "Needs attention", tone: "bad" },
+  "Reconnect needed": { label: "Reconnect needed", tone: "bad" },
+  "Cooling down": { label: "Cooling down", tone: "" },
+  Paused: { label: "Paused", tone: "" },
+  Configured: { label: "Configured", tone: "" },
+};
+export function Status({ value }: { value: StatusValue }) {
+  const { label, tone } = statuses[value];
   return (
-    <span
-      className={`status ${value === "running" || value === "Ready" ? "good" : value === "error" || value === "Needs attention" || value === "Reconnect needed" ? "bad" : ""}`}
-    >
+    <span className={`status ${tone}`}>
       <span className="status-dot" />
-      {value === "running"
-        ? "Running"
-        : value === "stopped"
-          ? "Stopped"
-          : value === "starting"
-            ? "Starting…"
-            : value === "error"
-              ? "Error"
-              : value}
+      {label}
     </span>
   );
 }

@@ -1,10 +1,27 @@
-import type { Agent } from "./agents.ts";
-import type { OAuthProvider } from "./providers.ts";
-import type {
-  ResetResultCode,
-  RetentionDays,
-  strategies,
-} from "./vocabulary.ts";
+// The server's wire types (crates/domain/src/wire), as `bun run wire:export` writes them to
+// ./generated/domain. `bun run quality` fails while the committed export differs.
+export type { Account } from "./generated/domain/Account.ts";
+export type { AgentSetup } from "./generated/domain/AgentSetup.ts";
+export type { AgentSetupInput } from "./generated/domain/AgentSetupInput.ts";
+export type { AppState } from "./generated/domain/AppState.ts";
+export type { CatalogModel } from "./generated/domain/CatalogModel.ts";
+export type { CorePhase } from "./generated/domain/CorePhase.ts";
+export type { CoreState } from "./generated/domain/CoreState.ts";
+export type { ImportSource } from "./generated/domain/ImportSource.ts";
+export type { Model } from "./generated/domain/Model.ts";
+export type { OAuthReview } from "./generated/domain/OAuthReview.ts";
+export type { OAuthSession } from "./generated/domain/OAuthSession.ts";
+export type { OAuthStatus } from "./generated/domain/OAuthStatus.ts";
+export type { PricingTokens } from "./generated/domain/PricingTokens.ts";
+export type { Profile } from "./generated/domain/Profile.ts";
+export type { ProfileState } from "./generated/domain/ProfileState.ts";
+export type { Quota } from "./generated/domain/Quota.ts";
+export type { QuotaWindow } from "./generated/domain/QuotaWindow.ts";
+export type { ResetCredits } from "./generated/domain/ResetCredits.ts";
+export type { ResetResult } from "./generated/domain/ResetResult.ts";
+export type { UsagePricing } from "./generated/domain/UsagePricing.ts";
+export type { UsageRecord } from "./generated/domain/UsageRecord.ts";
+export type { UsageSummary } from "./generated/domain/UsageSummary.ts";
 
 /** Decoded JSON. Object values may be undefined so partial records and optional fields fit without casts. */
 export type Json =
@@ -14,220 +31,3 @@ export type Json =
   | null
   | Json[]
   | { [key: string]: Json | undefined };
-export interface Profile {
-  id: string;
-  slug: string;
-  name: string;
-  strategy: (typeof strategies)[number];
-  sessionAffinity: boolean;
-  enabled: boolean;
-  createdAt: string;
-}
-export interface QuotaWindow {
-  label: string;
-  remainingPercent: number | null;
-  resetsAt: string | null;
-  /** Limits one model only; never decides whether the whole account is out. */
-  scoped?: true;
-}
-export interface Quota {
-  status: "available" | "unavailable" | "error";
-  windows: QuotaWindow[];
-  checkedAt: string;
-  error?: string;
-  plan?: string;
-  bankedResets?: number;
-}
-export interface ResetCredits {
-  available_count: number;
-  credits: Array<{
-    id: string;
-    reset_type: string;
-    status: string;
-    expires_at: string | null;
-    title?: string | null;
-    description?: string | null;
-  }>;
-}
-export interface ResetResult {
-  code: ResetResultCode;
-  quotaRefreshed: boolean;
-}
-export interface SeatIdentity {
-  accountUuid?: string;
-  organizationUuid?: string;
-  organizationName?: string;
-}
-export interface Account extends SeatIdentity {
-  id: string;
-  name: string;
-  provider: string;
-  email?: string;
-  kind: "oauth" | "api-key";
-  disabled: boolean;
-  status:
-    | "Ready"
-    | "Needs attention"
-    | "Reconnect needed"
-    | "Cooling down"
-    | "Paused"
-    | "Configured";
-  priority: number;
-  authIndex?: string;
-  quota?: Quota;
-  prefix?: string;
-  modelCount?: number;
-}
-export interface UsageRecord {
-  id: string;
-  profileId: string;
-  timestamp: string;
-  provider: string;
-  model: string;
-  account: string;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  reasoningTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  latencyMs: number;
-  failed: boolean;
-  statusCode: number;
-  stream: boolean;
-  upstreamModel?: string;
-  /** Non-overlapping core accounting; null means explicitly incomplete. */
-  pricingTokens?: PricingTokens | null;
-}
-export interface PricingTokens {
-  input: number;
-  cached: number;
-  cacheWrite: number;
-  output: number;
-  reasoning: number;
-}
-export interface UsageTotals {
-  requests: number;
-  pricedRequests: number;
-  usd: number;
-  normalizedRequests: number;
-  tokens: PricingTokens;
-}
-export interface UsagePricing {
-  totals?: UsageTotals;
-  usd: Record<string, number | null>;
-  fetchedAt: string | null;
-  refreshing: boolean;
-  eur: { rate: number; date: string } | null;
-}
-export interface UsageSummary {
-  requests: number;
-  failed: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  reasoningTokens: number;
-  totalTokens: number;
-}
-export interface ProfileState extends Profile {
-  runtime: "stopped" | "starting" | "running" | "error";
-  error?: string;
-  accounts: Account[];
-  endpoint: string;
-}
-export type CorePhase = "checking" | "downloading" | "testing" | "restarting";
-export interface CoreState {
-  /** The core this build bundles. */
-  bundled: string;
-  /** Whether this run can install reviewed core updates (installed builds only). */
-  updates: boolean;
-  /** A newer reviewed core the last check found that this app may run. */
-  available?: string;
-  /** The update or revert in progress. */
-  phase?: CorePhase;
-}
-export interface AppState {
-  profiles: ProfileState[];
-  /** The core profiles start from: `core.bundled`, or an update installed over it. */
-  coreVersion: string;
-  core: CoreState;
-  gateway: string;
-  usageRetentionDays: RetentionDays;
-  version: string;
-  errors: string[];
-}
-export interface Model {
-  id: string;
-  owned_by?: string;
-}
-/** A model with the models.dev limits and prices the agents and Activity need. */
-export interface CatalogModel extends Model {
-  metadata?: {
-    name: string;
-    context: number;
-    output: number;
-    inputLimit?: number;
-    input: Array<"text" | "image">;
-    reasoning: boolean;
-    toolCall: boolean;
-    cost?: {
-      input: number;
-      output: number;
-      reasoning?: number;
-      cache_read?: number;
-      cache_write?: number;
-      tiers?: Array<{
-        input: number;
-        output: number;
-        reasoning?: number;
-        cache_read?: number;
-        cache_write?: number;
-        tier: { type: "context"; size: number };
-      }>;
-    };
-    source: string;
-    fetchedAt: string;
-  };
-}
-export interface ImportSource extends SeatIdentity {
-  id: string;
-  fileName: string;
-  provider: string;
-  email?: string;
-  source: string;
-}
-export interface OAuthSession {
-  profileId: string;
-  provider: OAuthProvider;
-  url: string;
-  state: string;
-  startedAt: number;
-  userCode?: string;
-  expiresAt: number;
-  reconnectAccountId?: string;
-}
-export interface OAuthReview {
-  account: Account;
-  action: "add" | "reconnect" | "blocked";
-  message?: string;
-}
-export type OAuthStatus =
-  | { status: "wait" }
-  | { status: "review"; review: OAuthReview }
-  | { status: "ok"; account?: Account; reconnected?: boolean }
-  | { status: "error"; error: string };
-export interface AgentSetupInput {
-  agent: Agent;
-  projectDirectory?: string;
-  /** Claude Code and Codex: also offer models from other providers. */
-  otherProviders?: boolean;
-}
-export interface AgentSetup extends AgentSetupInput {
-  models: string[];
-  needsReconnect?: boolean;
-  projects?: string[];
-  command: string;
-  files: string[];
-  provider: string;
-  instructions: string;
-}

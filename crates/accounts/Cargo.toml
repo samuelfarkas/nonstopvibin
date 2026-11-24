@@ -1,0 +1,36 @@
+[package]
+name = "nsv-accounts"
+description = "Accounts, quota, usage accounting, the deadline scheduler, sign-in, pricing and the model catalog."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["server"] }
+nsv-domain.workspace = true
+nsv-files.workspace = true
+nsv-store.workspace = true
+nsv-net.workspace = true
+nsv-core.workspace = true
+serde.workspace = true
+# preserve_order: a queue entry without a request id is named by the hash of its JSON text, which
+# keeps the order the core wrote its keys in, as JSON.parse and JSON.stringify did.
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+nsv-testkit = { workspace = true, features = ["accounts"] }
+rusqlite.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+[package]
+name = "nsv-core"
+description = "CLIProxyAPI cores: binary pins, config, spawn, watchdog, ledger, pool, management client and release installs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-net.workspace = true
+nsv-files.workspace = true
+nsv-store.workspace = true
+rustix.workspace = true
+serde.workspace = true
+# preserve_order: the core config keeps the key order it is built in, as YAML.stringify did.
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+nsv-testkit = { workspace = true, features = ["core"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "test-util", "time"] }
+
+# The fake core is this test binary run as `cli-proxy-api --config <path>`, which libtest's
+# argument parser would refuse; its main runs the tests itself.
+[[test]]
+name = "processes"
+harness = false
+
+[lints]
+workspace = true

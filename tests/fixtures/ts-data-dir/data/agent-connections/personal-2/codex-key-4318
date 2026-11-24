@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+nv_connection=$(curl -q --fail --silent --show-error --noproxy '*' --proxy '' --max-time 4 --unix-socket '/tmp/nonstopvibin-979-b0f85aa75fdace6ccc595d96/agents.sock' 'http://localhost/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0') || {
+  printf '%s\n' 'Open nonstopvibin and start personal-2.' >&2
+  exit 1
+}
+nv_key=${nv_connection%%'
+'*}
+nv_port=${nv_connection#*'
+'}
+case "$nv_key" in nv_*) ;; *) exit 1 ;; esac
+case "$nv_key" in *[!a-zA-Z0-9_-]*) exit 1 ;; esac
+[ "${#nv_key}" -eq 46 ] || exit 1
+[ "$nv_port" = '4318' ] || {
+  printf '%s\n' 'The gateway port changed. Reconnect this agent in nonstopvibin.' >&2
+  exit 1
+}
+printf '%s\n' "$nv_key"

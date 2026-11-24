@@ -1,7 +1,6 @@
 import { ArrowRight, ChevronRight, RefreshCw } from "lucide-react";
 import type { AppState } from "../shared/types.ts";
 import { providerLabel } from "../shared/providers.ts";
-import { keepsRunning } from "../shared/vocabulary.ts";
 import { api, desktop } from "./api.ts";
 import { useAction } from "./action.ts";
 import { Opening, useAppState } from "./feed.tsx";
@@ -63,8 +62,7 @@ export function TrayView({
               let failure: unknown;
               // Refresh starts a profile the app keeps running; one that cannot start keeps no other from refreshing.
               for (const p of state.profiles.filter(
-                (p) =>
-                  p.runtime === "running" || keepsRunning(p.accounts.length),
+                (p) => p.runtime === "running" || p.accounts.length > 0,
               ))
                 try {
                   next = await api("POST /profiles/:profileId/refresh", {

@@ -1,0 +1,1494 @@
+{
+  "generatedBy": "bun tests/fixtures/ts-data-dir/generate.ts at nonstopvibin main 4ea188a",
+  "originalPaths": {
+    "root": "/tmp/nsv-ts-fixture",
+    "data": "/tmp/nsv-ts-fixture/data",
+    "agentHome": "/tmp/nsv-ts-fixture/agent-home"
+  },
+  "vaultKeyHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "gatewayPort": 4318,
+  "corePorts": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": 8317,
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": 8318,
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": 8319,
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": 8320
+  },
+  "profiles": [
+    {
+      "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "slug": "equipe-cafe-r-d-ete",
+      "name": "Équipe Café: R&D (été)",
+      "strategy": "round-robin",
+      "sessionAffinity": false,
+      "enabled": true,
+      "createdAt": "2026-01-05T09:00:00.000Z"
+    },
+    {
+      "id": "d120c6b8-8067-4659-8593-37de2c72d1cf",
+      "slug": "personal",
+      "name": "Personal",
+      "strategy": "fill-first",
+      "sessionAffinity": true,
+      "enabled": false,
+      "createdAt": "2026-02-10T12:30:00.000Z"
+    },
+    {
+      "id": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+      "slug": "personal-2",
+      "name": "Personal",
+      "strategy": "round-robin",
+      "sessionAffinity": true,
+      "enabled": true,
+      "createdAt": "2026-03-15T18:45:30.500Z"
+    },
+    {
+      "id": "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c",
+      "slug": "profile",
+      "name": "★ ★ ★",
+      "strategy": "fill-first",
+      "sessionAffinity": false,
+      "enabled": false,
+      "createdAt": "2026-04-01T00:00:00.000Z"
+    }
+  ],
+  "secrets": {
+    "1b6af1c5-e326-4f25-bc03-67a44252969f:api": "synthetic api key four",
+    "5ca3dfd5-9fed-42fb-940a-ec69912cd659:api": "synthetic api key six",
+    "60ede06a-58e3-4481-8f27-4961587f1a96:api": "synthetic api key one",
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:client": "nv_ccccccccccccccccccccccccccccccccccccccccccc",
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:core": "core-cccccccccccccccccccccccccccccccc",
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:management": "management-cccccccccccccccccccccccccccccccc",
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a:client": "nv_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a:core": "core-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a:management": "management-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "92c76ff8-c05a-4284-800c-508b4f5b86af:api": "synthetic api key two",
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c:client": "nv_ddddddddddddddddddddddddddddddddddddddddddd",
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c:core": "core-dddddddddddddddddddddddddddddddd",
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c:management": "management-dddddddddddddddddddddddddddddddd",
+    "ad86b40a-7310-49b8-803e-435f5e9f14bb:api": "synthetic api key three",
+    "cac936fb-1e3b-4906-8001-d546242a6af0:api": "synthetic api key five",
+    "d120c6b8-8067-4659-8593-37de2c72d1cf:client": "nv_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "d120c6b8-8067-4659-8593-37de2c72d1cf:core": "core-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "d120c6b8-8067-4659-8593-37de2c72d1cf:management": "management-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "apiAccounts": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": [
+      {
+        "id": "60ede06a-58e3-4481-8f27-4961587f1a96",
+        "name": "Local Mixed",
+        "provider": "custom",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "prefix": "local",
+        "models": [
+          {
+            "id": "qwen3-coder:30b",
+            "protocol": "openai"
+          },
+          {
+            "id": "local-claude-proxy",
+            "protocol": "anthropic"
+          },
+          {
+            "id": "local-responses",
+            "protocol": "responses"
+          }
+        ],
+        "disabled": false
+      },
+      {
+        "id": "92c76ff8-c05a-4284-800c-508b4f5b86af",
+        "name": "Anthropic API",
+        "provider": "anthropic",
+        "baseUrl": "https://api.anthropic.com/v1",
+        "prefix": "anthropic",
+        "models": [
+          {
+            "id": "claude-sonnet-4-5",
+            "protocol": "anthropic"
+          }
+        ],
+        "disabled": false
+      },
+      {
+        "id": "ad86b40a-7310-49b8-803e-435f5e9f14bb",
+        "name": "OpenAI Team",
+        "provider": "openai",
+        "baseUrl": "https://api.openai.com/v1",
+        "prefix": "oai",
+        "models": [
+          {
+            "id": "gpt-5",
+            "protocol": "openai"
+          },
+          {
+            "id": "gpt-5-codex",
+            "protocol": "responses"
+          }
+        ],
+        "disabled": true
+      }
+    ],
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": [
+      {
+        "id": "5ca3dfd5-9fed-42fb-940a-ec69912cd659",
+        "name": "Gemini",
+        "provider": "gemini",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "prefix": "gem",
+        "models": [
+          {
+            "id": "gemini-2.5-pro",
+            "protocol": "openai"
+          }
+        ],
+        "disabled": false
+      }
+    ],
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": [
+      {
+        "id": "1b6af1c5-e326-4f25-bc03-67a44252969f",
+        "name": "OpenCode Go",
+        "provider": "opencode-go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "prefix": "go",
+        "models": [
+          {
+            "id": "glm-4.6",
+            "protocol": "openai"
+          },
+          {
+            "id": "qwen3-coder",
+            "protocol": "anthropic"
+          },
+          {
+            "id": "gpt-5-mini",
+            "protocol": "responses"
+          }
+        ],
+        "disabled": false
+      },
+      {
+        "id": "cac936fb-1e3b-4906-8001-d546242a6af0",
+        "name": "OpenCode Go spare",
+        "provider": "opencode-go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "prefix": "go",
+        "models": [
+          {
+            "id": "glm-4.6",
+            "protocol": "openai"
+          }
+        ],
+        "disabled": false
+      }
+    ],
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": []
+  },
+  "accountMetadata": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": [
+      {
+        "id": "claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json",
+        "name": "Work Claude",
+        "accountUuid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "organizationUuid": "bbbbbbbb-0000-4000-8000-000000000001",
+        "organizationName": "Acme Research",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "ada@example.com",
+        "disabled": false,
+        "status": "Ready",
+        "priority": 2,
+        "authIndex": "0000000000000001"
+      },
+      {
+        "id": "claude-3c524087-98dc-4962-96de-722141bfcb8c.json",
+        "name": "Claude",
+        "accountUuid": "aaaaaaaa-0000-4000-8000-000000000002",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "ada.personal@example.com",
+        "disabled": true,
+        "status": "Paused",
+        "priority": 0,
+        "authIndex": "0000000000000002"
+      },
+      {
+        "id": "codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json",
+        "name": "Codex Pro",
+        "provider": "codex",
+        "kind": "oauth",
+        "email": "ada@example.com",
+        "disabled": false,
+        "status": "Reconnect needed",
+        "priority": 1,
+        "authIndex": "0000000000000003"
+      }
+    ],
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": [],
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": [
+      {
+        "id": "claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json",
+        "name": "Claude",
+        "accountUuid": "cccccccc-0000-4000-8000-000000000003",
+        "organizationUuid": "dddddddd-0000-4000-8000-000000000003",
+        "organizationName": "Café Ltd",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "grace@example.com",
+        "disabled": false,
+        "status": "Cooling down",
+        "priority": 0,
+        "authIndex": "0000000000000004"
+      }
+    ],
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": []
+  },
+  "accountsList": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": [
+      {
+        "id": "claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json",
+        "name": "Work Claude",
+        "accountUuid": "aaaaaaaa-0000-4000-8000-000000000001",
+        "organizationUuid": "bbbbbbbb-0000-4000-8000-000000000001",
+        "organizationName": "Acme Research",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "ada@example.com",
+        "disabled": false,
+        "status": "Ready",
+        "priority": 2,
+        "authIndex": "0000000000000001",
+        "quota": {
+          "status": "available",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remainingPercent": 75,
+              "resetsAt": "2026-11-22T14:00:00.000Z"
+            },
+            {
+              "label": "Weekly",
+              "remainingPercent": 39.5,
+              "resetsAt": "2026-11-27T00:00:00.000Z"
+            },
+            {
+              "label": "Opus weekly",
+              "remainingPercent": 10,
+              "resetsAt": "2026-11-27T00:00:00.000Z",
+              "scoped": true
+            },
+            {
+              "label": "Fable weekly",
+              "remainingPercent": 95,
+              "resetsAt": "2026-11-27T00:00:00.000Z",
+              "scoped": true
+            }
+          ],
+          "checkedAt": "2026-11-22T12:00:00.000Z"
+        }
+      },
+      {
+        "id": "claude-3c524087-98dc-4962-96de-722141bfcb8c.json",
+        "name": "Claude",
+        "accountUuid": "aaaaaaaa-0000-4000-8000-000000000002",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "ada.personal@example.com",
+        "disabled": true,
+        "status": "Paused",
+        "priority": 0,
+        "authIndex": "0000000000000002"
+      },
+      {
+        "id": "codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json",
+        "name": "Codex Pro",
+        "provider": "codex",
+        "kind": "oauth",
+        "email": "ada@example.com",
+        "disabled": false,
+        "status": "Reconnect needed",
+        "priority": 1,
+        "authIndex": "0000000000000003",
+        "quota": {
+          "status": "available",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remainingPercent": 60,
+              "resetsAt": "2026-11-22T13:00:00.000Z"
+            },
+            {
+              "label": "Weekly",
+              "remainingPercent": 30,
+              "resetsAt": "2026-11-18T11:06:40.000Z"
+            },
+            {
+              "label": "Code review · Weekly",
+              "remainingPercent": 100,
+              "resetsAt": "2026-11-23T12:00:00.000Z"
+            }
+          ],
+          "checkedAt": "2026-11-22T12:00:00.000Z",
+          "plan": "pro",
+          "bankedResets": 2
+        }
+      },
+      {
+        "id": "60ede06a-58e3-4481-8f27-4961587f1a96",
+        "name": "Local Mixed",
+        "provider": "custom",
+        "kind": "api-key",
+        "disabled": false,
+        "status": "Configured",
+        "priority": 0,
+        "prefix": "local",
+        "modelCount": 3,
+        "quota": {
+          "status": "unavailable",
+          "windows": [],
+          "checkedAt": "2026-11-22T12:00:00.000Z"
+        }
+      },
+      {
+        "id": "92c76ff8-c05a-4284-800c-508b4f5b86af",
+        "name": "Anthropic API",
+        "provider": "anthropic",
+        "kind": "api-key",
+        "disabled": false,
+        "status": "Configured",
+        "priority": 0,
+        "prefix": "anthropic",
+        "modelCount": 1,
+        "quota": {
+          "status": "error",
+          "windows": [],
+          "checkedAt": "2026-11-21T12:00:00.000Z",
+          "error": "Anthropic API returned HTTP 401. Reconnect this subscription."
+        }
+      },
+      {
+        "id": "ad86b40a-7310-49b8-803e-435f5e9f14bb",
+        "name": "OpenAI Team",
+        "provider": "openai",
+        "kind": "api-key",
+        "disabled": true,
+        "status": "Paused",
+        "priority": 0,
+        "prefix": "oai",
+        "modelCount": 2
+      }
+    ],
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": [
+      {
+        "id": "5ca3dfd5-9fed-42fb-940a-ec69912cd659",
+        "name": "Gemini",
+        "provider": "gemini",
+        "kind": "api-key",
+        "disabled": false,
+        "status": "Configured",
+        "priority": 0,
+        "prefix": "gem",
+        "modelCount": 1
+      }
+    ],
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": [
+      {
+        "id": "claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json",
+        "name": "Claude",
+        "accountUuid": "cccccccc-0000-4000-8000-000000000003",
+        "organizationUuid": "dddddddd-0000-4000-8000-000000000003",
+        "organizationName": "Café Ltd",
+        "provider": "claude",
+        "kind": "oauth",
+        "email": "grace@example.com",
+        "disabled": false,
+        "status": "Cooling down",
+        "priority": 0,
+        "authIndex": "0000000000000004",
+        "quota": {
+          "status": "available",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remainingPercent": 0,
+              "resetsAt": "2026-11-22T13:00:00.000Z"
+            },
+            {
+              "label": "Weekly",
+              "remainingPercent": 0,
+              "resetsAt": null
+            }
+          ],
+          "checkedAt": "2026-11-22T12:00:00.000Z"
+        }
+      },
+      {
+        "id": "1b6af1c5-e326-4f25-bc03-67a44252969f",
+        "name": "OpenCode Go",
+        "provider": "opencode-go",
+        "kind": "api-key",
+        "disabled": false,
+        "status": "Configured",
+        "priority": 0,
+        "prefix": "go",
+        "modelCount": 3,
+        "quota": {
+          "status": "available",
+          "windows": [
+            {
+              "label": "5-hour",
+              "remainingPercent": 88,
+              "resetsAt": "2026-11-22T13:00:00.000Z"
+            },
+            {
+              "label": "Weekly",
+              "remainingPercent": 75,
+              "resetsAt": "2026-11-24T12:00:00.000Z"
+            },
+            {
+              "label": "Monthly",
+              "remainingPercent": 45,
+              "resetsAt": null
+            }
+          ],
+          "checkedAt": "2026-11-22T12:00:00.000Z"
+        }
+      },
+      {
+        "id": "cac936fb-1e3b-4906-8001-d546242a6af0",
+        "name": "OpenCode Go spare",
+        "provider": "opencode-go",
+        "kind": "api-key",
+        "disabled": false,
+        "status": "Configured",
+        "priority": 0,
+        "prefix": "go",
+        "modelCount": 1
+      }
+    ],
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": []
+  },
+  "quotas": [
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "accountId": "claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json",
+      "quota": {
+        "status": "available",
+        "windows": [
+          {
+            "label": "5-hour",
+            "remainingPercent": 75,
+            "resetsAt": "2026-11-22T14:00:00.000Z"
+          },
+          {
+            "label": "Weekly",
+            "remainingPercent": 39.5,
+            "resetsAt": "2026-11-27T00:00:00.000Z"
+          },
+          {
+            "label": "Opus weekly",
+            "remainingPercent": 10,
+            "resetsAt": "2026-11-27T00:00:00.000Z",
+            "scoped": true
+          },
+          {
+            "label": "Fable weekly",
+            "remainingPercent": 95,
+            "resetsAt": "2026-11-27T00:00:00.000Z",
+            "scoped": true
+          }
+        ],
+        "checkedAt": "2026-11-22T12:00:00.000Z"
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "accountId": "codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json",
+      "quota": {
+        "status": "available",
+        "windows": [
+          {
+            "label": "5-hour",
+            "remainingPercent": 60,
+            "resetsAt": "2026-11-22T13:00:00.000Z"
+          },
+          {
+            "label": "Weekly",
+            "remainingPercent": 30,
+            "resetsAt": "2026-11-18T11:06:40.000Z"
+          },
+          {
+            "label": "Code review · Weekly",
+            "remainingPercent": 100,
+            "resetsAt": "2026-11-23T12:00:00.000Z"
+          }
+        ],
+        "checkedAt": "2026-11-22T12:00:00.000Z",
+        "plan": "pro",
+        "bankedResets": 2
+      }
+    },
+    {
+      "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+      "accountId": "claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json",
+      "quota": {
+        "status": "available",
+        "windows": [
+          {
+            "label": "5-hour",
+            "remainingPercent": 0,
+            "resetsAt": "2026-11-22T13:00:00.000Z"
+          },
+          {
+            "label": "Weekly",
+            "remainingPercent": 0,
+            "resetsAt": null
+          }
+        ],
+        "checkedAt": "2026-11-22T12:00:00.000Z"
+      }
+    },
+    {
+      "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+      "accountId": "1b6af1c5-e326-4f25-bc03-67a44252969f",
+      "quota": {
+        "status": "available",
+        "windows": [
+          {
+            "label": "5-hour",
+            "remainingPercent": 88,
+            "resetsAt": "2026-11-22T13:00:00.000Z"
+          },
+          {
+            "label": "Weekly",
+            "remainingPercent": 75,
+            "resetsAt": "2026-11-24T12:00:00.000Z"
+          },
+          {
+            "label": "Monthly",
+            "remainingPercent": 45,
+            "resetsAt": null
+          }
+        ],
+        "checkedAt": "2026-11-22T12:00:00.000Z"
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "accountId": "60ede06a-58e3-4481-8f27-4961587f1a96",
+      "quota": {
+        "status": "unavailable",
+        "windows": [],
+        "checkedAt": "2026-11-22T12:00:00.000Z"
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "accountId": "92c76ff8-c05a-4284-800c-508b4f5b86af",
+      "quota": {
+        "status": "error",
+        "windows": [],
+        "checkedAt": "2026-11-21T12:00:00.000Z",
+        "error": "Anthropic API returned HTTP 401. Reconnect this subscription."
+      }
+    }
+  ],
+  "usage": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": {
+      "count": 8,
+      "records": [
+        {
+          "sequence": 1,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0001",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-16T09:15:00.000Z",
+            "provider": "claude",
+            "model": "claude-sonnet-4-5",
+            "upstreamModel": "claude-sonnet-4-5-20250929",
+            "pricingTokens": {
+              "input": 300,
+              "cached": 800,
+              "cacheWrite": 100,
+              "output": 300,
+              "reasoning": 0
+            },
+            "account": "0000000000000001",
+            "inputTokens": 1200,
+            "outputTokens": 300,
+            "cachedTokens": 800,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 100,
+            "totalTokens": 1500,
+            "latencyMs": 2150,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 2,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0002",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-17T14:02:11.250Z",
+            "provider": "claude",
+            "model": "claude-opus-4-1",
+            "upstreamModel": "claude-opus-4-1",
+            "pricingTokens": null,
+            "account": "0000000000000001",
+            "inputTokens": 5000,
+            "outputTokens": 1200,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 6200,
+            "latencyMs": 8400,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 3,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0003",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-18T08:00:00.000Z",
+            "provider": "codex",
+            "model": "gpt-5-codex",
+            "upstreamModel": "gpt-5-codex",
+            "pricingTokens": {
+              "input": 1500,
+              "cached": 2500,
+              "cacheWrite": 0,
+              "output": 500,
+              "reasoning": 400
+            },
+            "account": "0000000000000003",
+            "inputTokens": 4000,
+            "outputTokens": 900,
+            "cachedTokens": 2500,
+            "reasoningTokens": 400,
+            "cacheWriteTokens": 0,
+            "totalTokens": 4900,
+            "latencyMs": 5100,
+            "failed": false,
+            "statusCode": 200,
+            "stream": false
+          }
+        },
+        {
+          "sequence": 4,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0004",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-18T08:00:00.000Z",
+            "provider": "codex",
+            "model": "gpt-5-codex",
+            "upstreamModel": "gpt-5-codex",
+            "pricingTokens": null,
+            "account": "0000000000000003",
+            "inputTokens": 10,
+            "outputTokens": 0,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 10,
+            "latencyMs": 120,
+            "failed": true,
+            "statusCode": 429,
+            "stream": false
+          }
+        },
+        {
+          "sequence": 5,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:8b5134f6c5b2d3d3671c12d9d4522d78e9d8460db0c987a93dc05c90013ac396",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-19T21:30:45.999Z",
+            "provider": "openai-compatibility",
+            "model": "local/qwen3-coder:30b",
+            "upstreamModel": "qwen3-coder:30b",
+            "pricingTokens": null,
+            "account": "0000000000000006",
+            "inputTokens": 700,
+            "outputTokens": 150,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 850,
+            "latencyMs": 980,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 6,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0006",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-20T10:00:00.123456789Z",
+            "provider": "claude",
+            "model": "anthropic/claude-sonnet-4-5",
+            "pricingTokens": null,
+            "account": "0000000000000005",
+            "inputTokens": 64,
+            "outputTokens": 16,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 80,
+            "latencyMs": 30000,
+            "failed": true,
+            "statusCode": 502,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 7,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0007",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-21T16:45:00.000Z",
+            "provider": "claude",
+            "model": "claude-sonnet-4-5",
+            "upstreamModel": "claude-sonnet-4-5-20250929",
+            "pricingTokens": {
+              "input": 1000,
+              "cached": 20000,
+              "cacheWrite": 4000,
+              "output": 1500,
+              "reasoning": 500
+            },
+            "account": "0000000000000001",
+            "inputTokens": 25000,
+            "outputTokens": 2000,
+            "cachedTokens": 20000,
+            "reasoningTokens": 500,
+            "cacheWriteTokens": 4000,
+            "totalTokens": 27000,
+            "latencyMs": 12345,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 8,
+          "record": {
+            "id": "6e4156ab-2acf-4d89-9a81-264f3b3da50a:req-0008",
+            "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+            "timestamp": "2026-11-22T07:59:59.000Z",
+            "provider": "codex",
+            "model": "gpt-5",
+            "upstreamModel": "gpt-5",
+            "pricingTokens": {
+              "input": 100,
+              "cached": 0,
+              "cacheWrite": 0,
+              "output": 50,
+              "reasoning": 0
+            },
+            "account": "0000000000000003",
+            "inputTokens": 100,
+            "outputTokens": 50,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 150,
+            "latencyMs": 640,
+            "failed": false,
+            "statusCode": 200,
+            "stream": false
+          }
+        }
+      ]
+    },
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": {
+      "count": 1,
+      "records": [
+        {
+          "sequence": 12,
+          "record": {
+            "id": "d120c6b8-8067-4659-8593-37de2c72d1cf:req-legacy-0001",
+            "profileId": "d120c6b8-8067-4659-8593-37de2c72d1cf",
+            "timestamp": "2026-11-15T23:59:59.000Z",
+            "provider": "gemini",
+            "model": "gem/gemini-2.5-pro",
+            "account": "0000000000000009",
+            "inputTokens": 400,
+            "outputTokens": 100,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 500,
+            "latencyMs": 700,
+            "failed": false,
+            "statusCode": 200,
+            "stream": false
+          }
+        }
+      ]
+    },
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": {
+      "count": 3,
+      "records": [
+        {
+          "sequence": 9,
+          "record": {
+            "id": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:req-0101",
+            "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+            "timestamp": "2026-11-19T12:00:00.000Z",
+            "provider": "claude",
+            "model": "claude-sonnet-4-5",
+            "upstreamModel": "claude-sonnet-4-5-20250929",
+            "pricingTokens": {
+              "input": 900,
+              "cached": 0,
+              "cacheWrite": 0,
+              "output": 90,
+              "reasoning": 0
+            },
+            "account": "0000000000000004",
+            "inputTokens": 900,
+            "outputTokens": 90,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 990,
+            "latencyMs": 1500,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 10,
+          "record": {
+            "id": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:req-0102",
+            "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+            "timestamp": "2026-11-20T12:00:00.000Z",
+            "provider": "openai-compatibility",
+            "model": "go/glm-4.6",
+            "upstreamModel": "glm-4.6",
+            "pricingTokens": null,
+            "account": "0000000000000007",
+            "inputTokens": 2000,
+            "outputTokens": 400,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 2400,
+            "latencyMs": 2200,
+            "failed": false,
+            "statusCode": 200,
+            "stream": true
+          }
+        },
+        {
+          "sequence": 11,
+          "record": {
+            "id": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0:req-0103",
+            "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+            "timestamp": "2026-11-21T12:00:00.000Z",
+            "provider": "claude",
+            "model": "go/qwen3-coder",
+            "upstreamModel": "qwen3-coder",
+            "pricingTokens": {
+              "input": 3000,
+              "cached": 0,
+              "cacheWrite": 0,
+              "output": 600,
+              "reasoning": 0
+            },
+            "account": "0000000000000008",
+            "inputTokens": 3000,
+            "outputTokens": 600,
+            "cachedTokens": 0,
+            "reasoningTokens": 0,
+            "cacheWriteTokens": 0,
+            "totalTokens": 3600,
+            "latencyMs": 2600,
+            "failed": false,
+            "statusCode": 200,
+            "stream": false
+          }
+        }
+      ]
+    },
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": {
+      "count": 0,
+      "records": []
+    }
+  },
+  "settings": {
+    "accounts:6a4fc666-ed37-4a2e-a0cc-8710745c83b0": "[{\"id\":\"claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json\",\"name\":\"Claude\",\"accountUuid\":\"cccccccc-0000-4000-8000-000000000003\",\"organizationUuid\":\"dddddddd-0000-4000-8000-000000000003\",\"organizationName\":\"Café Ltd\",\"provider\":\"claude\",\"kind\":\"oauth\",\"email\":\"grace@example.com\",\"disabled\":false,\"status\":\"Cooling down\",\"priority\":0,\"authIndex\":\"0000000000000004\"}]",
+    "accounts:6e4156ab-2acf-4d89-9a81-264f3b3da50a": "[{\"id\":\"claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json\",\"name\":\"Work Claude\",\"accountUuid\":\"aaaaaaaa-0000-4000-8000-000000000001\",\"organizationUuid\":\"bbbbbbbb-0000-4000-8000-000000000001\",\"organizationName\":\"Acme Research\",\"provider\":\"claude\",\"kind\":\"oauth\",\"email\":\"ada@example.com\",\"disabled\":false,\"status\":\"Ready\",\"priority\":2,\"authIndex\":\"0000000000000001\"},{\"id\":\"claude-3c524087-98dc-4962-96de-722141bfcb8c.json\",\"name\":\"Claude\",\"accountUuid\":\"aaaaaaaa-0000-4000-8000-000000000002\",\"provider\":\"claude\",\"kind\":\"oauth\",\"email\":\"ada.personal@example.com\",\"disabled\":true,\"status\":\"Paused\",\"priority\":0,\"authIndex\":\"0000000000000002\"},{\"id\":\"codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json\",\"name\":\"Codex Pro\",\"provider\":\"codex\",\"kind\":\"oauth\",\"email\":\"ada@example.com\",\"disabled\":false,\"status\":\"Reconnect needed\",\"priority\":1,\"authIndex\":\"0000000000000003\"}]",
+    "codex-reset:[\"11111111-2222-4333-8444-555555555555\",\"credit-synthetic-1\"]": "af535df0-3e58-4daa-b0bc-649fc0570f10",
+    "usage-retention-days": "365"
+  },
+  "retentionDays": 365,
+  "resetRequest": {
+    "identity": "11111111-2222-4333-8444-555555555555",
+    "creditId": "credit-synthetic-1",
+    "settingId": "codex-reset:[\"11111111-2222-4333-8444-555555555555\",\"credit-synthetic-1\"]",
+    "requestId": "af535df0-3e58-4daa-b0bc-649fc0570f10"
+  },
+  "tables": [
+    {
+      "type": "table",
+      "name": "profiles",
+      "sql": "CREATE TABLE profiles (id TEXT PRIMARY KEY, slug TEXT UNIQUE NOT NULL, body TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "secrets",
+      "sql": "CREATE TABLE secrets (id TEXT PRIMARY KEY, encrypted TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "api_accounts",
+      "sql": "CREATE TABLE api_accounts (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES profiles(id), body TEXT NOT NULL)"
+    },
+    {
+      "type": "table",
+      "name": "quotas",
+      "sql": "CREATE TABLE quotas (profile_id TEXT NOT NULL, account_id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(profile_id,account_id))"
+    },
+    {
+      "type": "table",
+      "name": "usage",
+      "sql": "CREATE TABLE usage (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, timestamp TEXT NOT NULL, body TEXT NOT NULL)"
+    },
+    {
+      "type": "index",
+      "name": "usage_profile_sequence",
+      "sql": "CREATE INDEX usage_profile_sequence ON usage(profile_id)"
+    },
+    {
+      "type": "index",
+      "name": "usage_profile_time",
+      "sql": "CREATE INDEX usage_profile_time ON usage(profile_id,timestamp)"
+    },
+    {
+      "type": "table",
+      "name": "settings",
+      "sql": "CREATE TABLE settings (id TEXT PRIMARY KEY, value TEXT NOT NULL)"
+    }
+  ],
+  "credentialFiles": {
+    "6e4156ab-2acf-4d89-9a81-264f3b3da50a": [
+      {
+        "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json",
+        "content": {
+          "type": "claude",
+          "email": "ada@example.com",
+          "access_token": "synthetic-access-token-claude",
+          "refresh_token": "synthetic-refresh-token-claude",
+          "id_token": "",
+          "expired": "2026-11-23T10:00:00Z",
+          "last_refresh": "2026-11-23T02:00:00Z",
+          "account_uuid": "aaaaaaaa-0000-4000-8000-000000000001",
+          "organization_uuid": "bbbbbbbb-0000-4000-8000-000000000001",
+          "organization_name": "Acme Research",
+          "disabled": false,
+          "note": "Work Claude",
+          "priority": 2
+        }
+      },
+      {
+        "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/claude-3c524087-98dc-4962-96de-722141bfcb8c.json",
+        "content": {
+          "type": "claude",
+          "email": "ada.personal@example.com",
+          "access_token": "synthetic-access-token-claude-personal",
+          "refresh_token": "synthetic-refresh-token-claude-personal",
+          "expired": "2026-11-20T10:00:00Z",
+          "last_refresh": "2026-11-20T02:00:00Z",
+          "account_uuid": "aaaaaaaa-0000-4000-8000-000000000002",
+          "disabled": true
+        }
+      },
+      {
+        "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json",
+        "content": {
+          "type": "codex",
+          "email": "ada@example.com",
+          "access_token": "synthetic-access-token-codex",
+          "refresh_token": "synthetic-refresh-token-codex",
+          "id_token": "synthetic-id-token-codex",
+          "account_id": "11111111-2222-4333-8444-555555555555",
+          "expired": "2026-11-30T10:00:00Z",
+          "last_refresh": "2026-11-22T10:00:00Z",
+          "disabled": false,
+          "note": "Codex Pro",
+          "priority": 1
+        }
+      }
+    ],
+    "d120c6b8-8067-4659-8593-37de2c72d1cf": [],
+    "6a4fc666-ed37-4a2e-a0cc-8710745c83b0": [
+      {
+        "path": "data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0/auth/claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json",
+        "content": {
+          "type": "claude",
+          "email": "grace@example.com",
+          "access_token": "synthetic-access-token-claude-cafe",
+          "refresh_token": "synthetic-refresh-token-claude-cafe",
+          "expired": "2026-11-23T11:00:00Z",
+          "last_refresh": "2026-11-23T03:00:00Z",
+          "account_uuid": "CCCCCCCC-0000-4000-8000-000000000003",
+          "organization_uuid": "DDDDDDDD-0000-4000-8000-000000000003",
+          "organization_name": "Café Ltd",
+          "disabled": false
+        }
+      }
+    ],
+    "991bda5e-6c9d-45cf-8115-37a8ccf9ab8c": []
+  },
+  "coreLedger": [
+    {
+      "path": "data/core-processes/4242.json",
+      "content": {
+        "pid": 4242,
+        "identity": "Sun Nov 22 08:00:01 2026 /opt/nonstopvibin/core/cli-proxy-api --config /tmp/nsv-ts-fixture/data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/config.yaml",
+        "owner": {
+          "pid": 1801492,
+          "identity": "Sun Nov 22 08:00:00 2026 /opt/nonstopvibin/nonstopvibin"
+        }
+      }
+    },
+    {
+      "path": "data/core-processes/4243.json",
+      "content": {
+        "pid": 4243,
+        "identity": "Sun Nov 22 08:00:01 2026 /opt/nonstopvibin/core/cli-proxy-api --config /tmp/nsv-ts-fixture/data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0/config.yaml",
+        "owner": {
+          "pid": 1801492,
+          "identity": "Sun Nov 22 08:00:00 2026 /opt/nonstopvibin/nonstopvibin"
+        }
+      }
+    }
+  ],
+  "agentConnections": [
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "input": {
+        "agent": "claude",
+        "projectDirectory": "/tmp/nsv-ts-fixture/agent-home/projects/webapp"
+      },
+      "models": ["claude-sonnet-4-5", "claude-opus-4-1"],
+      "result": {
+        "agent": "claude",
+        "projectDirectory": "/tmp/nsv-ts-fixture/agent-home/projects/webapp",
+        "models": ["claude-sonnet-4-5", "claude-opus-4-1"],
+        "projects": ["/tmp/nsv-ts-fixture/agent-home/projects/webapp"],
+        "provider": "nonstopvibin-equipe-cafe-r-d-ete",
+        "command": "claude --settings '/tmp/nsv-ts-fixture/data/agent-connections/equipe-cafe-r-d-ete/claude-4d5871823f0addc331d14a9f.settings.json'",
+        "files": [
+          "agent-home/projects/webapp/.claude/settings.local.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-4d5871823f0addc331d14a9f.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-key-4318",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-4d5871823f0addc331d14a9f.settings.json"
+        ],
+        "instructions": "Run it inside the connected project; plain claude skips the picker. Approve the credential helper, pick a model with /model, and check /status shows Équipe Café: R&D (été)."
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "input": {
+        "agent": "claude",
+        "projectDirectory": "/tmp/nsv-ts-fixture/agent-home/projects/api server",
+        "otherProviders": true
+      },
+      "models": ["claude-sonnet-4-5", "gpt-5-codex", "local/qwen3-coder:30b"],
+      "result": {
+        "agent": "claude",
+        "projectDirectory": "/tmp/nsv-ts-fixture/agent-home/projects/api server",
+        "otherProviders": true,
+        "models": ["claude-sonnet-4-5", "gpt-5-codex", "local/qwen3-coder:30b"],
+        "projects": [
+          "/tmp/nsv-ts-fixture/agent-home/projects/api server",
+          "/tmp/nsv-ts-fixture/agent-home/projects/webapp"
+        ],
+        "provider": "nonstopvibin-equipe-cafe-r-d-ete",
+        "command": "claude --settings '/tmp/nsv-ts-fixture/data/agent-connections/equipe-cafe-r-d-ete/claude-1805943e6e6338f90c37031b.settings.json'",
+        "files": [
+          "agent-home/projects/api server/.claude/settings.local.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-1805943e6e6338f90c37031b.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-key-4318",
+          "data/agent-connections/equipe-cafe-r-d-ete/claude-1805943e6e6338f90c37031b.settings.json"
+        ],
+        "instructions": "Run it inside the connected project; plain claude skips the picker. Approve the credential helper, pick a model with /model, and check /status shows Équipe Café: R&D (été)."
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "input": {
+        "agent": "codex",
+        "otherProviders": false
+      },
+      "models": ["gpt-5-codex", "gpt-5"],
+      "result": {
+        "agent": "codex",
+        "otherProviders": false,
+        "models": ["gpt-5-codex", "gpt-5"],
+        "provider": "nonstopvibin-equipe-cafe-r-d-ete",
+        "command": "codex --profile nonstopvibin-equipe-cafe-r-d-ete",
+        "files": [
+          "agent-home/.codex/nonstopvibin-equipe-cafe-r-d-ete.config.toml",
+          "data/agent-connections/equipe-cafe-r-d-ete/codex.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/codex-key-4318"
+        ],
+        "instructions": "Works in any project. Pick a model with /model before the first prompt; Codex's built-in default may not exist here. Needs Codex 0.140.0 or later."
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "input": {
+        "agent": "opencode"
+      },
+      "models": ["claude-sonnet-4-5", "gpt-5-codex", "local/qwen3-coder:30b"],
+      "result": {
+        "agent": "opencode",
+        "models": ["claude-sonnet-4-5", "gpt-5-codex", "local/qwen3-coder:30b"],
+        "provider": "nonstopvibin-equipe-cafe-r-d-ete",
+        "command": "opencode",
+        "files": [
+          "agent-home/.config/opencode/plugins/nonstopvibin-6e4156ab-2acf-4d89-9a81-264f3b3da50a.js",
+          "data/agent-connections/equipe-cafe-r-d-ete/opencode.json"
+        ],
+        "instructions": "Use /models to choose nonstopvibin · Équipe Café: R&D (été). Needs OpenCode 1.18.29 or later; background model overrides to another provider are rejected."
+      }
+    },
+    {
+      "profileId": "6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "input": {
+        "agent": "pi"
+      },
+      "models": ["claude-sonnet-4-5", "gpt-5-codex"],
+      "result": {
+        "agent": "pi",
+        "models": ["claude-sonnet-4-5", "gpt-5-codex"],
+        "provider": "nonstopvibin-equipe-cafe-r-d-ete",
+        "command": "pi",
+        "files": [
+          "agent-home/.pi/agent/extensions/nonstopvibin-equipe-cafe-r-d-ete.js",
+          "data/agent-connections/equipe-cafe-r-d-ete/pi.json",
+          "data/agent-connections/equipe-cafe-r-d-ete/pi-key-4318"
+        ],
+        "instructions": "Choose Équipe Café: R&D (été) once with /nv; pi remembers the profile and model for this repository, including /new. Use native /model to switch models. The footer shows the active profile. App startup updates connected extensions automatically; restart pi or /reload to load changes. Skip /login: a stored key would override the credential helper. Needs pi 0.85.1 or later."
+      }
+    },
+    {
+      "profileId": "6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+      "input": {
+        "agent": "codex",
+        "otherProviders": true
+      },
+      "models": ["go/glm-4.6", "claude-sonnet-4-5"],
+      "result": {
+        "agent": "codex",
+        "otherProviders": true,
+        "models": ["go/glm-4.6", "claude-sonnet-4-5"],
+        "provider": "nonstopvibin-personal-2",
+        "command": "codex --profile nonstopvibin-personal-2",
+        "files": [
+          "agent-home/.codex/nonstopvibin-personal-2.config.toml",
+          "data/agent-connections/personal-2/codex.json",
+          "data/agent-connections/personal-2/codex-key-4318"
+        ],
+        "instructions": "Works in any project. Pick a model with /model before the first prompt; Codex's built-in default may not exist here. Needs Codex 0.140.0 or later."
+      }
+    }
+  ],
+  "credentialSocket": "/tmp/nonstopvibin-979-b0f85aa75fdace6ccc595d96",
+  "files": [
+    {
+      "path": "data/agent-connections",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/claude-1805943e6e6338f90c37031b.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/claude-1805943e6e6338f90c37031b.settings.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/claude-4d5871823f0addc331d14a9f.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/claude-4d5871823f0addc331d14a9f.settings.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/claude-key-4318",
+      "type": "file",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/codex-key-4318",
+      "type": "file",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/codex.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/opencode.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/pi-key-4318",
+      "type": "file",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/equipe-cafe-r-d-ete/pi.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/agent-connections/personal-2",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/personal-2/codex-key-4318",
+      "type": "file",
+      "mode": "0700"
+    },
+    {
+      "path": "data/agent-connections/personal-2/codex.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/core-processes",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/core-processes/4242.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/core-processes/4243.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/nonstopvibin.sqlite",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0/auth",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0/auth/claude-6790977a-c183-44f7-bc9b-49a9585cb4c4.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/6a4fc666-ed37-4a2e-a0cc-8710745c83b0/config.yaml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/claude-3c524087-98dc-4962-96de-722141bfcb8c.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/claude-dec7d424-62b9-4b40-9f72-5278f53b78b6.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/auth/codex-2d09805d-42f1-46f0-a05a-a23632b1c728.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/6e4156ab-2acf-4d89-9a81-264f3b3da50a/config.yaml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/991bda5e-6c9d-45cf-8115-37a8ccf9ab8c",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/991bda5e-6c9d-45cf-8115-37a8ccf9ab8c/auth",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/991bda5e-6c9d-45cf-8115-37a8ccf9ab8c/config.yaml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/profiles/d120c6b8-8067-4659-8593-37de2c72d1cf",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/d120c6b8-8067-4659-8593-37de2c72d1cf/auth",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "data/profiles/d120c6b8-8067-4659-8593-37de2c72d1cf/config.yaml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "data/vault.key",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/.codex",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.codex/config.toml",
+      "type": "file",
+      "mode": "0644"
+    },
+    {
+      "path": "agent-home/.codex/nonstopvibin-equipe-cafe-r-d-ete.config.toml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/.codex/nonstopvibin-personal-2.config.toml",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/.config",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.config/opencode",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.config/opencode/plugins",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.config/opencode/plugins/nonstopvibin-6e4156ab-2acf-4d89-9a81-264f3b3da50a.js",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/.pi",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.pi/agent",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.pi/agent/extensions",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/.pi/agent/extensions/nonstopvibin-equipe-cafe-r-d-ete.js",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/projects",
+      "type": "directory",
+      "mode": "0755"
+    },
+    {
+      "path": "agent-home/projects/api server",
+      "type": "directory",
+      "mode": "0755"
+    },
+    {
+      "path": "agent-home/projects/api server/.claude",
+      "type": "directory",
+      "mode": "0700"
+    },
+    {
+      "path": "agent-home/projects/api server/.claude/settings.local.json",
+      "type": "file",
+      "mode": "0600"
+    },
+    {
+      "path": "agent-home/projects/webapp",
+      "type": "directory",
+      "mode": "0755"
+    },
+    {
+      "path": "agent-home/projects/webapp/.claude",
+      "type": "directory",
+      "mode": "0755"
+    },
+    {
+      "path": "agent-home/projects/webapp/.claude/settings.local.json",
+      "type": "file",
+      "mode": "0600"
+    }
+  ],
+  "gitIgnored": [
+    "tests/fixtures/ts-data-dir/data/nonstopvibin.sqlite",
+    "tests/fixtures/ts-data-dir/data/vault.key"
+  ]
+}

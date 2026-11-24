@@ -1,0 +1,17 @@
+[package]
+name = "nsv-desktop"
+description = "The desktop contract: the daemon-helper pipe and its handshake, the bridge methods, and the tray's and the shell's plain types."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,5 +1,5 @@
-// Run with `bun run test:server` on Linux x64 after `bun run dist:server`: installs the
-// linux-x64 archive from release/ into temporary directories and runs the installed CLI.
+// Run with `bun run test:server` on Linux after `bun run dist:server`: installs the archive for
+// the host architecture from release/ into temporary directories and runs the installed CLI.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -7,11 +7,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import pkg from "../package.json" with { type: "json" };
-import { serverArchiveName } from "../scripts/distribution.ts";
-import { notRunningExit, serverArchive } from "../src/server/host-defaults.ts";
+import {
+  notRunningExit,
+  serverArchive,
+  serverArchiveName,
+} from "../scripts/distribution.ts";
 import { unusedPort } from "./support/ports.ts";
 
-const name = serverArchiveName(pkg.version, "x64");
+const name = serverArchiveName(pkg.version, process.arch);
 const archive = resolve(import.meta.dirname, "../release", `${name}.tar.gz`);
 const work = await mkdtemp(join(tmpdir(), "nv-server-smoke-"));
 const env = {
@@ -47,7 +50,6 @@ try {
   server.stdout.on("data", (chunk) => log.push(chunk));
   server.stderr.on("data", (chunk) => log.push(chunk));
   for (let attempt = 0; attempt < 30 && status() !== 0; attempt++) {
-    // A server that exited will not become ready.
     if (server.exitCode !== null || server.signalCode !== null) break;
     await delay(1000);
   }

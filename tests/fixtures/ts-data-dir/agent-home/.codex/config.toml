@@ -1,0 +1,4 @@
+model = "gpt-5-codex"
+
+[projects."/srv/example"]
+trust_level = "trusted"

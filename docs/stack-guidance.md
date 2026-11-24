@@ -1,15 +1,15 @@
 # Stack guidance for agents
 
-Project-maintained integration notes, reviewed 2026-09-06. This document is not an
-Electron, SQLite, Bun, or Microsoft-authored skill. The technical references below
+Project-maintained integration notes, reviewed 2026-11-23. This document is not a
+Rust, SQLite, Bun, or Microsoft-authored skill. The technical references below
 come directly from those projects. Read only the section relevant to the change;
-check version-sensitive behavior against the actual installed runtime.
+check version-sensitive behavior against the installed toolchain and crates.
 
 ## React and accessible UI
 
 Use the installed `vercel-react-best-practices`, `vercel-composition-patterns`, and
 `web-design-guidelines` skills. They come directly from Vercel, not an aggregator.
-Apply them to the client React 19 renderer; this app has no Next.js server components.
+Apply them to the client-side React 19 interface; this app has no Next.js server components.
 The composition skill's React 19 preferences are review guidance, not a mandate to
 rewrite correct code. Prefer existing Radix dialog primitives and preserve keyboard
 focus, accessible labels, error announcement, and reduced-motion behavior.
@@ -21,44 +21,70 @@ remote guideline body is not pinned by skills-lock.json.
 [React rules](https://react.dev/reference/rules/rules-of-react),
 [Vercel UI guidelines](https://github.com/vercel-labs/web-interface-guidelines).
 
-## Electron: process boundaries, responsiveness, lifecycle
+## Rust daemon and window process: boundaries, responsiveness, lifecycle
 
-Before changing `src/desktop`, read Electron's
-[security checklist](https://www.electronjs.org/docs/latest/tutorial/security).
-Keep the sandbox and context isolation enabled, Node integration disabled, IPC
-arguments validated, and the sender checked. Expose specific methods through the
-preload bridge, not arbitrary IPC channels. Apply allowlists to navigation and
-external browser launches; never treat renderer-provided URLs as trusted.
+Two Rust binaries replace Electron. `nonstopvibin` (crate `nsv-cli`) is the daemon:
+gateway, management API, the interface's files, the CLI and, in desktop mode, the
+tray. On Linux it links no GUI library. `nonstopvibin-window` (crate `nsv-window`)
+is the only code that links WebKit: WKWebView on macOS and WebKitGTK 4.1 on Linux,
+through plain `wry` and `tao`. The daemon starts it when a window opens and it
+exits with its last window. [The decision record](decisions/rust-port.md) explains
+the split, and each crate's `lib.rs` documents what it owns.
 
-The project runs the local service in the desktop process. Large SQLite queries,
-imports, filesystem work, and synchronous IPC can block the UI. Profile before
-optimizing and keep substantial synchronous work out of the main-process hot path.
-[Electron performance](https://www.electronjs.org/docs/latest/tutorial/performance).
+Before changing `crates/window` or `crates/shell`, keep these properties:
+
+- The helper accepts IPC only from the main frame of a page on the daemon's
+  origin. It parses each message as `{ id, method, arg }` with a length cap and a
+  fixed method list.
+- `openExternal`, `getLoginItem`, `setLoginItem` and `revealData` go to the
+  daemon over the helper's stdio pipe, and the daemon validates each argument
+  again. Never trust a URL or path the page provides.
+- Navigation to other origins, new windows and downloads stay denied, except a
+  file the page makes itself (a `blob:` URL of the daemon's origin), which
+  Activity's CSV export saves in the Downloads folder. Devtools stay off in release
+  builds, and the CSP stays as it is.
+- The session token reaches the helper on stdin, never in argv, the environment
+  or a URL. The browser fallback opens an owner-only page in the data directory
+  that redirects to the session link, so the opener's arguments hold no token.
+
+The daemon runs on Tokio's `current_thread` runtime, measured at 0 idle wakeups.
+Never block it. SQLite runs on the store thread (`crates/store/src/store.rs`), and
+other blocking work goes through `spawn_blocking`. Every queue is bounded, and
+`std::thread::sleep` is disallowed (`clippy.toml`). One scheduler task sleeps until
+the earliest deadline; add a deadline to it instead of a polling loop. Measure
+idle PSS and wakeups before and after a change that adds a task, a timer or a
+dependency, as [the evidence record](decisions/rust-port-evidence.md) does.
+
+Each crate forbids `unsafe` code, except the macOS shell, which allows it one
+call at a time for `SMAppService`. Secrets are `secrecy` newtypes without
+`Serialize`, and client keys compare in constant time. The gateway crate cannot
+name the management client, so a profile key cannot reach management.
 
 Desktop and development use the same local AES-GCM vault. Preserve owner-only
 permissions on vault.key, SQLite, and core credential files. The key lives beside
 the database, so this does not protect against software running as the same OS user.
 
-Project-specific lifecycle checks: close-to-tray differs from Quit; verify an actual
-process exit after gateway/core shutdown, then reopen. Test activate/second-instance
-and tray events while windows are being destroyed. Packaging validation belongs in
-the real Electron runtime, not only browser or Bun tests. Keep the `.cjs` desktop
-output expected by package.json; Vite's ESM preference does not change this boundary.
-Follow SECURITY.md for release integrity, signing, and native platform checks.
+Project-specific lifecycle checks: closing the window differs from **Quit**.
+Verify that the daemon exits after gateway and core shutdown, then reopen. Test a
+second launch and tray events while windows close. Packaging validation belongs
+in the real packaged app, which `scripts/package-layout.ts` checks, not only
+in `cargo test`. Follow SECURITY.md for release integrity, signing, and native
+platform checks.
+[Rust API guidelines](https://rust-lang.github.io/api-guidelines/),
+[Tokio](https://tokio.rs/tokio/tutorial), [wry](https://docs.rs/wry).
 
 ## SQLite: correctness before tuning
 
-The app uses `DatabaseSync` from `node:sqlite` in `src/server/store.ts`. It already
-sets WAL, foreign keys, and a five-second busy timeout. It does not use Prisma,
-Drizzle, Turso/libSQL, better-sqlite3, or direct `bun:sqlite`; do not import examples
-for those APIs as if they were interchangeable. Check the embedded Electron/Node
-version and Bun compatibility before choosing an API from current Node docs.
-[Node SQLite API](https://nodejs.org/api/sqlite.html),
-[Bun Node compatibility](https://bun.sh/docs/runtime/nodejs-compat).
+The daemon uses `rusqlite` with its bundled SQLite in `crates/store/src/db.rs`, on
+one dedicated thread. It already sets WAL, foreign keys, and a five-second busy
+timeout. The schema, PRAGMAs and timestamp format are the ones the TypeScript store
+wrote, and `tests/fixtures/ts-data-dir` proves that the daemon reads such a
+directory. Do not change them without a migration and a downgrade plan.
+[rusqlite](https://docs.rs/rusqlite).
 
 - Bind user data through prepared-statement parameters. Dynamic identifiers require
   an explicit allowlist; string interpolation is not parameter binding.
-  [Prepared statements](https://nodejs.org/api/sqlite.html#class-statementsync).
+  [Parameters](https://docs.rs/rusqlite/latest/rusqlite/macro.params.html).
 - Set and verify foreign-key enforcement on every connection. Check schema/index
   requirements, and do not toggle enforcement inside a transaction expecting it to
   take effect. [Foreign keys](https://www.sqlite.org/foreignkeys.html).
@@ -83,20 +109,26 @@ as a fixture or reduce durability merely to improve benchmark numbers.
 
 ## Bun and TypeScript
 
-Bun is the package manager, test runner, and development runtime; Electron supplies
-the packaged runtime. A successful Bun test does not establish Electron API support.
-Use frozen installs (`bun ci`) and review bun.lock with dependency changes. The app
-and .deepsec have separate lockfiles. Do not fetch latest skills during setup.
-[Bun lockfiles](https://bun.sh/docs/pm/lockfile),
-[Bun compatibility](https://bun.sh/docs/runtime/nodejs-compat).
+Bun is the package manager, the test runner for the TypeScript tests, and the
+runtime of the build and packaging scripts in `scripts/`. It is not part of any
+shipped product: the daemon and the window process are Rust. Use frozen installs
+(`bun ci`) and review bun.lock with dependency changes. The app and .deepsec have
+separate lockfiles. Do not fetch latest skills during setup.
+[Bun lockfiles](https://bun.sh/docs/pm/lockfile).
 
 Keep TypeScript strictness, unused-code checks, and the current erasable-syntax
-constraint. Validate external JSON/IPC/provider input as `unknown` at runtime before
+constraint. Validate external JSON and provider input as `unknown` at runtime before
 narrowing; type assertions do not validate it. Use discriminated unions when success,
 failure, stale, and unavailable data have different meanings. Avoid replacing domain
 types with `any` or non-null assertions to bypass an unresolved boundary.
 [TypeScript narrowing](https://www.typescriptlang.org/docs/handbook/2/narrowing.html),
 [Zod parsing](https://zod.dev/basics).
+
+The UI's wire types, route keys and desktop bridge method names are generated from Rust:
+`bun run wire:export` rewrites `src/shared/generated`, which `src/shared` re-exports.
+Provider, agent and vocabulary data stays in TypeScript: after changing it, run
+`bun run registry:export` to rewrite `crates/domain/data/registry.json`.
+`bun run quality` fails on drift.
 
 ## Vite and build tooling
 
@@ -104,11 +136,13 @@ Use the installed `vite` skill from Anthony Fu for config, plugins, assets, and 
 changes. Vite lists him on its [team page](https://vite.dev/team). His skill repository
 is a documentation-generated proof of concept, and this skill describes a Vite 8
 beta snapshot. Its maintainer reputation is credible; that is not a guarantee that
-every option matches installed Vite 8.2.4. Confirm version-sensitive configuration
+every option matches the installed Vite version in `package.json`. Confirm version-sensitive configuration
 against [current Vite docs](https://vite.dev/config/) and the installed types.
 
-Keep renderer assets and environment exposure separate from desktop credentials.
-Measure bundle changes, preserve loopback development binding, and verify both
-renderer and desktop outputs. Do not adopt Anthony Fu's broader pnpm/Vitest/Vue
+Keep interface assets and environment exposure separate from desktop credentials.
+Measure bundle changes and preserve loopback development binding. The build
+targets `chrome152` and `safari16` in `vite.config.ts`: macOS 13 shows the window
+in Safari 16's WebKit, and browsers reach the headless server. Check new CSS and
+JavaScript features against Safari 16 and the WebKitGTK 4.1 window on Linux. Do not adopt Anthony Fu's broader pnpm/Vitest/Vue
 preferences: only the Vite skill is installed. Continue using Bun, React, Oxlint,
 Oxfmt, and the existing tests.

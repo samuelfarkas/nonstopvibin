@@ -1,0 +1,26 @@
+[package]
+name = "nsv-agents"
+description = "Agent setup writers for Claude Code, Codex, OpenCode and pi, and the credential socket."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+nsv-domain.workspace = true
+nsv-files.workspace = true
+rustix.workspace = true
+# preserve_order: the user's Claude settings keep their key order when merged, as JSON.parse and
+# JSON.stringify keep it. Cargo unifies the feature for the whole workspace.
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[lints]
+workspace = true

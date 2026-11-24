@@ -1,0 +1,140 @@
+{
+  "providers": {
+    "claude": {
+      "label": "Claude",
+      "catalog": "anthropic",
+      "nativeAgent": "claude",
+      "hosts": [
+        "claude.ai",
+        "console.anthropic.com",
+        "platform.claude.com"
+      ],
+      "credentialFile": true,
+      "signIn": {
+        "core": "anthropic"
+      },
+      "organizations": true,
+      "reconnect": true
+    },
+    "codex": {
+      "label": "Codex",
+      "catalog": "openai",
+      "nativeAgent": "codex",
+      "hosts": [
+        "auth.openai.com",
+        "chatgpt.com"
+      ],
+      "credentialFile": true,
+      "signIn": {},
+      "bankedResets": true
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "hosts": [
+        "accounts.google.com"
+      ],
+      "credentialFile": true,
+      "signIn": {}
+    },
+    "kimi": {
+      "label": "Kimi Code",
+      "catalog": "kimi-for-coding",
+      "hosts": [
+        "auth.kimi.com",
+        "www.kimi.com",
+        "kimi.com"
+      ],
+      "credentialFile": true,
+      "signIn": {}
+    },
+    "xai": {
+      "label": "Grok",
+      "hosts": [
+        "accounts.x.ai",
+        "auth.x.ai",
+        "grok.com",
+        "accounts.xai.com"
+      ],
+      "credentialFile": true,
+      "signIn": {}
+    },
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "hosts": [
+        "opencode.ai"
+      ],
+      "apiKey": true,
+      "preset": {
+        "name": "OpenCode Go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "fixedEndpoint": true,
+        "upstream": "opencode-go"
+      }
+    },
+    "openai": {
+      "label": "OpenAI",
+      "nativeAgent": "codex",
+      "apiKey": true,
+      "preset": {
+        "name": "OpenAI API",
+        "baseUrl": "https://api.openai.com/v1"
+      }
+    },
+    "anthropic": {
+      "label": "Anthropic API",
+      "nativeAgent": "claude",
+      "apiKey": true,
+      "preset": {
+        "name": "Anthropic API",
+        "baseUrl": "https://api.anthropic.com/v1"
+      }
+    },
+    "gemini": {
+      "label": "Gemini",
+      "catalog": "google",
+      "credentialFile": true,
+      "apiKey": true
+    },
+    "custom": {
+      "label": "Compatible API",
+      "apiKey": true,
+      "preset": {
+        "name": "Other compatible API",
+        "baseUrl": ""
+      }
+    }
+  },
+  "agents": {
+    "claude": {
+      "title": "Claude Code",
+      "project": true,
+      "native": "Claude"
+    },
+    "codex": {
+      "title": "Codex",
+      "project": false,
+      "native": "OpenAI",
+      "catalog": "header"
+    },
+    "pi": {
+      "title": "pi",
+      "project": false,
+      "catalog": "query"
+    },
+    "opencode": {
+      "title": "OpenCode",
+      "project": false,
+      "catalog": "query"
+    }
+  },
+  "limits": {
+    "nameLength": 60,
+    "prefixLength": 30,
+    "priorityLimit": 1000,
+    "credentialFileBytes": 2000000,
+    "allHistoryDays": 3650
+  },
+  "usagePageSize": 500,
+  "quotaRefreshMs": 120000,
+  "pollMs": 4000
+}

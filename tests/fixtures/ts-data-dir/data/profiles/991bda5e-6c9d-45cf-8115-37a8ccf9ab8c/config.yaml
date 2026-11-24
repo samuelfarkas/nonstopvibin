@@ -1,0 +1,33 @@
+host: 127.0.0.1
+port: 8320
+auth-dir: /tmp/nsv-ts-fixture/data/profiles/991bda5e-6c9d-45cf-8115-37a8ccf9ab8c/auth
+api-keys:
+  - core-dddddddddddddddddddddddddddddddd
+remote-management:
+  allow-remote: false
+  secret-key: management-dddddddddddddddddddddddddddddddd
+  disable-control-panel: true
+  disable-auto-update-panel: true
+debug: false
+commercial-mode: true
+logging-to-file: false
+request-log: false
+error-logs-max-files: 10
+usage-statistics-enabled: true
+redis-usage-queue-retention-seconds: 86400
+request-retry: 1
+max-retry-interval: 5
+ws-auth: true
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: false
+  antigravity-credits: false
+routing:
+  strategy: fill-first
+  session-affinity: false
+  session-affinity-ttl: 1h
+plugins:
+  enabled: false
+openai-compatibility: []
+claude-api-key: []
+codex-api-key: []
