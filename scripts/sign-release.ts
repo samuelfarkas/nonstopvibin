@@ -1,5 +1,5 @@
-// `bun scripts/sign-release.ts <release-dir>`: writes <release-dir>/SHA256SUMS over every file
-// there and signs it with minisign into SHA256SUMS.minisig, which the Rust updater verifies with
+// `bun scripts/sign-release.ts <release-dir>`: writes <release-dir>/SHA256SUMS over the release
+// files there and signs it with minisign into SHA256SUMS.minisig, which the Rust updater verifies with
 // the public key in build/update-signing.pub. The secret key file's text comes from MINISIGN_SECRET_KEY and its
 // password, if it has one, from MINISIGN_PASSWORD (the release environment's secrets).
 // Without the secret it warns and signs nothing, until the public key is committed: from then
@@ -34,6 +34,14 @@ export async function writeSums(
   for (const name of names.toSorted())
     lines.push(`${sha256(await readFile(join(directory, name)))}  ${name}\n`);
   await writeFile(join(directory, "SHA256SUMS"), lines.join(""));
+}
+
+/** The files SHA256SUMS lists: regular files, without SHA256SUMS and its signature. */
+export async function releaseFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && !entry.name.startsWith("SHA256SUMS"))
+    .map((entry) => entry.name);
 }
 
 async function signRelease(
@@ -99,6 +107,6 @@ if (import.meta.main) {
   const [directory] = process.argv.slice(2);
   if (!directory)
     throw new Error("Usage: bun scripts/sign-release.ts <release-dir>");
-  await writeSums(directory, await readdir(directory));
+  await writeSums(directory, await releaseFiles(directory));
   await signRelease(directory);
 }

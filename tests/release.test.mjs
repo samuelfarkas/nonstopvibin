@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -15,6 +15,7 @@ import {
   serverArchiveName,
   serverArchitectures,
 } from "../scripts/distribution.ts";
+import { releaseFiles, writeSums } from "../scripts/sign-release.ts";
 
 const cargo = {
   version: "0.1.2",
@@ -137,6 +138,26 @@ test("release publication requires every configured installer, both server archi
       Buffer.from("corrupted installer"),
     );
     await assert.rejects(verifyReleaseAssets(directory, "0.1.2"), /mismatch/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SHA256SUMS lists the release files, so writing it again gives the same manifest", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nv-sums-"));
+  try {
+    await writeFile(join(directory, "b.yml"), "b");
+    await writeFile(join(directory, "a.zip"), "a");
+    // What a local dist leaves beside the installers, and an earlier run's output.
+    await mkdir(join(directory, "mac-arm64"));
+    await writeFile(join(directory, "SHA256SUMS"), "stale\n");
+    await writeFile(join(directory, "SHA256SUMS.minisig"), "stale\n");
+    await writeSums(directory, await releaseFiles(directory));
+    assert.equal(
+      await readFile(join(directory, "SHA256SUMS"), "utf8"),
+      "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb  a.zip\n" +
+        "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d  b.yml\n",
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
