@@ -124,7 +124,7 @@ pub enum StartError {
     /// The cores could not be set up, or the core could not be selected and checked.
     #[error(transparent)]
     Cores(AppError),
-    /// `server.json` could not be written.
+    /// An earlier `server.json` could not be removed, or this one written.
     #[error(transparent)]
     Session(io::Error),
 }
@@ -213,16 +213,19 @@ impl Clone for Daemon {
 }
 
 impl Daemon {
-    /// Opens the store, prunes old usage and starts accepting on the loopback port; requests
-    /// are served from here on. Then [`Daemon::restore`] starts the profiles.
+    /// Removes an earlier run's `server.json`, opens the store, prunes old usage and starts
+    /// accepting on the loopback port; requests are served from here on. Then
+    /// [`Daemon::restore`] starts the profiles.
     ///
     /// # Errors
-    /// A port in use, or a store that does not open.
+    /// A `server.json` that cannot be removed, a port in use, or a store that does not open.
     pub async fn start(
         options: Options,
         boundaries: Boundaries,
         lock: ServerLock,
     ) -> Result<Self, StartError> {
+        // An unclean exit's file would hand a second launch a token nobody holds.
+        Session::discard(lock.directory()).map_err(StartError::Session)?;
         let directory = lock.directory().clone();
         let vault = tokio::task::spawn_blocking(move || Vault::open(&directory)).await??;
         let store = Store::open(lock.directory(), vault).await?;

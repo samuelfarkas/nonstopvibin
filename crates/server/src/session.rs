@@ -1,10 +1,12 @@
 //! `server.json`: how `url`, `status` and a second desktop launch find the running daemon. It
 //! is written atomically and owner-only once the daemon has started, read only when it is an
-//! owner-only ordinary file, and removed at shutdown only while it still names this process.
+//! owner-only ordinary file, removed when a daemon takes the data directory's lock, and removed
+//! at shutdown only while it still names this process.
 
 use std::io;
 use std::time::{Duration, SystemTime};
 
+use hyper::StatusCode;
 use nsv_domain::endpoint::{loopback_origin, session_link};
 use nsv_domain::secret::SessionToken;
 use nsv_domain::time::{epoch_ms, iso_string, parse_iso};
@@ -45,8 +47,9 @@ pub enum ShowError {
     NoAnswer(String),
 }
 
-/// How long a second launch waits for a daemon that holds the lock but is still starting.
-const STARTING: Duration = Duration::from_secs(5);
+/// How long a second launch waits for a daemon that holds the lock but is still starting: its
+/// restore starts each kept-running profile's core, which may take up to 15 s to answer.
+const STARTING: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(100);
 
 /// The largest answer the daemon reads from a loopback port: its state, or a profile's models.
@@ -147,50 +150,65 @@ impl Session {
     /// An unsafe file, or a file-system error.
     pub fn remove(directory: &DataDir, pid: u32) -> Result<(), SessionError> {
         if Self::read(directory)?.is_some_and(|session| session.pid == pid) {
-            match std::fs::remove_file(directory.session()) {
-                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
-                _ => {}
-            }
+            Self::discard(directory)?;
         }
         Ok(())
     }
 
-    /// The second desktop launch: the daemon holding `directory`'s lock shows its main window on
-    /// `POST /api/desktop/show` with its token. Waits up to five seconds for a daemon that is
-    /// still starting to write `server.json`.
+    /// Removes `server.json`, whichever process it names. Only the holder of the data
+    /// directory's lock may: the lock proves an earlier run's file stale.
     ///
     /// # Errors
-    /// An unsafe `server.json`, none in time, or no 2xx answer within two seconds.
+    /// A file-system error.
+    pub(crate) fn discard(directory: &DataDir) -> io::Result<()> {
+        match std::fs::remove_file(directory.session()) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    /// The second desktop launch: the daemon holding `directory`'s lock shows its main window on
+    /// `POST /api/desktop/show` with its token. Waits up to half a minute for a daemon that is
+    /// still starting: until `server.json` exists, names a port that answers, and holds the
+    /// daemon's token rather than an earlier run's.
+    ///
+    /// # Errors
+    /// An unsafe `server.json`, none in time, an answer other than 2xx or 401, or no 2xx answer
+    /// in time.
     pub async fn show_main(directory: &DataDir) -> Result<(), ShowError> {
         let deadline = tokio::time::Instant::now() + STARTING;
-        let session = loop {
-            if let Some(session) = Self::read(directory)? {
-                break session;
-            }
+        loop {
+            let pending = match Self::read(directory)? {
+                None => ShowError::NoSession,
+                Some(session) => {
+                    let authorization = format!("Bearer {}", session.token.expose_secret());
+                    let answer = loopback(LoopbackRequest {
+                        to: Loopback::v4(session.port),
+                        method: &Method::POST,
+                        target: "/api/desktop/show",
+                        headers: &[("Authorization", &authorization)],
+                        body: None,
+                        timeout: Duration::from_secs(2),
+                        limit: 64 * 1024,
+                    })
+                    .await;
+                    let refused = |status: StatusCode| {
+                        ShowError::NoAnswer(format!("it answered HTTP/1.1 {}", status.as_u16()))
+                    };
+                    match answer {
+                        Ok(response) if response.ok() => return Ok(()),
+                        Ok(response) if response.status == StatusCode::UNAUTHORIZED => {
+                            refused(response.status)
+                        }
+                        Ok(response) => return Err(refused(response.status)),
+                        Err(error) => ShowError::NoAnswer(error.to_string()),
+                    }
+                }
+            };
             if tokio::time::Instant::now() >= deadline {
-                return Err(ShowError::NoSession);
+                return Err(pending);
             }
             tokio::time::sleep(POLL).await;
-        };
-        let authorization = format!("Bearer {}", session.token.expose_secret());
-        let response = loopback(LoopbackRequest {
-            to: Loopback::v4(session.port),
-            method: &Method::POST,
-            target: "/api/desktop/show",
-            headers: &[("Authorization", &authorization)],
-            body: None,
-            timeout: Duration::from_secs(2),
-            limit: 64 * 1024,
-        })
-        .await
-        .map_err(|error| ShowError::NoAnswer(error.to_string()))?;
-        if response.ok() {
-            Ok(())
-        } else {
-            Err(ShowError::NoAnswer(format!(
-                "it answered HTTP/1.1 {}",
-                response.status.as_u16()
-            )))
         }
     }
 

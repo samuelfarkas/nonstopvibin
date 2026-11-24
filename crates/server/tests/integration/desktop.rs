@@ -2,6 +2,9 @@
 //! only the desktop serves, and the tray's status, where a sleeping profile still counts as
 //! running because its core starts on the next request.
 
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use nsv_agents::AgentDirectories;
 use nsv_core::install::CoreSource;
 use nsv_desktop::HostEvent;
@@ -16,7 +19,7 @@ use serde_json::json;
 use crate::common::{ModelsDev, now, send};
 
 /// A fresh data directory with one enabled API-key profile, which sleeps until a request.
-async fn seeded(root: &TempDir) -> std::path::PathBuf {
+async fn seeded(root: &TempDir) -> PathBuf {
     let data = root.path().join("data");
     nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
     let directory = DataDir::new(&data);
@@ -42,7 +45,13 @@ async fn seeded(root: &TempDir) -> std::path::PathBuf {
 }
 
 async fn daemon(root: &TempDir, desktop: Option<Desktop>) -> Daemon {
-    let data = seeded(root).await;
+    let daemon = start(root, &seeded(root).await, desktop).await;
+    daemon.restore().await.unwrap();
+    daemon
+}
+
+/// The daemon of `data`, accepting but not yet restored.
+async fn start(root: &TempDir, data: &Path, desktop: Option<Desktop>) -> Daemon {
     let options = Options {
         port: 0,
         allow_hosts: Vec::new(),
@@ -60,10 +69,8 @@ async fn daemon(root: &TempDir, desktop: Option<Desktop>) -> Daemon {
         clock: now,
         ..Boundaries::production().unwrap()
     };
-    let lock = DataDir::new(&data).lock().unwrap();
-    let daemon = Daemon::start(options, boundaries, lock).await.unwrap();
-    daemon.restore().await.unwrap();
-    daemon
+    let lock = DataDir::new(data).lock().unwrap();
+    Daemon::start(options, boundaries, lock).await.unwrap()
 }
 
 #[tokio::test]
@@ -135,22 +142,45 @@ async fn a_second_launch_shows_the_running_window_through_server_json() {
     let mut events = desktop.events();
     Session::show_main(&data).await.unwrap();
     assert_eq!(events.try_recv().unwrap(), HostEvent::ShowMain);
-    // A token the daemon does not hold is refused, and nothing shows.
-    let mut stale = daemon.session().unwrap();
-    stale.token = SessionToken::new("stale-token");
-    stale.write(&data).unwrap();
-    assert_eq!(
-        Session::show_main(&data).await.unwrap_err().to_string(),
-        "NonstopVibin is already running but did not answer: it answered HTTP/1.1 401"
-    );
-    assert!(events.try_recv().is_err());
     // A server.json others may write is never trusted.
     set_mode(&data.session(), 0o644);
     assert_eq!(
         Session::show_main(&data).await.unwrap_err().to_string(),
         "server.json must be an owner-only ordinary file you own (chmod 600)."
     );
-    daemon.session().unwrap().write(&data).unwrap();
+    // A token the daemon does not hold, as an earlier run's file holds, is refused and nothing
+    // shows; the launch waits until server.json names the daemon's own.
+    let mut stale = daemon.session().unwrap();
+    stale.token = SessionToken::new("stale-token");
+    stale.write(&data).unwrap();
+    let (shown, ()) = tokio::join!(Session::show_main(&data), async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(events.try_recv().is_err());
+        daemon.session().unwrap().write(&data).unwrap();
+    });
+    shown.unwrap();
+    assert_eq!(events.try_recv().unwrap(), HostEvent::ShowMain);
+    daemon.close().await.unwrap();
+}
+
+/// Holding the data directory's lock proves an earlier run's `server.json` stale: it is gone
+/// once the daemon starts, long before restore writes the new one.
+#[tokio::test]
+async fn a_start_removes_the_server_json_an_unclean_exit_left() {
+    let root = TempDir::new("desktop-stale");
+    let data = seeded(&root).await;
+    let directory = DataDir::new(&data);
+    let stale = Session {
+        pid: 4242,
+        port: 9,
+        token: SessionToken::new("stale-token"),
+        allow_hosts: Vec::new(),
+        version: "0.2.0".to_owned(),
+        started_at: now(),
+    };
+    stale.write(&directory).unwrap();
+    let daemon = start(&root, &data, Some(Desktop::default())).await;
+    assert!(!directory.session().exists());
     daemon.close().await.unwrap();
 }
 
