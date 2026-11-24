@@ -17,8 +17,8 @@ use nsv_domain::secret::SessionToken;
 use serde_json::{Value, json};
 use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event::{Event, StartCause, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopWindowTarget};
-use tao::window::{Window, WindowBuilder, WindowId};
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopProxy, EventLoopWindowTarget};
+use tao::window::{Theme, Window, WindowBuilder, WindowId};
 use wry::{
     NewWindowResponse, PageLoadEvent, PermissionResponse, WebContext, WebView, WebViewBuilder,
 };
@@ -148,9 +148,17 @@ struct App {
     native: <Os as Native>::State,
 }
 
+/// The platform's loop. The UI is dark only, so the native dialogs and menus are dark too,
+/// as main.ts's `nativeTheme.themeSource = "dark"` made them.
+fn event_loop<T: 'static>() -> EventLoop<T> {
+    let event_loop = Os::event_loop();
+    event_loop.set_theme(Some(Theme::Dark));
+    event_loop
+}
+
 /// `failure`'s error dialog with `reason` as its text, then exit once it is dismissed.
 pub(crate) fn alert(failure: Failure, reason: Reason) -> ! {
-    let event_loop = Os::event_loop::<()>();
+    let event_loop = event_loop::<()>();
     let proxy = event_loop.create_proxy();
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -169,7 +177,7 @@ pub(crate) fn alert(failure: Failure, reason: Reason) -> ! {
 }
 
 pub(crate) fn run(boot: Boot) -> ! {
-    let event_loop = Os::event_loop();
+    let event_loop = event_loop();
     let proxy = event_loop.create_proxy();
     read_daemon(&proxy);
     let updates = boot.updates;
