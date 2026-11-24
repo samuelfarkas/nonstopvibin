@@ -113,10 +113,12 @@ async fn show_items(uri: &str) -> zbus::Result<()> {
 }
 
 /// Starts a program that hands its argument to the desktop. Tokio reaps it once it exits.
+/// Its messages may quote that argument, so they stay out of the daemon's log.
 fn launch(command: &mut Command) -> Result<(), String> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(drop)
         .map_err(|error| format!("Could not open it: {error}"))
@@ -185,5 +187,31 @@ mod tests {
             safe_external(&format!("{at_limit}a")),
             Err("Invalid argument for openExternal.".to_owned())
         );
+    }
+
+    /// The opener's standard error is not the daemon's.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_opener_cannot_write_to_the_daemons_log() {
+        let file = std::env::temp_dir().join(format!("nsv-shell-launch-{}", std::process::id()));
+        launch(
+            Command::new("sh")
+                .arg("-c")
+                .arg(r#"readlink /proc/self/fd/2 > "$0.part" && mv "$0.part" "$0""#)
+                .arg(&file),
+        )
+        .unwrap();
+        let stderr = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(&file) {
+                    break text;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(stderr.trim_end(), "/dev/null");
     }
 }
