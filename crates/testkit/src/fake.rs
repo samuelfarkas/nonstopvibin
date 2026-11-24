@@ -56,6 +56,8 @@ pub struct Script {
     /// Another local user's program holds its port and answers every call to it as a ready
     /// core would, so the core does not own its port.
     pub squatted: bool,
+    /// Once sent SIGTERM it closes its listener and such a program takes the port.
+    pub squatted_once_terminated: bool,
     /// How long checking that it owns its port takes, as `lsof` can on macOS.
     pub listens_takes: Duration,
 }
@@ -71,6 +73,7 @@ impl Default for Script {
             misses_writes: 0,
             unkillable: false,
             squatted: false,
+            squatted_once_terminated: false,
             listens_takes: Duration::ZERO,
         }
     }
@@ -486,10 +489,12 @@ impl FakeCores {
     async fn answer(&self, call: Call) -> Result<Response, NetError> {
         {
             let mut cores = self.0.lock().unwrap();
-            let squatted = cores
-                .launched
-                .iter()
-                .any(|core| core.port == call.port && core.script.squatted);
+            let squatted = cores.launched.iter().any(|core| {
+                core.port == call.port
+                    && (core.script.squatted
+                        || (core.script.squatted_once_terminated
+                            && core.terms.load(Ordering::SeqCst) > 0))
+            });
             if squatted {
                 if !call.authorization.is_empty() {
                     cores.squatted += 1;

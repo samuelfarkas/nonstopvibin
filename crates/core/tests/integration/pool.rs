@@ -189,6 +189,51 @@ async fn management_calls_reach_a_core_only_once_it_answered() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn management_calls_stop_reaching_a_core_once_it_is_signalled_to_stop() {
+    let world = World::new().await;
+    let profile = world.profile("Signalled", false, true, false).await;
+    world.fake.script(
+        &profile,
+        [Script {
+            stop_takes: Duration::from_secs(1),
+            squatted_once_terminated: true,
+            ..Script::default()
+        }],
+    );
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    let core = world.fake.latest(&profile).unwrap();
+    let stopping = tokio::spawn({
+        let (pool, profile) = (world.pool().clone(), profile.clone());
+        async move { pool.stop(&profile).await }
+    });
+    world
+        .until("the stop signal", Duration::from_secs(1), || {
+            core.terms.load(Ordering::SeqCst) > 0
+        })
+        .await;
+    assert!(core.alive(), "the core is still exiting");
+    let signalled = world
+        .run(
+            world
+                .pool()
+                .management(&profile, &Method::GET, "/config", None),
+        )
+        .await;
+    assert_eq!(
+        world.fake.squatted(),
+        0,
+        "a call carrying a key reached the port after the stop signal"
+    );
+    assert_eq!(signalled.unwrap_err().status, 409);
+    world.run(stopping).await.unwrap().unwrap();
+    // The final drain ran before the signal and reached the core.
+    assert_eq!(world.fake.calls(&profile, "/usage-queue").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_readiness_request_waits_no_longer_than_the_start_has_left() {
     let world = World::with_ready(Duration::from_secs(1)).await;
     let profile = world.profile("Slow check", false, true, false).await;

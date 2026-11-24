@@ -61,7 +61,9 @@ pub enum Phase {
     /// It answered.
     Running,
     /// Being stopped. `answered`: it was running, so the final usage drain still reaches it.
-    Stopping { answered: bool },
+    /// `signalled`: it was sent SIGTERM and may close its listener before it exits, so nothing
+    /// reaches it any more.
+    Stopping { answered: bool, signalled: bool },
     /// It exited after being stopped on purpose.
     Stopped,
     /// It could not launch, did not answer in time, or exited on its own: why.
@@ -78,7 +80,20 @@ impl Phase {
     /// It answered and has not exited. It may be stopping.
     #[must_use]
     pub const fn answered(&self) -> bool {
-        matches!(self, Self::Running | Self::Stopping { answered: true })
+        matches!(self, Self::Running | Self::Stopping { answered: true, .. })
+    }
+
+    /// It answered and has not been signalled to stop: its port still leads to it.
+    #[must_use]
+    pub const fn reachable(&self) -> bool {
+        matches!(
+            self,
+            Self::Running
+                | Self::Stopping {
+                    answered: true,
+                    signalled: false
+                }
+        )
     }
 }
 
@@ -166,10 +181,15 @@ impl PoolState {
     pub fn runtime(&self, profile: &ProfileId) -> (Runtime, Option<&Arc<str>>) {
         match self.core(profile).map(|core| &core.phase) {
             None | Some(Phase::Stopped) => (Runtime::Stopped, None),
-            Some(Phase::Starting | Phase::Stopping { answered: false }) => {
-                (Runtime::Starting, None)
+            Some(
+                Phase::Starting
+                | Phase::Stopping {
+                    answered: false, ..
+                },
+            ) => (Runtime::Starting, None),
+            Some(Phase::Running | Phase::Stopping { answered: true, .. }) => {
+                (Runtime::Running, None)
             }
-            Some(Phase::Running | Phase::Stopping { answered: true }) => (Runtime::Running, None),
             Some(Phase::Failed(error)) => (Runtime::Error, Some(error)),
         }
     }
@@ -471,12 +491,13 @@ impl Pool {
             .map_err(AppError::from)
     }
 
-    /// A management request to the profile's latest core, once it answered and while it has
-    /// not exited: before, its port may be another user's listener, and after, anyone's.
+    /// A management request to the profile's latest core, once it answered and until it is
+    /// signalled to stop: before, its port may be another user's listener, and after, the core
+    /// may have closed it for anyone to take. The final usage drain runs before the signal.
     ///
     /// # Errors
-    /// 409 when the profile has no core that answered and runs, 502 for an answer other than
-    /// 2xx or one that is not JSON, or the connection's failure.
+    /// 409 when the profile has no core that answered and has not been signalled to stop, 502
+    /// for an answer other than 2xx or one that is not JSON, or the connection's failure.
     pub async fn management(
         &self,
         profile: &ProfileId,
@@ -489,7 +510,7 @@ impl Pool {
             .state
             .borrow()
             .core(profile)
-            .filter(|core| core.phase.answered())
+            .filter(|core| core.phase.reachable())
             .cloned()
             .ok_or_else(AppError::not_started)?;
         self.call(&core, method, path, body).await

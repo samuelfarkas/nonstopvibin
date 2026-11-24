@@ -65,10 +65,12 @@ pub(super) enum Command {
         id: CoreId,
         published: oneshot::Sender<()>,
     },
-    /// From a core's task: it is terminating a core that did not become ready.
+    /// From a core's task: it is about to signal the core to stop; the owner acknowledges once
+    /// that is published.
     Terminating {
         profile: ProfileId,
         id: CoreId,
+        published: oneshot::Sender<()>,
     },
     /// From a core's task: the process exited; `text` is the user's message if unexpected.
     Exited {
@@ -227,15 +229,21 @@ impl Owner {
                 }
                 let _ = published.send(());
             }
-            Command::Terminating { profile, id } => {
+            Command::Terminating {
+                profile,
+                id,
+                published,
+            } => {
                 if let Some(core) = self.current(&profile, id)
                     && core.phase.alive()
                 {
                     core.phase = Phase::Stopping {
                         answered: core.phase.answered(),
+                        signalled: true,
                     };
                     self.publish();
                 }
+                let _ = published.send(());
             }
             Command::Exited { profile, id, text } => self.exited(&profile, id, &text),
             Command::StartEnded { profile, result } => self.start_ended(profile, &result),
@@ -419,7 +427,10 @@ impl Owner {
             && alive
         {
             answered = core.phase.answered();
-            core.phase = Phase::Stopping { answered };
+            core.phase = Phase::Stopping {
+                answered,
+                signalled: false,
+            };
         }
         let terminate = slot.terminate.take();
         self.publish();
@@ -613,12 +624,7 @@ impl Launch {
             // Its core runs on until shutdown stops it.
             Err(Unready::Abandoned) => self.end_start(Err(AppError::shutting_down())).await,
             Err(Unready::Late(last)) => {
-                self.tell(Command::Terminating {
-                    profile: self.profile.clone(),
-                    id: self.id,
-                })
-                .await;
-                let status = handle.terminate().await;
+                let status = self.terminate(handle.as_mut()).await;
                 self.exited(exit_text(&status)).await;
                 let error = format!("Proxy did not become ready. {last}");
                 return self.end_start(Err(AppError::new(error, 503))).await;
@@ -627,13 +633,28 @@ impl Launch {
         tokio::select! {
             status = handle.wait() => self.exited(exit_text(&status)).await,
             request = requests => {
-                let status = handle.terminate().await;
+                let status = self.terminate(handle.as_mut()).await;
                 self.exited(exit_text(&status)).await;
                 if let Ok(reply) = request {
                     let _ = reply.send(status.map(|_| ()));
                 }
             }
         }
+    }
+
+    /// Terminates the core once the owner has published that it was signalled, so no
+    /// management request starts toward a port the core may give up.
+    async fn terminate(&self, handle: &mut dyn CoreHandle) -> io::Result<ExitStatus> {
+        let (published, done) = oneshot::channel();
+        self.tell(Command::Terminating {
+            profile: self.profile.clone(),
+            id: self.id,
+            published,
+        })
+        .await;
+        // An owner that is gone publishes nothing any more.
+        let _ = done.await;
+        handle.terminate().await
     }
 
     async fn exited(&self, text: String) {
