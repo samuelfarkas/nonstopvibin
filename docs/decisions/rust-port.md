@@ -62,8 +62,9 @@ option below. Only the host changes.
 - The helper accepts IPC only from the main frame of a page on the daemon origin, and parses
   each message as `{ id, method, arg }` with a length cap. Unknown methods fail to parse.
 - Navigation to any other origin is denied. New windows are denied, and their URL goes to the
-  same provider-host allowlist as `openExternal`. Downloads are denied. Devtools are off in
-  release builds. The CSP stays byte-identical to main's.
+  same provider-host allowlist as `openExternal`. Downloads are denied, except a `blob:` file
+  the page makes on the daemon's origin (Activity's CSV export). Devtools are off in release
+  builds. The CSP stays byte-identical to main's.
 - A second launch finds the running daemon through `server.json` and calls
   `POST /api/desktop/show` with its token.
 - When the desktop app cannot start, or its quit cannot close cleanly, it shows main.ts's
@@ -242,6 +243,8 @@ it. These differences are deliberate, each with its reason in the commit or test
 - **Error statuses and text.** A core the pool cannot reach answers 502, not 500; a sign-in link
   or pasted URL that is not a URL answers 502 or 400, not 500. Messages that came from Bun or
   Node (`ENOENT …`, `Invalid URL`) are now Rust's own; every `AppError` message is unchanged.
+  A profile whose core key cannot be read gets 401 from the gateway instead of 500, and a
+  store whose profile list cannot be read refuses to start, also for disabled profiles.
 - **Small parsing edges.** Usage counters are whole numbers (a fractional counter loses its
   fraction); a date-time without an offset reads as UTC (V8 used local time); a hand-edited
   retention value such as `"3e1"` reads as keep everything; an empty `HOME` is used as is.
@@ -255,6 +258,7 @@ it. These differences are deliberate, each with its reason in the commit or test
   browser; WebKit's default context menu is suppressed; on macOS the helper moves the window
   for drag regions, which gives up edge tiling and double-click zoom on those regions. The
   interface's `localStorage` starts empty once, so it forgets the last selected profile and page.
+  Activity's CSV export saves into the Downloads folder without a save dialog.
 - **Start and quit failures.** The could-not-start and failed-quit dialogs carry the real reason
   as the one free-text field on the helper pipe (capped, control and bidirectional characters
   stripped, shown as plain native text). On Linux without WebKitGTK a desktop notification
