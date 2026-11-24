@@ -50,9 +50,11 @@ impl Install {
                     .is_some_and(|extension| extension == "app")
             })
             .map(Path::to_path_buf);
-        let app_image = std::env::var_os("APPIMAGE")
-            .map(PathBuf::from)
-            .filter(|image| image.is_absolute());
+        let app_image = app_image(
+            std::env::var_os("APPIMAGE").map(PathBuf::from),
+            std::env::var_os("APPDIR").and_then(|mount| std::fs::canonicalize(mount).ok()),
+            executable.as_deref(),
+        );
         let (resources, packaged) = match package {
             Some(resources)
                 if resources.join(interface).is_dir() || resources.join(bundled_core).is_file() =>
@@ -85,5 +87,40 @@ impl Install {
             .and_then(Path::parent)
             .ok_or_else(|| io::Error::other("the executable's folder is unknown"))?;
         Ok(directory.join(HELPER))
+    }
+}
+
+/// `$APPIMAGE`, when this executable runs from that image's mount `$APPDIR`. A build started by
+/// another `AppImage` inherits both, and must not update or autostart that image.
+fn app_image(
+    image: Option<PathBuf>,
+    mount: Option<PathBuf>,
+    executable: Option<&Path>,
+) -> Option<PathBuf> {
+    let (image, mount, executable) = (image?, mount?, executable?);
+    (image.is_absolute() && mount.is_absolute() && executable.starts_with(&mount)).then_some(image)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_appimage_is_this_build_only_when_it_runs_from_that_image() {
+        let image = Some(PathBuf::from("/home/me/Apps/NonstopVibin.AppImage"));
+        let mount = Some(PathBuf::from("/tmp/.mount_NonstoAbc123"));
+        let inside = Path::new("/tmp/.mount_NonstoAbc123/nonstopvibin");
+        assert_eq!(app_image(image.clone(), mount.clone(), Some(inside)), image);
+        // A deb build started from another AppImage inherits that image's variables.
+        let installed = Path::new("/opt/NonstopVibin/nonstopvibin");
+        assert_eq!(app_image(image.clone(), mount, Some(installed)), None);
+        assert_eq!(app_image(image.clone(), None, Some(inside)), None);
+        assert_eq!(
+            app_image(image, Some(PathBuf::from("relative")), Some(inside)),
+            None
+        );
+        let relative = Some(PathBuf::from("NonstopVibin.AppImage"));
+        let mount = Some(PathBuf::from("/tmp/.mount_NonstoAbc123"));
+        assert_eq!(app_image(relative, mount, Some(inside)), None);
     }
 }
