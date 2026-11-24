@@ -3,9 +3,12 @@
 
 [graph]
 all-features = true
-# The platforms releases ship: macOS on Apple silicon, Linux on x64 and arm64 (server archives).
+# The targets releases ship (scripts/distribution.ts): macOS on Apple silicon, the static musl
+# daemon on Linux x64 and arm64, and the glibc window helper beside it.
 targets = [
   "aarch64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
 ]
