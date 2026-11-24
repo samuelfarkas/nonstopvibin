@@ -18,6 +18,7 @@ import { basename, join, relative, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import {
   architecture,
+  debianVersion,
   privateFilePattern,
   product,
   rustLicenses,
@@ -458,7 +459,7 @@ export function verifyArtifact(file: string): void {
       );
       assert.equal(
         fields,
-        `Package: ${product.executable}\nVersion: ${pkg.version}\nArchitecture: ${match[2]}\n`,
+        `Package: ${product.executable}\nVersion: ${debianVersion(pkg.version)}\nArchitecture: ${match[2]}\n`,
         `${name}: control fields`,
       );
       execFileSync("dpkg-deb", ["-x", file, work]);

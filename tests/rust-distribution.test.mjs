@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { load } from "js-yaml";
 import pkg from "../package.json" with { type: "json" };
 import {
+  debianVersion,
   desktopArtifact,
   desktopTargets,
   product,
@@ -63,6 +64,11 @@ test("Rust packages keep the identity and file names installed Electron builds u
     desktopArtifact("0.2.0", "linux", "x64", "deb"),
     "NonstopVibin-0.2.0-linux-amd64.deb",
   );
+});
+
+test("the deb's Version sorts a beta before its release, as electron-builder's did", () => {
+  assert.equal(debianVersion("0.2.0-beta.1"), "0.2.0~beta.1");
+  assert.equal(debianVersion("0.2.0"), "0.2.0");
 });
 
 test("update feeds have electron-builder's fields and electron-updater's YAML parser reads them", async () => {

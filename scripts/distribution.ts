@@ -98,6 +98,13 @@ export function desktopArtifact(
 }
 
 /**
+ * The deb's Version field. A `-` starts the Debian revision, after which `0.2.0-beta.1` sorts
+ * above `0.2.0`; `~` sorts below it, as electron-builder wrote `0.2.0~beta.1`.
+ */
+export const debianVersion = (version: string): string =>
+  version.replaceAll("-", "~");
+
+/**
  * Rust targets per platform and Node architecture name. The Linux daemon is static musl: a
  * glibc build links the build host's newest symbols (GLIBC_2.39 on ubuntu-24.04), which would
  * drop most distributions in docs/server.md. The helper links the system WebKitGTK, so glibc.

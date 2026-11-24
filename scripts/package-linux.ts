@@ -17,7 +17,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { desktopArtifact, product, rustTarget } from "./distribution.ts";
+import {
+  debianVersion,
+  desktopArtifact,
+  product,
+  rustTarget,
+} from "./distribution.ts";
 import {
   coreLayout,
   cargoBuild,
@@ -156,7 +161,7 @@ try {
   await writeFile(
     join(control, "control"),
     `Package: ${product.executable}
-Version: ${version}
+Version: ${debianVersion(version)}
 Section: devel
 Priority: optional
 Architecture: ${debArch}
