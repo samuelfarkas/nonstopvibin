@@ -274,7 +274,7 @@ async fn find(target: &Target, current: AppVersion) -> Result<Option<Staged>, Fa
     let sha256 = *sums.of(&payload.name)?;
     let staging = staging(target);
     remove_blocking(staging.clone()).await;
-    tokio::fs::create_dir(&staging)
+    create_staging(&staging)
         .await
         .map_err(|error| Failure::Local(format!("could not stage the update: {error}")))?;
     let file = staging.join("payload");
@@ -398,6 +398,15 @@ fn unsupported(error: &std::io::Error) -> bool {
 }
 
 /// `<folder>/.<app name>.update`: beside the app, so the swap stays on one file system.
+/// Owner-only whatever the umask: the verified update waits here, beside the app where other
+/// users can often reach it, until the user restarts.
+async fn create_staging(staging: &Path) -> std::io::Result<()> {
+    tokio::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(staging)
+        .await
+}
+
 fn staging(target: &Target) -> PathBuf {
     let path = target.path();
     let name = path
@@ -454,6 +463,19 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[tokio::test]
+    async fn the_staging_folder_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("nsv-staging-mode-{}", std::process::id()));
+        drop(fs::remove_dir_all(&root));
+        fs::create_dir_all(&root).unwrap();
+        let staging = root.join(".NonstopVibin.app.update");
+        create_staging(&staging).await.unwrap();
+        let mode = fs::metadata(&staging).unwrap().permissions().mode() & 0o777;
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(mode, 0o700, "{mode:o}");
+    }
 
     /// The app at `path`: a file, or a bundle-like folder holding one.
     fn app(path: &Path, folder: bool, version: &str) {
