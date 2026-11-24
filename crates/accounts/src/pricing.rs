@@ -301,6 +301,8 @@ struct Euro {
 
 /// Activity's prices: one bounded aggregate per profile, never its history rows.
 pub struct UsagePrices {
+    store: Store,
+    catalog: Arc<ModelCatalog>,
     fetch: Arc<dyn Outside>,
     /// Milliseconds since the epoch.
     clock: fn() -> i64,
@@ -313,8 +315,15 @@ pub struct UsagePrices {
 
 impl UsagePrices {
     #[must_use]
-    pub fn new(fetch: Arc<dyn Outside>, clock: fn() -> i64) -> Self {
+    pub fn new(
+        store: Store,
+        catalog: Arc<ModelCatalog>,
+        fetch: Arc<dyn Outside>,
+        clock: fn() -> i64,
+    ) -> Self {
         Self {
+            store,
+            catalog,
             fetch,
             clock,
             totals: Mutex::new(HashMap::new()),
@@ -327,12 +336,8 @@ impl UsagePrices {
     /// Each record's price against the catalog now, without waiting for the network: the
     /// catalog and the euro rate refresh in the background (the rate at most once a minute
     /// after a failure, once a day after a success).
-    pub fn snapshot(
-        self: &Arc<Self>,
-        records: &[UsageRecord],
-        catalog: &Arc<ModelCatalog>,
-    ) -> UsagePricing {
-        let snapshot = (!records.is_empty()).then(|| catalog.snapshot());
+    pub fn snapshot(self: &Arc<Self>, records: &[UsageRecord]) -> UsagePricing {
+        let snapshot = (!records.is_empty()).then(|| self.catalog.snapshot());
         self.pricing(records, snapshot.as_ref())
     }
 
@@ -416,10 +421,8 @@ impl UsagePrices {
     /// A store failure, or [`PricingError::Closed`] once [`UsagePrices::close`] began.
     pub async fn history(
         self: &Arc<Self>,
-        store: &Store,
         profile: &ProfileId,
         since: &str,
-        catalog: &Arc<ModelCatalog>,
     ) -> Result<UsageHistory, PricingError> {
         let turn = Arc::clone(locked(&self.histories).entry(profile.clone()).or_default());
         let result = {
@@ -427,7 +430,7 @@ impl UsagePrices {
             if self.closed.load(Ordering::Acquire) {
                 Err(PricingError::Closed)
             } else {
-                self.summarize(store, profile, since, catalog).await
+                self.summarize(profile, since).await
             }
         };
         let mut histories = locked(&self.histories);
@@ -440,17 +443,15 @@ impl UsagePrices {
 
     async fn summarize(
         self: &Arc<Self>,
-        store: &Store,
         profile: &ProfileId,
         since: &str,
-        catalog: &Arc<ModelCatalog>,
     ) -> Result<UsageHistory, PricingError> {
         loop {
             // One store snapshot before yielding: the records and where the total stops.
             let (records, generation, through) = {
                 let profile = profile.clone();
                 let since = since.to_owned();
-                store
+                self.store
                     .call(move |db| {
                         let page = registry().usage_page_size;
                         Ok((
@@ -462,7 +463,7 @@ impl UsagePrices {
                     .await?
             };
             // Rates stay frozen for the whole calculation, even if a refresh lands meanwhile.
-            let snapshot = (!records.is_empty()).then(|| catalog.snapshot());
+            let snapshot = (!records.is_empty()).then(|| self.catalog.snapshot());
             let pricing = self.pricing(&records, snapshot.as_ref());
             let fetched_at = snapshot
                 .as_ref()
@@ -492,7 +493,7 @@ impl UsagePrices {
                     through: previous.sequence,
                     from: None,
                 };
-                self.walk(store, profile, left_out, |record| {
+                self.walk(profile, left_out, |record| {
                     tally.include(record, Direction::Subtract);
                 })
                 .await?;
@@ -510,7 +511,7 @@ impl UsagePrices {
                 },
             };
             let last_generation = self
-                .walk(store, profile, added, |record| {
+                .walk(profile, added, |record| {
                     if record.timestamp.as_str() >= since {
                         tally.include(record, Direction::Add);
                     }
@@ -550,14 +551,13 @@ impl UsagePrices {
     /// pages, and answers the retention generation the last page saw.
     async fn walk(
         &self,
-        store: &Store,
         profile: &ProfileId,
         read: Read,
         mut each: impl FnMut(&UsageRecord) + Send,
     ) -> Result<u64, PricingError> {
         let mut read = read;
         loop {
-            let (records, next, generation) = self.page(store, profile, read).await?;
+            let (records, next, generation) = self.page(profile, read).await?;
             for record in &records {
                 each(record);
             }
@@ -573,7 +573,6 @@ impl UsagePrices {
     /// store section.
     async fn page(
         &self,
-        store: &Store,
         profile: &ProfileId,
         read: Read,
     ) -> Result<(Vec<UsageRecord>, Option<Read>, u64), PricingError> {
@@ -581,7 +580,8 @@ impl UsagePrices {
             return Err(PricingError::Closed);
         }
         let profile = profile.clone();
-        Ok(store
+        Ok(self
+            .store
             .call(move |db| {
                 let (records, next) = match read {
                     Read::After { after, through } => {

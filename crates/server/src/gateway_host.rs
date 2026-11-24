@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
-use nsv_accounts::catalog::{ModelCatalog, profile_models};
+use nsv_accounts::catalog::ProfileModels;
 use nsv_accounts::cores::Cores;
 use nsv_agents::{CatalogAnswer, curated, gateway_catalog};
 use nsv_domain::error::AppError;
@@ -53,31 +53,29 @@ pub(crate) struct GatewayHost {
     /// The gateway's entries for the store's latest snapshot, built when it changes.
     profiles: Mutex<Option<GatewayProfiles>>,
     cores: Arc<Cores>,
-    catalog: Arc<ModelCatalog>,
-    store: Store,
+    models: ProfileModels,
 }
 
 impl GatewayHost {
     pub(crate) fn new(
         shared: Arc<Shared>,
-        store: Store,
+        store: &Store,
         cores: Arc<Cores>,
-        catalog: Arc<ModelCatalog>,
+        models: ProfileModels,
     ) -> Self {
         Self {
             shared,
             auth: store.auth(),
             profiles: Mutex::default(),
             cores,
-            catalog,
-            store,
+            models,
         }
     }
 
     async fn curated(&self, profile: &ProfileId, agent: Agent) -> Result<Catalog, AppError> {
         let models = self.cores.models(profile).await?;
         let offered = curated(agent, models, false, |models| async move {
-            Ok(profile_models(&self.catalog, &self.store, profile, &models).await?)
+            Ok(self.models.of(profile, &models).await?)
         })
         .await?;
         Ok(match gateway_catalog(agent, &offered)? {

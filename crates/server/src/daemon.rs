@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use nsv_accounts::Backends;
-use nsv_accounts::catalog::ModelCatalog;
+use nsv_accounts::catalog::{ModelCatalog, ProfileModels};
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
 use nsv_accounts::imports::ImportCatalog;
@@ -290,7 +290,8 @@ impl Daemon {
             .map_err(StartError::Cores)?,
         );
         let catalog = Arc::new(ModelCatalog::new(Arc::clone(&outside), clock));
-        let prices = Arc::new(UsagePrices::new(outside, clock));
+        let models = ProfileModels::new(Arc::clone(&catalog), store.clone());
+        let prices = Arc::new(UsagePrices::new(store.clone(), catalog, outside, clock));
         let imports = ImportCatalog::new(&options.agents.home);
         let agents = Arc::new(AgentSetup::new(
             lock.directory(),
@@ -303,16 +304,16 @@ impl Daemon {
                 store.clone(),
                 Arc::clone(&cores),
                 Arc::clone(&agents),
-                Arc::clone(&catalog),
+                models.clone(),
                 Arc::clone(&prices),
                 imports,
             ),
             assets: Assets::new(options.client).map_err(StartError::Entropy)?,
             gateway: Gateway::new(GatewayHost::new(
                 Arc::clone(&shared),
-                store.clone(),
+                &store,
                 Arc::clone(&cores),
-                catalog,
+                models,
             )),
             shared,
             checks,

@@ -472,17 +472,30 @@ impl ModelCatalog {
     }
 }
 
-/// A profile's models as its core lists them, with metadata matched through its API accounts.
-///
-/// # Errors
-/// A store failure, or 502 when models.dev cannot be fetched.
-pub async fn profile_models(
-    catalog: &ModelCatalog,
-    store: &Store,
-    profile: &ProfileId,
-    models: &[Model],
-) -> Result<Vec<CatalogModel>, CatalogError> {
-    let profile = profile.clone();
-    let accounts = store.call(move |db| db.api_accounts(&profile)).await?;
-    catalog.models(models, &accounts).await
+/// The catalog matched to each profile's models through the profile's API accounts.
+#[derive(Clone)]
+pub struct ProfileModels {
+    catalog: Arc<ModelCatalog>,
+    store: Store,
+}
+
+impl ProfileModels {
+    #[must_use]
+    pub fn new(catalog: Arc<ModelCatalog>, store: Store) -> Self {
+        Self { catalog, store }
+    }
+
+    /// The profile's models as its core lists them, with metadata.
+    ///
+    /// # Errors
+    /// A store failure, or 502 when models.dev cannot be fetched.
+    pub async fn of(
+        &self,
+        profile: &ProfileId,
+        models: &[Model],
+    ) -> Result<Vec<CatalogModel>, CatalogError> {
+        let profile = profile.clone();
+        let accounts = self.store.call(move |db| db.api_accounts(&profile)).await?;
+        self.catalog.models(models, &accounts).await
+    }
 }

@@ -81,6 +81,8 @@ async fn period_totals_update_incrementally_as_typescript_did() {
     ));
     catalog.models(&[], &[]).await.unwrap();
     let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
         Arc::new(StubFetch::new(|_| Ok(response(503, "{}")))),
         fixed,
     ));
@@ -91,10 +93,7 @@ async fn period_totals_update_incrementally_as_typescript_did() {
         "2026-11-15T00:00:00.000Z",
         "2026-12-01T00:00:00.000Z",
     ] {
-        let history = prices
-            .history(&store, &owner, since, &catalog)
-            .await
-            .unwrap();
+        let history = prices.history(&owner, since).await.unwrap();
         let actual = json!({
             "summary": history.summary,
             "totals": history.pricing.totals,

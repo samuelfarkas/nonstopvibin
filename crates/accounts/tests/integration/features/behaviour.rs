@@ -191,14 +191,13 @@ async fn period_totals_follow_new_rows_shorter_periods_retention_and_new_rates()
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), now));
     catalog.models(&[], &[]).await.unwrap();
     let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
         Arc::new(StubFetch::new(|_| Ok(response(503, "")))),
         fixed,
     ));
     let total = async |since: &str| {
-        let history = prices
-            .history(&store, &owner, since, &catalog)
-            .await
-            .unwrap();
+        let history = prices.history(&owner, since).await.unwrap();
         let totals = history.pricing.totals.unwrap();
         (totals.requests, totals.usd.0, history.summary.input_tokens)
     };
@@ -267,9 +266,7 @@ async fn period_totals_follow_new_rows_shorter_periods_retention_and_new_rates()
 
     prices.close().await;
     assert!(matches!(
-        prices
-            .history(&store, &owner, "2000-01-01T00:00:00.000Z", &catalog)
-            .await,
+        prices.history(&owner, "2000-01-01T00:00:00.000Z").await,
         Err(PricingError::Closed)
     ));
     store.close().await;
@@ -358,11 +355,13 @@ async fn unknown_prices_and_incomplete_breakdowns_are_missing_not_free() {
     }));
     add(&store, vec![unknown, incomplete, mismatched]).await;
     let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
         Arc::new(StubFetch::new(|_| Ok(response(503, "")))),
         fixed,
     ));
     let history = prices
-        .history(&store, &owner, "2026-11-01T00:00:00.000Z", &catalog)
+        .history(&owner, "2026-11-01T00:00:00.000Z")
         .await
         .unwrap();
     assert!(history.pricing.usd.values().all(Option::is_none));
@@ -857,14 +856,21 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
         ))
     });
     let (models, rates) = (Arc::new(models), Arc::new(rates));
+    let directory = TempDir::new("euro-rate");
+    let store = open_store(directory.path()).await;
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&models), fixed));
-    let prices = Arc::new(UsagePrices::new(Arc::<StubFetch>::clone(&rates), fixed));
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
+        Arc::<StubFetch>::clone(&rates),
+        fixed,
+    ));
     let profile = fixture_profile();
     let record = fixture_record(&profile, "fixture");
-    let first = prices.snapshot(std::slice::from_ref(&record), &catalog);
+    let first = prices.snapshot(std::slice::from_ref(&record));
     assert_eq!(first.usd["fixture"], None);
     assert_eq!(first.eur, None);
-    let _again = prices.snapshot(std::slice::from_ref(&record), &catalog);
+    let _again = prices.snapshot(std::slice::from_ref(&record));
     settle().await;
     assert_eq!((models.count(), rates.count()), (1, 1));
     let asked = rates.seen.lock().unwrap()[0].request.clone();
@@ -884,7 +890,7 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
     settle().await;
     let mut unknown = fixture_record(&profile, "unknown");
     unknown.provider = "custom".to_owned();
-    let both = prices.snapshot(&[record, unknown], &catalog);
+    let both = prices.snapshot(&[record, unknown]);
     assert_eq!(both.usd["fixture"].map(|usd| usd.0), Some(0.000_665));
     assert_eq!(both.usd["unknown"], None);
     assert_eq!(
@@ -893,7 +899,7 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
     );
     assert!(both.fetched_at.is_some());
     assert_eq!((models.count(), rates.count()), (1, 1));
-    let personal = prices.snapshot(&[fixture_record(&profile, "personal")], &catalog);
+    let personal = prices.snapshot(&[fixture_record(&profile, "personal")]);
     assert_eq!(
         personal.usd.keys().collect::<Vec<_>>(),
         ["personal"],
@@ -904,12 +910,19 @@ async fn the_euro_rate_is_fetched_once_without_credentials_and_never_waited_for(
 #[tokio::test]
 async fn an_outage_backs_off_instead_of_retrying_on_every_poll() {
     let fetch = unavailable();
+    let directory = TempDir::new("outage");
+    let store = open_store(directory.path()).await;
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
-    let prices = Arc::new(UsagePrices::new(Arc::<StubFetch>::clone(&fetch), fixed));
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
+        Arc::<StubFetch>::clone(&fetch),
+        fixed,
+    ));
     let record = fixture_record(&fixture_profile(), "fixture");
-    let _first = prices.snapshot(std::slice::from_ref(&record), &catalog);
+    let _first = prices.snapshot(std::slice::from_ref(&record));
     settle().await;
-    let result = prices.snapshot(&[record], &catalog);
+    let result = prices.snapshot(&[record]);
     settle().await;
     assert_eq!(fetch.count(), 2, "one catalog and one rate request");
     assert_eq!(result.usd["fixture"], None);
@@ -924,8 +937,13 @@ async fn histories_restart_after_retention_and_stop_once_prices_close() {
     let owner = profile(&store, "Lifecycle").await;
     let fetch = unavailable();
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
-    let prices = Arc::new(UsagePrices::new(Arc::<StubFetch>::clone(&fetch), fixed));
-    let empty = prices.history(&store, &owner, "", &catalog).await.unwrap();
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
+        Arc::<StubFetch>::clone(&fetch),
+        fixed,
+    ));
+    let empty = prices.history(&owner, "").await.unwrap();
     assert_eq!(empty.pricing.totals.unwrap().requests, 0);
     settle().await;
     assert_eq!(
@@ -941,7 +959,7 @@ async fn histories_restart_after_retention_and_stop_once_prices_close() {
     add(&store, old).await;
     // Retention lands after the calculation's first read, before its pages.
     let (retained, deleted) = tokio::join!(
-        prices.history(&store, &owner, "", &catalog),
+        prices.history(&owner, ""),
         store.call(|db| db.set_usage_retention_days(RetentionDays::Days30)),
     );
     deleted.unwrap();
@@ -955,8 +973,7 @@ async fn histories_restart_after_retention_and_stop_once_prices_close() {
     );
 
     add(&store, fixture_records(&owner, "recent", page_size() + 1)).await;
-    let (interrupted, ()) =
-        tokio::join!(prices.history(&store, &owner, "", &catalog), prices.close());
+    let (interrupted, ()) = tokio::join!(prices.history(&owner, ""), prices.close());
     assert!(matches!(interrupted, Err(PricingError::Closed)));
     store.close().await;
 }
@@ -968,16 +985,21 @@ async fn queued_histories_each_keep_records_summary_and_prices_from_one_snapshot
     let owner = profile(&store, "Snapshot").await;
     let fetch = unavailable();
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
-    let prices = Arc::new(UsagePrices::new(Arc::<StubFetch>::clone(&fetch), fixed));
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
+        Arc::<StubFetch>::clone(&fetch),
+        fixed,
+    ));
     let count = u64::from(page_size()) + 1;
     add(&store, fixture_records(&owner, "snapshot", page_size() + 1)).await;
     let mut new = fixture_record(&owner, "new");
     "2026-09-14T00:00:00Z".clone_into(&mut new.timestamp);
     // The insert queues on the store after the first history's read, before the second's.
     let (first, inserted, queued) = tokio::join!(
-        prices.history(&store, &owner, "", &catalog),
+        prices.history(&owner, ""),
         store.call(move |db| db.add_usage(&[new])),
-        prices.history(&store, &owner, "", &catalog),
+        prices.history(&owner, ""),
     );
     inserted.unwrap();
     for (i, result) in [first.unwrap(), queued.unwrap()].into_iter().enumerate() {
@@ -1007,7 +1029,12 @@ async fn a_queued_history_runs_its_own_read_after_the_one_ahead_fails() {
     let owner = profile(&store, "Queued failure").await;
     let fetch = unavailable();
     let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
-    let prices = Arc::new(UsagePrices::new(Arc::<StubFetch>::clone(&fetch), fixed));
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        Arc::clone(&catalog),
+        Arc::<StubFetch>::clone(&fetch),
+        fixed,
+    ));
     add(&store, vec![fixture_record(&owner, "fixture")]).await;
     let database = nsv_files::DataDir::new(directory.path()).database();
     let rename = move |from: &str, to: &str| {
@@ -1019,7 +1046,7 @@ async fn a_queued_history_runs_its_own_read_after_the_one_ahead_fails() {
     // The first read fails; the store renames the table back before the queued read.
     rename("usage", "usage_hidden");
     let (first, (), queued) = tokio::join!(
-        prices.history(&store, &owner, "", &catalog),
+        prices.history(&owner, ""),
         async {
             store
                 .call(move |_| {
@@ -1029,7 +1056,7 @@ async fn a_queued_history_runs_its_own_read_after_the_one_ahead_fails() {
                 .await
                 .unwrap();
         },
-        prices.history(&store, &owner, "", &catalog),
+        prices.history(&owner, ""),
     );
     assert!(first.is_err());
     assert_eq!(queued.unwrap().summary.requests, 1);

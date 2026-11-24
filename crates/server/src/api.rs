@@ -10,7 +10,7 @@ use hyper::body::Incoming;
 use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 use nsv_accounts::accounts::listed;
-use nsv_accounts::catalog::{ModelCatalog, profile_models};
+use nsv_accounts::catalog::ProfileModels;
 use nsv_accounts::cores::Cores;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
@@ -157,7 +157,7 @@ pub(crate) struct Api {
     store: Store,
     cores: Arc<Cores>,
     agents: Arc<AgentSetup>,
-    catalog: Arc<ModelCatalog>,
+    models: ProfileModels,
     prices: Arc<UsagePrices>,
     imports: Arc<Mutex<ImportCatalog>>,
 }
@@ -168,7 +168,7 @@ impl Api {
         store: Store,
         cores: Arc<Cores>,
         agents: Arc<AgentSetup>,
-        catalog: Arc<ModelCatalog>,
+        models: ProfileModels,
         prices: Arc<UsagePrices>,
         imports: ImportCatalog,
     ) -> Self {
@@ -177,7 +177,7 @@ impl Api {
             store,
             cores,
             agents,
-            catalog,
+            models,
             prices,
             imports: Arc::new(Mutex::new(imports)),
         }
@@ -324,10 +324,7 @@ impl Api {
                 let metadata = query(url, "metadata").as_deref() == Some("1");
                 let models = self.core_models(id).await?;
                 if metadata {
-                    json(
-                        StatusCode::OK,
-                        &profile_models(&self.catalog, &self.store, id, &models).await?,
-                    )
+                    json(StatusCode::OK, &self.models.of(id, &models).await?)
                 } else {
                     json(StatusCode::OK, &models)
                 }
@@ -442,10 +439,7 @@ impl Api {
         } else {
             iso_string((self.shared.clock)() - i64::from(days) * 86_400_000)
         };
-        let history = self
-            .prices
-            .history(&self.store, id, &since, &self.catalog)
-            .await?;
+        let history = self.prices.history(id, &since).await?;
         json(StatusCode::OK, &history)
     }
 
@@ -483,7 +477,7 @@ impl Api {
         let input = parse::agent_setup(&body(request).await?)?;
         let models = self.core_models(id).await?;
         let ids = connection_models(&input, models, |models| async move {
-            Ok(profile_models(&self.catalog, &self.store, id, &models).await?)
+            Ok(self.models.of(id, &models).await?)
         })
         .await?;
         let profile = self.stored(id).await?;
