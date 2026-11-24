@@ -149,7 +149,7 @@ echo "ok: SHA256SUMS signed by another key is refused"
 
 publish
 launch
-dialog() { xdotool search --name '^NonstopVibin$' >"$work/window" 2>/dev/null; }
+dialog() { xdotool search --onlyvisible --name '^NonstopVibin$' >"$work/window" 2>/dev/null; }
 wait_for "the update dialog" 120 dialog
 window=$(head -n 1 "$work/window")
 # "Later" is the default; the button before it is "Restart to update".
