@@ -405,7 +405,7 @@ impl App {
             return;
         }
         let Some(work_area) = Os::work_area(anchor) else {
-            return self.failed("quota popup", &"no display holds the tray icon");
+            return self.quota_failed(&"no display holds the tray icon");
         };
         let bounds = layout::quota_bounds(anchor, work_area, Os::POPUP_BELOW_ANCHOR);
         let builder = WindowBuilder::new()
@@ -418,7 +418,17 @@ impl App {
         let url = self.origin.tray_url();
         match self.open(target, Pane::Quota, Os::quota_window(builder), &url) {
             Ok(surface) => self.quota = Some(surface),
-            Err(error) => self.failed("quota popup", &error),
+            Err(error) => self.quota_failed(&error),
+        }
+    }
+
+    /// The daemon took the popup for open when it asked for it. A helper that keeps running
+    /// reports it closed, so the next click on the tray opens it again; one with nothing on
+    /// screen exits instead, and the daemon opens the browser.
+    fn quota_failed(&mut self, error: &dyn fmt::Display) {
+        self.failed("quota popup", error);
+        if self.ready {
+            self.report_closed(ViewKind::Quota, None);
         }
     }
 
