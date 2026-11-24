@@ -89,8 +89,9 @@ async fn exchange(request: &LoopbackRequest<'_>) -> Result<Response, NetError> {
 mod tests {
     use std::net::Ipv6Addr;
 
+    use nsv_testkit::Port;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpSocket};
+    use tokio::net::TcpListener;
 
     use super::*;
     use crate::StatusCode;
@@ -195,10 +196,8 @@ mod tests {
         slow.timeout = Duration::from_millis(200);
         let result = loopback(slow).await;
         assert!(matches!(result, Err(NetError::Timeout)), "{result:?}");
-        // Bound but not listening: connections are refused, and the port stays ours.
-        let closed = TcpSocket::new_v4().unwrap();
-        closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let to = Loopback::new(closed.local_addr().unwrap()).unwrap();
+        let closed = SocketAddr::from((Ipv4Addr::LOCALHOST, Port::reserve().release()));
+        let to = Loopback::new(closed).unwrap();
         let result = loopback(request(to)).await;
         assert!(matches!(result, Err(NetError::Connect(_))), "{result:?}");
     }

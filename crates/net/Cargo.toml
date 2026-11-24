@@ -20,6 +20,7 @@ tokio-rustls.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+nsv-testkit.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 
 [lints]
