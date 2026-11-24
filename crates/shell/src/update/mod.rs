@@ -26,6 +26,7 @@ use minisign_verify::PublicKey;
 use nsv_desktop::pipe::{Choice, DialogKind};
 use nsv_domain::version::AppVersion;
 use sha2::{Digest, Sha256, Sha512};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 
 #[cfg(target_os = "linux")]
@@ -93,10 +94,13 @@ struct Updater {
     machine: Machine<Staged>,
     timer: Interval,
     check: Option<Pin<Box<dyn Future<Output = Checked<Staged>>>>>,
+    /// Removing what an earlier update left, which the first check waits for.
+    leftovers: Option<JoinHandle<()>>,
 }
 
 impl Updates {
-    /// What this installation allows. Leftovers of an earlier update are removed.
+    /// What this installation allows. Leftovers of an earlier update are removed in the
+    /// background.
     pub(crate) fn detect(install: &Install) -> Self {
         let current = AppVersion::current();
         if !install.packaged || !cfg!(updates_enabled) {
@@ -107,7 +111,8 @@ impl Updates {
             Detected::NotReplaceable => Self(Mode::MoveFirst),
             Detected::Target(target) => {
                 // What an earlier update left: a download, or the version it replaced.
-                remove(&staging(&target));
+                let leftovers = staging(&target);
+                let leftovers = tokio::task::spawn_blocking(move || remove(&leftovers));
                 let mut timer = tokio::time::interval_at(Instant::now() + FIRST_CHECK, EVERY);
                 timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 Self(Mode::On(Box::new(Updater {
@@ -116,6 +121,7 @@ impl Updates {
                     machine: Machine::new(),
                     timer,
                     check: None,
+                    leftovers: Some(leftovers),
                 })))
             }
         }
@@ -197,14 +203,20 @@ impl Updater {
             Command::Show(kind) => Some(kind),
             Command::Check => {
                 let (target, current) = (self.target.clone(), self.current);
+                let leftovers = self.leftovers.take();
                 self.check = Some(Box::pin(async move {
+                    if let Some(leftovers) = leftovers
+                        && let Err(error) = leftovers.await
+                    {
+                        tracing::warn!("could not remove an earlier update: {error}");
+                    }
                     match find(&target, current).await {
                         Ok(Some(staged)) => Checked::Ready(staged),
                         Ok(None) => Checked::UpToDate,
                         Err(error) => {
                             // Generic: remote bodies never reach the log.
                             tracing::warn!("app update failed: {error}");
-                            remove(&staging(&target));
+                            remove_blocking(staging(&target)).await;
                             Checked::Failed
                         }
                     }
@@ -261,7 +273,7 @@ async fn find(target: &Target, current: AppVersion) -> Result<Option<Staged>, Fa
     )?;
     let sha256 = *sums.of(&payload.name)?;
     let staging = staging(target);
-    remove(&staging);
+    remove_blocking(staging.clone()).await;
     tokio::fs::create_dir(&staging)
         .await
         .map_err(|error| Failure::Local(format!("could not stage the update: {error}")))?;
@@ -420,6 +432,13 @@ fn remove(path: &Path) {
     }
 }
 
+/// [`remove`] on a blocking thread: on macOS a staged or replaced app is a whole bundle.
+async fn remove_blocking(path: PathBuf) {
+    if let Err(error) = tokio::task::spawn_blocking(move || remove(&path)).await {
+        tracing::warn!("could not remove a staged update: {error}");
+    }
+}
+
 /// Starts the updated app as a process of its own, with this one's environment and log.
 fn relaunch(executable: &Path) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
@@ -513,6 +532,7 @@ mod tests {
             machine: Machine::new(),
             timer: tokio::time::interval(EVERY),
             check: None,
+            leftovers: None,
         })));
         for second_start in [true, false] {
             let Mode::On(on) = &mut updates.0 else {
