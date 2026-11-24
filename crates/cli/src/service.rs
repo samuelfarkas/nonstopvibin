@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 use nsv_agents::agent_environment;
 use nsv_files::{DataDir, config_home, write_atomic};
 use nsv_server::{AllowedHost, Session};
+use nsv_shell::Install;
 
 use crate::{CliError, SERVER_PORT, complain, say, user};
 
@@ -310,14 +311,24 @@ stops when you log out and does not start at boot. Ask an administrator to run:
     ));
 }
 
+/// What the unit starts: the `AppImage`, whose mount moves with every launch, or else this
+/// executable.
+fn executable(install: &Install) -> Result<&Path, CliError> {
+    install
+        .app_image
+        .as_deref()
+        .or(install.executable.as_deref())
+        .ok_or_else(|| CliError::new("The executable's path is unknown."))
+}
+
 /// `service install [--port] [--allow-host]`.
 pub(crate) async fn install(
-    packaged: bool,
+    install: &Install,
     port: Option<u16>,
     allow_hosts: Option<&[AllowedHost]>,
 ) -> Result<(), CliError> {
     require_user_manager()?;
-    if !packaged {
+    if !install.packaged {
         return Err(CliError::new(
             "Install the service from the packaged release, not from source.",
         ));
@@ -350,10 +361,7 @@ pub(crate) async fn install(
     let unit = if let Some(previous) = &previous {
         update_unit(previous, port, allow_hosts, &environment)?
     } else {
-        let executable = std::env::current_exe()
-            .and_then(std::fs::canonicalize)
-            .map_err(|error| CliError::new(error.to_string()))?;
-        render_unit(&executable.to_string_lossy(), &args, &environment)?
+        render_unit(&executable(install)?.to_string_lossy(), &args, &environment)?
     };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| CliError::new(error.to_string()))?;
@@ -458,4 +466,37 @@ pub(crate) fn uninstall() -> Result<(), CliError> {
         directory.path().display()
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_service_installed_from_an_appimage_starts_the_image() {
+        let mount = Path::new("/tmp/.mount_NonstoAbc123");
+        let app_image = Install {
+            executable: Some(mount.join("nonstopvibin")),
+            resources: mount.to_owned(),
+            packaged: true,
+            app_image: Some(PathBuf::from("/home/me/Apps/NonstopVibin.AppImage")),
+            bundle: None,
+        };
+        assert_eq!(
+            executable(&app_image).unwrap(),
+            Path::new("/home/me/Apps/NonstopVibin.AppImage")
+        );
+        let archive = Install {
+            executable: Some(PathBuf::from(
+                "/home/me/.local/lib/nonstopvibin/nonstopvibin",
+            )),
+            resources: PathBuf::from("/home/me/.local/lib/nonstopvibin"),
+            app_image: None,
+            ..app_image
+        };
+        assert_eq!(
+            executable(&archive).unwrap(),
+            Path::new("/home/me/.local/lib/nonstopvibin/nonstopvibin")
+        );
+    }
 }

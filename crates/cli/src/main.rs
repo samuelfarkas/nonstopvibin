@@ -243,7 +243,7 @@ async fn command(args: &Args) -> Result<u8, CliError> {
         }
         ["service", "install"] => {
             let given_port = args.port.is_some().then_some(port);
-            service::install(run::install().packaged, given_port, allow_hosts.as_deref()).await?;
+            service::install(&run::install(), given_port, allow_hosts.as_deref()).await?;
             Ok(0)
         }
         ["service", "uninstall"] => {
