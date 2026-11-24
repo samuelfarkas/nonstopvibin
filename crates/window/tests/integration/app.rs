@@ -188,9 +188,11 @@ fn a_failed_quit_shows_its_reason_until_dismissed_then_exits_1() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let x = X::open();
-    let mut app = App::launch("quit", &["--background"], |_| {});
+    let mut app = App::launch("quit", &[], |_| {});
+    // The window opens once the start is over; server.json is written while it is still
+    // restoring, and a signal then ends a start, not a running app.
+    shown_window(&x, "NonstopVibin");
     let session = app.data.join("server.json");
-    wait_until("the app writes server.json", || session.is_file());
     fs::remove_file(&session).unwrap();
     fs::create_dir(&session).unwrap();
     app.signal("TERM");
