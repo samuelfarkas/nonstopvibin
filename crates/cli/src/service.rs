@@ -321,6 +321,17 @@ fn executable(install: &Install) -> Result<&Path, CliError> {
         .ok_or_else(|| CliError::new("The executable's path is unknown."))
 }
 
+/// The unit's data directory, which the service must read back exactly: a unit holds text.
+fn data_directory_variable(directory: &DataDir) -> Result<(String, String), CliError> {
+    let path = directory.path().to_str().ok_or_else(|| {
+        CliError::new(format!(
+            "Cannot write a data directory that is not valid UTF-8 to the service unit: {}",
+            directory.path().display()
+        ))
+    })?;
+    Ok((DataDir::VARIABLE.to_owned(), path.to_owned()))
+}
+
 /// `service install [--port] [--allow-host]`.
 pub(crate) async fn install(
     install: &Install,
@@ -346,12 +357,9 @@ pub(crate) async fn install(
     }
     // The unit carries the shell's data directory, resolved, and the agent variables as set.
     let environment: Vec<(String, String)> = chosen
-        .map(|directory| {
-            (
-                DataDir::VARIABLE.to_owned(),
-                directory.path().display().to_string(),
-            )
-        })
+        .as_ref()
+        .map(data_directory_variable)
+        .transpose()?
         .into_iter()
         .chain(agent_environment().into_iter().filter_map(|key| {
             let value = std::env::var(key).ok().filter(|value| !value.is_empty())?;
@@ -497,6 +505,25 @@ mod tests {
         assert_eq!(
             executable(&archive).unwrap(),
             Path::new("/home/me/.local/lib/nonstopvibin/nonstopvibin")
+        );
+    }
+
+    #[test]
+    fn a_data_directory_the_unit_cannot_hold_exactly_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+
+        assert_eq!(
+            data_directory_variable(&DataDir::new("/srv/nonstopvibin")).unwrap(),
+            (
+                "NONSTOPVIBIN_DATA_DIR".to_owned(),
+                "/srv/nonstopvibin".to_owned()
+            )
+        );
+        // Latin-1 "données".
+        let latin1 = DataDir::new(OsStr::from_bytes(b"/srv/donn\xe9es"));
+        assert_eq!(
+            data_directory_variable(&latin1).unwrap_err().message,
+            "Cannot write a data directory that is not valid UTF-8 to the service unit: /srv/donn\u{fffd}es"
         );
     }
 }
