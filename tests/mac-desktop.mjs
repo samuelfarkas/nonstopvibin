@@ -5,22 +5,24 @@
 // icon, the quota popup and how it closes, the tray menu, the main window coming to the front
 // with key focus (docs/decisions/rust-port.md: 20 of 20), the Dock icon, the application menu,
 // the login item, and quitting without leftovers: from the tray menu, by a quit Apple Event to
-// the daemon and from the Dock. It uses the default data folder, as a second launch must find
-// the running app there. Screenshots, the daemon's logs and results.json go to
-// test-results/mac-desktop.
+// the daemon and from the Dock. The app runs from a temporary Applications folder on a temporary
+// data folder, which `open --env` gives every launch, so a second launch finds the running app
+// there. Screenshots, the daemon's logs and results.json go to test-results/mac-desktop.
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import sharp from "sharp";
@@ -35,13 +37,20 @@ const root = resolve(import.meta.dirname, "..");
 const results = join(root, "test-results/mac-desktop");
 const name = product.name;
 const packaged = join(root, `release/mac-${process.arch}/${name}.app`);
-const apps = join(homedir(), "Applications");
+// ps shows the app under the resolved path: /private/var, not /var.
+const work = realpathSync(mkdtempSync(join(tmpdir(), "nv-mac-desktop-")));
+const apps = join(work, "Applications");
 const app = join(apps, `${name}.app`);
 const macOS = join(app, "Contents/MacOS");
 const daemonPath = join(macOS, name);
 const helperPath = join(macOS, product.helper);
 const corePath = join(app, "Contents/Resources/core/cli-proxy-api");
-const data = join(homedir(), ".nonstopvibin");
+const data = join(work, "data");
+// The daemons this script starts, and the commands it runs, use it too.
+process.env.NONSTOPVIBIN_DATA_DIR = data;
+/** `open` with the data folder, which an app launched through Launch Services needs. */
+const open = (...args) =>
+  run("open", ["--env", `NONSTOPVIBIN_DATA_DIR=${data}`, ...args, app]);
 const MAIN = "NonstopVibin";
 const QUOTA = "NonstopVibin quotas";
 const TRIALS = 20;
@@ -549,12 +558,11 @@ async function frontTrials(label, how) {
 }
 
 await new Promise((done) => upstream.listen(0, "127.0.0.1", done));
-rmSync(app, { recursive: true, force: true });
-mkdirSync(apps, { recursive: true });
+mkdirSync(apps);
 run("ditto", [packaged, app]);
 let exit = 1;
 try {
-  run("open", [app]);
+  open();
 
   await check("the first launch shows the main window in front", async () => {
     await waitFor("the main window", () => windowNamed(MAIN), 30_000);
@@ -765,12 +773,12 @@ try {
 
   await check(
     `a second launch (open -n) brings the main window to the front (${TRIALS} trials)`,
-    () => frontTrials("second-launch", () => run("open", ["-n", app])),
+    () => frontTrials("second-launch", () => open("-n")),
   );
 
   await check(
     `opening the running app again (open) brings the main window to the front (${TRIALS} trials)`,
-    () => frontTrials("reopen", () => run("open", [app])),
+    () => frontTrials("reopen", () => open()),
   );
 
   await check(
@@ -928,7 +936,7 @@ try {
   const left = appProcesses().map(({ pid }) => String(pid));
   if (left.length) run("kill", ["-9", ...left], { allowFailure: true });
   upstream.close();
-  rmSync(app, { recursive: true, force: true });
+  rmSync(work, { recursive: true, force: true });
   if (existsSync(results))
     console.log(
       `${outcomes.filter((o) => o.pass).length}/${outcomes.length} checks passed`,
