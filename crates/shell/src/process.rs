@@ -97,7 +97,7 @@ mod macos {
                             },
                         };
                         if let Some(daemon) = daemon.take() {
-                            start_daemon(daemon, link, proxy.clone());
+                            start_daemon(daemon, link, &proxy);
                         }
                     }
                     Event::UserEvent(MainEvent::Exit(code)) => {
@@ -127,16 +127,19 @@ mod macos {
     fn start_daemon(
         daemon: impl FnOnce(TrayLink) -> u8 + Send + 'static,
         link: TrayLink,
-        proxy: EventLoopProxy<MainEvent>,
+        proxy: &EventLoopProxy<MainEvent>,
     ) {
+        let exit = proxy.clone();
         let spawned = std::thread::Builder::new()
             .name("daemon".to_owned())
             .spawn(move || {
                 let code = panic::catch_unwind(AssertUnwindSafe(|| daemon(link))).unwrap_or(1);
-                drop(proxy.send_event(MainEvent::Exit(i32::from(code))));
+                drop(exit.send_event(MainEvent::Exit(i32::from(code))));
             });
         if let Err(error) = spawned {
             tracing::warn!("could not start the daemon thread: {error}");
+            // Without the daemon nothing would end the loop: the menu bar item's Quit goes to it.
+            drop(proxy.send_event(MainEvent::Exit(1)));
         }
     }
 
