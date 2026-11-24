@@ -164,7 +164,8 @@ impl Accounts {
             })
             .collect();
         let directory = self.store.directory().credentials(profile);
-        let known = self.with(profile, |state| std::mem::take(&mut state.claude));
+        // A copy: a sync dropped during the scan leaves the cache for the next one.
+        let known = self.with(profile, |state| state.claude.clone());
         let limit = registry().limits.credential_file_bytes;
         let (identities, parsed, repaired) =
             tokio::task::spawn_blocking(move || scan(&directory, &named, &known, limit))
