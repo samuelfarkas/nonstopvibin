@@ -747,6 +747,24 @@ async fn the_auth_snapshot_is_current_when_a_write_returns_and_fails_closed() {
 }
 
 #[tokio::test]
+async fn another_connections_commit_reaches_the_keys_and_facts_on_the_next_call() {
+    let temp = TempDir::new("auth-outside");
+    let store = open(temp.path()).await;
+    let profile = store.call(|db| db.create_profile("Fixture")).await.unwrap();
+    let id = profile.id.clone();
+    let client = store.call(move |db| db.client_key(&id)).await.unwrap();
+    let auth = store.current_auth().await.unwrap();
+    assert!(owner(&auth, client.expose_secret()).unwrap().is_some());
+
+    raw(temp.path())
+        .execute("DELETE FROM profiles WHERE id=?", [profile.id.as_str()])
+        .unwrap();
+    let auth = store.current_auth().await.unwrap();
+    assert!(owner(&auth, client.expose_secret()).unwrap().is_none());
+    assert!(store.facts().borrow().is_empty());
+}
+
+#[tokio::test]
 async fn a_core_key_the_store_cannot_read_refuses_only_its_own_profile() {
     let temp = TempDir::new("auth-core-key");
     let store = open(temp.path()).await;

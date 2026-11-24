@@ -135,6 +135,52 @@ impl Running {
     }
 }
 
+/// A profile key removed from the database by another connection, such as another process or a
+/// hand edit, is refused on the very next request, as main's gateway read the live rows; other
+/// profiles keep theirs.
+#[tokio::test]
+async fn a_key_removed_outside_the_store_is_refused_on_the_next_request() {
+    let running = running("features-removed-key", None).await;
+    let removed = running.profile("Removed").await;
+    let kept = running.profile("Kept").await;
+    let key = async |profile: &str| {
+        let answer = running
+            .ok("GET", &format!("/profiles/{profile}/key"), None)
+            .await;
+        answer["key"].as_str().unwrap().to_owned()
+    };
+    let (removed_key, kept_key) = (key(&removed).await, key(&kept).await);
+    let status = async |key: &str| {
+        let authorization = ("Authorization".to_owned(), format!("Bearer {key}"));
+        crate::common::send(
+            running.daemon.port(),
+            "GET",
+            "/v1/models",
+            &[authorization],
+            b"",
+        )
+        .await
+        .status
+    };
+    // Accepted keys reach the stopped-profile check; refused ones never do.
+    assert_eq!(status(&removed_key).await, 503);
+    let database = running.root.path().join("data/nonstopvibin.sqlite");
+    let outside = rusqlite::Connection::open(database).unwrap();
+    outside
+        .execute("DELETE FROM profiles WHERE id=?", [&removed])
+        .unwrap();
+    assert_eq!(status(&removed_key).await, 401);
+    outside
+        .execute(
+            "DELETE FROM secrets WHERE id LIKE ?",
+            [format!("{removed}:%")],
+        )
+        .unwrap();
+    assert_eq!(status(&removed_key).await, 401);
+    assert_eq!(status(&kept_key).await, 503);
+    running.close().await;
+}
+
 fn codex() -> Value {
     json!({
         "type": "codex",

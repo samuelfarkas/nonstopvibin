@@ -111,9 +111,10 @@ pub struct AuthEntry {
 }
 
 /// Every profile's keys by client-key digest. The store publishes a new snapshot before it
-/// acknowledges any profile or secret write, so the gateway never reads SQLite and a deleted
-/// or rotated key fails closed at once. A client key the store cannot read fails every
-/// profile; a core key, only its own.
+/// acknowledges any profile or secret write, and before it answers any call after another
+/// connection committed, so the gateway never reads SQLite itself and a deleted or rotated key
+/// fails closed at once (see [`crate::Store::current_auth`]). A client key the store cannot read
+/// fails every profile; a core key, only its own.
 #[derive(Debug)]
 pub struct AuthSnapshot(Result<HashMap<KeyDigest, AuthEntry>, Arc<StoreError>>);
 
@@ -164,6 +165,8 @@ pub struct Db {
     auth_stale: bool,
     facts: watch::Sender<ProfileFacts>,
     facts_stale: bool,
+    /// `PRAGMA data_version` as last read: it changes when another connection commits.
+    data_version: i64,
 }
 
 /// What the store publishes, for [`crate::Store`] to hand out.
@@ -189,6 +192,7 @@ impl Db {
         connection.execute_batch(SCHEMA)?;
         // Room for every statement below, so none is compiled again (the default keeps 16).
         connection.set_prepared_statement_cache_capacity(32);
+        let data_version = connection.query_row("PRAGMA data_version", [], |row| row.get(0))?;
         let page_size = registry().usage_page_size;
         let (auth, auth_receiver) = watch::channel(Arc::new(AuthSnapshot(Ok(HashMap::new()))));
         let (facts, facts_receiver) = watch::channel(ProfileFacts::from([]));
@@ -201,6 +205,7 @@ impl Db {
             auth_stale: true,
             facts,
             facts_stale: false,
+            data_version,
         };
         // The scheduler restores profiles from the first facts: facts it cannot read must not
         // pass for no profiles.
@@ -216,10 +221,22 @@ impl Db {
     }
 
     /// Rebuilds the auth snapshot after a profile or secret write, and the profile facts after
-    /// a profile or account write. A failure to read the keys publishes the error, so the
-    /// gateway refuses every key rather than trusting a stale one; facts that cannot be read
-    /// keep their last value, and the next write tries again. Unchanged facts wake no one.
+    /// a profile or account write; both after another connection committed, such as another
+    /// process or a hand edit. A failure to read the keys publishes the error, so the gateway
+    /// refuses every key rather than trusting a stale one; facts that cannot be read keep their
+    /// last value, and the next write tries again. Unchanged facts wake no one.
     pub(crate) fn publish_if_stale(&mut self) {
+        match self.value::<i64>("PRAGMA data_version", []) {
+            Ok(Some(version)) if version == self.data_version => {}
+            read => {
+                // A version that cannot be read counts as changed.
+                if let Ok(Some(version)) = read {
+                    self.data_version = version;
+                }
+                self.auth_stale = true;
+                self.facts_stale = true;
+            }
+        }
         if self.auth_stale {
             let entries = self.read_auth().map_err(Arc::new);
             self.auth.send_replace(Arc::new(AuthSnapshot(entries)));

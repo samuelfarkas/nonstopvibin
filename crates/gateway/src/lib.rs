@@ -108,10 +108,10 @@ pub enum Activity {
 
 /// What the gateway needs from the rest of the daemon.
 pub trait Host: Send + Sync + 'static {
-    /// The profile whose client key the index maps `digest` to, if any. The gateway compares
-    /// the presented key with the returned live key in constant time, so a stale index entry
-    /// fails closed.
-    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>>;
+    /// The profile whose client key the index maps `digest` to when the request arrives, if
+    /// any. The gateway compares the presented key with the returned live key in constant time,
+    /// so a stale index entry fails closed.
+    fn profile(&self, digest: &KeyDigest) -> impl Future<Output = Option<Arc<ProfileAuth>>> + Send;
 
     /// Wakes the profile's core if it is dormant, and returns its loopback address. The
     /// gateway drops this future when the agent hangs up, so a core start must not depend on
@@ -274,7 +274,9 @@ impl<H: Host> Gateway<H> {
     /// A refusal, which the server answers with [`Refusal::into_response`].
     pub async fn proxy(&self, request: Request<Incoming>) -> Result<Response<Body>, Refusal> {
         let (parts, body) = request.into_parts();
-        let route = self.route(&parts.method, &parts.uri, &parts.headers)?;
+        let route = self
+            .route(&parts.method, &parts.uri, &parts.headers)
+            .await?;
         let lease = self.lease(route.auth).await?;
         if let Some(agent) = route.catalog {
             return self.catalog(&lease, agent).await;
@@ -317,7 +319,9 @@ impl<H: Host> Gateway<H> {
     }
 
     async fn relay(&self, request: &mut Request<Incoming>) -> Result<Response<Body>, Refusal> {
-        let route = self.route(request.method(), request.uri(), request.headers())?;
+        let route = self
+            .route(request.method(), request.uri(), request.headers())
+            .await?;
         let lease = self.lease(route.auth).await?;
         let (mut sender, connection) = handshake(lease.core).await?;
         tokio::spawn(connection.with_upgrades());
@@ -361,15 +365,21 @@ impl<H: Host> Gateway<H> {
         Ok(reply)
     }
 
-    fn route(
+    async fn route(
         &self,
         method: &hyper::Method,
         uri: &hyper::Uri,
         headers: &HeaderMap,
     ) -> Result<route::Route, Refusal> {
-        route::route(method, uri, headers, &self.inner.catalogs, |digest| {
-            self.inner.host.profile(digest)
-        })
+        let host = &self.inner.host;
+        route::route(
+            method,
+            uri,
+            headers,
+            &self.inner.catalogs,
+            |digest| async move { host.profile(&digest).await },
+        )
+        .await
     }
 
     /// Counts the request in before waking the core: the wait is in flight, and keeps a dormant

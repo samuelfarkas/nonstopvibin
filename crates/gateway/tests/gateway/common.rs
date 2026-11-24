@@ -66,8 +66,8 @@ impl TestHost {
 }
 
 impl Host for TestHost {
-    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
-        self.index.get(digest).cloned()
+    fn profile(&self, digest: &KeyDigest) -> impl Future<Output = Option<Arc<ProfileAuth>>> + Send {
+        std::future::ready(self.index.get(digest).cloned())
     }
 
     async fn wake(&self, _profile: &ProfileId) -> Result<SocketAddr, Refusal> {

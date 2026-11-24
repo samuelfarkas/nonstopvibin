@@ -119,6 +119,17 @@ impl Store {
         self.auth.clone()
     }
 
+    /// The gateway's view of every client key, read again first if another connection, such as
+    /// another process or a hand edit, committed since the last call: a key deleted or rotated
+    /// there fails closed on the next request, as it did when main read the live rows.
+    ///
+    /// # Errors
+    /// [`StoreError::Closed`].
+    pub async fn current_auth(&self) -> Result<Arc<AuthSnapshot>, StoreError> {
+        self.call(|_| Ok(())).await?;
+        Ok(Arc::clone(&self.auth.borrow()))
+    }
+
     /// Every profile's facts, current before any write is acknowledged.
     #[must_use]
     pub fn facts(&self) -> watch::Receiver<ProfileFacts> {

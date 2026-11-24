@@ -1883,6 +1883,7 @@ dependencies = [
  "nsv-net",
  "nsv-store",
  "nsv-testkit",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

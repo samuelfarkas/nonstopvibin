@@ -15,7 +15,6 @@ use nsv_domain::secret::KeyDigest;
 use nsv_domain::sync::locked;
 use nsv_gateway::{Activity, Catalog, Host, ProfileAuth, Refusal};
 use nsv_store::{AuthSnapshot, Store};
-use tokio::sync::watch;
 
 use crate::failure;
 use crate::shared::Shared;
@@ -49,7 +48,7 @@ impl GatewayProfiles {
 
 pub(crate) struct GatewayHost {
     shared: Arc<Shared>,
-    auth: watch::Receiver<Arc<AuthSnapshot>>,
+    store: Store,
     /// The gateway's entries for the store's latest snapshot, built when it changes.
     profiles: Mutex<Option<GatewayProfiles>>,
     cores: Arc<Cores>,
@@ -65,7 +64,7 @@ impl GatewayHost {
     ) -> Self {
         Self {
             shared,
-            auth: store.auth(),
+            store: store.clone(),
             profiles: Mutex::default(),
             cores,
             models,
@@ -86,9 +85,10 @@ impl GatewayHost {
 }
 
 impl Host for GatewayHost {
-    fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
-        // The current snapshot on every request, so a deleted or rotated key fails at once.
-        let snapshot = Arc::clone(&self.auth.borrow());
+    async fn profile(&self, digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
+        // The current snapshot on every request, so a deleted or rotated key fails at once, also
+        // when another process or a hand edit changed it. A closed store accepts no key.
+        let snapshot = self.store.current_auth().await.ok()?;
         let mut profiles = locked(&self.profiles);
         if !profiles
             .as_ref()

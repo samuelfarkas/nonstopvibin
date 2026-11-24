@@ -1,6 +1,7 @@
 //! Which profile a request belongs to and where it may go: key extraction, the `/p/<slug>`
 //! prefix, the endpoint allowlist and the curated-catalog trigger (`routeRequest` and
-//! `curatedCatalog` in `gateway.ts`). Pure functions over the request head.
+//! `curatedCatalog` in `gateway.ts`). Functions over the request head; the host looks up the
+//! key's profile.
 //!
 //! The TypeScript gateway checked the path that the WHATWG URL parser produced. This one checks
 //! the raw request target, and refuses every target that parser would have rewritten in a way
@@ -52,20 +53,26 @@ pub(crate) struct Route {
 }
 
 /// Routes a request head, in the TypeScript order: credentials (401), profile prefix (403),
-/// endpoint (404).
-pub(crate) fn route(
+/// endpoint (404). `profile` looks up the profile a key digest belongs to.
+pub(crate) async fn route<F>(
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
     catalogs: &[(Agent, AgentCatalog)],
-    profile: impl FnOnce(&KeyDigest) -> Option<Arc<ProfileAuth>>,
-) -> Result<Route, Refusal> {
+    profile: impl FnOnce(KeyDigest) -> F,
+) -> Result<Route, Refusal>
+where
+    F: Future<Output = Option<Arc<ProfileAuth>>>,
+{
     let key = presented_key(headers)?;
     // The live key decides, so deletion and rotation fail closed even past a stale index.
-    let auth = std::str::from_utf8(&key)
-        .ok()
-        .and_then(|key| profile(&KeyDigest::of(key)).filter(|auth| auth.client_key.matches(key)))
-        .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "Invalid profile API key."))?;
+    let auth = match std::str::from_utf8(&key) {
+        Ok(key) => profile(KeyDigest::of(key))
+            .await
+            .filter(|auth| auth.client_key.matches(key)),
+        Err(_) => None,
+    }
+    .ok_or_else(|| Refusal::new(StatusCode::UNAUTHORIZED, "Invalid profile API key."))?;
     let path = match uri.path().strip_prefix(PROFILE_ROUTES) {
         None => uri.path(),
         // A slug is `[a-z0-9-]+`, so the prefix names this profile exactly when the slug is
@@ -247,8 +254,8 @@ mod tests {
         (Agent::Opencode, AgentCatalog::Query),
     ];
 
-    fn work(digest: &KeyDigest) -> Option<Arc<ProfileAuth>> {
-        (*digest == KeyDigest::of(WORK_KEY)).then(|| {
+    fn work(digest: KeyDigest) -> std::future::Ready<Option<Arc<ProfileAuth>>> {
+        std::future::ready((digest == KeyDigest::of(WORK_KEY)).then(|| {
             Arc::new(
                 ProfileAuth::new(
                     ProfileId::parse("11111111-1111-4111-8111-111111111111").unwrap(),
@@ -258,7 +265,17 @@ mod tests {
                 )
                 .unwrap(),
             )
-        })
+        }))
+    }
+
+    /// Routes with [`work`], which answers at once, so the first poll ends the route.
+    fn routed_with(method: &Method, uri: &Uri, headers: &HeaderMap) -> Result<Route, Refusal> {
+        let routing = std::pin::pin!(route(method, uri, headers, &CATALOGS, work));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match routing.poll(&mut context) {
+            std::task::Poll::Ready(routed) => routed,
+            std::task::Poll::Pending => panic!("the lookup answers at once"),
+        }
     }
 
     fn headers(pairs: &[(&str, &[u8])]) -> HeaderMap {
@@ -274,7 +291,7 @@ mod tests {
 
     fn routed(target: &str, pairs: &[(&str, &[u8])]) -> Result<Route, Refusal> {
         let uri = Uri::try_from(target).unwrap();
-        route(&Method::GET, &uri, &headers(pairs), &CATALOGS, work)
+        routed_with(&Method::GET, &uri, &headers(pairs))
     }
 
     fn bearer(key: &str) -> Vec<u8> {
@@ -424,7 +441,7 @@ mod tests {
             let Ok(uri) = Uri::try_from(target.as_str()) else { return Ok(()) };
             let auth = bearer(WORK_KEY);
             let method = if post { Method::POST } else { Method::GET };
-            if let Ok(route) = route(&method, &uri, &headers(&[("authorization", &auth)]), &CATALOGS, work) {
+            if let Ok(route) = routed_with(&method, &uri, &headers(&[("authorization", &auth)])) {
                 assert_safe(&route);
             }
         }
