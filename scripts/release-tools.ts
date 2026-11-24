@@ -2,7 +2,7 @@
 // into .vendor/release-tools, each checked against the SHA-256 reviewed here, and prints their
 // paths. Tools: appimagetool, appimage-runtime (the AppImage type 2 runtime), minisign.
 // Like scripts/install-security-tools.mjs, a new version means a new reviewed hash.
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type Pin, pinnedDownload, sha256 } from "./pinned-download.ts";
 
@@ -78,8 +78,12 @@ export async function releaseTool(
   if (cached && sha256(cached) === expected) return destination;
   const tool = await pinnedDownload(name, download, 120_000);
   await mkdir(join(destination, ".."), { recursive: true });
-  await writeFile(destination, tool);
-  await chmod(destination, 0o755);
+  // The cached name appears only on an executable file: an interrupted run must not leave one
+  // that matches the digest above but cannot run.
+  const partial = `${destination}.${process.pid}.partial`;
+  await writeFile(partial, tool);
+  await chmod(partial, 0o755);
+  await rename(partial, destination);
   return destination;
 }
 
