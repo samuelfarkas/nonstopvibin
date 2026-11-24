@@ -365,26 +365,30 @@ impl<I: Identify> Ledger<I> {
             return Ok(None);
         }
         let ledger = self.directory.core_ledger();
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&ledger)?;
         let path = ledger.join(format!("{}.json", core.pid));
-        let entry = Entry {
+        let entry = serde_json::to_string(&Entry {
             pid: core.pid,
             identity,
             owner: Owner {
                 pid: std::process::id(),
                 identity: owner,
             },
-        };
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)?
-            .write_all(serde_json::to_string(&entry)?.as_bytes())?;
+        })?;
+        let written = path.clone();
+        blocking(move || {
+            DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&ledger)?;
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&written)?
+                .write_all(entry.as_bytes())
+        })
+        .await?;
         Ok(Some(path))
     }
 
@@ -396,23 +400,9 @@ impl<I: Identify> Ledger<I> {
     /// A malformed entry could not be removed.
     pub async fn reap_orphans(&self) -> io::Result<()> {
         let ledger = self.directory.core_ledger();
-        let Ok(listing) = fs::read_dir(&ledger) else {
-            return Ok(());
-        };
-        let names: Vec<OsString> = listing
-            .filter_map(|entry| entry.ok().map(|e| e.file_name()))
-            .collect();
-        for name in names {
-            let path = ledger.join(&name);
-            let entry = read_own_file(&path, 0, 64 * 1024, || {
-                io::Error::other("not a ledger entry")
-            })
-            .ok()
-            .flatten()
-            .and_then(|text| serde_json::from_str::<Entry>(&text).ok())
-            .filter(Entry::valid);
+        for (name, path, entry) in blocking(move || Ok(read_ledger(&ledger))).await? {
             let Some(entry) = entry else {
-                forget(&path)?;
+                blocking(move || forget(&path)).await?;
                 continue;
             };
             // Unprovable this time (e.g. ps could not run): the entry stays for the next start.
@@ -436,7 +426,8 @@ impl<I: Identify> Ledger<I> {
         {
             self.stop_orphan(entry).await?;
         }
-        forget(path)
+        let path = path.to_owned();
+        blocking(move || forget(&path)).await
     }
 
     /// Not our child, so its exit cannot be awaited: this bounded poll runs only while reaping.
@@ -461,6 +452,37 @@ impl<I: Identify> Ledger<I> {
         }
         Ok(())
     }
+}
+
+/// Each ledger entry's file name, path and contents; `None` for a file that is not a valid
+/// entry.
+fn read_ledger(ledger: &Path) -> Vec<(OsString, PathBuf, Option<Entry>)> {
+    let Ok(listing) = fs::read_dir(ledger) else {
+        return Vec::new();
+    };
+    listing
+        .filter_map(|entry| entry.ok().map(|e| e.file_name()))
+        .map(|name| {
+            let path = ledger.join(&name);
+            let entry = read_own_file(&path, 0, 64 * 1024, || {
+                io::Error::other("not a ledger entry")
+            })
+            .ok()
+            .flatten()
+            .and_then(|text| serde_json::from_str::<Entry>(&text).ok())
+            .filter(Entry::valid);
+            (name, path, entry)
+        })
+        .collect()
+}
+
+/// Runs file work on the blocking pool, off the runtime thread.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> io::Result<T> + Send + 'static,
+) -> io::Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(io::Error::other)?
 }
 
 /// Removes a ledger entry; a missing one is no error.
