@@ -42,7 +42,12 @@ impl Native for Gtk {
     const POPUP_BELOW_ANCHOR: bool = false;
     const MAIN_DRAG_REGIONS: bool = false;
 
+    /// GTK names the windows' X11 class and Wayland app id after the program, so they match
+    /// the desktop entry (`nonstopvibin.desktop`) and docks show its icon. tao's app id cannot
+    /// do it: `GApplication` refuses an id without a dot, and with one the helper would become
+    /// a unique application that a second helper on the session bus hands over to and exits.
     fn event_loop<T: 'static>() -> EventLoop<T> {
+        gtk::glib::set_prgname(Some("nonstopvibin"));
         EventLoopBuilder::<T>::with_user_event().build()
     }
 

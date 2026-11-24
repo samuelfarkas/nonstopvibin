@@ -60,6 +60,7 @@ Exec=${exec}
 Icon=${product.executable}
 Terminal=false
 Categories=${product.linuxCategory};
+StartupWMClass=${product.executable}
 `;
 const icon = join(repo, "public/icon.png");
 
