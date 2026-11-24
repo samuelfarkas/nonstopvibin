@@ -24,6 +24,9 @@ use tokio::sync::OnceCell;
 /// How long a core gets to exit after SIGTERM before SIGKILL, wherever it is stopped.
 pub const KILL_GRACE: Duration = Duration::from_secs(5);
 const PS_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+/// `ps` answers in milliseconds, slower under load or emulation; one that hangs (a stopped
+/// process, a stuck mount) must not hold a core's record or a start's reaping forever.
+const PS_TIMEOUT: Duration = Duration::from_secs(5);
 /// What a core inherits, each only when set and not empty, as core.ts listed it: no API keys,
 /// proxy settings, storage backends or provider variables.
 const CORE_ENVIRONMENT: [&str; 6] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SystemRoot"];
@@ -96,10 +99,10 @@ where
 }
 
 /// `ps` start time and full command line, or `None` if `ps` reports no such process. Every
-/// other failure is an error, `ps` not running at all included, so nothing unprovable reads
-/// as gone.
+/// other failure is an error, `ps` not running at all or not answering within [`PS_TIMEOUT`]
+/// included, so nothing unprovable reads as gone.
 async fn process_identity(ps: OsString, pid: u32) -> io::Result<Option<String>> {
-    let output = Command::new(&ps)
+    let lookup = Command::new(&ps)
         .args(["-ww", "-o", "lstart=", "-o", "command=", "-p"])
         .arg(pid.to_string())
         .env_clear()
@@ -108,8 +111,11 @@ async fn process_identity(ps: OsString, pid: u32) -> io::Result<Option<String>> 
         .env("TZ", "UTC")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .await?;
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(PS_TIMEOUT, lookup)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "ps did not answer in time"))??;
     if output.status.code() == Some(1) {
         return Ok(None);
     }
@@ -509,5 +515,20 @@ mod tests {
             assert!(!core_of(data, &identity(&refused)), "{refused}");
         }
         assert!(!core_of(data, "short"));
+    }
+
+    #[tokio::test]
+    async fn a_hung_ps_is_a_timeout_at_its_bound() {
+        let directory = nsv_testkit::TempDir::new("hung-ps");
+        let ps = directory.path().join("ps");
+        nsv_testkit::write_executable(&ps, b"#!/bin/sh\nexec sleep 60\n");
+        let started = std::time::Instant::now();
+        let lookup = process_identity(ps.into_os_string(), std::process::id());
+        let error = tokio::time::timeout(PS_TIMEOUT + Duration::from_secs(2), lookup)
+            .await
+            .expect("the lookup ends at its bound")
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() >= PS_TIMEOUT, "{:?}", started.elapsed());
     }
 }
