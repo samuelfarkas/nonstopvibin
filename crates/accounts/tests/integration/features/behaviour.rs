@@ -694,6 +694,85 @@ async fn quota_checks_run_once_per_account_and_never_store_response_excerpts() {
     );
 }
 
+/// The remaining percent of a quota's first window.
+fn remaining(quota: &Quota) -> f64 {
+    quota.windows[0].remaining_percent.unwrap().0
+}
+
+#[tokio::test]
+async fn a_check_queued_behind_a_running_one_answers_the_stored_quota_once_it_is_saved() {
+    let directory = TempDir::new("quota-overlap");
+    let store = open_store(directory.path()).await;
+    let owner = profile(&store, "Owner").await;
+    let claude = AccountId::parse("claude.json").unwrap();
+    let old = parse_quota(
+        "claude",
+        &json!({ "five_hour": { "utilization": 90 } }),
+        NOW,
+    )
+    .unwrap();
+    let (id, account) = (owner.clone(), claude.clone());
+    store
+        .call(move |db| db.save_quota(&id, &account, &old))
+        .await
+        .unwrap();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let source = Arc::new(StubSource {
+        accounts: vec![subscription("claude.json", "claude")],
+        gate: Some(Arc::clone(&gate)),
+        ..StubSource::default()
+    });
+    source.queue([
+        json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } }),
+        json!({ "status_code": 500, "body": "" }),
+    ]);
+    let quotas = Quotas::new(store.clone(), Arc::clone(&source), unavailable(), fixed);
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (first, second) = tokio::join!(quotas.refresh(&owner, &claude), async {
+        called(&source, 1).await;
+        // The store answers nothing until released, so the second check's read and the first
+        // one's save queue up in that order.
+        let blocker = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .call(move |_| {
+                        let _ = held.recv();
+                        Ok(())
+                    })
+                    .await
+            }
+        });
+        settle().await;
+        let (second, ()) = tokio::join!(quotas.refresh(&owner, &claude), async {
+            settle().await;
+            gate.add_permits(10);
+            settle().await;
+            release.send(()).unwrap();
+        });
+        blocker.await.unwrap().unwrap();
+        second
+    });
+    assert_eq!(remaining(&first.unwrap()), 75.0);
+    let second = second.unwrap();
+    assert_eq!(
+        (second.status, remaining(&second)),
+        (QuotaStatus::Available, 10.0),
+        "the queued check answers the stored quota"
+    );
+    assert_eq!(source.take_calls().len(), 1, "the provider is asked once");
+    let stored = store
+        .call(move |db| db.quota(&owner, &claude))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (stored.status, remaining(&stored)),
+        (QuotaStatus::Available, 75.0)
+    );
+    store.close().await;
+}
+
 struct Refresh(Result<QuotaStatus, ()>);
 
 impl RefreshQuota for Refresh {

@@ -691,13 +691,16 @@ impl<S: QuotaSource> Quotas<S> {
             .into_iter()
             .find(|account| &account.id == account_id)
             .ok_or_else(|| AppError::new("Account not found.", 404))?;
+        // Held from before the prior read until after the save: a second check never reads a
+        // quota the running one is about to replace, nor asks the provider again meanwhile.
+        let running = self.refreshing.begin((profile.clone(), account_id.clone()));
         let prior = {
             let (profile, account) = (profile.clone(), account_id.clone());
             self.store
                 .call(move |db| db.quota(&profile, &account))
                 .await?
         };
-        let Some(running) = self.refreshing.begin((profile.clone(), account_id.clone())) else {
+        let Some(running) = running else {
             return prior
                 .ok_or_else(|| AppError::new("Quota refresh is already in progress.", 409).into());
         };
@@ -728,11 +731,11 @@ impl<S: QuotaSource> Quotas<S> {
                 }
             },
         };
-        drop(running);
         let (profile, account, stored) = (profile.clone(), account_id.clone(), quota.clone());
         self.store
             .call(move |db| db.save_quota(&profile, &account, &stored))
             .await?;
+        drop(running);
         Ok(quota)
     }
 
