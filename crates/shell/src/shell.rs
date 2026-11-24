@@ -329,7 +329,7 @@ impl<H: ShellHost> Shell<'_, H> {
             tracing::warn!("could not write the page for the browser: {error}");
             return;
         }
-        if let Err(error) = external::open(&page) {
+        if let Err(error) = external::open(&page).await {
             tracing::warn!("could not open the browser either: {error}");
         }
     }
@@ -408,7 +408,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 self.send(&ToHelper::Reply { id, outcome }).await;
             }
             FromHelper::OpenExternal { url } => {
-                if let Err(message) = external::open_approved(&url) {
+                if let Err(message) = external::open_approved(&url).await {
                     self.host.report(&message);
                 }
             }
@@ -431,7 +431,7 @@ impl<H: ShellHost> Shell<'_, H> {
     async fn bridge(&self, call: DaemonCall) -> Result<Value, String> {
         match call {
             DaemonCall::OpenExternal(url) => {
-                external::open_approved(&url)?;
+                external::open_approved(&url).await?;
                 Ok(Value::Null)
             }
             DaemonCall::GetLoginItem => Ok(Value::Bool(self.options.login.enabled())),

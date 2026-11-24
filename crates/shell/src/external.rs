@@ -40,32 +40,44 @@ pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
 }
 
 /// Opens `url` when [`safe_external`] approves it: `openExternal`, and a page's new window.
-pub(crate) fn open_approved(url: &str) -> Result<(), String> {
-    open(&safe_external(url)?)
+pub(crate) async fn open_approved(url: &str) -> Result<(), String> {
+    open(&safe_external(url)?).await
 }
 
 /// Opens `target`: a URL [`safe_external`] approved, or the page holding the session link.
-pub(crate) fn open(target: impl AsRef<OsStr>) -> Result<(), String> {
-    Os::open(target.as_ref())
+pub(crate) async fn open(target: impl AsRef<OsStr>) -> Result<(), String> {
+    Os::open(target.as_ref()).await
 }
 
 #[cfg(target_os = "macos")]
 impl Opener for Os {
     /// Through Launch Services, as Electron's `shell.openExternal` did, so no process's
     /// arguments carry the URL: other users can read those, and a sign-in URL holds its OAuth
-    /// `state`.
-    fn open(target: &OsStr) -> Result<(), String> {
+    /// `state`. Off the runtime thread, which the call may block, and in a pool of its own for
+    /// what it autoreleases.
+    async fn open(target: &OsStr) -> Result<(), String> {
+        use objc2::rc::autoreleasepool;
         use objc2_app_kit::NSWorkspace;
         use objc2_foundation::{NSString, NSURL};
 
-        let text = target.to_str().ok_or_else(|| "Invalid URL".to_owned())?;
-        let string = NSString::from_str(text);
-        let url = if text.starts_with('/') {
-            NSURL::fileURLWithPath(&string)
-        } else {
-            NSURL::URLWithString(&string).ok_or_else(|| "Invalid URL".to_owned())?
-        };
-        if NSWorkspace::sharedWorkspace().openURL(&url) {
+        let text = target
+            .to_str()
+            .ok_or_else(|| "Invalid URL".to_owned())?
+            .to_owned();
+        let opened = tokio::task::spawn_blocking(move || {
+            autoreleasepool(|_| -> Result<bool, String> {
+                let string = NSString::from_str(&text);
+                let url = if text.starts_with('/') {
+                    NSURL::fileURLWithPath(&string)
+                } else {
+                    NSURL::URLWithString(&string).ok_or_else(|| "Invalid URL".to_owned())?
+                };
+                Ok(NSWorkspace::sharedWorkspace().openURL(&url))
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())??;
+        if opened {
             Ok(())
         } else {
             Err("macOS could not open it.".to_owned())
@@ -79,8 +91,8 @@ impl Opener for Os {
 
 #[cfg(target_os = "linux")]
 impl Opener for Os {
-    fn open(target: &OsStr) -> Result<(), String> {
-        launch(Command::new("xdg-open").arg(target))
+    fn open(target: &OsStr) -> impl Future<Output = Result<(), String>> {
+        std::future::ready(launch(Command::new("xdg-open").arg(target)))
     }
 
     /// The `FileManager1` D-Bus interface, else the folder in the default file manager.
@@ -92,7 +104,7 @@ impl Opener for Os {
             Ok(()) => Ok(()),
             Err(error) => {
                 tracing::warn!("no FileManager1 ({error}); opening the folder");
-                Self::open(file.parent().unwrap_or(file).as_os_str())
+                Self::open(file.parent().unwrap_or(file).as_os_str()).await
             }
         }
     }
