@@ -728,12 +728,11 @@ async fn race<T>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn core_ports_differ_and_come_from_below_the_ephemeral_range() {
         let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap();
         let ephemeral: u16 = range.split_whitespace().next().unwrap().parse().unwrap();
