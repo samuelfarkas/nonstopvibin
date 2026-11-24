@@ -11,6 +11,8 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
+use nsv_accounts::restart::RestartTiming;
+use nsv_accounts::scheduler::{TIMING, Timing};
 use nsv_agents::AgentDirectories;
 use nsv_core::install::CoreSource;
 use nsv_files::DataDir;
@@ -239,9 +241,21 @@ async fn launch(root: &Path) -> (Daemon, Placeholders) {
         },
         agents,
     };
+    // The recording ended before any restart was due. With the production timing, the first
+    // automatic start of a kept profile the launch left stopped comes two seconds after launch,
+    // which a replay on a loaded machine outlasts.
+    let hour = 3_600_000;
     let boundaries = Boundaries {
         outside: std::sync::Arc::new(ModelsDev::new()),
         clock: now,
+        timing: Timing {
+            restart: RestartTiming {
+                coalesce: hour,
+                restart_backoff: hour,
+                ..TIMING.restart
+            },
+            ..*TIMING
+        },
         ..Boundaries::production().unwrap()
     };
     let data = DataDir::new(&data);
