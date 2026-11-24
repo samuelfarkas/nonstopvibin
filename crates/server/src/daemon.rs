@@ -360,7 +360,7 @@ impl Daemon {
         let app = &self.0;
         let desktop = app.shared.desktop.is_some();
         if desktop {
-            self.publish()?;
+            self.publish().await?;
         }
         app.cores.launch().await.map_err(StartError::Cores)?;
         let profiles = app.store.call(|db| db.profiles()).await?;
@@ -379,13 +379,13 @@ impl Daemon {
             }
         }
         if !desktop {
-            self.publish()?;
+            self.publish().await?;
         }
         Ok(())
     }
 
     /// Writes `server.json`, where `url`, `status` and a second desktop launch find the daemon.
-    fn publish(&self) -> Result<(), StartError> {
+    async fn publish(&self) -> Result<(), StartError> {
         let app = &self.0;
         let session = Session {
             pid: std::process::id(),
