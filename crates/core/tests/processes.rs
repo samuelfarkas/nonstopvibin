@@ -26,9 +26,7 @@ use std::process::{Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use nsv_core::processes::{
-    CoreProcess, Identify, KILL_GRACE, Ledger, Ps, core_arguments, forget, spawn_core,
-};
+use nsv_core::processes::{CoreProcess, Identify, KILL_GRACE, Ledger, Ps, forget, spawn_core};
 use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
 
@@ -298,12 +296,24 @@ fn fixture_profile() -> ProfileId {
     profile(0)
 }
 
+/// The arguments installed cores of `data` run with, written out because the reaper recognises
+/// a core by them.
+fn core_command(data: &DataDir) -> [String; 2] {
+    [
+        "--config".to_owned(),
+        format!(
+            "{}/profiles/{}/config.yaml",
+            data.path().display(),
+            fixture_profile()
+        ),
+    ]
+}
+
 fn core_identity(data: &DataDir) -> String {
-    let arguments: Vec<String> = core_arguments(data, &fixture_profile())
-        .iter()
-        .map(|a| a.to_str().unwrap().to_owned())
-        .collect();
-    format!("Thu Jan  1 00:00:00 1970     core {}", arguments.join(" "))
+    format!(
+        "Thu Jan  1 00:00:00 1970     core {}",
+        core_command(data).join(" ")
+    )
 }
 
 /// A running owner instance: its process, its cores, their watchdogs and its own identity.
@@ -598,7 +608,7 @@ fn reaping_without_ps_keeps_the_entry_and_signals_nothing() {
         // A shell blocked in its builtin read, with the command line of a core of this directory.
         let mut child = Command::new("/bin/sh")
             .args(["-c", "read _", "core"])
-            .args(core_arguments(&fixture.data, &fixture_profile()))
+            .args(core_command(&fixture.data))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
