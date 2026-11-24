@@ -6,3 +6,4 @@
 mod data_dir;
 mod files;
 mod lock;
+mod path;

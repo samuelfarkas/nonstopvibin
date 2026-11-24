@@ -2,7 +2,7 @@
 //! sniffing, no referrer, a year's immutable cache for Vite's fingerprinted assets and
 //! revalidation by `ETag` for everything else.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use hyper::body::Incoming;
@@ -11,6 +11,7 @@ use hyper::{Request, Response, StatusCode};
 use nsv_domain::endpoint::CSP;
 use nsv_domain::error::AppError;
 use nsv_domain::wire::JsNumber;
+use nsv_files::resolve;
 use nsv_gateway::Body;
 
 use crate::parse::decode_component;
@@ -57,32 +58,6 @@ fn extname(path: &str) -> &str {
         }
         _ => "",
     }
-}
-
-/// `path.resolve(base, relative)` for an absolute base: `.` and `..` resolved lexically.
-fn resolve(base: &Path, relative: &str) -> PathBuf {
-    let mut parts: Vec<&std::ffi::OsStr> = Vec::new();
-    for component in base.components() {
-        match component {
-            Component::Normal(part) => parts.push(part),
-            Component::ParentDir => {
-                parts.pop();
-            }
-            _ => {}
-        }
-    }
-    for part in relative.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            part => parts.push(std::ffi::OsStr::new(part)),
-        }
-    }
-    let mut path = PathBuf::from("/");
-    path.extend(parts);
-    path
 }
 
 /// Vite's fingerprinted assets: `assets/<name>-<8+ word characters>.(js|css|woff2)`.
@@ -260,20 +235,5 @@ mod tests {
         ] {
             assert_eq!(extname(path), extension, "{path}");
         }
-    }
-
-    #[test]
-    fn resolve_never_leaves_the_root_lexically_unnoticed() {
-        let root = Path::new("/srv/client");
-        assert_eq!(resolve(root, "a/./b"), PathBuf::from("/srv/client/a/b"));
-        assert_eq!(
-            resolve(root, "../secret.txt"),
-            PathBuf::from("/srv/secret.txt")
-        );
-        assert_eq!(
-            resolve(root, "../client-evil.txt"),
-            PathBuf::from("/srv/client-evil.txt")
-        );
-        assert!(!resolve(root, "../client-evil.txt").starts_with(root));
     }
 }

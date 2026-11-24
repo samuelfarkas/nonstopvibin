@@ -3,11 +3,12 @@
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use nsv_domain::endpoint::profile_base;
 use nsv_domain::js;
 use nsv_domain::wire::Profile;
+use nsv_files::resolve;
 use serde_json::{Map, Value};
 
 use crate::connection::{Definition, shell_quote, text};
@@ -246,19 +247,4 @@ fn git_marker(directory: &Path) -> Result<(), AgentError> {
         }
     }
     Ok(())
-}
-
-/// Node's `path.resolve(base, path)`: lexical, without touching the file system.
-fn resolve(base: &Path, path: &str) -> PathBuf {
-    let mut resolved = PathBuf::new();
-    for component in base.join(path).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                resolved.pop();
-            }
-            other => resolved.push(other),
-        }
-    }
-    resolved
 }

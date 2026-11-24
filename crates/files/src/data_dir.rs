@@ -5,13 +5,14 @@ use std::env;
 use std::ffi::OsStr;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::sha256_hex;
 
 use crate::lock::{LockError, ServerLock};
+use crate::path::resolve;
 
 /// A data directory: an absolute path, the root of every file below. Cheap to clone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,21 +42,11 @@ impl DataDir {
             return Ok(None);
         }
         let chosen = Path::new(value);
-        let absolute = if chosen.is_absolute() {
-            chosen.to_owned()
+        let resolved = if chosen.is_absolute() {
+            resolve(Path::new("/"), chosen)
         } else {
-            env::current_dir()?.join(chosen)
+            resolve(&env::current_dir()?, chosen)
         };
-        let mut resolved = PathBuf::new();
-        for component in absolute.components() {
-            match component {
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    resolved.pop();
-                }
-                other => resolved.push(other),
-            }
-        }
         Ok(Some(Self::new(resolved)))
     }
 
