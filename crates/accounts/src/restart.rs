@@ -66,41 +66,12 @@ pub struct RestartState {
 /// What can happen to a profile, told as it happens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestartEvent {
+    /// The pool's event. An automatic start is the scheduler's, which this policy began itself.
+    Core(CoreEvent),
     /// It gained or lost its last subscription, or no longer exists.
     Kept(bool),
-    /// A stop or credential swap began, or none is in flight any more.
-    Holding(bool),
-    /// A start began; `automatic`: the scheduler's, which this policy began itself.
-    Starting { automatic: bool },
-    /// That start ended; `running`: with its core running; `error`: why not.
-    Started {
-        automatic: bool,
-        running: bool,
-        error: Option<String>,
-    },
-    /// Its core went away; `error` unless it was stopped on purpose.
-    Exited { error: Option<String> },
     /// A wakeup this policy asked for came due.
     Time,
-}
-
-impl From<CoreEvent> for RestartEvent {
-    fn from(event: CoreEvent) -> Self {
-        match event {
-            CoreEvent::Starting { automatic } => Self::Starting { automatic },
-            CoreEvent::Started {
-                automatic,
-                running,
-                error,
-            } => Self::Started {
-                automatic,
-                running,
-                error,
-            },
-            CoreEvent::Exited { error } => Self::Exited { error },
-            CoreEvent::Holding(holding) => Self::Holding(holding),
-        }
-    }
 }
 
 /// When the profile next wants [`RestartEvent::Time`].
@@ -209,13 +180,13 @@ impl RestartState {
         }
         match event {
             RestartEvent::Kept(kept) => next.kept = kept,
-            RestartEvent::Holding(holding) => next.holding = holding,
-            RestartEvent::Starting { automatic } => next.starting |= !automatic,
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Holding(holding)) => next.holding = holding,
+            RestartEvent::Core(CoreEvent::Starting { automatic }) => next.starting |= !automatic,
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: false,
                 running,
                 ..
-            } => {
+            }) => {
                 next.starting = false;
                 // Someone else's start left a core running: the run ends, given up or not.
                 if running {
@@ -228,11 +199,11 @@ impl RestartState {
                     };
                 }
             }
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: true,
                 running,
                 error,
-            } => {
+            }) => {
                 if let Run::Starting { attempts, reported } = next.run {
                     next.run = if running {
                         Run::Up {
@@ -245,7 +216,7 @@ impl RestartState {
                     };
                 }
             }
-            RestartEvent::Exited { error } => match next.run {
+            RestartEvent::Core(CoreEvent::Exited { error }) => match next.run {
                 // While a start is in flight its own end says whether a core runs.
                 Run::Idle {
                     running: true,

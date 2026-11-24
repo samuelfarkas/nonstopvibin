@@ -724,11 +724,11 @@ impl Shared {
                 let mut state = shared.lock();
                 let pool = shared.pool.state();
                 let now = Instant::now();
-                let event = RestartEvent::Started {
+                let event = RestartEvent::Core(CoreEvent::Started {
                     automatic: true,
                     running: false,
                     error: Some(error.message),
-                };
+                });
                 shared.hear(&mut state, &pool, &profile, Some(event), false, now);
                 shared.schedule(&mut state, &pool, now);
                 return;
@@ -1168,7 +1168,14 @@ impl Hooks for PoolHooks {
             track.last_used = Some(now);
             track.outcomes.clear();
         }
-        shared.hear(&mut state, &pool, profile, Some(event.into()), false, now);
+        shared.hear(
+            &mut state,
+            &pool,
+            profile,
+            Some(RestartEvent::Core(event)),
+            false,
+            now,
+        );
         shared.schedule(&mut state, &pool, now);
     }
 

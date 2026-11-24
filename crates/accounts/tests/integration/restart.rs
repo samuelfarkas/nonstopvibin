@@ -8,6 +8,7 @@ use nsv_accounts::restart::{
     Action, Due, Facts, RESTART_TIMING, RestartEvent, RestartState, RestartTiming, Run,
     give_up_text,
 };
+use nsv_core::pool::CoreEvent;
 use serde_json::{Value, json};
 
 // ---- The golden file ----
@@ -21,16 +22,16 @@ fn event(value: &Value) -> RestartEvent {
     let error = value.get("error").map(|e| e.as_str().unwrap().to_owned());
     match value["type"].as_str().unwrap() {
         "kept" => RestartEvent::Kept(flag("kept")),
-        "holding" => RestartEvent::Holding(flag("holding")),
-        "starting" => RestartEvent::Starting {
+        "holding" => RestartEvent::Core(CoreEvent::Holding(flag("holding"))),
+        "starting" => RestartEvent::Core(CoreEvent::Starting {
             automatic: flag("automatic"),
-        },
-        "started" => RestartEvent::Started {
+        }),
+        "started" => RestartEvent::Core(CoreEvent::Started {
             automatic: flag("automatic"),
             running: flag("running"),
             error,
-        },
-        "exited" => RestartEvent::Exited { error },
+        }),
+        "exited" => RestartEvent::Core(CoreEvent::Exited { error }),
         "time" => RestartEvent::Time,
         other => panic!("unknown event {other}"),
     }
@@ -151,25 +152,25 @@ fn fresh(facts: Facts) -> RestartState {
 const TIME: RestartEvent = RestartEvent::Time;
 
 fn auto_ok() -> RestartEvent {
-    RestartEvent::Started {
+    RestartEvent::Core(CoreEvent::Started {
         automatic: true,
         running: true,
         error: None,
-    }
+    })
 }
 
 fn auto_failed() -> RestartEvent {
-    RestartEvent::Started {
+    RestartEvent::Core(CoreEvent::Started {
         automatic: true,
         running: false,
         error: Some("failed".to_owned()),
-    }
+    })
 }
 
 fn crash() -> RestartEvent {
-    RestartEvent::Exited {
+    RestartEvent::Core(CoreEvent::Exited {
         error: Some("crashed".to_owned()),
-    }
+    })
 }
 
 /// Feeds `(event, now)` pairs in order; answers the last state and every action, in order.
@@ -257,13 +258,16 @@ fn someone_elses_start_that_leaves_a_core_running_ends_the_run() {
         state,
         vec![
             (crash(), since + 1),
-            (RestartEvent::Starting { automatic: false }, since + 1),
             (
-                RestartEvent::Started {
+                RestartEvent::Core(CoreEvent::Starting { automatic: false }),
+                since + 1,
+            ),
+            (
+                RestartEvent::Core(CoreEvent::Started {
                     automatic: false,
                     running: true,
                     error: None,
-                },
+                }),
                 since + 2,
             ),
             (crash(), since + 3),
@@ -334,14 +338,17 @@ fn only_a_failure_the_launch_reported_counts_as_this_runs_entry() {
 #[test]
 fn a_blocked_profile_asks_for_no_wakeup_and_asks_again_once_the_obstacle_ends() {
     let cases = [
-        (RestartEvent::Holding(true), RestartEvent::Holding(false)),
         (
-            RestartEvent::Starting { automatic: false },
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Holding(true)),
+            RestartEvent::Core(CoreEvent::Holding(false)),
+        ),
+        (
+            RestartEvent::Core(CoreEvent::Starting { automatic: false }),
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: false,
                 running: false,
                 error: None,
-            },
+            }),
         ),
         (RestartEvent::Kept(false), RestartEvent::Kept(true)),
     ];
@@ -361,13 +368,16 @@ fn a_blocked_profile_asks_for_no_wakeup_and_asks_again_once_the_obstacle_ends() 
 fn a_failed_start_by_someone_else_changes_nothing() {
     let someone_fails = || {
         vec![
-            (RestartEvent::Starting { automatic: false }, 10),
             (
-                RestartEvent::Started {
+                RestartEvent::Core(CoreEvent::Starting { automatic: false }),
+                10,
+            ),
+            (
+                RestartEvent::Core(CoreEvent::Started {
                     automatic: false,
                     running: false,
                     error: Some("no".to_owned()),
-                },
+                }),
                 11,
             ),
         ]
@@ -516,7 +526,7 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
     if world.holding {
         list.push(event(
             "release",
-            RestartEvent::Holding(false),
+            RestartEvent::Core(CoreEvent::Holding(false)),
             World {
                 holding: false,
                 ..world
@@ -525,7 +535,7 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
         if world.core {
             list.push(event(
                 "stopped",
-                RestartEvent::Exited { error: None },
+                RestartEvent::Core(CoreEvent::Exited { error: None }),
                 World {
                     core: false,
                     up_since: None,
@@ -536,7 +546,7 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
     } else {
         list.push(event(
             "hold",
-            RestartEvent::Holding(true),
+            RestartEvent::Core(CoreEvent::Holding(true)),
             World {
                 holding: true,
                 ..world
@@ -567,11 +577,11 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
         }
         list.push(event(
             "auto-ok",
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: true,
                 running: !world.lost,
                 error: world.lost.then(|| "crashed".to_owned()),
-            },
+            }),
             World {
                 op: Op::None,
                 lost: false,
@@ -593,7 +603,7 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
     if world.op == Op::None && !world.core && !world.holding {
         list.push(event(
             "other-start",
-            RestartEvent::Starting { automatic: false },
+            RestartEvent::Core(CoreEvent::Starting { automatic: false }),
             World {
                 op: Op::Foreign,
                 ..world
@@ -603,11 +613,11 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
     if world.op == Op::Foreign {
         list.push(event(
             "other-ok",
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: false,
                 running: true,
                 error: None,
-            },
+            }),
             World {
                 op: Op::None,
                 core: true,
@@ -617,11 +627,11 @@ fn moves(world: World, timing: &RestartTiming) -> Vec<Move> {
         ));
         list.push(event(
             "other-fail",
-            RestartEvent::Started {
+            RestartEvent::Core(CoreEvent::Started {
                 automatic: false,
                 running: false,
                 error: Some("no".to_owned()),
-            },
+            }),
             World {
                 op: Op::None,
                 ..world
@@ -727,7 +737,11 @@ fn apply(node: &Node, step: &Move, timing: &RestartTiming) -> Node {
         monitor.starts += 1;
         world.op = Op::Auto;
         // The pool says so from inside the start call.
-        let began = state.transition(RestartEvent::Starting { automatic: true }, 0, timing);
+        let began = state.transition(
+            RestartEvent::Core(CoreEvent::Starting { automatic: true }),
+            0,
+            timing,
+        );
         check(
             began.state == state,
             "its own start's notice changed the state",
