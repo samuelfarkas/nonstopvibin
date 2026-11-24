@@ -405,7 +405,7 @@ impl Pool {
     /// settings.
     ///
     /// # Errors
-    /// 503 when the core has not applied the settings within six seconds, or a write or
+    /// 503 when the core has not applied the settings after 60 checks 100 ms apart, or a write or
     /// management error from a core that is still current.
     pub async fn configure(&self, profile: &ProfileId) -> Result<(), AppError> {
         let mut state = self.context.state.clone();
