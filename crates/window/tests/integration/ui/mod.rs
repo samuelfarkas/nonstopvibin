@@ -102,7 +102,7 @@ fn check(name: &str, site: &Site, view: View, token: &str, data: &Path) -> Value
                 _ => step = report,
             },
             Some(Event::Act(action, reply)) => {
-                let answer = perform(&desktop, &helper, &mut bridge, &action);
+                let answer = perform(&desktop, &helper, &mut bridge, &action, data);
                 reply.send(answer).unwrap_or_default();
             }
         }
@@ -173,7 +173,13 @@ impl Bridge {
     }
 }
 
-fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Value) -> Value {
+fn perform(
+    desktop: &Desktop,
+    helper: &Helper,
+    bridge: &mut Bridge,
+    action: &Value,
+    data: &Path,
+) -> Value {
     if action["bridge"] == true {
         // Long enough for the helper to have answered or dropped what the page posted.
         crate::common::pause(Duration::from_millis(300));
@@ -183,6 +189,23 @@ fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Val
         crate::common::pause(Duration::from_millis(300));
         bridge.watch(helper);
         return json!({ "sent": std::mem::take(&mut bridge.sent) });
+    }
+    if action["downloads"] == true {
+        crate::common::pause(Duration::from_millis(300));
+        // Where the helper's HOME (`Helper::launch`) keeps its downloads.
+        let saved: serde_json::Map<String, Value> = fs::read_dir(data.join("home/Downloads"))
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let text = String::from_utf8_lossy(&fs::read(&path).unwrap()).into_owned();
+                (
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    text.into(),
+                )
+            })
+            .collect();
+        let refused = helper.log().matches("refused a download").count();
+        return json!({ "downloads": saved, "refused": refused });
     }
     #[cfg(target_os = "macos")]
     if let Some(answer) = desktop.mac_action(action) {
@@ -287,6 +310,16 @@ fn showing_the_window_again_withdraws_an_unanswered_close() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("focus.html"), "close-race");
     check_once("close-race", &site, View::Main { profile: None }, TOKEN);
+}
+
+/// Activity's CSV export: a file the page makes is saved in the Downloads folder, and nothing
+/// else downloads.
+#[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
+fn only_files_the_page_makes_download() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let site = Site::start(fixtures("focus.html"), "downloads");
+    check_once("downloads", &site, View::Main { profile: None }, TOKEN);
 }
 
 #[test]

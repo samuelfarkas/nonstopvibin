@@ -210,6 +210,14 @@ fn bridge_call(method: Method, arg: Option<Value>) -> Option<Call> {
     }
 }
 
+/// Whether a download from `url` is a file a page on `origin` made itself, `blob:<origin>/<id>`,
+/// as Activity's CSV export is. Every other download is refused.
+pub(crate) fn own_blob(origin: &Origin, url: &str) -> bool {
+    url.strip_prefix("blob:")
+        .and_then(|inner| inner.strip_prefix(origin.as_str()))
+        .is_some_and(|id| id.len() > 1 && id.starts_with('/'))
+}
+
 /// A whole page coordinate; a window is far smaller than `i32`.
 fn page_coordinate(value: &Value) -> Option<i32> {
     value.as_i64().and_then(|value| i32::try_from(value).ok())
@@ -341,11 +349,16 @@ mod tests {
     #[test]
     fn drops_messages_not_from_the_bridge_script_on_the_daemon_origin() {
         let good = json!({ "nonce": NONCE, "id": 1, "method": "bootstrap" }).to_string();
-        let wrong_origin = parse(&origin(), NONCE, "http://localhost:4100/", &good);
-        assert_eq!(
-            wrong_origin,
-            Err(Rejected::Untrusted("the page is not on the daemon origin"))
-        );
+        // A blob: page the origin made: Linux lets the window open one, for downloads.
+        for page in [
+            "http://localhost:4100/",
+            "blob:http://127.0.0.1:4100/0b6f4f5e",
+        ] {
+            assert_eq!(
+                parse(&origin(), NONCE, page, &good),
+                Err(Rejected::Untrusted("the page is not on the daemon origin"))
+            );
+        }
         let unsigned = json!({ "id": 1, "method": "bootstrap" }).to_string();
         let forged = json!({ "nonce": "guess", "id": 1, "method": "bootstrap" }).to_string();
         for body in [unsigned, forged] {
@@ -372,6 +385,28 @@ mod tests {
             parse(&origin(), NONCE, PAGE, &huge),
             Err(Rejected::Untrusted("the message is too long"))
         );
+    }
+
+    #[test]
+    fn only_blobs_of_the_daemon_origin_download() {
+        let origin = origin();
+        assert!(own_blob(
+            &origin,
+            "blob:http://127.0.0.1:4100/0b6f4f5e-6a7b-4c8d-9e0f-1a2b3c4d5e6f"
+        ));
+        for url in [
+            "http://127.0.0.1:4100/download",
+            "data:text/csv,a",
+            "blob:http://127.0.0.1:4100",
+            "blob:http://127.0.0.1:4100/",
+            "blob:http://127.0.0.1:41000/0b6f4f5e",
+            "blob:http://127.0.0.1:4100@example.com/0b6f4f5e",
+            "blob:http://localhost:4100/0b6f4f5e",
+            "blob:null/0b6f4f5e",
+            "blob:https://example.com/0b6f4f5e",
+        ] {
+            assert!(!own_blob(&origin, url), "{url}");
+        }
     }
 
     #[test]

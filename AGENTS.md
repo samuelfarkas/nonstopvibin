@@ -50,7 +50,8 @@ security, and accessibility while optimizing.
 - Keep the gateway on loopback with Host/Origin checks and endpoint allowlists.
 - Validate bridge calls in the window helper (main frame, daemon origin, known
   method) and validate their arguments again in the daemon. Keep navigation to
-  other origins, new windows and downloads denied.
+  other origins, new windows and downloads denied; only a `blob:` file the page
+  makes on the daemon's origin (Activity's CSV export) downloads.
 - SQLite secrets use an owner-only local `vault.key` in desktop and development.
   Keep the key, database, and core credentials owner-only and out of distributions.
   This does not protect against software running as the same OS user.

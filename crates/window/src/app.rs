@@ -457,7 +457,7 @@ impl App {
             Os::MAIN_DRAG_REGIONS && pane == Pane::Main,
         );
         let (ipc, loads, popup) = (self.proxy.clone(), self.proxy.clone(), self.proxy.clone());
-        let origin = self.origin.clone();
+        let (origin, downloads) = (self.origin.clone(), self.origin.clone());
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(url)
             .with_background_color(BACKGROUND)
@@ -474,12 +474,26 @@ impl App {
                     },
                 );
             })
-            .with_navigation_handler(move |url| origin.contains(&url))
+            // WebKitGTK asks here before it downloads a link, and wry does not say the link
+            // downloads: the page's own files pass, and the download handler then decides. The
+            // helper drops what a page opened at such a URL posts: the URL is not on the origin.
+            .with_navigation_handler(move |url| {
+                origin.contains(&url)
+                    || (cfg!(target_os = "linux") && bridge::own_blob(&origin, &url))
+            })
             .with_new_window_req_handler(move |url, _features| {
                 post(&popup, UserEvent::NewWindow(url));
                 NewWindowResponse::Deny
             })
-            .with_download_started_handler(|_url, _path| false)
+            // A file the page made (Activity's CSV export) goes where wry puts it: the Downloads
+            // folder, under a name no file there has yet.
+            .with_download_started_handler(move |url, _path| {
+                let allowed = bridge::own_blob(&downloads, &url);
+                if !allowed {
+                    log(format_args!("refused a download"));
+                }
+                allowed
+            })
             .with_permission_handler(|_kind| PermissionResponse::Deny)
             .with_on_page_load_handler(move |event, _url| {
                 let finished = matches!(event, PageLoadEvent::Finished);

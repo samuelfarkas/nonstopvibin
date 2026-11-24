@@ -39,8 +39,10 @@ Before changing `crates/window` or `crates/shell`, keep these properties:
 - `openExternal`, `getLoginItem`, `setLoginItem` and `revealData` go to the
   daemon over the helper's stdio pipe, and the daemon validates each argument
   again. Never trust a URL or path the page provides.
-- Navigation to other origins, new windows and downloads stay denied. Devtools
-  stay off in release builds, and the CSP stays as it is.
+- Navigation to other origins, new windows and downloads stay denied, except a
+  file the page makes itself (a `blob:` URL of the daemon's origin), which
+  Activity's CSV export saves in the Downloads folder. Devtools stay off in release
+  builds, and the CSP stays as it is.
 - The session token reaches the helper on stdin, never in argv, the environment
   or a URL. The browser fallback opens an owner-only page in the data directory
   that redirects to the session link, so the opener's arguments hold no token.

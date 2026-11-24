@@ -244,9 +244,19 @@ impl Helper {
     ) -> Self {
         let home = directory.join("home");
         fs::create_dir_all(home.join("Downloads")).unwrap();
+        // The Downloads folder as a Linux desktop session names it; macOS needs only HOME.
+        fs::create_dir_all(home.join(".config")).unwrap();
+        fs::write(
+            home.join(".config/user-dirs.dirs"),
+            format!(
+                "XDG_DOWNLOAD_DIR=\"{}\"\n",
+                home.join("Downloads").display()
+            ),
+        )
+        .unwrap();
         let mut child = Command::new(binary)
             .env("HOME", &home)
-            .env("XDG_DOWNLOAD_DIR", home.join("Downloads"))
+            .env("XDG_CONFIG_HOME", home.join(".config"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

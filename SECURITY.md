@@ -25,9 +25,13 @@ The Rust daemon enforces these boundaries. The gateway crate cannot name the
 management client, so a profile key cannot reach management endpoints. The
 listener checks Host, Origin and the session token. Only the window helper links
 WebKit. It accepts bridge calls only from the main frame of a page on the daemon's
-origin, denies other navigation, new windows and downloads, and receives the
-session token on its standard input. The daemon validates the arguments of the
-four calls the helper forwards to it again.
+origin, denies other navigation and new windows, refuses every download but a file
+the page makes itself (a `blob:` URL of the daemon's origin, as Activity's CSV
+export), which it saves in the Downloads folder, and receives the session token on
+its standard input. On Linux, where WebKitGTK checks such a download as a
+navigation, the page may also open a `blob:` URL it made; the helper drops what that
+page posts. The daemon validates the arguments of the four calls the helper forwards
+to it again.
 
 ## Reporting
 
