@@ -502,7 +502,7 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
         raw.to_string(),
     )
     .unwrap();
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     world.cores.sync_accounts(&profile).await.unwrap();
 
     let redemptions = Arc::new(Mutex::new(Vec::<String>::new()));

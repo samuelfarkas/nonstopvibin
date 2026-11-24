@@ -487,7 +487,7 @@ async fn an_undeletable_pending_sign_in_does_not_keep_launch_from_reaping_orphan
 async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_it_queues() {
     let world = World::new("oauth-shutdown-action").await;
     let profile = world.profile("Sign-in order").await;
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     let (entered, (release, released)) = (Arc::new(Notify::new()), watch::channel(false));
     let (queued, change) = tokio::sync::oneshot::channel();
     let queued = Arc::new(std::sync::Mutex::new(Some(queued)));
@@ -557,7 +557,7 @@ async fn shutdown_lets_a_sign_in_action_finish_before_it_waits_for_the_changes_i
 async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_core() {
     let world = World::new("oauth-shutdown-order").await;
     let profile = world.profile("Order").await;
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     let (entered, (release, released)) = (Arc::new(Notify::new()), watch::channel(false));
     let change = tokio::spawn({
         let (credentials, pool, profile, entered) = (
@@ -582,8 +582,13 @@ async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_cor
         let cores = Arc::clone(&world.cores);
         async move { cores.shutdown().await }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let refused = world.cores.pool().start(&profile, false).await.unwrap_err();
+    world
+        .cores
+        .changes()
+        .wait_for(|state| state.closing)
+        .await
+        .unwrap();
+    let refused = world.cores.start(&profile).await.unwrap_err();
     assert_eq!(refused.status, 503);
     release.send_replace(true);
     assert!(
@@ -817,7 +822,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     );
     assert!(account.disabled);
     assert!(file(&world, &first, &first_id).contains("synthetic-access-stopped"));
-    world.cores.pool().start(&first, false).await.unwrap();
+    world.cores.start(&first).await.unwrap();
 
     // The wrong organization on reconnect is blocked before anything is replaced.
     let before = file(&world, &first, &first_id);
@@ -977,7 +982,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
 
     // Seat metadata persists across a restart without renaming.
     world.cores.pool().stop(&first).await.unwrap();
-    world.cores.pool().start(&first, false).await.unwrap();
+    world.cores.start(&first).await.unwrap();
     let listed = accounts.accounts(&first).await.unwrap();
     let ids: Vec<&str> = listed.iter().map(|account| account.id.as_str()).collect();
     assert!(ids.contains(&first_id.as_str()) && ids.contains(&second_id.as_str()));
@@ -988,7 +993,7 @@ async fn same_email_seats_stay_separate_through_review_reconnect_imports_and_cle
     assert_eq!(reread.organization_uuid.as_deref(), Some(ORGANIZATION_B));
 
     // Shutdown cleans up a pending sign-in even after its core has stopped.
-    world.cores.pool().start(&second, false).await.unwrap();
+    world.cores.start(&second).await.unwrap();
     sign_in
         .begin_sign_in(&first, OAuthProvider::Codex, None)
         .await

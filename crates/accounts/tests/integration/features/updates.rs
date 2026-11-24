@@ -3,7 +3,6 @@
 //! during a download.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use nsv_accounts::scheduler::TIMING;
 use nsv_core::binary::{CoreTarget, bundled_pin};
@@ -37,7 +36,7 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     let world = installed_world("updates-install").await;
     let profile = world.profile("Update fixture").await;
     world.cores.launch().await.unwrap();
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     let updates = &world.cores;
     updates.check_core().await.unwrap();
     assert_eq!(updates.core_state().available.as_deref(), Some(UPDATE));
@@ -105,7 +104,7 @@ async fn an_installed_build_updates_its_core_keeps_it_across_launches_and_goes_b
     .await;
     world.cores.launch().await.unwrap();
     assert_eq!(world.cores.core_version(), UPDATE);
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     assert_eq!(
         *world.cores.pool().state().core(&profile).unwrap().binary,
         *installed
@@ -131,7 +130,7 @@ async fn no_other_start_slips_in_while_an_update_restarts_a_core_on_the_new_bina
     let world = installed_world("updates-swap").await;
     let profile = world.profile("Swap fixture").await;
     world.cores.launch().await.unwrap();
-    world.cores.pool().start(&profile, false).await.unwrap();
+    world.cores.start(&profile).await.unwrap();
     world.cores.check_core().await.unwrap();
     // The stop's usage drain waits, so another start arrives between its stop and its start.
     let held = profile.clone();
@@ -148,13 +147,16 @@ async fn no_other_start_slips_in_while_an_update_restarts_a_core_on_the_new_bina
     })
     .await
     .unwrap();
-    let cores = Arc::clone(&world.cores);
-    let start = profile.clone();
-    let other = tokio::spawn(async move { cores.pool().start(&start, false).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // One poll queues the start in the pool's command queue, ahead of the stop's end.
+    let mut other = std::pin::pin!(world.cores.start(&profile));
+    let queued = std::future::poll_fn(|context| {
+        std::task::Poll::Ready(other.as_mut().poll(context).is_pending())
+    })
+    .await;
+    assert!(queued, "the start waits for the stop in flight");
     release.send_replace(true);
     install.await.unwrap().unwrap();
-    let refused = other.await.unwrap().unwrap_err();
+    let refused = other.await.unwrap_err();
     assert_eq!(refused.status, 409);
     let state = world.cores.pool().state();
     assert!(state.running(&profile));
