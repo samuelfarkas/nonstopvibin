@@ -6,12 +6,14 @@
 //! line), lists sorted by name, and the response framing headers (`content-length`,
 //! `transfer-encoding`) left out because the echoed body's length follows the forwarded
 //! header order. The catalog bodies come from the goldens themselves, since the host builds
-//! them; the replay checks which agent, profile and labels the gateway picks.
+//! them; the replay checks which agent, profile and labels the gateway picks. A case this
+//! gateway answers differently on purpose must give the answer [`intentional`] states.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nsv_domain::registry::Agent;
 use nsv_domain::secret::KeyDigest;
@@ -24,23 +26,58 @@ use crate::common::{Header, RawRequest, TestHost, Wake, key, profile, send, spaw
 
 const GOLDEN: &str = include_str!("../../../../tests/golden/gateway.json");
 
-/// Why this gateway answers a case differently on purpose, if it does.
-fn intentional(name: &str) -> Option<&'static str> {
-    if name.ends_with("/v1/responses/ünïcode") {
-        Some(
-            "Bun's parser answered 400 to raw UTF-8 in the target. hyper accepts it and the \
-             gateway refuses the path: 404, or 403 under a foreign profile prefix. Nothing is \
-             forwarded either way.",
-        )
-    } else if name == "target *" {
-        Some("Bun's parser answered 400 to `*`. hyper accepts it and the gateway answers 404.")
-    } else if name == "catalog POST with header" {
-        Some(
-            "Node added `Content-Length: 0` to an empty POST. hyper sends no length header, \
-             which RFC 9112 reads as no body, as Go does.",
-        )
-    } else {
-        None
+/// What this gateway answers on purpose where it differs from the recording.
+enum Intended {
+    /// Bun's parser answered 400 to raw UTF-8 or `*` in the target. hyper accepts both and the
+    /// gateway refuses the path with this status and message; the core receives nothing.
+    Refused(u16, &'static str),
+    /// Node added `Content-Length: 0` to an empty POST. hyper sends no length header, which
+    /// RFC 9112 reads as no body, as Go does. Everything else is as recorded.
+    NoContentLength,
+}
+
+const UNSUPPORTED: Intended = Intended::Refused(404, "Unsupported proxy endpoint.");
+const FOREIGN: Intended = Intended::Refused(
+    403,
+    "This API key does not belong to the requested profile.",
+);
+
+/// The intended answer for a case this gateway answers differently, if it does.
+fn intentional(name: &str) -> Option<Intended> {
+    match name {
+        "target *" => return Some(UNSUPPORTED),
+        "catalog POST with header" => return Some(Intended::NoContentLength),
+        _ => {}
+    }
+    let target = name
+        .strip_prefix("route GET ")
+        .or_else(|| name.strip_prefix("route POST "))?;
+    // Each presents the work key: no endpoint under no prefix or its own, a foreign profile
+    // under any other.
+    match target.strip_suffix("/v1/responses/ünïcode")? {
+        "" | "/p/work" | "/p/work/p/work" => Some(UNSUPPORTED),
+        "/p/personal" | "/p/WORK" | "/p/work-" | "/p/team-2" | "/p/" | "/p" | "/p/w%6Frk" => {
+            Some(FOREIGN)
+        }
+        _ => None,
+    }
+}
+
+impl Intended {
+    /// The comparable answer, from the recorded one.
+    fn answer(&self, recorded: &Value) -> Value {
+        match self {
+            Self::Refused(status, message) => {
+                json!({ "error": { "message": message, "status": status } })
+            }
+            Self::NoContentLength => {
+                let mut answer = recorded.clone();
+                if let Some(forwarded) = answer["output"]["forwardedHeaders"].as_array_mut() {
+                    forwarded.retain(|pair| pair[0] != "content-length");
+                }
+                answer
+            }
+        }
     }
 }
 
@@ -90,12 +127,16 @@ fn response_set(index: usize) -> (u16, Vec<(&'static str, &'static str)>) {
 }
 
 /// The raw stub core of the recorder: answers with the request line, headers and body it got.
-async fn stub_core() -> SocketAddr {
+/// It counts the connections it accepts.
+async fn stub_core() -> (SocketAddr, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&accepted);
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
+            counted.fetch_add(1, Ordering::SeqCst);
             tokio::spawn(async move {
                 let mut buffer = Vec::new();
                 let mut chunk = [0_u8; 4096];
@@ -113,7 +154,7 @@ async fn stub_core() -> SocketAddr {
             });
         }
     });
-    address
+    (address, accepted)
 }
 
 /// The stub's answer once `buffer` holds a whole request.
@@ -341,14 +382,16 @@ fn observe(name: &str, response: &crate::common::RawResponse, core_port: u16) ->
 #[tokio::test]
 async fn replays_the_typescript_goldens() {
     let cases: Vec<Value> = serde_json::from_str(GOLDEN).unwrap();
-    let core = stub_core().await;
+    let (core, accepted) = stub_core().await;
     let (address, _gateway) = spawn_gateway(golden_host(core, &cases)).await;
     let mut passed = 0;
     let mut differing = Vec::new();
     let mut failures = Vec::new();
     for case in &cases {
         let name = case["name"].as_str().unwrap();
+        let connections = accepted.load(Ordering::SeqCst);
         let response = send(address, &request(&case["input"])).await;
+        let reached_core = accepted.load(Ordering::SeqCst) != connections;
         let observed = json!({ "name": name, "input": case["input"] })
             .as_object()
             .unwrap()
@@ -361,14 +404,32 @@ async fn replays_the_typescript_goldens() {
                     .clone(),
             )
             .collect::<serde_json::Map<_, _>>();
-        let (expected, observed) = (comparable(case), comparable(&Value::Object(observed)));
-        match (expected == observed, intentional(name).is_some()) {
-            (true, false) => passed += 1,
-            (false, true) => differing.push(name),
-            (true, true) => failures.push(format!("{name}: listed as different but matches")),
-            (false, false) => failures.push(format!(
-                "{name}\n  expected {expected}\n  observed {observed}"
-            )),
+        let (recorded, observed) = (comparable(case), comparable(&Value::Object(observed)));
+        let Some(intended) = intentional(name) else {
+            if recorded == observed {
+                passed += 1;
+            } else {
+                failures.push(format!(
+                    "{name}\n  expected {recorded}\n  observed {observed}"
+                ));
+            }
+            continue;
+        };
+        let expected = intended.answer(&recorded);
+        if expected == recorded {
+            failures.push(format!(
+                "{name}: listed as different but intends the recording"
+            ));
+        } else if expected != observed {
+            failures.push(format!(
+                "{name}\n  intended {expected}\n  observed {observed}"
+            ));
+        } else if matches!(intended, Intended::Refused(..)) && reached_core {
+            failures.push(format!(
+                "{name}: refused, but the core received a connection"
+            ));
+        } else {
+            differing.push(name);
         }
     }
     assert!(
