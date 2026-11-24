@@ -57,6 +57,10 @@ pub trait CoreHandle: Send + 'static {
 
     /// SIGTERM, then SIGKILL after five seconds; answers the exit status. Cancel-safe.
     fn terminate(&mut self) -> BoxFuture<'_, io::Result<ExitStatus>>;
+
+    /// Whether a connection to 127.0.0.1:`port` can reach only this core: it listens there,
+    /// and no other process does. Until then a key sent there could reach another local user.
+    fn listens(&self, port: u16) -> BoxFuture<'static, io::Result<bool>>;
 }
 
 /// Real cores: [`spawn_core`], the watchdog and the ledger of `core-processes/`.
@@ -156,6 +160,11 @@ impl CoreHandle for Process {
             self.forget();
             status
         })
+    }
+
+    fn listens(&self, port: u16) -> BoxFuture<'static, io::Result<bool>> {
+        // The core is not reaped while its handle has not seen it exit, so its PID is not reused.
+        Box::pin(super::listener::owned(self.core.pid(), port))
     }
 }
 

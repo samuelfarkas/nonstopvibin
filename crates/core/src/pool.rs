@@ -8,6 +8,7 @@
 //! core's management API. A port of `src/server/core.ts`.
 
 mod backend;
+mod listener;
 mod owner;
 
 use std::collections::BTreeMap;

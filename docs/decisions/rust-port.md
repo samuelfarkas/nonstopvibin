@@ -237,7 +237,9 @@ it. These differences are deliberate, each with its reason in the commit or test
 - **Durability.** Credential and agent-configuration writes are synced before their rename.
 - **Core ports.** A core's port comes from 10001–20000, below the system's ephemeral range.
   Main took one from `bind(0)` and released it, so any outgoing connection could take it before
-  the core bound it, and the start failed with "Proxy exited (1)".
+  the core bound it, and the start failed with "Proxy exited (1)". Readiness sends no key until
+  the launched core is the only listener that takes connections to its port on 127.0.0.1; main
+  sent the management key to whatever listened there, such as another local user's program.
 - **Error statuses and text.** A core the pool cannot reach answers 502, not 500; a sign-in link
   or pasted URL that is not a URL answers 502 or 400, not 500. Messages that came from Bun or
   Node (`ENOENT …`, `Invalid URL`) are now Rust's own; every `AppError` message is unchanged.

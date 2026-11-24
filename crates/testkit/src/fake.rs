@@ -34,6 +34,10 @@ use url::Url;
 
 /// How one launch of a profile's core behaves.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent behaviours a test scripts one at a time"
+)]
 pub struct Script {
     /// The executable cannot be started.
     pub launch_error: bool,
@@ -49,6 +53,9 @@ pub struct Script {
     pub misses_writes: usize,
     /// Signalling it fails, as a broken `kill` would.
     pub unkillable: bool,
+    /// Another local user's program holds its port and answers every call to it as a ready
+    /// core would, so the core does not own its port.
+    pub squatted: bool,
 }
 
 impl Default for Script {
@@ -61,6 +68,7 @@ impl Default for Script {
             stop_takes: Duration::ZERO,
             misses_writes: 0,
             unkillable: false,
+            squatted: false,
         }
     }
 }
@@ -235,6 +243,8 @@ struct Cores {
     /// Data directories whose ledgers were reaped.
     reaped: Vec<PathBuf>,
     states: usize,
+    /// Calls with an `Authorization` header that a squatter received.
+    squatted: usize,
 }
 
 #[derive(Clone, Default)]
@@ -352,6 +362,12 @@ impl FakeCores {
         self.0.lock().unwrap().reaped.clone()
     }
 
+    /// How many calls with an `Authorization` header squatters received.
+    #[must_use]
+    pub fn squatted(&self) -> usize {
+        self.0.lock().unwrap().squatted
+    }
+
     /// A gateway request for `model` to the core on `port`: the upstream answers 200, or 429
     /// for the limited model, and the core queues its usage. 502 without an answering core.
     #[must_use]
@@ -452,6 +468,19 @@ impl FakeCores {
         reason = "one arm per management route, as the core's router"
     )]
     async fn answer(&self, call: Call) -> Result<Response, NetError> {
+        {
+            let mut cores = self.0.lock().unwrap();
+            let squatted = cores
+                .launched
+                .iter()
+                .any(|core| core.port == call.port && core.script.squatted);
+            if squatted {
+                if !call.authorization.is_empty() {
+                    cores.squatted += 1;
+                }
+                return Ok(respond(200, &json!({})));
+            }
+        }
         let silent = self.knobs(|knobs| knobs.silent);
         let core = self
             .0
@@ -846,5 +875,10 @@ impl CoreHandle for Handle {
             }
             Ok(self.exited().await)
         })
+    }
+
+    fn listens(&self, port: u16) -> BoxFuture<'static, io::Result<bool>> {
+        let owned = port == self.0.port && !self.0.script.squatted;
+        Box::pin(async move { Ok(owned) })
     }
 }

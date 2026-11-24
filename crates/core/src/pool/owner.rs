@@ -669,7 +669,8 @@ impl Launch {
     }
 
     /// Polls the management API until the core answers, then runs the ready hook; both retry
-    /// until the deadline.
+    /// until the deadline. Each poll first checks that only the core listens on `port`, so
+    /// neither sends a key to another local user's listener.
     async fn readiness(
         &self,
         port: u16,
@@ -683,15 +684,28 @@ impl Launch {
             if now >= deadline {
                 return Err(Unready::Late(last));
             }
-            let answer = management(
-                self.context.backend.as_ref(),
-                port,
-                &keys.management,
-                &Method::GET,
-                "/config",
-                None,
-                deadline - now,
-            );
+            let owned = handle.listens(port);
+            let answer = async {
+                let owned = owned.await.map_err(|error| {
+                    AppError::new(format!("Could not check the proxy's port: {error}."), 503)
+                })?;
+                if !owned {
+                    return Err(AppError::new(
+                        format!("The proxy is not yet the only listener on port {port}."),
+                        503,
+                    ));
+                }
+                management(
+                    self.context.backend.as_ref(),
+                    port,
+                    &keys.management,
+                    &Method::GET,
+                    "/config",
+                    None,
+                    deadline - now,
+                )
+                .await
+            };
             let failure = match race(handle, &self.context, answer).await? {
                 Ok(_) => {
                     // An answering core has finished its exec: record it if the first read

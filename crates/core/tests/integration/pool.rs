@@ -123,6 +123,35 @@ async fn a_core_that_never_becomes_ready_and_ignores_sigterm_is_killed_before_st
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_start_sends_no_key_to_a_listener_on_its_port_that_is_not_its_core() {
+    let world = World::with_ready(Duration::from_secs(1)).await;
+    let profile = world.profile("Squatted", false, true, false).await;
+    world.fake.script(
+        &profile,
+        [Script {
+            squatted: true,
+            ..Script::default()
+        }],
+    );
+    let began = Instant::now();
+    let started = world.run(world.pool().start(&profile, false)).await;
+    assert_eq!(
+        world.fake.squatted(),
+        0,
+        "calls carrying a key reached the squatter"
+    );
+    let error = started.unwrap_err();
+    assert_eq!(error.status, 503);
+    assert!(
+        error.message.starts_with("Proxy did not become ready. "),
+        "{error:?}"
+    );
+    assert!(began.elapsed() >= Duration::from_secs(1));
+    assert!(!world.fake.latest(&profile).unwrap().alive());
+    assert_eq!(world.pool().state().runtime(&profile).0, Runtime::Error);
+}
+
+#[tokio::test(start_paused = true)]
 async fn shutdown_completes_after_the_core_could_not_spawn() {
     let world = World::new().await;
     let profile = world.profile("Unlaunchable", false, true, false).await;
