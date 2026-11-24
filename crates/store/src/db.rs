@@ -199,8 +199,11 @@ impl Db {
             auth,
             auth_stale: true,
             facts,
-            facts_stale: true,
+            facts_stale: false,
         };
+        // The scheduler restores profiles from the first facts: facts it cannot read must not
+        // pass for no profiles.
+        db.publish_facts(db.read_facts()?);
         db.publish_if_stale();
         Ok((
             db,
@@ -224,18 +227,20 @@ impl Db {
         if self.facts_stale {
             self.facts_stale = false;
             match self.read_facts() {
-                Ok(facts) => {
-                    self.facts.send_if_modified(|current| {
-                        let changed = **current != *facts;
-                        if changed {
-                            *current = facts;
-                        }
-                        changed
-                    });
-                }
+                Ok(facts) => self.publish_facts(facts),
                 Err(error) => tracing::error!(%error, "the profile facts could not be read"),
             }
         }
+    }
+
+    fn publish_facts(&self, facts: ProfileFacts) {
+        self.facts.send_if_modified(|current| {
+            let changed = **current != *facts;
+            if changed {
+                *current = facts;
+            }
+            changed
+        });
     }
 
     fn read_facts(&self) -> Result<ProfileFacts, StoreError> {

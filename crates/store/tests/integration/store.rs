@@ -747,6 +747,27 @@ async fn the_auth_snapshot_is_current_when_a_write_returns_and_fails_closed() {
 }
 
 #[tokio::test]
+async fn a_store_that_cannot_read_its_profile_facts_does_not_open_as_if_it_had_none() {
+    let temp = TempDir::new("facts-unreadable");
+    let store = open(temp.path()).await;
+    let profile = store
+        .call(|db| db.create_profile("Fixture"))
+        .await
+        .unwrap()
+        .id;
+    store.close().await;
+    raw(temp.path())
+        .execute(
+            "INSERT INTO settings VALUES (?, 'not an account list')",
+            [format!("accounts:{profile}")],
+        )
+        .unwrap();
+    let data = DataDir::new(temp.path());
+    let opened = Store::open(&data, Vault::open(&data).unwrap()).await;
+    assert!(matches!(opened, Err(StoreError::Sqlite(_))));
+}
+
+#[tokio::test]
 async fn closed_stores_refuse_calls() {
     let temp = TempDir::new("closed");
     let store = open(temp.path()).await;
