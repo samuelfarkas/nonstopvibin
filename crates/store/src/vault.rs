@@ -58,7 +58,8 @@ impl Vault {
     /// Opens `vault.key` in `directory`. A missing key is created (0600, never replacing a file)
     /// only while no database exists: a new key cannot decrypt an existing database. The key
     /// must be a regular file owned by this user, never followed through a symbolic link; its
-    /// mode is set to 0600 on every open. Blocks on the file system.
+    /// mode is set to 0600 on every open, and first of all when its owner cannot read it, as
+    /// main's chmod did. Blocks on the file system.
     ///
     /// # Errors
     /// [`VaultError::MissingKey`] for a database without its key, [`VaultError::UnsafeKey`] for
@@ -83,6 +84,12 @@ impl Vault {
             // A symbolic link fails with ELOOP under O_NOFOLLOW.
             Err(error) if error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
                 return Err(VaultError::UnsafeKey);
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                if !make_readable(&path)? {
+                    return Err(VaultError::UnsafeKey);
+                }
+                open_key(&path)?
             }
             opened => opened?,
         };
@@ -136,6 +143,38 @@ impl Vault {
             .map_err(|_| VaultError::Undecryptable)?;
         String::from_utf8(body.to_vec()).map_err(|_| VaultError::Undecryptable)
     }
+}
+
+/// Sets 0600 on the key when it is this user's own ordinary file, without following a link;
+/// `false` when it is not. An `O_PATH` descriptor needs no permission on the file; `fchmod`
+/// refuses one, so the mode is set through its `/proc/self/fd` entry, which reaches that file
+/// alone.
+#[cfg(target_os = "linux")]
+fn make_readable(path: &Path) -> io::Result<bool> {
+    use std::os::fd::AsRawFd;
+
+    let flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let key = File::from(rustix::fs::open(path, flags, Mode::empty())?);
+    if !own_entry(&key.metadata()?, EntryKind::File, 0) {
+        return Ok(false);
+    }
+    let owner_only = Mode::RUSR | Mode::WUSR;
+    rustix::fs::chmod(format!("/proc/self/fd/{}", key.as_raw_fd()), owner_only)?;
+    Ok(true)
+}
+
+/// Sets 0600 on the key when it is this user's own ordinary file, without following a link:
+/// one put there since the check gets the mode itself; `false` when it is not.
+#[cfg(target_os = "macos")]
+fn make_readable(path: &Path) -> io::Result<bool> {
+    use rustix::fs::{AtFlags, CWD};
+
+    if !own_entry(&std::fs::symlink_metadata(path)?, EntryKind::File, 0) {
+        return Ok(false);
+    }
+    let owner_only = Mode::RUSR | Mode::WUSR;
+    rustix::fs::chmodat(CWD, path, owner_only, AtFlags::SYMLINK_NOFOLLOW)?;
+    Ok(true)
 }
 
 /// Opens the key without following a symbolic link or blocking on a FIFO.

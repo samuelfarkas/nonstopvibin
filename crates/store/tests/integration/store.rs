@@ -160,6 +160,33 @@ async fn vault_keys_are_refused_through_links_fifos_or_at_the_wrong_length() {
 }
 
 #[tokio::test]
+async fn an_owners_vault_key_it_cannot_read_is_made_owner_only_again() {
+    let temp = TempDir::new("vault-key-unreadable");
+    let directory = temp.path();
+    Vault::open(&DataDir::new(directory)).unwrap();
+    let path = directory.join("vault.key");
+    for unreadable in [0o200, 0o000] {
+        set_mode(&path, unreadable);
+        Vault::open(&DataDir::new(directory)).unwrap();
+        assert_eq!(mode(&path), 0o600, "{unreadable:o}");
+    }
+
+    // Only an ordinary file is repaired.
+    fs::remove_file(&path).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    set_mode(&path, 0o000);
+    assert!(matches!(
+        Vault::open(&DataDir::new(directory)).unwrap_err(),
+        VaultError::UnsafeKey
+    ));
+    assert_eq!(mode(&path), 0o000);
+}
+
+#[tokio::test]
 async fn a_linked_database_is_refused() {
     let temp = TempDir::new("linked-database");
     let directory = temp.path();
