@@ -152,6 +152,43 @@ async fn a_start_sends_no_key_to_a_listener_on_its_port_that_is_not_its_core() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn management_calls_reach_a_core_only_once_it_answered() {
+    let world = World::with_ready(Duration::from_secs(1)).await;
+    let profile = world.profile("Squatted", false, true, false).await;
+    world.fake.script(
+        &profile,
+        [Script {
+            squatted: true,
+            ..Script::default()
+        }],
+    );
+    let starting = tokio::spawn({
+        let (pool, profile) = (world.pool().clone(), profile.clone());
+        async move { pool.start(&profile, false).await }
+    });
+    let mut state = world.pool().subscribe();
+    world
+        .run(state.wait_for(|state| state.alive(&profile)))
+        .await
+        .unwrap();
+    let management = || {
+        world
+            .pool()
+            .management(&profile, &Method::GET, "/config", None)
+    };
+    let launched = world.run(management()).await;
+    assert!(launched.is_err(), "{launched:?}");
+    world.run(starting).await.unwrap().unwrap_err();
+    let exited = world.run(management()).await;
+    assert!(exited.is_err(), "{exited:?}");
+    assert_eq!(
+        world.fake.squatted(),
+        0,
+        "calls carrying a key reached the squatter"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn shutdown_completes_after_the_core_could_not_spawn() {
     let world = World::new().await;
     let profile = world.profile("Unlaunchable", false, true, false).await;

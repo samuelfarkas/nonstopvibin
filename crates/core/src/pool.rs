@@ -471,11 +471,12 @@ impl Pool {
             .map_err(AppError::from)
     }
 
-    /// A management request to the profile's latest core, which may have exited.
+    /// A management request to the profile's latest core, once it answered and while it has
+    /// not exited: before, its port may be another user's listener, and after, anyone's.
     ///
     /// # Errors
-    /// 409 when the profile has had no core, 502 for an answer other than 2xx or one that is
-    /// not JSON, or the connection's failure.
+    /// 409 when the profile has no core that answered and runs, 502 for an answer other than
+    /// 2xx or one that is not JSON, or the connection's failure.
     pub async fn management(
         &self,
         profile: &ProfileId,
@@ -488,6 +489,7 @@ impl Pool {
             .state
             .borrow()
             .core(profile)
+            .filter(|core| core.phase.answered())
             .cloned()
             .ok_or_else(AppError::not_started)?;
         self.call(&core, method, path, body).await
