@@ -25,6 +25,8 @@ test("an elapsed reset asks for a fresh observation", () => {
 test("CSV cells neutralize whitespace-prefixed formulas and escape quotes", () => {
   assert.equal(csvCell(" =SUM(A1)"), `" '=SUM(A1)"`);
   assert.equal(csvCell("\t=cmd"), `"\t'=cmd"`);
+  for (const formula of ["+1", "-1", "@SUM(A1)"])
+    assert.equal(csvCell(formula), `"'${formula}"`);
   assert.equal(csvCell("plain text"), `"plain text"`);
   assert.equal(csvCell(`say "hello"`), `"say ""hello"""`);
 });
