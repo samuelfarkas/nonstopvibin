@@ -1,10 +1,11 @@
 //! The desktop app's part of the daemon: the tray's status and the events for its shell. A
 //! headless daemon has none.
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use nsv_accounts::cores::Cores;
 use nsv_desktop::{HostEvent, TrayStatus};
+use nsv_domain::sync::locked;
 use nsv_store::ProfileFacts;
 use tokio::sync::{broadcast, watch};
 
@@ -13,13 +14,18 @@ use tokio::sync::{broadcast, watch};
 pub struct Desktop {
     status: watch::Sender<TrayStatus>,
     events: broadcast::Sender<HostEvent>,
+    /// Subscribed at creation for the shell, which starts once the daemon restored: it still
+    /// hears a second launch from meanwhile.
+    first: Arc<Mutex<Option<broadcast::Receiver<HostEvent>>>>,
 }
 
 impl Default for Desktop {
     fn default() -> Self {
+        let (events, first) = broadcast::channel(8);
         Self {
             status: watch::Sender::new(TrayStatus::default()),
-            events: broadcast::Sender::new(8),
+            events,
+            first: Arc::new(Mutex::new(Some(first))),
         }
     }
 }
@@ -31,10 +37,13 @@ impl Desktop {
         self.status.subscribe()
     }
 
-    /// Sign-ins and second launches.
+    /// Sign-ins and second launches: the first receiver from this desktop's creation on, later
+    /// ones from their call on.
     #[must_use]
     pub fn events(&self) -> broadcast::Receiver<HostEvent> {
-        self.events.subscribe()
+        locked(&self.first)
+            .take()
+            .unwrap_or_else(|| self.events.subscribe())
     }
 
     pub(crate) fn sign_in_accepted(&self) {

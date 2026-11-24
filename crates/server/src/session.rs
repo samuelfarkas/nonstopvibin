@@ -47,8 +47,8 @@ pub enum ShowError {
     NoAnswer(String),
 }
 
-/// How long a second launch waits for a daemon that holds the lock but is still starting: its
-/// restore starts each kept-running profile's core, which may take up to 15 s to answer.
+/// How long a second launch waits for a daemon that holds the lock but is still starting. A
+/// desktop daemon writes `server.json` before its restore starts any core.
 const STARTING: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(100);
 

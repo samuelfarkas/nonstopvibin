@@ -340,7 +340,8 @@ impl Daemon {
     /// Selects and checks the core, reaps cores and pending sign-ins an earlier run left,
     /// starts the profiles that are kept running (the others start on their first request),
     /// checks for a core update in the background, restores agent connections, and writes
-    /// `server.json`. Dropping it part-way is safe: [`Daemon::close`] stops whatever
+    /// `server.json`: a desktop daemon first, since a second launch finds it there and the
+    /// cores may take a while. Dropping it part-way is safe: [`Daemon::close`] stops whatever
     /// it started.
     ///
     /// # Errors
@@ -348,6 +349,10 @@ impl Daemon {
     /// read, or shutdown beginning meanwhile.
     pub async fn restore(&self) -> Result<(), StartError> {
         let app = &self.0;
+        let desktop = app.shared.desktop.is_some();
+        if desktop {
+            self.publish()?;
+        }
         app.cores.launch().await.map_err(StartError::Cores)?;
         let profiles = app.store.call(|db| db.profiles()).await?;
         match app.agents.restore(&profiles, app.shared.port).await {
@@ -364,6 +369,15 @@ impl Daemon {
                 );
             }
         }
+        if !desktop {
+            self.publish()?;
+        }
+        Ok(())
+    }
+
+    /// Writes `server.json`, where `url`, `status` and a second desktop launch find the daemon.
+    fn publish(&self) -> Result<(), StartError> {
+        let app = &self.0;
         let session = Session {
             pid: std::process::id(),
             port: app.shared.port,

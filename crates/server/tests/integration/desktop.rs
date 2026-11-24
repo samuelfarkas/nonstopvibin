@@ -3,16 +3,21 @@
 //! running because its core starts on the next request.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use nsv_accounts::Backends;
 use nsv_agents::AgentDirectories;
 use nsv_core::install::CoreSource;
+use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
 use nsv_domain::secret::{ApiKey, SessionToken};
-use nsv_domain::wire::ApiAccount;
+use nsv_domain::wire::{Account, ApiAccount};
 use nsv_files::DataDir;
 use nsv_server::{Boundaries, CoreOptions, Daemon, Desktop, Options, Session};
 use nsv_store::{Store, Vault};
+use nsv_testkit::fake::{Directory, FakeCores};
+use nsv_testkit::world::bundled_core;
 use nsv_testkit::{TempDir, set_mode};
 use serde_json::json;
 
@@ -45,13 +50,29 @@ async fn seeded(root: &TempDir) -> PathBuf {
 }
 
 async fn daemon(root: &TempDir, desktop: Option<Desktop>) -> Daemon {
-    let daemon = start(root, &seeded(root).await, desktop).await;
+    let daemon = start(root, &seeded(root).await, desktop, None).await;
     daemon.restore().await.unwrap();
     daemon
 }
 
-/// The daemon of `data`, accepting but not yet restored.
-async fn start(root: &TempDir, data: &Path, desktop: Option<Desktop>) -> Daemon {
+/// The daemon of `data`, accepting but not yet restored. Without `fake` cores it has no core.
+async fn start(
+    root: &TempDir,
+    data: &Path,
+    desktop: Option<Desktop>,
+    fake: Option<&FakeCores>,
+) -> Daemon {
+    let production = Boundaries::production().unwrap();
+    let (binary, backends) = match fake {
+        None => (root.path().join("no-core"), production.backends),
+        Some(fake) => {
+            let fake = fake.clone();
+            let backends: Backends = Arc::new(move |data: &DataDir| -> Arc<dyn Backend> {
+                Arc::new(Directory(fake.clone(), data.to_owned()))
+            });
+            (bundled_core(root.path()), backends)
+        }
+    };
     let options = Options {
         port: 0,
         allow_hosts: Vec::new(),
@@ -59,15 +80,16 @@ async fn start(root: &TempDir, data: &Path, desktop: Option<Desktop>) -> Daemon 
         desktop,
         client: root.path().join("client"),
         core: CoreOptions {
-            binary: root.path().join("no-core"),
+            binary,
             source: CoreSource::Development,
         },
         agents: AgentDirectories::new(root.path().join("home")),
     };
     let boundaries = Boundaries {
-        outside: std::sync::Arc::new(ModelsDev::new()),
+        backends,
+        outside: Arc::new(ModelsDev::new()),
         clock: now,
-        ..Boundaries::production().unwrap()
+        ..production
     };
     let lock = DataDir::new(data).lock().unwrap();
     Daemon::start(options, boundaries, lock).await.unwrap()
@@ -179,8 +201,46 @@ async fn a_start_removes_the_server_json_an_unclean_exit_left() {
         started_at: now(),
     };
     stale.write(&directory).unwrap();
-    let daemon = start(&root, &data, Some(Desktop::default())).await;
+    let daemon = start(&root, &data, Some(Desktop::default()), None).await;
     assert!(!directory.session().exists());
+    daemon.close().await.unwrap();
+}
+
+/// A second launch while the first still starts the cores it keeps running, up to 15 s each:
+/// server.json is there once restore begins, and the shell, which starts after restore, still
+/// hears the request.
+#[tokio::test]
+async fn a_second_launch_during_restore_shows_the_window_once_the_shell_listens() {
+    let root = TempDir::new("desktop-restoring");
+    let data = seeded(&root).await;
+    let directory = DataDir::new(&data);
+    let store = Store::open(&directory, Vault::open(&directory).unwrap())
+        .await
+        .unwrap();
+    // A subscription keeps its profile running, so restore starts that core.
+    store
+        .call(|db| {
+            let mut profile = db.create_profile("Kept")?;
+            profile.enabled = true;
+            db.save_profile(&profile)?;
+            let account: Account = serde_json::from_value(json!({
+                "id": "claude.json", "name": "Claude", "provider": "claude", "kind": "oauth",
+                "disabled": false, "status": "Ready", "priority": 0, "authIndex": "1",
+            }))?;
+            db.save_account_metadata(&profile.id, &[account])
+        })
+        .await
+        .unwrap();
+    store.close().await;
+    let fake = FakeCores::default();
+    fake.knobs(|knobs| knobs.silent = true);
+    let desktop = Desktop::default();
+    let daemon = start(&root, &data, Some(desktop.clone()), Some(&fake)).await;
+    tokio::select! {
+        restored = daemon.restore() => panic!("restore ended first: {restored:?}"),
+        shown = Session::show_main(&directory) => shown.unwrap(),
+    }
+    assert_eq!(desktop.events().try_recv().unwrap(), HostEvent::ShowMain);
     daemon.close().await.unwrap();
 }
 
