@@ -3,17 +3,23 @@
 //! matches its manifest, and is then swapped in at the bundle's path.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use nsv_core::binary::{BINARY, PACKAGED_DIRECTORY, verify_core};
 use rustix::fs::Access;
 use rustix::io::Errno;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 use super::Detected;
 use crate::install::{BUNDLE_RESOURCES, Install};
 use crate::platform::UpdateTarget;
 /// The bundle the release zip holds at its root.
 const BUNDLE: &str = "NonstopVibin.app";
+/// How long `ditto` and `codesign` may run. Unpacking or hashing the 100 MB bundle takes
+/// seconds; one that hangs is killed instead of holding the update forever.
+const TOOL_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Clone)]
 pub(super) struct Target {
@@ -98,12 +104,17 @@ impl UpdateTarget for Target {
 /// which scripts/package-mac.ts sets to `identifier "app.nonstopvibin.desktop"` for ad-hoc
 /// builds and codesign derives from the certificate for a Developer ID.
 async fn designated(bundle: &Path) -> Result<String, String> {
-    let output = Command::new("/usr/bin/codesign")
-        .args(["--display", "-r-"])
-        .arg(bundle)
-        .output()
-        .await
-        .map_err(|error| format!("could not run codesign: {error}"))?;
+    let output = timeout(
+        TOOL_TIMEOUT,
+        Command::new("/usr/bin/codesign")
+            .args(["--display", "-r-"])
+            .arg(bundle)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .unwrap_or_else(|elapsed| Err(elapsed.into()))
+    .map_err(|error| format!("could not run codesign: {error}"))?;
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .find_map(|line| line.strip_prefix("designated => "))
@@ -113,13 +124,18 @@ async fn designated(bundle: &Path) -> Result<String, String> {
 }
 
 async fn run(command: &mut Command, what: &str) -> Result<(), String> {
-    let status = command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map_err(|error| format!("could not {what} the update: {error}"))?;
+    let status = timeout(
+        TOOL_TIMEOUT,
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .unwrap_or_else(|elapsed| Err(elapsed.into()))
+    .map_err(|error| format!("could not {what} the update: {error}"))?;
     if status.success() {
         Ok(())
     } else {
