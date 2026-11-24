@@ -14,7 +14,7 @@ use nsv_domain::registry::Agent;
 use nsv_domain::secret::KeyDigest;
 use nsv_domain::sync::locked;
 use nsv_gateway::{Activity, Catalog, Host, ProfileAuth, Refusal};
-use nsv_store::{AuthSnapshot, ProfileFacts, Store};
+use nsv_store::{AuthSnapshot, Store};
 use tokio::sync::watch;
 
 use crate::failure;
@@ -52,8 +52,6 @@ pub(crate) struct GatewayHost {
     auth: watch::Receiver<Arc<AuthSnapshot>>,
     /// The gateway's entries for the store's latest snapshot, built when it changes.
     profiles: Mutex<Option<GatewayProfiles>>,
-    /// The profiles the desktop's tray names.
-    facts: watch::Receiver<ProfileFacts>,
     cores: Arc<Cores>,
     catalog: Arc<ModelCatalog>,
     store: Store,
@@ -70,7 +68,6 @@ impl GatewayHost {
             shared,
             auth: store.auth(),
             profiles: Mutex::default(),
-            facts: store.facts(),
             cores,
             catalog,
             store,
@@ -128,12 +125,5 @@ impl Host for GatewayHost {
             Activity::Closed { last } => !last,
         };
         self.cores.activity(profile, open);
-        let edge = matches!(
-            activity,
-            Activity::Opened { first: true } | Activity::Closed { last: true }
-        );
-        if edge && let Some(desktop) = &self.shared.desktop {
-            desktop.update(&self.cores, &self.facts);
-        }
     }
 }

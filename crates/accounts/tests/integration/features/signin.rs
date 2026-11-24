@@ -584,7 +584,8 @@ async fn shutdown_lets_a_queued_credential_change_finish_before_it_stops_the_cor
     });
     world
         .cores
-        .changes()
+        .pool()
+        .subscribe()
         .wait_for(|state| state.closing)
         .await
         .unwrap();

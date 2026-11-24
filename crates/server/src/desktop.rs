@@ -48,7 +48,7 @@ impl Desktop {
 
     /// `Application.status()`: a dormant profile still serves, since its core starts on the next
     /// request. Tells the tray only when something it shows changed.
-    pub(crate) fn update(&self, cores: &Cores, facts: &watch::Receiver<ProfileFacts>) {
+    fn update(&self, cores: &Cores, facts: &watch::Receiver<ProfileFacts>) {
         let facts = Arc::clone(&facts.borrow());
         let status = cores.statuses(|status| {
             let mut tray = TrayStatus::default();
@@ -68,15 +68,17 @@ impl Desktop {
         });
     }
 
-    /// Follows each change the pool or the store's profile facts publish, while `cores` lives.
+    /// Follows each change the pool, the scheduler or the store's profile facts publish, while
+    /// `cores` lives.
     pub(crate) fn follow(&self, cores: &Arc<Cores>, mut facts: watch::Receiver<ProfileFacts>) {
         let desktop = self.clone();
         let weak: Weak<Cores> = Arc::downgrade(cores);
-        let mut pool = cores.changes();
+        let (mut pool, mut scheduler) = cores.changes();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     published = pool.changed() => if published.is_err() { return },
+                    Ok(()) = scheduler.changed() => {}
                     // A closed store publishes nothing more: its branch is skipped.
                     Ok(()) = facts.changed() => {}
                 }

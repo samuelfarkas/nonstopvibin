@@ -34,6 +34,27 @@ async fn an_idle_daemons_only_pending_deadline_is_the_daily_history_cleanup() {
     assert!(world.reports().is_empty(), "{:?}", world.reports());
 }
 
+/// The tray shows a dormant profile as serving and an open request as streaming, which the
+/// pool does not publish: the scheduler tells of each change, and of nothing else.
+#[tokio::test(start_paused = true)]
+async fn dormancy_and_open_requests_are_told_when_they_change() {
+    let (world, profile) = lazy_world(false).await;
+    let mut changes = world.scheduler.changes();
+    world.scheduler.launch().await.unwrap();
+    assert!(changes.has_changed().unwrap(), "the launch left it dormant");
+    changes.mark_unchanged();
+    world.scheduler.activity(&profile, true);
+    assert!(changes.has_changed().unwrap(), "a request opened");
+    changes.mark_unchanged();
+    world.scheduler.activity(&profile, true);
+    assert!(!changes.has_changed().unwrap(), "another one: still open");
+    world.scheduler.activity(&profile, false);
+    assert!(changes.has_changed().unwrap(), "the last one closed");
+    changes.mark_unchanged();
+    world.run(world.scheduler.wake(&profile)).await.unwrap();
+    assert!(changes.has_changed().unwrap(), "its core started");
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_profile_without_an_oauth_account_starts_its_core_on_its_first_request() {
     let (world, profile) = lazy_world(false).await;

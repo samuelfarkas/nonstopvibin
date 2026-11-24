@@ -177,12 +177,6 @@ impl App {
             .unwrap_or_else(|error| failure::refusal(error, &self.shared.errors).into_response())
     }
 
-    fn update_tray(&self) {
-        if let Some(desktop) = &self.shared.desktop {
-            desktop.update(&self.cores, &self.store.facts());
-        }
-    }
-
     async fn close_resources(&self) -> Result<(), CloseError> {
         let mut failures = Vec::new();
         advance(&self.phase, Phase::Draining);
@@ -366,7 +360,6 @@ impl Daemon {
                 );
             }
         }
-        app.update_tray();
         let session = Session {
             pid: std::process::id(),
             port: app.shared.port,

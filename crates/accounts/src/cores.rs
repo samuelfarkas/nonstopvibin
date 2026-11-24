@@ -264,10 +264,11 @@ impl Cores {
             .tracked(|tracked| read(&|profile| ProfileStatus::of(&pool, tracked(profile), profile)))
     }
 
-    /// Changes the pool publishes; the tray follows them.
+    /// Changes the pool publishes, and the scheduler's to whether a profile is dormant or has
+    /// requests open: the tray follows both.
     #[must_use]
-    pub fn changes(&self) -> watch::Receiver<Arc<PoolState>> {
-        self.pool.subscribe()
+    pub fn changes(&self) -> (watch::Receiver<Arc<PoolState>>, watch::Receiver<()>) {
+        (self.pool.subscribe(), self.scheduler.changes())
     }
 
     /// Gateway activity on the profile: a request opened or closed, and whether any is still

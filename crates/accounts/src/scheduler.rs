@@ -248,6 +248,8 @@ struct Shared {
     host: Arc<dyn Host>,
     /// Drain passes, maintenance, automatic starts and idle stops in flight.
     work: watch::Sender<usize>,
+    /// Sent when a profile's `dormant` or `open` changes, which the pool does not publish.
+    changes: watch::Sender<()>,
 }
 
 /// A handle to the scheduler and the pool it drives.
@@ -284,6 +286,7 @@ impl Scheduler {
                 accounts,
                 host,
                 work: watch::Sender::new(0),
+                changes: watch::Sender::new(()),
             }
         });
         #[expect(
@@ -315,7 +318,7 @@ impl Scheduler {
                 .filter(|fact| {
                     // A core already running (started before launch) is no longer dormant.
                     let dormant = state.lazy(&fact.id) && !self.0.pool.state().alive(&fact.id);
-                    state.track(&fact.id).dormant = dormant;
+                    self.0.set(&mut state.track(&fact.id).dormant, dormant);
                     !dormant
                 })
                 .map(|fact| (fact.id.clone(), fact.name.clone()))
@@ -353,7 +356,7 @@ impl Scheduler {
         let now = Instant::now();
         let activity = self.0.timing.activity;
         let track = state.track(profile);
-        track.open = open;
+        self.0.set(&mut track.open, open);
         track.last_used = Some(now);
         if let Some(cadence) = &mut track.cadence {
             cadence.active_until = Some(now + activity);
@@ -382,7 +385,7 @@ impl Scheduler {
             let mut state = shared.lock();
             let track = state.track(&profile);
             if track.dormant {
-                track.dormant = false;
+                shared.set(&mut track.dormant, false);
                 let pool = shared.pool.state();
                 let now = Instant::now();
                 shared.hear(&mut state, &pool, &profile, None, false, now);
@@ -472,6 +475,13 @@ impl Scheduler {
             .is_some_and(|track| track.dormant)
     }
 
+    /// Tells of each change to whether a profile is dormant or has requests open, which the
+    /// pool does not publish.
+    #[must_use]
+    pub fn changes(&self) -> watch::Receiver<()> {
+        self.0.changes.subscribe()
+    }
+
     /// What a profile shows once the scheduler stopped starting it.
     #[must_use]
     pub fn gave_up(&self, profile: &ProfileId) -> Option<Arc<str>> {
@@ -545,6 +555,15 @@ impl Drop for Working {
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
         locked(&self.state)
+    }
+
+    /// Sets a track's `dormant` or `open`, telling [`Scheduler::changes`] when it changed.
+    fn set(&self, fact: &mut bool, value: bool) {
+        if *fact != value {
+            *fact = value;
+            // No receiver means no desktop: nothing follows the change.
+            let _ = self.changes.send(());
+        }
     }
 
     /// Milliseconds since the scheduler began, the restart policy's clock.
@@ -1066,7 +1085,7 @@ impl Shared {
             {
                 return Ok(());
             }
-            state.track(profile).dormant = true;
+            self.set(&mut state.track(profile).dormant, true);
             self.hear(&mut state, &pool, profile, None, false, now);
             permit.stop(profile)
         };
@@ -1164,7 +1183,7 @@ impl Hooks for PoolHooks {
         // and it holds no cooldowns.
         if let CoreEvent::Started { running: true, .. } = event {
             let track = state.track(profile);
-            track.dormant = false;
+            shared.set(&mut track.dormant, false);
             track.last_used = Some(now);
             track.outcomes.clear();
         }
