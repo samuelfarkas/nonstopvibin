@@ -78,21 +78,33 @@ const plistVersion = (app) =>
     { encoding: "utf8" },
   ).stdout.trim();
 
-/** What Squirrel.Mac relies on: a valid deep signature whose requirement is the identifier. */
-function checkSignature(app) {
+/** A valid deep signature that meets `test`, a requirement, when given. */
+function verify(app, test) {
   command("codesign", [
     "--verify",
     "--deep",
     "--strict",
     "--all-architectures",
+    ...(test ? [`-R=${test}`] : []),
     app,
   ]);
+}
+
+/** The Electron build: ad-hoc signed, with the identifier as its designated requirement. */
+function checkElectronSignature(app) {
+  verify(app);
   assert.equal(
     command("codesign", ["-d", "-r-", app]).stdout.trim(),
     `designated => ${requirement}`,
   );
   assert.match(command("codesign", ["-dv", app]).stderr, /^Signature=adhoc$/m);
 }
+
+/**
+ * What Squirrel.Mac requires of the update: it meets the Electron build's requirement, whether
+ * it is ad-hoc signed or a release signed with the Developer ID.
+ */
+const checkUpdateSignature = (app) => verify(app, requirement);
 
 async function runningPid(app) {
   const executable = join(app, "Contents/MacOS", identity.name);
@@ -158,10 +170,8 @@ try {
   const zip = update.files.find((file) => file.url.endsWith(".zip")).url;
   const shipped = join(work, "shipped");
   command("ditto", ["-x", "-k", join(release, zip), shipped]);
-  checkSignature(join(shipped, product));
-  console.log(
-    `The packaged ${zip} is ad-hoc signed and requires ${requirement}.`,
-  );
+  checkUpdateSignature(join(shipped, product));
+  console.log(`The packaged ${zip} meets ${requirement}.`);
 
   const config = join(work, "electron-builder.json");
   writeFileSync(
@@ -189,7 +199,7 @@ try {
   installed = join(folder, product);
   command("ditto", [oldApp, installed]);
   assert.equal(plistVersion(installed), oldVersion);
-  checkSignature(installed);
+  checkElectronSignature(installed);
 
   const log = openSync(appLog, "a");
   const app = spawn(
@@ -229,7 +239,7 @@ try {
   const relaunched = await waitFor("the updated app to start", 60_000, () =>
     runningPid(installed),
   );
-  checkSignature(installed);
+  checkUpdateSignature(installed);
   console.log(
     `Squirrel.Mac replaced ${oldVersion} with ${pkg.version} in place and started it.`,
   );
