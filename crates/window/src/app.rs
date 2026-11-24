@@ -6,6 +6,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use nsv_desktop::Command;
 use nsv_desktop::bridge::fits_external;
 use nsv_desktop::pipe::{
     self, Anchor, Choice, DialogKind, Failure, FromHelper, Outcome, Reason, Rect, ToHelper, View,
@@ -199,6 +200,8 @@ pub(crate) fn run(boot: Boot) -> ! {
         exit: None,
         native: <Os as Native>::State::default(),
     };
+    // The helper ends the loop itself; any other end is a quit from outside.
+    let mut exiting = false;
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
@@ -212,6 +215,17 @@ pub(crate) fn run(boot: Boot) -> ! {
             Event::WindowEvent {
                 window_id, event, ..
             } => app.window_event(window_id, &event),
+            // AppKit ends the loop for a quit from outside the helper (the Dock's Quit, the app
+            // switcher's, logout) and exits once this returns. The whole app quits, as
+            // Electron's did, rather than the daemon taking it for a closed window.
+            Event::LoopDestroyed => {
+                if !exiting {
+                    app.send(&FromHelper::Command {
+                        command: Command::Quit,
+                    });
+                }
+                return;
+            }
             _ => {}
         }
         Os::settle(&mut app.native, target, || {
@@ -220,6 +234,7 @@ pub(crate) fn run(boot: Boot) -> ! {
         // Before Init has opened the first view, an empty helper is starting, not done.
         let idle = first.is_none() && app.windowless();
         if let Some(code) = app.exit.or(idle.then_some(0)) {
+            exiting = true;
             *control_flow = ControlFlow::ExitWithCode(code);
         }
     })

@@ -4,11 +4,21 @@
 // Accessibility), and every result is read back from the system: the menu bar item and its
 // icon, the quota popup and how it closes, the tray menu, the main window coming to the front
 // with key focus (docs/decisions/rust-port.md: 20 of 20), the Dock icon, the application menu,
-// the login item, and quitting without leftovers. It uses the default data folder, as a second
-// launch must find the running app there. Screenshots and results.json go to
+// the login item, and quitting without leftovers: from the tray menu, by a quit Apple Event to
+// the daemon and from the Dock. It uses the default data folder, as a second launch must find
+// the running app there. Screenshots, the daemon's logs and results.json go to
 // test-results/mac-desktop.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -30,9 +40,13 @@ const app = join(apps, `${name}.app`);
 const macOS = join(app, "Contents/MacOS");
 const daemonPath = join(macOS, name);
 const helperPath = join(macOS, product.helper);
+const corePath = join(app, "Contents/Resources/core/cli-proxy-api");
+const data = join(homedir(), ".nonstopvibin");
 const MAIN = "NonstopVibin";
 const QUOTA = "NonstopVibin quotas";
 const TRIALS = 20;
+/** The daemon waits up to 30 s for its graceful close after a quit from outside the app. */
+const QUIT_WITHIN = 40_000;
 
 rmSync(results, { recursive: true, force: true });
 mkdirSync(results, { recursive: true });
@@ -278,6 +292,23 @@ const covering = (x, y) =>
     }).map((w) => [w.kCGWindowOwnerName, w.kCGWindowLayer]);`);
 const dockItems = () =>
   json(`${SE} return se.processes.byName('Dock').lists[0].uiElements.name();`);
+const dockTile = `${SE} const tile = se.processes.byName('Dock').lists[0].uiElements.byName(${JSON.stringify(name)});`;
+/** Opens the app's Dock menu, as a right click on its tile does, and chooses `title`. */
+async function fromDockMenu(title) {
+  jxa(`${dockTile} tile.actions.byName('AXShowMenu').perform();`);
+  await waitFor("the Dock menu", () => {
+    try {
+      return json(
+        `${dockTile} return tile.menus[0].menuItems.name();`,
+      ).includes(title);
+    } catch {
+      return false;
+    }
+  });
+  jxa(
+    `${dockTile} tile.menus[0].menuItems.byName(${JSON.stringify(title)}).click();`,
+  );
+}
 function finderInFront() {
   appleScript(`tell application "Finder"
     activate
@@ -351,6 +382,107 @@ async function api(method, path, body) {
     body: body && JSON.stringify(body),
   });
   return { status: response.status, body: await response.json() };
+}
+
+// --- Quits from outside the app --------------------------------------------------------------
+
+/** `server.json`, which names the daemon that serves; it is replaced whole, never in place. */
+const sessionFile = () => existsSync(join(data, "server.json"));
+const sessionPid = () =>
+  sessionFile()
+    ? JSON.parse(readFileSync(join(data, "server.json"), "utf8")).pid
+    : null;
+/** The core ledger: an entry per core the daemon started and has not stopped yet. */
+const ledger = () =>
+  existsSync(join(data, "core-processes"))
+    ? readdirSync(join(data, "core-processes"))
+    : [];
+
+/**
+ * Starts the daemon as this script's child, which learns its exit status, and starts the
+ * profile so that a core runs. The daemon's output goes to `label`.log.
+ */
+async function launchDaemon(args, label) {
+  const log = openSync(join(results, `${label}.log`), "w");
+  const child = spawn(daemonPath, args, { stdio: ["ignore", log, log] });
+  closeSync(log);
+  const exited = new Promise((done) =>
+    child.once("exit", (code, signal) =>
+      done({ code, signal, at: Date.now() }),
+    ),
+  );
+  try {
+    await waitFor(
+      "the daemon to serve",
+      () => sessionPid() === child.pid,
+      30_000,
+    );
+    const [profile] = (await api("GET", "/state")).body.profiles;
+    await api("POST", `/profiles/${profile.id}/start`);
+    await waitFor(
+      "the profile to run",
+      async () =>
+        (await api("GET", "/state")).body.profiles[0]?.runtime === "running",
+      60_000,
+    );
+    ok(pidOf(corePath), "a core runs", appProcesses());
+  } catch (error) {
+    stopDaemon(child);
+    throw error;
+  }
+  return { child, exited };
+}
+/** A leftover daemon must not reach the next check. */
+function stopDaemon(child) {
+  if (child.exitCode === null && child.signalCode === null)
+    child.kill("SIGKILL");
+}
+
+/** osascript on its own process, so this script sees the daemon exit meanwhile. */
+const appleScriptAsync = (script) =>
+  new Promise((done) =>
+    execFile("osascript", ["-e", script], (error, stdout, stderr) =>
+      done({
+        status: error ? error.code : 0,
+        output: `${stdout}${stderr}`.trim(),
+      }),
+    ),
+  );
+
+/**
+ * The daemon's exit after a quit that began at `started`, and what only its graceful close
+ * does: the exit status is the close's, `server.json` is removed and each core is stopped and
+ * forgotten. AppKit's own exit, which skips the close, exits 0 and leaves both files.
+ * `context` joins the outcome.
+ */
+async function quitGracefully(exited, started, context) {
+  const exit = await Promise.race([
+    exited,
+    delay(Math.max(0, started + QUIT_WITHIN - Date.now())).then(() => null),
+  ]);
+  ok(exit, `the daemon exits within ${QUIT_WITHIN / 1000} s`, {
+    ...context,
+    running: appProcesses(),
+  });
+  await poll(() => appProcesses().length === 0, 10_000);
+  const outcome = {
+    ...context,
+    code: exit.code,
+    signal: exit.signal,
+    ms: exit.at - started,
+    serverJson: sessionFile(),
+    ledger: ledger(),
+    left: appProcesses().map(({ command }) => command.slice(app.length)),
+  };
+  ok(outcome.code === 0, "the daemon exits with 0", outcome);
+  ok(!outcome.serverJson, "server.json is removed", outcome);
+  ok(
+    outcome.ledger.length === 0,
+    "the cores are stopped and forgotten",
+    outcome,
+  );
+  ok(outcome.left.length === 0, "no daemon, helper or core is left", outcome);
+  return outcome;
 }
 
 // --- Checks ----------------------------------------------------------------------------------
@@ -747,6 +879,42 @@ try {
         helpers,
         others: before.filter((p) => !owners.includes(p.responsible)),
       };
+    },
+  );
+
+  // Logout, restart, shutdown and Activity Monitor's Quit send the same quit Apple Event.
+  await check(
+    "a quit Apple Event to the daemon closes it as Quit does",
+    async () => {
+      const { child, exited } = await launchDaemon(
+        ["--background"],
+        "quit-apple-event",
+      );
+      try {
+        ok(!pidOf(helperPath), "only the daemon can take the event");
+        const started = Date.now();
+        const quit = await appleScriptAsync(`quit app "${name}"`);
+        return await quitGracefully(exited, started, { quit });
+      } finally {
+        stopDaemon(child);
+      }
+    },
+  );
+
+  await check(
+    "the Dock's Quit, which goes to the window helper, quits the whole app",
+    async () => {
+      const { child, exited } = await launchDaemon([], "quit-dock");
+      try {
+        await waitFor("the main window", () => windowNamed(MAIN), 30_000);
+        await waitFor("the Dock icon", () => dockItems().includes(name));
+        const helper = pidOf(helperPath);
+        const started = Date.now();
+        await fromDockMenu("Quit");
+        return await quitGracefully(exited, started, { helper });
+      } finally {
+        stopDaemon(child);
+      }
     },
   );
 
