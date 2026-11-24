@@ -709,7 +709,10 @@ pub(crate) fn decode_component(text: &str) -> Option<String> {
     let mut index = 0;
     while let Some(&byte) = bytes.get(index) {
         if byte == b'%' {
-            let hex = bytes.get(index + 1..index + 3)?;
+            // `from_str_radix` alone would accept a leading `+`.
+            let hex = bytes
+                .get(index + 1..index + 3)
+                .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))?;
             let hex = std::str::from_utf8(hex).ok()?;
             decoded.push(u8::from_str_radix(hex, 16).ok()?);
             index += 3;
@@ -849,6 +852,10 @@ mod tests {
         assert!(decode_component("%E0%A4%A").is_none());
         assert!(decode_component("%zz").is_none());
         assert!(decode_component("%C3").is_none());
+        // `decodeURIComponent` throws on a sign or a space where a hex digit belongs.
+        assert!(decode_component("%+f").is_none());
+        assert!(decode_component("%-1").is_none());
+        assert!(decode_component("% f").is_none());
     }
 
     #[test]
