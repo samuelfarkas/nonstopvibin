@@ -397,7 +397,6 @@ fn unsupported(error: &std::io::Error) -> bool {
     })
 }
 
-/// `<folder>/.<app name>.update`: beside the app, so the swap stays on one file system.
 /// Owner-only whatever the umask: the verified update waits here, beside the app where other
 /// users can often reach it, until the user restarts.
 async fn create_staging(staging: &Path) -> std::io::Result<()> {
@@ -407,6 +406,7 @@ async fn create_staging(staging: &Path) -> std::io::Result<()> {
         .await
 }
 
+/// `<folder>/.<app name>.update`: beside the app, so the swap stays on one file system.
 fn staging(target: &Target) -> PathBuf {
     let path = target.path();
     let name = path

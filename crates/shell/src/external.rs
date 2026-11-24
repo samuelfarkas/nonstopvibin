@@ -78,12 +78,9 @@ impl Opener for Os {
 }
 
 #[cfg(target_os = "linux")]
-const XDG_OPEN: &str = "xdg-open";
-
-#[cfg(target_os = "linux")]
 impl Opener for Os {
     fn open(target: &OsStr) -> Result<(), String> {
-        launch(Command::new(XDG_OPEN).arg(target))
+        launch(Command::new("xdg-open").arg(target))
     }
 
     /// The `FileManager1` D-Bus interface, else the folder in the default file manager.
@@ -95,8 +92,7 @@ impl Opener for Os {
             Ok(()) => Ok(()),
             Err(error) => {
                 tracing::warn!("no FileManager1 ({error}); opening the folder");
-                let folder = file.parent().unwrap_or(file);
-                launch(Command::new(XDG_OPEN).arg(folder))
+                Self::open(file.parent().unwrap_or(file).as_os_str())
             }
         }
     }
