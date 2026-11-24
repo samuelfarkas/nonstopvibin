@@ -21,10 +21,15 @@ use crate::{CliError, NOT_RUNNING, complain, say, url_text};
 
 /// Where the desktop app listens unless `NONSTOPVIBIN_PORT` says otherwise.
 const DESKTOP_PORT: u16 = 4318;
+/// A package's built interface, relative to its resources.
+const PACKAGED_CLIENT: &str = "client";
 
-/// Where this build is installed; a package keeps its core in its resources.
+/// Where this build is installed; a package keeps its interface and its core in its resources.
 pub(crate) fn install() -> Install {
-    Install::detect(&Path::new(PACKAGED_DIRECTORY).join(BINARY))
+    Install::detect(
+        Path::new(PACKAGED_CLIENT),
+        &Path::new(PACKAGED_DIRECTORY).join(BINARY),
+    )
 }
 
 /// The daemon's two lives.
@@ -66,7 +71,7 @@ fn options(mode: Mode, install: &Install) -> Result<Options, CliError> {
     let (core, client) = if install.packaged {
         (
             install.resources.join(PACKAGED_DIRECTORY),
-            install.resources.join("client"),
+            install.resources.join(PACKAGED_CLIENT),
         )
     } else {
         (

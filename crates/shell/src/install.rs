@@ -17,7 +17,7 @@ pub struct Install {
     pub executable: Option<PathBuf>,
     /// The package's files, or the source checkout this was built from.
     pub resources: PathBuf,
-    /// An installed build: `resources` holds the bundled core.
+    /// An installed build: `resources` holds the package's interface or its bundled core.
     pub packaged: bool,
     /// Linux's `$APPIMAGE`, the image file the `AppImage` runtime mounted this executable from;
     /// the mount moves with every launch.
@@ -27,9 +27,11 @@ pub struct Install {
 }
 
 impl Install {
-    /// `bundled_core` is where a package keeps its core, relative to its resources.
+    /// `interface` and `bundled_core` are where a package keeps its built interface and its
+    /// core, relative to its resources. Either marks a package, so one that lost its core still
+    /// reports that core missing rather than running as a source checkout.
     #[must_use]
-    pub fn detect(bundled_core: &Path) -> Self {
+    pub fn detect(interface: &Path, bundled_core: &Path) -> Self {
         let executable = std::env::current_exe().and_then(std::fs::canonicalize).ok();
         let directory = executable.as_deref().and_then(Path::parent);
         // macOS runs `<bundle>/Contents/MacOS/<executable>`, whatever the bundle is named.
@@ -52,7 +54,11 @@ impl Install {
             .map(PathBuf::from)
             .filter(|image| image.is_absolute());
         let (resources, packaged) = match package {
-            Some(resources) if resources.join(bundled_core).is_file() => (resources, true),
+            Some(resources)
+                if resources.join(interface).is_dir() || resources.join(bundled_core).is_file() =>
+            {
+                (resources, true)
+            }
             _ => {
                 let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
                 (std::fs::canonicalize(&checkout).unwrap_or(checkout), false)
