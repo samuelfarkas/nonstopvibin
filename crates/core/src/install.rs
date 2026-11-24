@@ -43,9 +43,9 @@ pub const CORE_FEED: &str = "https://raw.githubusercontent.com/samuelfarkas/nons
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreSource {
     /// A packaged build. Reviewed updates from `feed` ([`CORE_FEED`], or
-    /// `NONSTOPVIBIN_CORE_FEED`) run instead of the bundled core once installed. A headless
-    /// release's core must also match the pin compiled in; the desktop app's signing rewrites
-    /// its core and refreshes the manifest, so it is not `pinned`.
+    /// `NONSTOPVIBIN_CORE_FEED`) run instead of the bundled core once installed. Its core must
+    /// also match the pin compiled in, except in the macOS app, whose signing rewrites the core
+    /// and refreshes the manifest, so it is not `pinned` in either mode.
     Package { feed: String, pinned: bool },
     /// A checkout's `serve`, whose core `core:install` wrote from the pin compiled in and must
     /// still match it. A checkout shares the data folder, where an installed core would shadow

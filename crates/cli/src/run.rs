@@ -51,14 +51,11 @@ fn options(mode: Mode, install: &Install) -> Result<Options, CliError> {
         && !install.packaged
         && std::env::var_os("NONSTOPVIBIN_DEVELOPMENT").is_some_and(|value| value == "1");
     let source = match (&mode, install.packaged) {
-        (Mode::Serve { .. }, true) => CoreSource::Package {
+        // The installation decides, whichever life runs: macOS packaging signs the core, which
+        // rewrites it, and refreshes its manifest; other packages ship upstream's binary.
+        (_, true) => CoreSource::Package {
             feed: core_feed(),
-            pinned: true,
-        },
-        // Desktop signing rewrites the core and refreshes its manifest.
-        (Mode::Desktop(_), true) => CoreSource::Package {
-            feed: core_feed(),
-            pinned: false,
+            pinned: !cfg!(target_os = "macos"),
         },
         (Mode::Serve { .. }, false) if !development => CoreSource::Checkout,
         // A development run without its core still opens.

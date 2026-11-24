@@ -4,10 +4,11 @@
 // Accessibility), and every result is read back from the system: the menu bar item and its
 // icon, the quota popup and how it closes, the tray menu, the main window coming to the front
 // with key focus (docs/decisions/rust-port.md: 20 of 20), the Dock icon, the application menu,
-// the login item, and quitting without leftovers: from the tray menu, by a quit Apple Event to
-// the daemon and from the Dock. The app runs from a temporary Applications folder on a temporary
-// data folder, which `open --env` gives every launch, so a second launch finds the running app
-// there. Screenshots, the daemon's logs and results.json go to test-results/mac-desktop.
+// the login item, `serve` on the signed core, and quitting without leftovers: from the tray
+// menu, by a quit Apple Event to the daemon and from the Dock. The app runs from a temporary
+// Applications folder on a temporary data folder, which `open --env` gives every launch, so a
+// second launch finds the running app there. Screenshots, the daemon's logs and results.json go
+// to test-results/mac-desktop.
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -562,6 +563,43 @@ mkdirSync(apps);
 run("ditto", [packaged, app]);
 let exit = 1;
 try {
+  // Signing rewrote the bundled core; `serve` checks it as the desktop app does.
+  await check("serve starts on the packaged app's signed core", async () => {
+    const port = await new Promise((done) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port } = probe.address();
+        probe.close(() => done(port));
+      });
+    });
+    const env = { ...process.env, NONSTOPVIBIN_DATA_DIR: join(work, "serve") };
+    const logFile = join(results, "serve.log");
+    const log = openSync(logFile, "w");
+    const child = spawn(daemonPath, ["serve", "--port", String(port)], {
+      stdio: ["ignore", log, log],
+      env,
+    });
+    closeSync(log);
+    const exited = new Promise((done) =>
+      child.once("exit", (code, signal) => done({ code, signal })),
+    );
+    try {
+      // `url` answers once the daemon serves its authenticated API.
+      const state = await poll(
+        () =>
+          child.exitCode !== null
+            ? "exited"
+            : spawnSync(daemonPath, ["url", "--json"], { env }).status === 0 &&
+              "served",
+        30_000,
+      );
+      ok(state === "served", "serve answers", readFileSync(logFile, "utf8"));
+      child.kill("SIGTERM");
+      equal(await exited, { code: 0, signal: null }, "serve stops");
+    } finally {
+      stopDaemon(child);
+    }
+  });
+
   open();
 
   await check("the first launch shows the main window in front", async () => {

@@ -390,8 +390,8 @@ pub fn check_core_directory(
 }
 
 /// Checks the core binary against the `manifest.json` beside it and, with `pinned`, against
-/// the binary hash that pin names for this platform. Desktop signing changes the binary and
-/// refreshes its manifest, so only headless releases require the pin.
+/// the binary hash that pin names for this platform. macOS signing changes the binary and
+/// refreshes its manifest, so the macOS app does not require the pin.
 ///
 /// # Errors
 /// [`AppError`] 503 when the binary is missing or fails either check; a read or JSON error
