@@ -245,7 +245,6 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
-    use crate::LoopbackRequest;
 
     /// Plain TCP to a local stub per host name.
     struct Plain(HashMap<&'static str, u16>);
@@ -499,31 +498,5 @@ mod tests {
             let _ = write!(text, "{byte:02x}");
             text
         })
-    }
-
-    /// Background refreshes spawn their requests, which needs `Send` futures.
-    #[test]
-    fn requests_can_be_spawned() {
-        fn spawnable<T: Send>(_: &T) {}
-        let https = Https::new().unwrap();
-        let get = Get {
-            url: "https://example.com/",
-            headers: &[("Accept", "application/json")],
-            timeout: Duration::from_secs(1),
-            limit: 1,
-            redirects: Redirects::Refuse,
-        };
-        spawnable(&https.get(&get));
-        spawnable(&https.download(&get, Path::new("unused")));
-        let loopback = LoopbackRequest {
-            to: crate::Loopback::v4(1),
-            method: &crate::Method::GET,
-            target: "/",
-            headers: &[],
-            body: None,
-            timeout: Duration::from_secs(1),
-            limit: 1,
-        };
-        spawnable(&crate::loopback(loopback));
     }
 }

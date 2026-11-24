@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsv_domain::id::ProfileId;
 use nsv_gateway::Activity;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 use crate::common::{
     RawRequest, TestHost, WORK, Wake, encode, key, parse_head, send, spawn_gateway, within,
@@ -222,9 +222,10 @@ async fn a_profile_holds_at_most_32_requests() {
 
 #[tokio::test]
 async fn an_unreachable_core_is_a_502_with_the_remedy() {
-    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    // Bound but not listening: connections are refused, and the port stays ours.
+    let closed = TcpSocket::new_v4().unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let core = closed.local_addr().unwrap();
-    drop(closed);
     let (address, gateway) = spawn_gateway(TestHost::work(Wake::At(core))).await;
     let response = send(
         address,
