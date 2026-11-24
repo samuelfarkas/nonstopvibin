@@ -119,7 +119,10 @@ async fn accept(
                 Ok((stream, _)) => {
                     requests.spawn(answer(stream, Arc::clone(&connection)));
                 }
-                Err(_) => tokio::time::sleep(ACCEPT_BACKOFF).await,
+                Err(error) => {
+                    tracing::warn!("could not accept an agent connection: {error}");
+                    tokio::time::sleep(ACCEPT_BACKOFF).await;
+                }
             },
             Some(_) = requests.join_next(), if !requests.is_empty() => {}
         }

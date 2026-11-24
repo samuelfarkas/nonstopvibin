@@ -129,9 +129,14 @@ impl CoreHandle for Process {
     fn record(&mut self) -> BoxFuture<'_, ()> {
         Box::pin(async {
             if self.entry.is_none() {
-                // The watchdog still guards this core; only the restart backstop is missing.
-                if let Ok(entry) = self.ledger.record(&mut self.core).await {
-                    self.entry = entry;
+                match self.ledger.record(&mut self.core).await {
+                    Ok(entry) => self.entry = entry,
+                    // The watchdog still guards this core; only the restart backstop is missing.
+                    Err(error) => tracing::warn!(
+                        %error,
+                        pid = self.core.pid(),
+                        "a core was not recorded in the ledger"
+                    ),
                 }
             }
         })

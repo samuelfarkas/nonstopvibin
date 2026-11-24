@@ -99,7 +99,10 @@ async fn accept(listener: TcpListener, stop: Arc<watch::Sender<Stop>>, handler: 
             Ok((stream, _)) => {
                 tokio::spawn(serve(stream, Arc::clone(&stop), Arc::clone(&handler)));
             }
-            Err(_) => tokio::time::sleep(ACCEPT_BACKOFF).await,
+            Err(error) => {
+                tracing::warn!("could not accept a sign-in callback connection: {error}");
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+            }
         }
     }
 }
