@@ -80,8 +80,9 @@ impl Socket {
                 {
                     *chunk = word(at)?;
                 }
-                let v6 = Ipv6Addr::from(bytes);
-                v6.is_unspecified() || v6.to_ipv4_mapped().is_some_and(takes)
+                // Not `::`: a dual-stack socket there cannot listen while the core listens on
+                // 127.0.0.1, so one beside the core is IPv6-only.
+                Ipv6Addr::from(bytes).to_ipv4_mapped().is_some_and(takes)
             }
             _ => return None,
         };
@@ -168,19 +169,24 @@ mod tests {
         // Another user listens on 127.0.0.1 and the core has not bound yet.
         assert!(!only_listeners(&[&owned, &none6], 10_001, &[3, 5151]));
 
-        // Another user's wildcard listener beside the core's, over IPv4 or IPv6.
+        // Another user's wildcard listener beside the core's, over IPv4 or IPv4-mapped IPv6.
         let any = "   3: 00000000:2711 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 999 1 0000000000000000 100 0 0 10 0";
         let wildcard = table(&[CORE, any]);
         assert!(!only_listeners(&[&wildcard, &none6], 10_001, &[4242]));
-        let any6 = "   0: 00000000000000000000000000000000:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 999 1 0000000000000000 100 0 0 10 0";
         let mapped6 = "   1: 0000000000000000FFFF00000100007F:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 998 1 0000000000000000 100 0 0 10 0";
-        for foreign in [any6, mapped6] {
+        let mapped_any6 = "   2: 0000000000000000FFFF000000000000:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 997 1 0000000000000000 100 0 0 10 0";
+        for foreign in [mapped6, mapped_any6] {
             let tcp6 = table(&[foreign]);
             assert!(
                 !only_listeners(&[&owned, &tcp6], 10_001, &[4242]),
                 "{foreign}"
             );
         }
+
+        // Another user's listener on `::` beside the core's is IPv6-only: 127.0.0.1 reaches the
+        // core alone.
+        let any6 = "   0: 00000000000000000000000000000000:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 999 1 0000000000000000 100 0 0 10 0";
+        assert!(only_listeners(&[&owned, &table(&[any6])], 10_001, &[4242]));
 
         // Nothing listens on the port yet.
         let missing = table(&[ACCEPTED, ELSEWHERE]);
