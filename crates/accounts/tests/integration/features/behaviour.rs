@@ -377,6 +377,49 @@ async fn unknown_prices_and_incomplete_breakdowns_are_missing_not_free() {
     );
 }
 
+#[tokio::test]
+async fn counters_at_u64_max_saturate_the_period_totals() {
+    let directory = TempDir::new("pricing-saturated");
+    let store = open_store(directory.path()).await;
+    let owner = profile(&store, "Owner").await;
+    let catalog = Arc::new(ModelCatalog::new(
+        Arc::new(StubFetch::new(|_| Ok(response(200, priced_catalog(1.0))))),
+        fixed,
+    ));
+    catalog.models(&[], &[]).await.unwrap();
+    add(
+        &store,
+        vec![
+            usage(&owner, "a", "2026-11-20T00:00:00.000Z", u64::MAX),
+            usage(&owner, "b", "2026-11-21T00:00:00.000Z", u64::MAX),
+        ],
+    )
+    .await;
+    let prices = Arc::new(UsagePrices::new(
+        store.clone(),
+        catalog,
+        unavailable(),
+        fixed,
+    ));
+    let history = prices
+        .history(&owner, "2026-11-01T00:00:00.000Z")
+        .await
+        .unwrap();
+    let summary = history.summary;
+    assert_eq!(
+        (summary.requests, summary.input_tokens, summary.total_tokens),
+        (2, u64::MAX, u64::MAX)
+    );
+    // Past 2^53 a breakdown is incomplete, so neither row is priced.
+    let totals = history.pricing.totals.unwrap();
+    assert_eq!(
+        (totals.requests, totals.normalized_requests, totals.usd.0),
+        (2, 0, 0.0)
+    );
+    prices.close().await;
+    store.close().await;
+}
+
 #[test]
 fn quota_readings_keep_unknown_values_unknown() {
     let now = 1_788_609_600_000; // 2026-09-05T12:00:00Z

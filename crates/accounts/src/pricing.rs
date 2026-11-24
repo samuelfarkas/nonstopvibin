@@ -213,11 +213,13 @@ enum Direction {
 }
 
 impl Direction {
+    /// Saturates: a core can report counters as large as `u64::MAX`, and a few such rows must
+    /// not overflow the period's total.
     fn apply(self, value: &mut u64, amount: u64) {
-        match self {
-            Self::Add => *value += amount,
-            Self::Subtract => *value -= amount,
-        }
+        *value = match self {
+            Self::Add => value.saturating_add(amount),
+            Self::Subtract => value.saturating_sub(amount),
+        };
     }
 }
 
