@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -473,11 +474,28 @@ async fn terminated(terminate: oneshot::Sender<Terminate>) -> Result<(), AppErro
     }
 }
 
-/// A port on 127.0.0.1 nothing listened on a moment ago.
+/// Core ports, 10001 to 20000: below the system's ephemeral range (from 32768 on Linux, 49152
+/// on macOS), which outgoing connections and `bind(0)` draw from. A port found free here stays
+/// free until the core binds it unless a program binds that very number. An ephemeral one could
+/// go to any connection meanwhile, and the core would exit with "address already in use".
+const FIRST_PORT: u32 = 10_001;
+const PORTS: u32 = 10_000;
+
+/// A core port on 127.0.0.1 nothing listened on a moment ago. Calls walk the range from a place
+/// the process id picks, so concurrent starts and other instances get different ports.
 fn unused_port() -> io::Result<u16> {
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port())
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let start = std::process::id().wrapping_mul(7_919);
+    for _ in 0..PORTS {
+        let offset = start.wrapping_add(NEXT.fetch_add(1, Ordering::Relaxed)) % PORTS;
+        let port = u16::try_from(FIRST_PORT + offset).map_err(io::Error::other)?;
+        match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            Ok(_) => return Ok(port),
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::AddrInUse.into())
 }
 
 /// What ends a readiness wait early.
@@ -707,5 +725,23 @@ async fn race<T>(
         status = handle.wait() => Err(Interrupt::Exited(status)),
         () = context.abandoned() => Err(Interrupt::Abandoned),
         value = step => Ok(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn core_ports_differ_and_come_from_below_the_ephemeral_range() {
+        let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap();
+        let ephemeral: u16 = range.split_whitespace().next().unwrap().parse().unwrap();
+        let (first, second) = (unused_port().unwrap(), unused_port().unwrap());
+        assert!(
+            first < ephemeral && second < ephemeral,
+            "{first} {second} {range}"
+        );
+        assert_ne!(first, second);
     }
 }
