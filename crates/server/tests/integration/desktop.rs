@@ -207,6 +207,40 @@ async fn a_failed_open_reaches_the_errors_the_ui_shows() {
     daemon.close().await.unwrap();
 }
 
+/// Node joined repeated Origin fields, so a request with a second one matched no accepted
+/// origin: the management API and the agent gateway refuse it.
+#[tokio::test]
+async fn a_request_with_two_origins_is_refused() {
+    let root = TempDir::new("two-origins");
+    let daemon = daemon(&root, None).await;
+    let port = daemon.port();
+    let own = format!("http://127.0.0.1:{port}");
+    let token = format!("Bearer {}", daemon.session_token().expose_secret());
+    let field = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+    let state = |origins: &[&str]| {
+        let mut headers = vec![field("Authorization", &token)];
+        headers.extend(origins.iter().map(|origin| field("Origin", origin)));
+        async move { send(port, "GET", "/api/state", &headers, b"").await }
+    };
+    assert_eq!(state(&[&own]).await.status, 200);
+    for origins in [[own.as_str(), "https://example.invalid"], ["", &own]] {
+        let refused = state(&origins).await;
+        assert_eq!(refused.status, 403, "{origins:?}");
+        let body: serde_json::Value = serde_json::from_slice(&refused.body).unwrap();
+        assert_eq!(
+            body["error"]["message"],
+            "Cross-origin management requests are not allowed."
+        );
+        let headers: Vec<_> = origins
+            .iter()
+            .map(|origin| field("Origin", origin))
+            .collect();
+        let gateway = send(port, "GET", "/v1/models", &headers, b"").await;
+        assert_eq!(gateway.status, 403, "{origins:?}");
+    }
+    daemon.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn the_headless_server_has_no_desktop_route() {
     let root = TempDir::new("headless-show");

@@ -283,11 +283,15 @@ fn switch(headers: &HeaderMap) -> Switch {
     }
 }
 
-/// A browser Origin: an empty header counts as none, as it did in Node.
+/// A browser Origin as Node read it: repeated fields joined with ", ", which no accepted origin
+/// matches, and an empty one counts as none.
 fn origin(request: &Request<Incoming>) -> Option<Cow<'_, str>> {
-    let value = request.headers().get(header::ORIGIN)?;
-    if value.is_empty() {
-        return None;
+    let mut values = request.headers().get_all(header::ORIGIN).iter();
+    let mut origin = String::from_utf8_lossy(values.next()?.as_bytes());
+    for value in values {
+        let joined = origin.to_mut();
+        joined.push_str(", ");
+        joined.push_str(&String::from_utf8_lossy(value.as_bytes()));
     }
-    Some(String::from_utf8_lossy(value.as_bytes()))
+    (!origin.is_empty()).then_some(origin)
 }
