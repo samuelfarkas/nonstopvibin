@@ -176,11 +176,11 @@ async fn management_calls_reach_a_core_only_once_it_answered() {
             .pool()
             .management(&profile, &Method::GET, "/config", None)
     };
-    let launched = world.run(management()).await;
-    assert!(launched.is_err(), "{launched:?}");
+    let launched = world.run(management()).await.unwrap_err();
+    assert_eq!(launched.status, 409, "{launched:?}");
     world.run(starting).await.unwrap().unwrap_err();
-    let exited = world.run(management()).await;
-    assert!(exited.is_err(), "{exited:?}");
+    let exited = world.run(management()).await.unwrap_err();
+    assert_eq!(exited.status, 409, "{exited:?}");
     assert_eq!(
         world.fake.squatted(),
         0,
