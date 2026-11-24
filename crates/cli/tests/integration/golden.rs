@@ -16,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use nsv_testkit::TempDir;
+use nsv_testkit::{TempDir, write_executable};
 use serde_json::{Value, json};
 
 const REPOSITORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
@@ -145,15 +145,14 @@ fn the_cli_answers_as_the_typescript_cli_did() {
     std::fs::create_dir_all(root.join("home")).unwrap();
     std::fs::create_dir_all(root.join("bin")).unwrap();
     let systemctl = root.join("bin/systemctl");
-    std::fs::write(
+    write_executable(
         &systemctl,
         format!(
             "#!/bin/sh\necho \"$@\" >> \"{}/systemctl.log\"\ncase \"$*\" in *is-active*) echo inactive; exit 3;; *show-environment*) exit 0;; *) exit 0;; esac\n",
             root.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+        )
+        .as_bytes(),
+    );
     state_stub();
 
     let cases: Vec<Value> = serde_json::from_slice(

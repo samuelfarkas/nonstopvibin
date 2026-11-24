@@ -15,6 +15,6 @@ pub mod shell;
 #[cfg(feature = "accounts")]
 pub mod world;
 
-pub use directory::{TempDir, mode, set_mode};
+pub use directory::{TempDir, copy_executable, mode, set_mode, write_executable};
 pub use http::dechunk;
 pub use port::Port;

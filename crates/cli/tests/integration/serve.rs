@@ -15,7 +15,7 @@ use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::ApiAccount;
 use nsv_files::DataDir;
 use nsv_store::{Store, Vault};
-use nsv_testkit::{Port, TempDir};
+use nsv_testkit::{Port, TempDir, copy_executable};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -784,9 +784,14 @@ async fn profile_keys_never_manage_or_cross_profiles() {
     let state = daemon.api("GET", "/api/state").await.json();
     assert_eq!(runtime(&state, &first.slug), "running");
     assert_eq!(runtime(&state, &second.slug), "stopped");
-    // A UI poll with watch starts the dormant ones, so it shows them running.
+    // A UI poll with watch starts the dormant ones. It waits two seconds for them, and a core
+    // slower than that shows as starting until a later poll.
     let watched = daemon.api("GET", "/api/state?watch=1").await.json();
-    assert_eq!(runtime(&watched, &second.slug), "running");
+    let started = runtime(&watched, &second.slug);
+    assert!(
+        matches!(started.as_str(), "running" | "starting"),
+        "{started}"
+    );
     daemon.signal("TERM");
     assert_eq!(daemon.exited().await.0, 0);
 }
@@ -1370,7 +1375,7 @@ async fn only_a_development_checkout_build_accepts_the_vite_server() {
             .or_else(|_| std::fs::copy(checkout.join(file), core.join(file)).map(drop))
             .unwrap();
     }
-    std::fs::copy(env!("CARGO_BIN_EXE_nonstopvibin"), &executable).unwrap();
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_nonstopvibin")), &executable);
     let mut packaged = Command::new(&executable);
     packaged
         .env_clear()

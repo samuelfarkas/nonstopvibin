@@ -7,6 +7,7 @@
 use std::fs::{self, Permissions};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// A directory under the system temporary directory, removed on drop.
@@ -48,4 +49,23 @@ pub fn mode(path: &Path) -> u32 {
 
 pub fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, Permissions::from_mode(mode)).unwrap();
+}
+
+/// Writes an executable a test runs, or hands a child to run.
+///
+/// A test thread that forks while this process holds a file open for writing passes the
+/// descriptor to its child until the child calls exec, and running the file meanwhile fails
+/// with "Text file busy". The bytes go to a sibling file, and a `cp` process writes the
+/// executable, so this process never holds it open for writing.
+pub fn write_executable(path: &Path, contents: &[u8]) {
+    let source = path.with_extension("source");
+    fs::write(&source, contents).unwrap();
+    copy_executable(&source, path);
+}
+
+/// Copies `from` to an executable `to` in a `cp` process; see [`write_executable`].
+pub fn copy_executable(from: &Path, to: &Path) {
+    let status = Command::new("cp").arg(from).arg(to).status().unwrap();
+    assert!(status.success(), "cp {} {}", from.display(), to.display());
+    set_mode(to, 0o755);
 }

@@ -3,12 +3,12 @@
 //! the browser fallback, which needs the fake `xdg-open` that tests/gui.sh puts on PATH.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use nsv_desktop::HostEvent;
 use nsv_testkit::shell::{Host, PROFILE, TOKEN};
+use nsv_testkit::write_executable;
 use serde_json::{Value, json};
 
 use crate::common::{directory, exited, options, spawn_shell, wait_until};
@@ -33,8 +33,7 @@ impl Fake {
     fn new(name: &str) -> Self {
         let dir = directory(name);
         let helper = dir.join("helper.sh");
-        fs::write(&helper, FAKE_HELPER).unwrap();
-        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&helper, FAKE_HELPER.as_bytes());
         Self { dir }
     }
 
