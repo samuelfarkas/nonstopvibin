@@ -486,12 +486,14 @@ const RECENT: usize = 16;
 
 /// A core port on 127.0.0.1 nothing listened on a moment ago, and none of the last [`RECENT`]
 /// handed out. Each call walks the range from a random place, which another local user cannot
-/// compute to bind the port first.
+/// compute to bind the port first. Ports this user may not bind, below the system's
+/// `ip_unprivileged_port_start`, are passed over.
 fn unused_port() -> io::Result<u16> {
     // A core may not have bound its port yet when the next start draws.
     static HANDED_OUT: Mutex<[u16; RECENT]> = Mutex::new([0; RECENT]);
     let start = u32::from_ne_bytes(nsv_domain::random::bytes::<4>()?) % PORTS;
     let mut handed_out = locked(&HANDED_OUT);
+    let mut refused = None;
     for step in 0..PORTS {
         let port = u16::try_from(FIRST_PORT + (start + step) % PORTS).map_err(io::Error::other)?;
         if handed_out.contains(&port) {
@@ -505,10 +507,11 @@ fn unused_port() -> io::Result<u16> {
                 return Ok(port);
             }
             Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => refused = Some(error),
             Err(error) => return Err(error),
         }
     }
-    Err(io::ErrorKind::AddrInUse.into())
+    Err(refused.unwrap_or_else(|| io::ErrorKind::AddrInUse.into()))
 }
 
 /// What ends a readiness wait early.
