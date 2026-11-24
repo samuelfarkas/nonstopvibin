@@ -26,7 +26,7 @@ use nsv_testkit::fake::response;
 use nsv_testkit::world::{StubFetch, open_store, profile};
 use serde_json::{Value, json};
 
-use super::common::{NOW, StubSource, fixed};
+use super::common::{NOW, NOW_ISO, StubSource, fixed};
 
 /// Waits until the stub core has received `calls` calls in all.
 async fn called(source: &StubSource, calls: usize) {
@@ -70,7 +70,7 @@ async fn the_catalog_fetch_is_credential_free_bounded_cached_coalesced_and_retri
     }
     let (fetch, gate) = StubFetch::gated(|_| Ok(response(200, priced_catalog(1.0))));
     let fetch = Arc::new(fetch);
-    let catalog = ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), now);
+    let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), now));
     let models = [model("m")];
     let (first, second) = tokio::join!(catalog.models(&models, &[]), async {
         settle().await;
@@ -107,7 +107,7 @@ async fn the_catalog_fetch_is_credential_free_bounded_cached_coalesced_and_retri
 async fn concurrent_callers_of_a_failed_fetch_all_get_the_502() {
     let (fetch, gate) = StubFetch::gated(|_| Ok(response(503, "")));
     let fetch = Arc::new(fetch);
-    let catalog = ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed);
+    let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
     let (first, second) = tokio::join!(catalog.models(&[], &[]), async {
         settle().await;
         gate.add_permits(10);
@@ -147,6 +147,29 @@ async fn activity_snapshots_never_wait_and_back_off_after_a_failure() {
     assert_eq!(snapshot.fetched_at(), Some("2026-11-22T12:01:00.000Z"));
     assert_eq!(snapshot.cost("claude", "m").unwrap().input.0, 1.0);
     assert_eq!(fetch.count(), 2);
+}
+
+#[tokio::test]
+async fn a_first_fetch_whose_caller_stopped_waiting_still_loads_the_catalog() {
+    let (fetch, gate) = StubFetch::gated(|_| Ok(response(200, priced_catalog(1.0))));
+    let fetch = Arc::new(fetch);
+    let catalog = Arc::new(ModelCatalog::new(Arc::<StubFetch>::clone(&fetch), fixed));
+    tokio::select! {
+        _ = catalog.models(&[], &[]) => panic!("the held fetch answered"),
+        () = async {
+            while fetch.count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        } => {}
+    }
+    gate.add_permits(1);
+    settle().await;
+    let snapshot = catalog.snapshot();
+    assert_eq!(
+        (snapshot.fetched_at(), snapshot.refreshing),
+        (Some(NOW_ISO), false)
+    );
+    assert_eq!(fetch.count(), 1);
 }
 
 /// A Claude request for model `m` that used `input` tokens.

@@ -146,10 +146,10 @@ async fn a_malformed_catalog_is_a_502() {
     let cases = cases("usage");
     let golden = case(&cases, "catalog malformed payload");
     let body = golden["input"].to_string();
-    let catalog = ModelCatalog::new(
+    let catalog = Arc::new(ModelCatalog::new(
         Arc::new(StubFetch::new(move |_| Ok(response(200, body.clone())))),
         fixed,
-    );
+    ));
     let model = Model {
         id: "x".to_owned(),
         owned_by: None,

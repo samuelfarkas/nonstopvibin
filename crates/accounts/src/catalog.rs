@@ -417,11 +417,18 @@ impl ModelCatalog {
         Ok(cached)
     }
 
-    async fn load(&self) -> Result<Arc<Cached>, AppError> {
+    async fn load(self: &Arc<Self>) -> Result<Arc<Cached>, AppError> {
         let begun = self.begin(&mut self.state());
         match begun {
             Ok(cached) => Ok(cached),
-            Err(load) => self.finish(&load).await,
+            Err(load) => {
+                let catalog = Arc::clone(self);
+                // Detached: a caller that stops waiting must not leave the fetch unfinished and
+                // `pending` set, which would keep snapshots from ever starting one.
+                tokio::spawn(async move { catalog.finish(&load).await })
+                    .await
+                    .map_err(AppError::internal)?
+            }
         }
     }
 
@@ -431,7 +438,7 @@ impl ModelCatalog {
     /// # Errors
     /// 502 when models.dev cannot be fetched or read.
     pub async fn models(
-        &self,
+        self: &Arc<Self>,
         models: &[Model],
         accounts: &[ApiAccount],
     ) -> Result<Vec<CatalogModel>, CatalogError> {
