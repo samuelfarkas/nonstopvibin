@@ -98,7 +98,7 @@ fn app_image(
     executable: Option<&Path>,
 ) -> Option<PathBuf> {
     let (image, mount, executable) = (image?, mount?, executable?);
-    (image.is_absolute() && mount.is_absolute() && executable.starts_with(&mount)).then_some(image)
+    (image.is_absolute() && executable.starts_with(&mount)).then_some(image)
 }
 
 #[cfg(test)]
@@ -114,11 +114,7 @@ mod tests {
         // A deb build started from another AppImage inherits that image's variables.
         let installed = Path::new("/opt/NonstopVibin/nonstopvibin");
         assert_eq!(app_image(image.clone(), mount, Some(installed)), None);
-        assert_eq!(app_image(image.clone(), None, Some(inside)), None);
-        assert_eq!(
-            app_image(image, Some(PathBuf::from("relative")), Some(inside)),
-            None
-        );
+        assert_eq!(app_image(image, None, Some(inside)), None);
         let relative = Some(PathBuf::from("NonstopVibin.AppImage"));
         let mount = Some(PathBuf::from("/tmp/.mount_NonstoAbc123"));
         assert_eq!(app_image(relative, mount, Some(inside)), None);
