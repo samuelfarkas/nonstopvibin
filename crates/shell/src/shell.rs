@@ -83,7 +83,7 @@ pub async fn run(
         anchor: Anchor::point(0, 0),
     };
     if shell.options.install.packaged
-        && let Err(error) = shell.options.login.follow()
+        && let Err(error) = login_item(&shell.options.login, Login::follow).await
     {
         tracing::warn!("could not update the login item: {error}");
     }
@@ -140,6 +140,17 @@ pub async fn run(
 enum Step {
     Continue,
     Stop,
+}
+
+/// Runs a login-item call on the blocking pool: it reads and writes files, or asks macOS.
+async fn login_item<T: Send + 'static>(
+    login: &Login,
+    call: impl FnOnce(&Login) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let login = login.clone();
+    tokio::task::spawn_blocking(move || call(&login))
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()))
 }
 
 async fn next_event(helper: &mut Option<Helper>) -> Event {
@@ -434,12 +445,18 @@ impl<H: ShellHost> Shell<'_, H> {
                 external::open_approved(&url).await?;
                 Ok(Value::Null)
             }
-            DaemonCall::GetLoginItem => Ok(Value::Bool(self.options.login.enabled())),
+            DaemonCall::GetLoginItem => {
+                login_item(&self.options.login, |login| Ok(login.enabled()))
+                    .await
+                    .map(Value::Bool)
+            }
             DaemonCall::SetLoginItem(enabled) => {
                 if !self.options.install.packaged {
                     return Err(UNPACKAGED.to_owned());
                 }
-                self.options.login.set(enabled).map(Value::Bool)
+                login_item(&self.options.login, move |login| login.set(enabled))
+                    .await
+                    .map(Value::Bool)
             }
             DaemonCall::RevealData => {
                 Os::reveal(&self.host.data_directory().database()).await?;
