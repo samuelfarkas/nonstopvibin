@@ -41,12 +41,7 @@ pub(crate) fn safe_external(raw: &str) -> Result<String, String> {
 
 /// Opens `url` when [`safe_external`] approves it: `openExternal`, and a page's new window.
 pub(crate) async fn open_approved(url: &str) -> Result<(), String> {
-    open(&safe_external(url)?).await
-}
-
-/// Opens `target`: a URL [`safe_external`] approved, or the page holding the session link.
-pub(crate) async fn open(target: impl AsRef<OsStr>) -> Result<(), String> {
-    Os::open(target.as_ref()).await
+    Os::open(OsStr::new(&safe_external(url)?)).await
 }
 
 #[cfg(target_os = "macos")]

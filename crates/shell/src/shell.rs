@@ -329,7 +329,7 @@ impl<H: ShellHost> Shell<'_, H> {
             tracing::warn!("could not write the page for the browser: {error}");
             return;
         }
-        if let Err(error) = external::open(&page).await {
+        if let Err(error) = Os::open(page.as_os_str()).await {
             tracing::warn!("could not open the browser either: {error}");
         }
     }
