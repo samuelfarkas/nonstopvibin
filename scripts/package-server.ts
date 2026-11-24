@@ -2,6 +2,7 @@
 // Usage: bun scripts/package-server.ts [x64|arm64 ...] (default: the host architecture).
 // Run `bun run build:client` first. Each architecture needs its Rust musl target and a C compiler
 // for it (musl-tools on a native runner); CI builds each on its own runner.
+import { execFileSync } from "node:child_process";
 import {
   chmod,
   copyFile,
@@ -41,6 +42,12 @@ const arches = process.argv.slice(2).length
 for (const arch of arches)
   if (!serverArchitectures.includes(arch))
     throw new Error(`Unsupported server architecture: ${arch}`);
+
+// macOS has bsdtar, which sets the owner with --uid and --gid and would add its metadata (and
+// AppleDouble ._ files) for extended attributes.
+const bsdtar = execFileSync("tar", ["--version"], {
+  encoding: "utf8",
+}).includes("bsdtar");
 
 await mkdir(releaseDir, { recursive: true });
 for (const arch of arches) {
@@ -108,16 +115,20 @@ Licenses are in \`licenses/\`.
 
     const archive = join(releaseDir, `${name}.tar.gz`);
     await rm(archive, { force: true });
-    run("tar", [
-      "-czf",
-      archive,
-      "--owner=0",
-      "--group=0",
-      "--numeric-owner",
-      "-C",
-      work,
-      name,
-    ]);
+    run(
+      "tar",
+      [
+        "-czf",
+        archive,
+        ...(bsdtar
+          ? ["--uid", "0", "--gid", "0", "--no-xattrs", "--no-mac-metadata"]
+          : ["--owner=0", "--group=0", "--numeric-owner"]),
+        "-C",
+        work,
+        name,
+      ],
+      { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+    );
     await report(archive);
   } finally {
     await rm(work, { recursive: true, force: true });
