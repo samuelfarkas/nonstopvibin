@@ -20,7 +20,7 @@ import {
   product,
   rustLicenses,
 } from "../scripts/distribution.ts";
-import { writeFeed } from "../scripts/package-common.ts";
+import { runSecret, writeFeed } from "../scripts/package-common.ts";
 import { cargoPackage } from "../scripts/verify-release.mjs";
 import {
   checkMacExecutable,
@@ -69,6 +69,23 @@ test("Rust packages keep the identity and file names installed Electron builds u
 test("the deb's Version sorts a beta before its release, as electron-builder's did", () => {
   assert.equal(debianVersion("0.2.0-beta.1"), "0.2.0~beta.1");
   assert.equal(debianVersion("0.2.0"), "0.2.0");
+});
+
+test("a failed command that takes a secret is reported without its arguments", () => {
+  const secret = ["--password", "synthetic-app-password"];
+  assert.throws(
+    () => runSecret("Notarization", "sh", ["-c", "exit 3", "sh", ...secret]),
+    { message: "Notarization failed (exit status 3)." },
+  );
+  assert.equal(
+    runSecret(
+      "Notarization",
+      "sh",
+      ["-c", "echo '{}'", "sh", ...secret],
+      "pipe",
+    ),
+    "{}\n",
+  );
 });
 
 test("update feeds have electron-builder's fields and electron-updater's YAML parser reads them", async () => {

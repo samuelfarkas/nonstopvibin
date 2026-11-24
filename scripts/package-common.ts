@@ -36,6 +36,36 @@ export function run(
   execFileSync(command, args, { cwd: repo, stdio: "inherit", ...options });
 }
 
+/**
+ * `run` for a command whose arguments hold a secret: `security import` and `notarytool` take
+ * their passwords only there. A failure names `operation` and how the command ended, where
+ * execFileSync's error would print every argument. Answers standard output when `stdout` is
+ * "pipe".
+ */
+export function runSecret(
+  operation: string,
+  command: string,
+  args: string[],
+  stdout: "inherit" | "pipe" = "inherit",
+): string {
+  const result = spawnSync(command, args, {
+    cwd: repo,
+    encoding: "utf8",
+    stdio: ["ignore", stdout, "inherit"],
+  });
+  if (result.status !== 0)
+    throw new Error(
+      `${operation} failed (${
+        result.error
+          ? result.error.message
+          : result.signal
+            ? `signal ${result.signal}`
+            : `exit status ${result.status}`
+      }).`,
+    );
+  return result.stdout ?? "";
+}
+
 export function cargoBuild(
   { target, packages }: RustBuild,
   env: Record<string, string> = {},

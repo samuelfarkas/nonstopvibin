@@ -34,6 +34,7 @@ import {
   repo,
   report,
   run,
+  runSecret,
   stageClient,
   stageCore,
   stageLicences,
@@ -194,7 +195,7 @@ async function developerId(work: string): Promise<Identity> {
   run("security", ["create-keychain", "-p", password, keychain]);
   run("security", ["set-keychain-settings", "-lut", "21600", keychain]);
   run("security", ["unlock-keychain", "-p", password, keychain]);
-  run("security", [
+  runSecret("Importing the Developer ID certificate", "security", [
     "import",
     p12,
     "-k",
@@ -250,7 +251,8 @@ function notarize(app: string, work: string): void {
   const upload = join(work, "notarize.zip");
   run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, upload]);
   const result = JSON.parse(
-    execFileSync(
+    runSecret(
+      "Notarization",
       "xcrun",
       [
         "notarytool",
@@ -268,7 +270,7 @@ function notarize(app: string, work: string): void {
         "--output-format",
         "json",
       ],
-      { encoding: "utf8" },
+      "pipe",
     ),
   );
   if (result.status !== "Accepted")
