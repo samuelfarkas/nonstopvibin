@@ -47,7 +47,9 @@ pub(crate) enum UserEvent {
         finished: bool,
     },
     NewWindow(String),
+    /// The page's `beforeunload` answer to close request `request`.
     Unload {
+        request: u64,
         vetoed: bool,
     },
     FolderChosen {
@@ -109,8 +111,8 @@ pub(crate) struct Boot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Closing {
     No,
-    /// Waiting for the page's `beforeunload` answer.
-    Asking,
+    /// Waiting for the page's `beforeunload` answer to the close request with this number.
+    Asking(u64),
     /// The page vetoed: the window is hidden until `releaseWindow` closes it.
     Deferred,
 }
@@ -142,6 +144,8 @@ struct App {
     dialogs: Vec<DialogKind>,
     main_bounds: Option<Rect>,
     main_closing: Closing,
+    /// Close requests asked so far.
+    close_requests: u64,
     forwarded: HashMap<u64, Ticket>,
     next_forward: u64,
     ready: bool,
@@ -194,6 +198,7 @@ pub(crate) fn run(boot: Boot) -> ! {
         dialogs: Vec::new(),
         main_bounds: boot.bounds,
         main_closing: Closing::No,
+        close_requests: 0,
         forwarded: HashMap::new(),
         next_forward: 0,
         ready: false,
@@ -512,22 +517,24 @@ impl App {
     /// `releaseWindow`.
     fn ask_to_close_main(&mut self) {
         let Some(main) = &self.main else { return };
-        if self.main_closing == Closing::Asking {
+        if matches!(self.main_closing, Closing::Asking(_)) {
             return;
         }
-        let proxy = self.proxy.clone();
+        self.close_requests += 1;
+        let (request, proxy) = (self.close_requests, self.proxy.clone());
         let asked =
             main.webview
                 .evaluate_script_with_callback(bridge::BEFORE_UNLOAD, move |vetoed| {
                     post(
                         &proxy,
                         UserEvent::Unload {
+                            request,
                             vetoed: vetoed == "true",
                         },
                     );
                 });
         match asked {
-            Ok(()) => self.main_closing = Closing::Asking,
+            Ok(()) => self.main_closing = Closing::Asking(request),
             Err(error) => {
                 log(format_args!("could not ask the page to close: {error}"));
                 self.close_main();
@@ -559,13 +566,19 @@ impl App {
                     log(format_args!("dropped an overlong new-window URL"));
                 }
             }
-            UserEvent::Unload { vetoed } => match &self.main {
-                Some(main) if vetoed => {
-                    main.window.set_visible(false);
-                    self.main_closing = Closing::Deferred;
+            // Only the open request's answer counts: showing the window again withdrew it.
+            UserEvent::Unload { request, vetoed }
+                if self.main_closing == Closing::Asking(request) =>
+            {
+                match &self.main {
+                    Some(main) if vetoed => {
+                        main.window.set_visible(false);
+                        self.main_closing = Closing::Deferred;
+                    }
+                    _ => self.close_main(),
                 }
-                _ => self.close_main(),
-            },
+            }
+            UserEvent::Unload { .. } => {}
             UserEvent::FolderChosen { ticket, result } => {
                 let outcome = match result {
                     Ok(path) => Outcome::Result(json!(path)),

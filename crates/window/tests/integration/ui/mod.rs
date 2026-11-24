@@ -206,6 +206,14 @@ fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Val
     } else if action["close"] == true {
         desktop.close_main();
         wait_until("the closed window hides", || !desktop.main_visible());
+    } else if action["closeThenShow"] == true {
+        // The close request reaches the helper well before the page, slow on purpose, answers.
+        desktop.close_main();
+        crate::common::pause(Duration::from_secs(1));
+        helper.send(&ToHelper::Show {
+            view: View::Main { profile: None },
+        });
+        crate::common::pause(Duration::from_millis(300));
     } else if action["show"] == true {
         helper.send(&ToHelper::Show {
             view: View::Main { profile: None },
@@ -269,6 +277,16 @@ fn drag_regions_move_the_main_window() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("logo.html"), "drag-region");
     check_once("drag-region", &site, View::Main { profile: None }, TOKEN);
+}
+
+/// The close button, then Show before the page has answered whether it may close: the late
+/// answer leaves the window that is on screen again open.
+#[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
+fn showing_the_window_again_withdraws_an_unanswered_close() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let site = Site::start(fixtures("focus.html"), "close-race");
+    check_once("close-race", &site, View::Main { profile: None }, TOKEN);
 }
 
 #[test]
