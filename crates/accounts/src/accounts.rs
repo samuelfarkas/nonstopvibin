@@ -74,11 +74,20 @@ pub fn read_credential(path: &Path, limit: u64) -> Result<Map<String, Value>, Ap
 }
 
 /// A credential file of a profile, as `credentialFiles` read it.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CredentialFile {
     /// The file name, which is the account id.
     pub id: String,
     pub raw: Map<String, Value>,
+}
+
+/// Only the id: `raw` holds the account's OAuth tokens.
+impl std::fmt::Debug for CredentialFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialFile")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A Claude credential file's identity, keyed by the file's version.
@@ -466,4 +475,25 @@ fn repair_modes(directory: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_credential_file_debugs_as_its_id_without_its_tokens() {
+        let raw =
+            json!({ "access_token": "synthetic-access", "refresh_token": "synthetic-refresh" });
+        let file = CredentialFile {
+            id: "claude.json".to_owned(),
+            raw: record(Some(&raw)).clone(),
+        };
+        assert_eq!(
+            format!("{file:?}"),
+            r#"CredentialFile { id: "claude.json", .. }"#
+        );
+    }
 }
