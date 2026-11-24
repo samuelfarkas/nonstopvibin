@@ -77,6 +77,15 @@ fn a_pin_is_written_in_the_files_key_order() {
     );
 }
 
+/// Installed TypeScript builds fetch the copy from `main`.
+#[test]
+fn the_typescript_builds_pin_copy_is_identical() {
+    assert_eq!(
+        include_str!("../../../../src/server/core-release.json"),
+        include_str!("../../core-release.json")
+    );
+}
+
 #[test]
 fn targets_use_node_names_and_upstream_archive_names() {
     let version = Version::parse("8.1.0").unwrap();

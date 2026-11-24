@@ -9,7 +9,8 @@
 //!   `directory` may ship; `--signed` holds the binary to its manifest, not the pin.
 //! - `rehash <directory>`: records the binary's hash in its manifest, after signing.
 //! - `layout`: the core's file names and the bundled version, as JSON.
-//! - `pin [version]`: writes `core-release.json` for an upstream release, the latest by default.
+//! - `pin [version]`: writes `core-release.json` and its TypeScript copy for an upstream release,
+//!   the latest by default.
 //! - `pending`: prints `<version> <published> <pinned> <releases>` when upstream's latest
 //!   release is newer than the pin, and nothing otherwise.
 
@@ -35,6 +36,11 @@ type Failure = Box<dyn Error>;
 
 /// The pin file this tool rewrites; the build bundles it.
 const PIN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/core-release.json");
+/// A byte-identical copy: installed TypeScript builds fetch the pin from this path on `main`.
+const TYPESCRIPT_PIN: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../src/server/core-release.json"
+);
 const CHECKOUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 #[tokio::main(flavor = "current_thread")]
@@ -234,8 +240,8 @@ async fn pending(https: &Https) -> Result<(), Failure> {
     say(format_args!("{version} {published} {pinned} {RELEASES}"))
 }
 
-/// Hashes each target's archive and executable of upstream's `version` into the pin file,
-/// keeping its `minApp`. Each archive must match the release's own `checksums.txt`.
+/// Hashes each target's archive and executable of upstream's `version` into the pin files,
+/// keeping the current `minApp`. Each archive must match the release's own `checksums.txt`.
 async fn pin(https: &Https, version: Version) -> Result<(), Failure> {
     let temporary = nsv_files::unique_directory(&env::temp_dir(), "nonstopvibin-pin-")?;
     let hashed = hash_release(https, version, &temporary).await;
@@ -248,7 +254,9 @@ async fn pin(https: &Https, version: Version) -> Result<(), Failure> {
         checksums,
         binaries,
     };
-    fs::write(PIN, serde_json::to_string_pretty(&pin)? + "\n")?;
+    let text = serde_json::to_string_pretty(&pin)? + "\n";
+    fs::write(PIN, &text)?;
+    fs::write(TYPESCRIPT_PIN, &text)?;
     let since = min_app.map_or_else(String::new, |app| {
         format!(" for NonstopVibin {app} or later")
     });

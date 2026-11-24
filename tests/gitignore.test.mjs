@@ -39,6 +39,7 @@ test("Git ignores private state while retaining source, skill copies and lockfil
       "src/main.tsx",
       "bun.lock",
       "crates/core/core-release.json",
+      "src/server/core-release.json",
       ".env.example",
       ".deepsec/.env.example",
       ".deepsec/bun.lock",

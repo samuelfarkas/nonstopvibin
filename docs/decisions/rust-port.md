@@ -213,6 +213,9 @@ daemon and app, the Electron, Bun-compile and TypeScript core-install paths are 
 
 - `tests/mac-update.mjs` builds its old version with electron-builder from the checkout.
   After switch 2 it must install a published Electron release's zip instead.
+- `src/server/core-release.json` stays a byte-identical copy of `crates/core/core-release.json`,
+  which `core-tool pin` writes too: installed TypeScript builds fetch the pin from that path on
+  `main`, so it goes once they are retired.
 
 ## Behaviour that differs from main
 
