@@ -176,11 +176,25 @@ async fn a_profile_holds_at_most_32_requests() {
     };
     let refused = send(address, &request).await;
     assert_eq!(refused.status, 429);
-    assert_eq!(refused.header("retry-after"), Some("2"));
-    let body: serde_json::Value = serde_json::from_slice(&refused.body).unwrap();
+    // `Retry-After` ahead of the error JSON's headers, as `server.ts` set it.
+    let described: Vec<(&str, &str)> = refused
+        .headers
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .filter(|(key, _)| !matches!(*key, "connection" | "content-length" | "date"))
+        .collect();
     assert_eq!(
-        body["error"]["message"],
-        "This profile has 32 requests in flight. Retry shortly."
+        described,
+        [
+            ("retry-after", "2"),
+            ("content-type", "application/json"),
+            ("cache-control", "no-store"),
+            ("x-content-type-options", "nosniff"),
+        ]
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&refused.body),
+        r#"{"error":{"message":"This profile has 32 requests in flight. Retry shortly.","type":"nonstopvibin_error","code":429}}"#
     );
     drop(agents.pop());
     within(LIMIT, "one release", || gateway.in_flight(&work()) == 31).await;

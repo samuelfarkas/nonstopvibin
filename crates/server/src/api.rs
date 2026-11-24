@@ -103,22 +103,9 @@ fn account_id(account: &str) -> Result<AccountId, AppError> {
     AccountId::parse(account).map_err(|_| AppError::account_not_found())
 }
 
-/// Management responses: JSON, never cached, never sniffed.
 fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Response<Body>, AppError> {
     let body = serde_json::to_vec(value).map_err(AppError::internal)?;
-    let mut response = Response::new(Body::full(body));
-    *response.status_mut() = status;
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    Ok(response)
+    Ok(nsv_gateway::json(status, HeaderMap::new(), body))
 }
 
 /// `jsonBody`: a JSON content type, at most 2 MB, parsed.
@@ -149,19 +136,15 @@ async fn body(request: Request<Incoming>) -> Result<Value, AppError> {
 /// A 405 that lists the methods the path does serve (RFC 9110), ahead of the error JSON's
 /// headers as `server.ts` sent them.
 fn not_allowed(methods: &str) -> Response<Body> {
-    let mut response = Refusal::new(
+    let mut first = HeaderMap::new();
+    if let Ok(allow) = HeaderValue::from_str(methods) {
+        first.insert(header::ALLOW, allow);
+    }
+    Refusal::new(
         StatusCode::METHOD_NOT_ALLOWED,
         AppError::method_not_allowed().message,
     )
-    .into_response();
-    if let Ok(allow) = HeaderValue::from_str(methods) {
-        let rest = std::mem::replace(
-            response.headers_mut(),
-            HeaderMap::from_iter([(header::ALLOW, allow)]),
-        );
-        response.headers_mut().extend(rest);
-    }
-    response
+    .into_response_after(first)
 }
 
 fn ok() -> Value {

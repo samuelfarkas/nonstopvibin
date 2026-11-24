@@ -3,9 +3,10 @@
 //!
 //! The server owns the listener and the Host and Origin checks. It serves each agent connection
 //! with [`serve_connection`] and hands an agent request to [`Gateway::proxy`], or a WebSocket
-//! handshake to [`Gateway::upgrade`]. A [`Refusal`] renders the error JSON, which the server's
-//! API answers with too. The gateway reaches the rest of the daemon only through [`Host`], whose
-//! answers carry no management key, so a profile key cannot reach the management API.
+//! handshake to [`Gateway::upgrade`]. A [`Refusal`] renders the error JSON and [`json`] any JSON
+//! answer; the server's API answers with both. The gateway reaches the rest of the daemon only
+//! through [`Host`], whose answers carry no management key, so a profile key cannot reach the
+//! management API.
 //!
 //! Bodies are never parsed or buffered: they pass through as hyper frames, with hyper's buffers
 //! capped at `MAX_BUF_SIZE`. Each request opens its own upstream connection, which hyper
@@ -29,13 +30,14 @@ use std::time::Duration;
 
 use hyper::body::{Bytes, Incoming};
 use hyper::client::conn::http1 as client;
-use hyper::header::{self, HeaderValue};
+use hyper::header::{self, HeaderMap, HeaderValue};
 use hyper::service::Service;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use nsv_domain::id::{ProfileId, ProfileSlug};
 use nsv_domain::registry::{Agent, AgentCatalog, registry};
 use nsv_domain::secret::{ClientKey, CoreKey, KeyDigest};
+use nsv_domain::wire::{ApiError, ApiErrorBody, ApiErrorType};
 use tokio::net::TcpStream;
 
 pub use body::Body;
@@ -164,30 +166,48 @@ impl Refusal {
         Self::new(StatusCode::BAD_GATEWAY, UNAVAILABLE)
     }
 
-    /// The error JSON (`json<ApiError>` in `server.ts`), never cached or sniffed. A 429 adds
-    /// `Retry-After: 2`.
+    /// The error JSON (`json<ApiError>` in `server.ts`). A 429 adds `Retry-After: 2`.
     #[must_use]
     pub fn into_response(self) -> Response<Body> {
-        let body = serde_json::json!({ "error": {
-            "message": self.message, "type": "nonstopvibin_error", "code": self.status.as_u16(),
-        }});
-        let mut response = Response::new(Body::full(body.to_string()));
-        *response.status_mut() = self.status;
-        let headers = response.headers_mut();
+        let mut first = HeaderMap::new();
         if self.status == StatusCode::TOO_MANY_REQUESTS {
-            headers.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
+            first.insert(header::RETRY_AFTER, HeaderValue::from_static("2"));
         }
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        headers.insert(
-            header::X_CONTENT_TYPE_OPTIONS,
-            HeaderValue::from_static("nosniff"),
-        );
-        response
+        self.into_response_after(first)
     }
+
+    /// The error JSON, after `first`: headers `server.ts` set before it answered.
+    #[must_use]
+    pub fn into_response_after(self, first: HeaderMap) -> Response<Body> {
+        let error = ApiError {
+            error: ApiErrorBody {
+                message: self.message.into_owned(),
+                kind: ApiErrorType::NonstopvibinError,
+                code: self.status.as_u16(),
+            },
+        };
+        // Two strings and a number: serializing cannot fail.
+        let body = serde_json::to_vec(&error).unwrap_or_default();
+        json(self.status, first, body)
+    }
+}
+
+/// A JSON answer as `json` in `server.ts` wrote it, never cached or sniffed, after `first`.
+#[must_use]
+pub fn json(status: StatusCode, mut first: HeaderMap, body: impl Into<Bytes>) -> Response<Body> {
+    first.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    first.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    first.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    let mut response = Response::new(Body::full(body));
+    *response.status_mut() = status;
+    *response.headers_mut() = first;
+    response
 }
 
 /// The agent gateway. Cheap to clone; clones share the in-flight counts.
@@ -342,7 +362,7 @@ impl<H: Host> Gateway<H> {
         &self,
         method: &hyper::Method,
         uri: &hyper::Uri,
-        headers: &hyper::HeaderMap,
+        headers: &HeaderMap,
     ) -> Result<route::Route, Refusal> {
         route::route(method, uri, headers, &self.inner.catalogs, |digest| {
             self.inner.host.profile(digest)
