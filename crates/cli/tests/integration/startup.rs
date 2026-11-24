@@ -34,6 +34,35 @@ fn a_taken_port_ends_the_start_with_exit_1_and_says_so() {
     );
 }
 
+/// Without `NONSTOPVIBIN_DATA_DIR` the data lives in `$HOME/.nonstopvibin`, resolved as main's
+/// `path.resolve` did: the core's config path and the credential socket's name derive from it.
+#[test]
+fn the_home_data_directory_is_resolved_like_main() {
+    let directory = TempDir::new("startup-home");
+    let root = std::fs::canonicalize(directory.path()).unwrap();
+    std::fs::create_dir_all(root.join("home/agent")).unwrap();
+    // No systemctl, so `url` looks in the home data directory.
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_nonstopvibin"))
+        .arg("url")
+        .current_dir(&root)
+        .env_clear()
+        .env("PATH", root.join("bin"))
+        .env("HOME", "home/./agent/..")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected = root.join("home/.nonstopvibin");
+    assert!(
+        stderr.contains(&format!(
+            "NonstopVibin is not running for {}.\n",
+            expected.display()
+        )),
+        "{stderr}"
+    );
+}
+
 /// A package that lost its core is still a package: it names its own core, and refuses the
 /// development allowance that would start it without one.
 #[tokio::test]

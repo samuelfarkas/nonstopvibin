@@ -41,23 +41,19 @@ impl DataDir {
         if value.is_empty() {
             return Ok(None);
         }
-        let chosen = Path::new(value);
-        let resolved = if chosen.is_absolute() {
-            resolve(Path::new("/"), chosen)
-        } else {
-            resolve(&env::current_dir()?, chosen)
-        };
-        Ok(Some(Self::new(resolved)))
+        Ok(Some(Self::new(absolute(Path::new(value))?)))
     }
 
-    /// `~/.nonstopvibin`, where the data lives unless a variable chooses another directory.
+    /// `~/.nonstopvibin`, where the data lives unless a variable chooses another directory,
+    /// resolved as [`DataDir::chosen`] resolves a path.
     ///
     /// # Errors
-    /// When there is no home directory.
+    /// When there is no home directory, or it is relative and the working directory is
+    /// unavailable.
     pub fn home() -> io::Result<Self> {
-        env::home_dir()
-            .map(|home| Self::new(home.join(".nonstopvibin")))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))
+        let home = env::home_dir()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no home directory"))?;
+        Ok(Self::new(absolute(&home.join(".nonstopvibin"))?))
     }
 
     /// A data directory already chosen, such as a throwaway one under
@@ -180,6 +176,15 @@ impl DataDir {
     pub fn credential_socket(&self) -> PathBuf {
         self.socket_directory().join("agents.sock")
     }
+}
+
+/// `path` against the working directory, lexically like Node's `path.resolve`.
+fn absolute(path: &Path) -> io::Result<PathBuf> {
+    Ok(if path.is_absolute() {
+        resolve(Path::new("/"), path)
+    } else {
+        resolve(&env::current_dir()?, path)
+    })
 }
 
 /// The user's configuration directory: `$XDG_CONFIG_HOME`, or `~/.config`. A relative value is
