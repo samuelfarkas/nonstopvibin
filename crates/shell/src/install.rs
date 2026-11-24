@@ -31,29 +31,26 @@ impl Install {
     #[must_use]
     pub fn detect(bundled_core: &Path) -> Self {
         let executable = std::env::current_exe().and_then(std::fs::canonicalize).ok();
-        // `<bundle>.app/Contents/MacOS/<executable>`.
-        let bundle = executable
-            .as_deref()
-            .and_then(|executable| executable.parent()?.parent()?.parent())
+        let directory = executable.as_deref().and_then(Path::parent);
+        // macOS runs `<bundle>/Contents/MacOS/<executable>`, whatever the bundle is named.
+        let macos_bundle = directory
+            .and_then(|directory| directory.parent()?.parent())
+            .filter(|_| cfg!(target_os = "macos"));
+        let package = match macos_bundle {
+            Some(bundle) => Some(bundle.join(BUNDLE_RESOURCES)),
+            None => directory.map(Path::to_path_buf),
+        };
+        // The updater replaces only an app bundle.
+        let bundle = macos_bundle
             .filter(|bundle| {
-                cfg!(target_os = "macos")
-                    && bundle
-                        .extension()
-                        .is_some_and(|extension| extension == "app")
+                bundle
+                    .extension()
+                    .is_some_and(|extension| extension == "app")
             })
             .map(Path::to_path_buf);
         let app_image = std::env::var_os("APPIMAGE")
             .map(PathBuf::from)
             .filter(|image| image.is_absolute());
-        let package = bundle.as_ref().map_or_else(
-            || {
-                executable
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map(Path::to_path_buf)
-            },
-            |bundle| Some(bundle.join(BUNDLE_RESOURCES)),
-        );
         let (resources, packaged) = match package {
             Some(resources) if resources.join(bundled_core).is_file() => (resources, true),
             _ => {
