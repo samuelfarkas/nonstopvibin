@@ -38,6 +38,18 @@ impl AppError {
         Self::new("nonstopvibin is shutting down.", 503)
     }
 
+    /// A request path that is not a URL or holds a segment `decodeURIComponent` rejects.
+    #[must_use]
+    pub fn malformed_path() -> Self {
+        Self::new("Malformed request path.", 400)
+    }
+
+    /// A method the path does not serve.
+    #[must_use]
+    pub fn method_not_allowed() -> Self {
+        Self::new("Method not allowed.", 405)
+    }
+
     /// A profile id that names no profile.
     #[must_use]
     pub fn profile_not_found() -> Self {

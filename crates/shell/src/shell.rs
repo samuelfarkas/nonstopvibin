@@ -10,6 +10,7 @@ use nsv_desktop::pipe::{
 };
 use nsv_desktop::{Command, HostEvent};
 use nsv_domain::endpoint::session_link;
+use nsv_domain::error::AppError;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -395,7 +396,7 @@ impl<H: ShellHost> Shell<'_, H> {
                     .as_ref()
                     .is_some_and(|profile| !self.host.has_profile(profile))
                 {
-                    self.host.report("Profile not found.");
+                    self.host.report(&AppError::profile_not_found().message);
                 } else {
                     self.show(View::Main { profile }).await;
                 }

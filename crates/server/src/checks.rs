@@ -176,7 +176,7 @@ impl Checks {
         let url = self
             .base
             .join(&request.uri().to_string())
-            .map_err(|_| AppError::new("Malformed request path.", 400))?;
+            .map_err(|_| AppError::malformed_path())?;
         let path = url.path();
         if path.starts_with("/api/") {
             if let Some(origin) = origin(request) {
@@ -220,7 +220,7 @@ impl Checks {
             return Ok(Admission::Gateway);
         }
         if request.method() != Method::GET && request.method() != Method::HEAD {
-            return Err(AppError::new("Method not allowed.", 405));
+            return Err(AppError::method_not_allowed());
         }
         Ok(Admission::Asset {
             path: path.to_owned(),

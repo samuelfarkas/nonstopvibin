@@ -149,8 +149,11 @@ async fn body(request: Request<Incoming>) -> Result<Value, AppError> {
 /// A 405 that lists the methods the path does serve (RFC 9110), ahead of the error JSON's
 /// headers as `server.ts` sent them.
 fn not_allowed(methods: &str) -> Response<Body> {
-    let mut response =
-        Refusal::new(StatusCode::METHOD_NOT_ALLOWED, "Method not allowed.").into_response();
+    let mut response = Refusal::new(
+        StatusCode::METHOD_NOT_ALLOWED,
+        AppError::method_not_allowed().message,
+    )
+    .into_response();
     if let Ok(allow) = HeaderValue::from_str(methods) {
         let rest = std::mem::replace(
             response.headers_mut(),
@@ -209,7 +212,7 @@ impl Api {
             .filter(|segment| !segment.is_empty())
             .map(parse::decode_component)
             .collect::<Option<_>>()
-            .ok_or_else(|| AppError::new("Malformed request path.", 400))?;
+            .ok_or_else(AppError::malformed_path)?;
         // Any profile path names a real profile before its route is chosen.
         let profile = match segments.get(1..3) {
             Some([profiles, id]) if profiles == "profiles" => {
