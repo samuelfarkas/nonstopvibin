@@ -46,12 +46,31 @@ pub(crate) fn open_approved(url: &str) -> Result<(), String> {
 
 /// Opens `target`: a URL [`safe_external`] approved, or the page holding the session link.
 pub(crate) fn open(target: impl AsRef<OsStr>) -> Result<(), String> {
-    launch(Command::new(Os::OPEN).arg(target))
+    Os::open(target.as_ref())
 }
 
 #[cfg(target_os = "macos")]
 impl Opener for Os {
-    const OPEN: &'static str = "open";
+    /// Through Launch Services, as Electron's `shell.openExternal` did, so no process's
+    /// arguments carry the URL: other users can read those, and a sign-in URL holds its OAuth
+    /// `state`.
+    fn open(target: &OsStr) -> Result<(), String> {
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+
+        let text = target.to_str().ok_or_else(|| "Invalid URL".to_owned())?;
+        let string = NSString::from_str(text);
+        let url = if text.starts_with('/') {
+            NSURL::fileURLWithPath(&string)
+        } else {
+            NSURL::URLWithString(&string).ok_or_else(|| "Invalid URL".to_owned())?
+        };
+        if NSWorkspace::sharedWorkspace().openURL(&url) {
+            Ok(())
+        } else {
+            Err("macOS could not open it.".to_owned())
+        }
+    }
 
     fn reveal(file: &Path) -> impl Future<Output = Result<(), String>> {
         std::future::ready(launch(Command::new("open").arg("-R").arg(file)))
@@ -59,8 +78,13 @@ impl Opener for Os {
 }
 
 #[cfg(target_os = "linux")]
+const XDG_OPEN: &str = "xdg-open";
+
+#[cfg(target_os = "linux")]
 impl Opener for Os {
-    const OPEN: &'static str = "xdg-open";
+    fn open(target: &OsStr) -> Result<(), String> {
+        launch(Command::new(XDG_OPEN).arg(target))
+    }
 
     /// The `FileManager1` D-Bus interface, else the folder in the default file manager.
     async fn reveal(file: &Path) -> Result<(), String> {
@@ -72,7 +96,7 @@ impl Opener for Os {
             Err(error) => {
                 tracing::warn!("no FileManager1 ({error}); opening the folder");
                 let folder = file.parent().unwrap_or(file);
-                launch(Command::new(Self::OPEN).arg(folder))
+                launch(Command::new(XDG_OPEN).arg(folder))
             }
         }
     }

@@ -33,7 +33,7 @@ zbus.workspace = true
 muda.workspace = true
 nsv-core.workspace = true
 objc2.workspace = true
-objc2-app-kit = { workspace = true, features = ["NSButton", "NSControl", "NSStatusBarButton", "NSStatusItem", "NSView"] }
+objc2-app-kit = { workspace = true, features = ["NSButton", "NSControl", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWorkspace"] }
 objc2-foundation.workspace = true
 objc2-service-management.workspace = true
 tao.workspace = true

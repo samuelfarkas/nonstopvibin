@@ -62,8 +62,8 @@ pub(crate) trait UpdateTarget: Sized {
 
 /// What the desktop opens for the app (`external.rs`).
 pub(crate) trait Opener {
-    /// The program that opens a URL in the default browser.
-    const OPEN: &'static str;
+    /// Opens a URL in the default browser, or a file with its default app.
+    fn open(target: &std::ffi::OsStr) -> Result<(), String>;
 
     /// Shows `file` selected in the file manager, as Electron's `showItemInFolder`.
     async fn reveal(file: &Path) -> Result<(), String>;
