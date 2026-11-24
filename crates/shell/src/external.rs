@@ -1,6 +1,7 @@
 //! What leaves the app: provider pages in the system browser, and the data folder in the file
 //! manager.
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Stdio;
 
@@ -43,9 +44,9 @@ pub(crate) fn open_approved(url: &str) -> Result<(), String> {
     open(&safe_external(url)?)
 }
 
-/// Opens `url`, which [`safe_external`] approved or which is the daemon's own session link.
-pub(crate) fn open(url: &str) -> Result<(), String> {
-    launch(Command::new(Os::OPEN).arg(url))
+/// Opens `target`: a URL [`safe_external`] approved, or the page holding the session link.
+pub(crate) fn open(target: impl AsRef<OsStr>) -> Result<(), String> {
+    launch(Command::new(Os::OPEN).arg(target))
 }
 
 #[cfg(target_os = "macos")]

@@ -42,7 +42,8 @@ Before changing `crates/window` or `crates/shell`, keep these properties:
 - Navigation to other origins, new windows and downloads stay denied. Devtools
   stay off in release builds, and the CSP stays as it is.
 - The session token reaches the helper on stdin, never in argv, the environment
-  or a URL.
+  or a URL. The browser fallback opens an owner-only page in the data directory
+  that redirects to the session link, so the opener's arguments hold no token.
 
 The daemon runs on Tokio's `current_thread` runtime, measured at 0 idle wakeups.
 Never block it. SQLite runs on the store thread (`crates/store/src/store.rs`), and

@@ -3,6 +3,7 @@
 //! the browser fallback, which needs the fake `xdg-open` that tests/gui.sh puts on PATH.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
@@ -189,7 +190,8 @@ fn a_known_profile_opens_and_a_crashed_helper_is_replaced() {
 }
 
 /// Needs tests/gui.sh's fake `xdg-open`, which appends its arguments to
-/// `$NSV_OPENED`.
+/// `$NSV_OPENED`. Any local user can read the opener's arguments, so they name an owner-only
+/// page in the data directory that leads to the session link, never the link itself.
 #[test]
 #[ignore = "needs the fake xdg-open from tests/gui.sh"]
 fn a_helper_that_cannot_start_falls_back_to_the_browser() {
@@ -198,13 +200,20 @@ fn a_helper_that_cannot_start_falls_back_to_the_browser() {
     let fake = Fake::new("fallback");
     // Exits before Ready, as without a display or WebKitGTK.
     fake.crash(1);
-    let link = format!("http://127.0.0.1:4100/#session={TOKEN}\n");
+    let page = fake.dir.join("browser.html");
+    let arguments = format!("{}\n", page.display());
+    let redirect = format!(
+        r#"<meta http-equiv="refresh" content="0;url=http://127.0.0.1:4100/#session={TOKEN}">"#
+    );
     for helper in [fake.helper(), fake.dir.join("no-such-helper")] {
         let host = Host::new(4100, &fake.dir);
         let shell = spawn_shell(&host, options(helper, true, false, &fake.config()));
-        wait_until("the browser opens the session link", || {
-            fs::read_to_string(&opened).is_ok_and(|text| text == link)
+        wait_until("the browser opens the session page", || {
+            fs::read_to_string(&opened).is_ok_and(|text| text == arguments)
         });
+        assert!(fs::read_to_string(&page).unwrap().contains(&redirect));
+        assert_eq!(fs::metadata(&page).unwrap().mode() & 0o777, 0o600);
+        fs::remove_file(&page).unwrap();
         fs::remove_file(&opened).unwrap();
         host.close();
         shell.join().unwrap();

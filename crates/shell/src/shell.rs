@@ -11,6 +11,7 @@ use nsv_desktop::pipe::{
 use nsv_desktop::{Command, HostEvent};
 use nsv_domain::endpoint::session_link;
 use nsv_domain::error::AppError;
+use nsv_files::write_atomic_unsynced;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -281,7 +282,7 @@ impl<H: ShellHost> Shell<'_, H> {
             Ok(helper) => self.helper = Some(helper),
             Err(error) => {
                 tracing::warn!("could not start the window helper: {error}");
-                self.fall_back();
+                self.fall_back().await;
                 self.helper_gone(None);
             }
         }
@@ -307,13 +308,28 @@ impl<H: ShellHost> Shell<'_, H> {
     }
 
     /// Without a helper, the main window and the quota popup become the session link in the
-    /// system browser.
-    fn fall_back(&self) {
+    /// system browser. The opener gets an owner-only page that redirects to the link, since
+    /// any local user can read a process's arguments.
+    async fn fall_back(&self) {
         if !self.main && self.popup != Popup::Open {
             return;
         }
         let link = session_link(self.host.origin().as_str(), self.host.session_token());
-        if let Err(error) = external::open(&link) {
+        let html = format!(
+            r#"<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url={link}"><title>NonstopVibin</title><a href="{link}">Open NonstopVibin</a>"#
+        );
+        let page = self.host.data_directory().browser_page();
+        let path = page.clone();
+        let written = tokio::task::spawn_blocking(move || {
+            write_atomic_unsynced(&path, html.as_bytes(), 0o600)
+        })
+        .await
+        .unwrap_or_else(|error| Err(io::Error::other(error)));
+        if let Err(error) = written {
+            tracing::warn!("could not write the page for the browser: {error}");
+            return;
+        }
+        if let Err(error) = external::open(&page) {
             tracing::warn!("could not open the browser either: {error}");
         }
     }
@@ -342,7 +358,7 @@ impl<H: ShellHost> Shell<'_, H> {
                 };
                 if !helper.ready() {
                     tracing::warn!("the window helper could not start ({status:?})");
-                    self.fall_back();
+                    self.fall_back().await;
                 } else if !status.is_some_and(|status| status.success()) {
                     tracing::warn!("the window helper stopped ({status:?})");
                 }

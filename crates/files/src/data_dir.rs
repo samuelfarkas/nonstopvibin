@@ -156,6 +156,13 @@ impl DataDir {
         self.0.join("webview")
     }
 
+    /// The page that hands the browser the session link when no window helper can start. It
+    /// holds the session token, so only the owner may read it.
+    #[must_use]
+    pub fn browser_page(&self) -> PathBuf {
+        self.0.join("browser.html")
+    }
+
     /// `/tmp/nonstopvibin-<uid>-<24 hex of SHA-256 of the data directory>`, the agent
     /// credential socket's directory. A short path stays within macOS's 103-byte socket path
     /// limit, whatever the home or data directory.
