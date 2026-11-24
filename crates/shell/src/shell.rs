@@ -182,7 +182,7 @@ impl<H: ShellHost> Shell<'_, H> {
         self.command(action.command).await
     }
 
-    /// A command from the tray or the macOS app menu.
+    /// A command from the tray or the app menu.
     async fn command(&mut self, command: Command) -> Step {
         match command {
             Command::OpenMain => self.show(View::Main { profile: None }).await,

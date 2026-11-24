@@ -57,8 +57,7 @@ pub(crate) enum UserEvent {
         kind: DialogKind,
         choice: Choice,
     },
-    /// A click in the macOS app menu, the only app menu.
-    #[cfg(target_os = "macos")]
+    /// A click or a shortcut in the app menu.
     Menu(muda::MenuId),
 }
 
@@ -101,7 +100,7 @@ pub(crate) struct Boot {
     /// The secret the bridge script signs its messages with, so a message from any other
     /// script or frame is dropped.
     pub(crate) nonce: String,
-    /// The app can update itself: the macOS app menu enables "Check for updates…".
+    /// The app can update itself: the app menu enables "Check for updates…".
     pub(crate) updates: bool,
 }
 
@@ -301,6 +300,7 @@ impl App {
     }
 
     fn quit(&mut self) {
+        Os::main_closing(&mut self.native);
         self.main = None;
         self.quota = None;
         self.exit = Some(0);
@@ -369,7 +369,7 @@ impl App {
         let url = self.origin.main_url(profile);
         match self.open(target, Pane::Main, Os::main_window(builder), &url) {
             Ok(surface) => {
-                Os::main_opened(&surface.window);
+                Os::main_opened(&mut self.native, &surface.window);
                 self.main = Some(surface);
             }
             Err(error) => self.failed("main window", &error),
@@ -468,6 +468,7 @@ impl App {
         if let Some(bounds) = normal_bounds(&main.window) {
             self.main_bounds = Some(bounds);
         }
+        Os::main_closing(&mut self.native);
         drop(main);
         self.main_closing = Closing::No;
         self.report_closed(ViewKind::Main, self.main_bounds);
@@ -545,9 +546,8 @@ impl App {
                 }
                 self.report_closed(ViewKind::Dialog { kind, choice }, None);
             }
-            #[cfg(target_os = "macos")]
             UserEvent::Menu(id) => {
-                let main = self.main.as_ref().map(|main| &main.webview);
+                let main = self.main.as_ref().map(|main| (&main.window, &main.webview));
                 if let Some(command) = Os::menu(&mut self.native, &id, main) {
                     self.send(&FromHelper::Command { command });
                 }

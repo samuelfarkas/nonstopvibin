@@ -158,9 +158,10 @@ two differ. A field only the UI reads needs no Rust change.
 ## Linux desktop
 
 Linux does not require a desktop secret service. GNOME may require an AppIndicator
-extension to show a tray icon; the View menu's quota command remains available. If
-the window helper cannot start, for example without WebKitGTK, the daemon opens the
-session link in the system browser. A desktop Linux session remains untested. CI
+extension to show a tray icon; the main window's menu bar still offers the quota popup
+(View), Check for updates… and Quit. If the window helper cannot start, for example without
+WebKitGTK, the daemon opens the session link in the system browser. A desktop Linux session
+remains untested. CI
 ([checks.yml](../.github/workflows/checks.yml)) runs the workspace tests and the
 window helper's UI checks under Xvfb and a session bus on Linux, and packages and
 tests updates on Linux and macOS. Xvfb does not replace testing installation and

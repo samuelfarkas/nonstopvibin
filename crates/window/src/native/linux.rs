@@ -8,12 +8,15 @@ use gtk::gdk::prelude::*;
 use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
 use gtk::prelude::*;
 use gtk::{ButtonsType, DialogFlags, FileChooserAction, MessageType, ResponseType};
+use muda::MenuId;
+use nsv_desktop::Command;
 use nsv_desktop::pipe::{Anchor, Choice, Rect};
 use tao::event_loop::{EventLoop, EventLoopBuilder};
 use tao::platform::unix::{WindowBuilderExtUnix, WindowExtUnix};
-use tao::window::{Window, WindowBuilder};
+use tao::window::{Fullscreen, Window, WindowBuilder};
 use wry::{WebView, WebViewBuilder, WebViewBuilderExtUnix};
 
+use super::menu::{self, Action, AppMenu, WindowItem, Zoom};
 use super::{Dialog, FOLDER_BUTTON, FOLDER_TITLE, Native};
 use crate::app::{Proxy, Target, Ticket, UserEvent, log, post};
 
@@ -24,9 +27,17 @@ const NON_UTF8_FOLDER: &str = "The project folder's path is not valid UTF-8.";
 
 pub(crate) struct Gtk;
 
-/// Linux has no app menu and keeps the title bar.
+#[derive(Default)]
+pub(crate) struct State {
+    /// "Check for updates…" is enabled.
+    updates: bool,
+    /// The main window's menu bar and its page's zoom: each main window gets its own.
+    bar: Option<(AppMenu, Zoom)>,
+}
+
+/// The app menu is the main window's menu bar, and the windows keep their title bars.
 impl Native for Gtk {
-    type State = ();
+    type State = State;
 
     const POPUP_BELOW_ANCHOR: bool = false;
     const MAIN_DRAG_REGIONS: bool = false;
@@ -35,11 +46,30 @@ impl Native for Gtk {
         EventLoopBuilder::<T>::with_user_event().build()
     }
 
-    fn start((): &mut (), _proxy: &Proxy, _updates: bool) {}
+    fn start(state: &mut State, proxy: &Proxy, updates: bool) {
+        state.updates = updates;
+        menu::listen(proxy);
+    }
 
-    fn settle((): &mut (), _target: &Target, _main_on_screen: impl FnOnce() -> bool) {}
+    fn settle(_state: &mut State, _target: &Target, _main_on_screen: impl FnOnce() -> bool) {}
 
-    fn drag((): &(), _window: &Window, _x: i32, _y: i32) {}
+    fn drag(_state: &State, _window: &Window, _x: i32, _y: i32) {}
+
+    /// The command for the daemon, or `None` when the item zoomed the page or was a window
+    /// item.
+    fn menu(state: &mut State, id: &MenuId, main: Option<(&Window, &WebView)>) -> Option<Command> {
+        let (bar, zoom) = state.bar.as_mut()?;
+        match bar.action(id)? {
+            Action::Command(command) => return Some(command),
+            Action::Zoom(step) => zoom.apply(step, main.map(|(_, webview)| webview)),
+            Action::Window(item) => {
+                if let Some((window, _)) = main {
+                    window_item(window, item);
+                }
+            }
+        }
+        None
+    }
 
     /// Keeps the webview's storage in `path`, for the owner only.
     fn web_data(path: PathBuf) -> io::Result<Option<PathBuf>> {
@@ -70,9 +100,27 @@ impl Native for Gtk {
         builder.with_skip_taskbar(true)
     }
 
-    /// The window manager's icon; Wayland compositors take it from the desktop entry instead.
-    fn main_opened(window: &Window) {
+    /// The window manager's icon, which Wayland compositors take from the desktop entry
+    /// instead, and the menu bar.
+    fn main_opened(state: &mut State, window: &Window) {
         set_icon(window);
+        let bar = menu::build(state.updates).and_then(|bar| {
+            bar.menu
+                .init_for_gtk_window(window.gtk_window(), window.default_vbox())?;
+            Ok(bar)
+        });
+        state.bar = match bar {
+            Ok(bar) => Some((bar, Zoom::default())),
+            Err(error) => {
+                log(format_args!("could not build the menu: {error}"));
+                None
+            }
+        };
+    }
+
+    /// The menu bar goes while its items exist, so that it can remove their shortcuts.
+    fn main_closing(state: &mut State) {
+        state.bar = None;
     }
 
     fn webview(builder: WebViewBuilder<'_>, window: &Window) -> Result<WebView, String> {
@@ -187,6 +235,18 @@ impl Native for Gtk {
             width: u32::try_from(area.width()).ok()?,
             height: u32::try_from(area.height()).ok()?,
         })
+    }
+}
+
+fn window_item(window: &Window, item: WindowItem) {
+    match item {
+        WindowItem::FullScreen => {
+            let full = window.fullscreen().is_none();
+            window.set_fullscreen(full.then_some(Fullscreen::Borderless(None)));
+        }
+        WindowItem::Minimize => window.set_minimized(true),
+        // As the title bar's close button: the page may keep the window for a draft.
+        WindowItem::Close => window.gtk_window().close(),
     }
 }
 

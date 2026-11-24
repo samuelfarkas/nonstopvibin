@@ -257,7 +257,7 @@ pub struct Start {
     pub bounds: Option<Rect>,
     /// The data directory's webview storage, which Linux keeps for the owner only.
     pub webview: PathBuf,
-    /// The app can update itself: the macOS app menu enables "Check for updates…".
+    /// The app can update itself: the app menu enables "Check for updates…".
     pub updates: bool,
 }
 
@@ -311,7 +311,7 @@ pub enum FromHelper {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<ProfileId>,
     },
-    /// A command from the macOS app menu, which the daemon carries out as from the tray.
+    /// A command from the app menu, which the daemon carries out as from the tray.
     Command { command: Command },
 }
 

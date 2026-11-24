@@ -4,8 +4,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{AboutMetadata, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use muda::MenuId;
 use nsv_desktop::Command;
 use nsv_desktop::pipe::{Anchor, Choice, Rect};
 use objc2::MainThreadMarker;
@@ -24,6 +23,7 @@ use tao::platform::macos::{
 use tao::window::{Window, WindowBuilder};
 use wry::{WebView, WebViewBuilder};
 
+use super::menu::{self, Action, AppMenu, Zoom};
 use super::{Dialog, FOLDER_BUTTON, FOLDER_TITLE, Native};
 use crate::app::{Proxy, Target, Ticket, UserEvent, log, post};
 
@@ -35,42 +35,13 @@ const EVENT_TRACKING: &str = "NSEventTrackingRunLoopMode";
 
 pub(crate) struct AppKit;
 
-impl AppKit {
-    /// An app menu item: the command for the daemon, or `None` when it was the page zoom.
-    pub(crate) fn menu(state: &mut State, id: &MenuId, main: Option<&WebView>) -> Option<Command> {
-        let level = match menu_action(id)? {
-            MenuAction::Command(command) => return Some(command),
-            MenuAction::ResetZoom => 0.0,
-            MenuAction::ZoomIn => (state.zoom.0 + 0.5).min(9.0),
-            MenuAction::ZoomOut => (state.zoom.0 - 0.5).max(-8.0),
-        };
-        state.zoom = Zoom(level);
-        if let Some(main) = main
-            && let Err(error) = main.zoom(state.zoom.scale())
-        {
-            log(format_args!("could not zoom: {error}"));
-        }
-        None
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct State {
     /// The menu bar, from the loop's start.
-    menu: Option<Menu>,
+    menu: Option<AppMenu>,
     /// The Dock icon shows.
     regular: bool,
     zoom: Zoom,
-}
-
-/// Electron's zoom level: each step of 0.5 scales the page by 1.2^0.5.
-#[derive(Debug, Clone, Copy, Default)]
-struct Zoom(f64);
-
-impl Zoom {
-    fn scale(self) -> f64 {
-        1.2_f64.powf(self.0)
-    }
 }
 
 impl Native for AppKit {
@@ -86,11 +57,27 @@ impl Native for AppKit {
         event_loop
     }
 
-    /// Electron's application menu (`desktop/main.ts`).
+    /// The app menu in the menu bar.
     fn start(state: &mut State, proxy: &Proxy, updates: bool) {
-        match install_menu(proxy, updates) {
-            Ok(menu) => state.menu = Some(menu),
+        match menu::build(updates) {
+            Ok(app_menu) => {
+                app_menu.menu.init_for_nsapp();
+                app_menu.window.set_as_windows_menu_for_nsapp();
+                menu::listen(proxy);
+                state.menu = Some(app_menu);
+            }
             Err(error) => log(format_args!("could not build the menu: {error}")),
+        }
+    }
+
+    /// The command for the daemon, or `None` when the item was the page zoom.
+    fn menu(state: &mut State, id: &MenuId, main: Option<(&Window, &WebView)>) -> Option<Command> {
+        match state.menu.as_ref()?.action(id)? {
+            Action::Command(command) => Some(command),
+            Action::Zoom(step) => {
+                state.zoom.apply(step, main.map(|(_, webview)| webview));
+                None
+            }
         }
     }
 
@@ -131,7 +118,9 @@ impl Native for AppKit {
         builder
     }
 
-    fn main_opened(_window: &Window) {}
+    fn main_opened(_state: &mut State, _window: &Window) {}
+
+    fn main_closing(_state: &mut State) {}
 
     fn webview(builder: WebViewBuilder<'_>, window: &Window) -> Result<WebView, String> {
         builder.build(window).map_err(|error| error.to_string())
@@ -299,142 +288,4 @@ fn drag_window(window: &Window, x: f64, y: f64) {
 #[expect(deprecated, reason = "its replacement, activate(), needs macOS 14")]
 fn activate(main_thread: MainThreadMarker) {
     NSApplication::sharedApplication(main_thread).activateIgnoringOtherApps(true);
-}
-
-/// What a menu item asks for: a command the daemon carries out, or the page zoom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MenuAction {
-    Command(Command),
-    ResetZoom,
-    ZoomIn,
-    ZoomOut,
-}
-
-const ACTIONS: [(&str, MenuAction); 7] = [
-    ("check-updates", MenuAction::Command(Command::CheckUpdates)),
-    ("quit", MenuAction::Command(Command::Quit)),
-    ("quotas", MenuAction::Command(Command::ToggleQuota)),
-    ("open-main", MenuAction::Command(Command::OpenMain)),
-    ("reset-zoom", MenuAction::ResetZoom),
-    ("zoom-in", MenuAction::ZoomIn),
-    ("zoom-out", MenuAction::ZoomOut),
-];
-
-fn menu_action(id: &MenuId) -> Option<MenuAction> {
-    ACTIONS
-        .iter()
-        .find(|(name, _)| id == *name)
-        .map(|&(_, action)| action)
-}
-
-fn item(action: MenuAction, label: &str, modifiers: Modifiers, key: Option<Code>) -> MenuItem {
-    let id = ACTIONS
-        .iter()
-        .find(|(_, a)| *a == action)
-        .map_or("", |(name, _)| name);
-    MenuItem::with_id(
-        id,
-        label,
-        true,
-        key.map(|key| Accelerator::new(modifiers, key)),
-    )
-}
-
-/// A command's item, labelled and enabled as in the tray.
-fn command_item(
-    command: Command,
-    updates: bool,
-    modifiers: Modifiers,
-    key: Option<Code>,
-) -> MenuItem {
-    let item = item(
-        MenuAction::Command(command),
-        command.app_menu_label(),
-        modifiers,
-        key,
-    );
-    item.set_enabled(command.enabled(updates));
-    item
-}
-
-/// Electron's application menu (`desktop/main.ts`). Menu events arrive as `UserEvent::Menu`.
-/// "Check for updates…" is enabled when the app can update itself (`updates`).
-fn install_menu(proxy: &Proxy, updates: bool) -> muda::Result<Menu> {
-    let command = Modifiers::META;
-    let app = Submenu::with_items(
-        "NonstopVibin",
-        true,
-        &[
-            &PredefinedMenuItem::about(
-                None,
-                Some(AboutMetadata {
-                    name: Some("NonstopVibin".to_owned()),
-                    version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-                    ..AboutMetadata::default()
-                }),
-            ),
-            &command_item(Command::CheckUpdates, updates, command, None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
-            &PredefinedMenuItem::separator(),
-            &command_item(Command::Quit, updates, command, Some(Code::KeyQ)),
-        ],
-    )?;
-    let edit = Submenu::with_items(
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(None),
-            &PredefinedMenuItem::redo(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::cut(None),
-            &PredefinedMenuItem::copy(None),
-            &PredefinedMenuItem::paste(None),
-            &PredefinedMenuItem::select_all(None),
-        ],
-    )?;
-    let view = Submenu::with_items(
-        "View",
-        true,
-        &[
-            &command_item(
-                Command::ToggleQuota,
-                updates,
-                command | Modifiers::SHIFT,
-                Some(Code::KeyU),
-            ),
-            &command_item(Command::OpenMain, updates, command, Some(Code::Digit1)),
-            &PredefinedMenuItem::separator(),
-            &item(
-                MenuAction::ResetZoom,
-                "Actual Size",
-                command,
-                Some(Code::Digit0),
-            ),
-            &item(MenuAction::ZoomIn, "Zoom In", command, Some(Code::Equal)),
-            &item(MenuAction::ZoomOut, "Zoom Out", command, Some(Code::Minus)),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::fullscreen(None),
-        ],
-    )?;
-    let window = Submenu::with_items(
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(None),
-            &PredefinedMenuItem::maximize(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::bring_all_to_front(None),
-        ],
-    )?;
-    let menu = Menu::with_items(&[&app, &edit, &view, &window])?;
-    menu.init_for_nsapp();
-    window.set_as_windows_menu_for_nsapp();
-    let proxy = proxy.clone();
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        post(&proxy, UserEvent::Menu(event.id));
-    }));
-    Ok(menu)
 }

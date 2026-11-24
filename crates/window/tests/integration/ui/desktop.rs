@@ -1,11 +1,11 @@
 //! What the user does to the helper's main window: keys, a click, the close button, and
-//! whether the window is on screen; on macOS also typing, ⌘ shortcuts, the pasteboard and the
-//! menu bar. X11 (`XTest`) on Linux; System Events on macOS, which needs the Accessibility
-//! permission the CI runner grants.
+//! whether the window is on screen; on Linux also Ctrl shortcuts, and on macOS typing, ⌘
+//! shortcuts, the pasteboard and the menu bar. X11 (`XTest`) on Linux; System Events on macOS,
+//! which needs the Accessibility permission the CI runner grants.
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use x11_dl::keysym::{XK_Escape, XK_Return, XK_Tab, XK_space};
+    use x11_dl::keysym::{XK_Control_L, XK_Escape, XK_Return, XK_Shift_L, XK_Tab, XK_space};
 
     use crate::common::x11::{Window, X};
 
@@ -37,7 +37,22 @@ mod imp {
             self.0.key(keysym);
         }
 
-        /// A click at `(x, y)` in the main window's page.
+        /// Ctrl with the character `key`, and Shift when `shift`: a menu bar shortcut.
+        pub(crate) fn shortcut(&self, key: &str, shift: bool) {
+            let mut characters = key.chars();
+            let (Some(character), None) = (characters.next(), characters.next()) else {
+                panic!("no key {key:?}");
+            };
+            let mut chord = vec![XK_Control_L];
+            if shift {
+                chord.push(XK_Shift_L);
+            }
+            // A Latin-1 character's keysym is its code point.
+            chord.push(u32::from(character));
+            self.0.chord(&chord);
+        }
+
+        /// A click at `(x, y)` from the main window's top-left corner.
         pub(crate) fn click(&self, x: f64, y: f64) {
             let window = self.main().unwrap();
             let (left, top, _, _) = self.0.geometry(window);

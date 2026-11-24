@@ -1,12 +1,14 @@
 //! What each platform does its own way: the windows' chrome, the webview's container, the
-//! clipboard, the folder picker, message dialogs, the work area and, on macOS, the app menu and
-//! the Dock icon. [`Native`] states it once; `linux.rs` (GTK) and `macos.rs` (AppKit) implement
-//! it, and answers come back as events on the loop. The dialogs' text, buttons and what each
-//! button means are written here once.
+//! clipboard, the folder picker, message dialogs, the work area, where the app menu shows and,
+//! on macOS, the Dock icon. [`Native`] states it once; `linux.rs` (GTK) and `macos.rs` (AppKit)
+//! implement it, and answers come back as events on the loop. The dialogs' text, buttons and
+//! what each button means are written here once, and the app menu's items in `menu.rs`.
 
 use std::io;
 use std::path::PathBuf;
 
+use muda::MenuId;
+use nsv_desktop::Command;
 use nsv_desktop::pipe::{Anchor, Choice, DialogKind, Failure, Reason, Rect};
 use tao::event_loop::EventLoop;
 use tao::window::{Window, WindowBuilder};
@@ -18,6 +20,7 @@ use crate::app::{Proxy, Target, Ticket};
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+mod menu;
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::Gtk as Os;
@@ -41,6 +44,13 @@ pub(crate) trait Native {
     fn settle(state: &mut Self::State, target: &Target, main_on_screen: impl FnOnce() -> bool);
     /// A press at page point (`x`, `y`) in a drag region of the main window.
     fn drag(state: &Self::State, window: &Window, x: i32, y: i32);
+    /// An app menu item, on the main window if one is open: the command for the daemon, or
+    /// `None` when the helper carried it out itself.
+    fn menu(
+        state: &mut Self::State,
+        id: &MenuId,
+        main: Option<(&Window, &WebView)>,
+    ) -> Option<Command>;
 
     /// Where WebKit keeps its storage, made from the data directory's `path`; `None` keeps the
     /// platform's default.
@@ -51,7 +61,9 @@ pub(crate) trait Native {
     fn main_window(builder: WindowBuilder) -> WindowBuilder;
     fn quota_window(builder: WindowBuilder) -> WindowBuilder;
     /// The main window has been built.
-    fn main_opened(window: &Window);
+    fn main_opened(state: &mut Self::State, window: &Window);
+    /// The main window, if any, is about to be destroyed.
+    fn main_closing(state: &mut Self::State);
     /// The webview inside `window`.
     ///
     /// # Errors

@@ -1,5 +1,6 @@
 //! The commands a user gives the daemon from a menu: the tray's, which the shell draws, and the
-//! macOS app menu's, which the window helper draws and forwards.
+//! app menu's, which the window helper draws (the macOS menu bar, the Linux main window's menu
+//! bar) and forwards.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +25,7 @@ impl Command {
         }
     }
 
-    /// The macOS app menu's label: beside the window's own items it names the main window.
+    /// The app menu's label: beside the window's own items it names the main window.
     #[must_use]
     pub const fn app_menu_label(self) -> &'static str {
         match self {

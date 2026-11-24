@@ -230,7 +230,7 @@ builds older than 0.2.0 install that manually. Development checkouts rerun
 
 Enabled packaged macOS and AppImage builds check shortly after startup and then
 periodically (`FIRST_CHECK` and `EVERY` in `crates/shell/src/update/mod.rs`).
-**Check for updates…** is available in the macOS app menu and the tray's menu; it is disabled on unsupported or unconfigured builds.
+**Check for updates…** is available in the app menu (the macOS menu bar, the Linux main window's menu bar) and the tray's menu; it is disabled on unsupported or unconfigured builds.
 
 Downloads happen in the background. A native dialog offers **Restart to update**
 or **Later**, defaulting to Later because restart interrupts connected agents.

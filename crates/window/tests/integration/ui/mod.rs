@@ -188,10 +188,21 @@ fn perform(desktop: &Desktop, helper: &Helper, bridge: &mut Bridge, action: &Val
     if let Some(answer) = desktop.mac_action(action) {
         return answer;
     }
+    #[cfg(target_os = "linux")]
+    if let Some(key) = action["shortcut"].as_str() {
+        desktop.shortcut(key, action["shift"] == true);
+        return json!({});
+    }
     if let Some(key) = action["key"].as_str() {
         desktop.key(key);
     } else if let Some([x, y]) = action["click"].as_array().map(Vec::as_slice) {
-        desktop.click(x.as_f64().unwrap(), y.as_f64().unwrap());
+        // The macOS page fills its window; the Linux one starts below the menu bar.
+        let top = if cfg!(target_os = "linux") {
+            action["top"].as_f64().unwrap()
+        } else {
+            0.0
+        };
+        desktop.click(x.as_f64().unwrap(), y.as_f64().unwrap() + top);
     } else if action["close"] == true {
         desktop.close_main();
         wait_until("the closed window hides", || !desktop.main_visible());
@@ -237,6 +248,17 @@ fn the_app_menu_edits_text_and_reaches_the_daemon() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let site = Site::start(fixtures("focus.html"), "app-menu");
     check_once("app-menu", &site, View::Main { profile: None }, TOKEN);
+}
+
+/// The Linux main window's menu bar, from the keyboard: View's shortcuts reach the daemon and
+/// zoom the page, Close asks the page first, and Quit.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs the built interface, its fixtures and a desktop: run tests/ui.sh"]
+fn the_menu_bar_zooms_closes_and_reaches_the_daemon() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let site = Site::start(fixtures("focus.html"), "menu-bar");
+    check_once("menu-bar", &site, View::Main { profile: None }, TOKEN);
 }
 
 /// The macOS main window moves when a drag starts in a drag region, not on a button in one.

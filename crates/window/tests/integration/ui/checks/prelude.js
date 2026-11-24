@@ -62,13 +62,15 @@ async function sees(type, label, input) {
 }
 const key = (name) =>
   sees("keyup", `the ${JSON.stringify(name)} key`, { key: name });
-// A real mouse click at the middle of the element.
+// A real mouse click at the middle of the element. `top` is how far below the window's top
+// the page starts: the height of the Linux main window's menu bar.
 async function click(selector) {
   const { x, y, width, height } = (
     await present(selector)
   ).getBoundingClientRect();
   await sees("mouseup", `a click on ${selector}`, {
     click: [x + width / 2, y + height / 2],
+    top: outerHeight - innerHeight,
   });
 }
 function present(selector) {

@@ -252,11 +252,24 @@ impl X {
 
     /// Presses and releases a key, as the keyboard would, into the focused window.
     pub(crate) fn key(&self, keysym: u32) {
-        // SAFETY: a keysym lookup on an open display.
-        let code = unsafe { (self.xlib.XKeysymToKeycode)(self.display, c_ulong::from(keysym)) };
-        for pressed in [xlib::True, xlib::False] {
+        self.chord(&[keysym]);
+    }
+
+    /// Presses `keysyms` in order and releases them in reverse: a shortcut, modifiers first.
+    pub(crate) fn chord(&self, keysyms: &[u32]) {
+        let codes: Vec<c_uint> = keysyms
+            .iter()
+            // SAFETY: a keysym lookup on an open display.
+            .map(|&keysym| unsafe {
+                (self.xlib.XKeysymToKeycode)(self.display, c_ulong::from(keysym))
+            })
+            .map(c_uint::from)
+            .collect();
+        let presses = codes.iter().map(|&code| (code, xlib::True));
+        let releases = codes.iter().rev().map(|&code| (code, xlib::False));
+        for (code, pressed) in presses.chain(releases) {
             // SAFETY: a synthetic key event for a keycode of this display.
-            unsafe { (self.xtest.XTestFakeKeyEvent)(self.display, c_uint::from(code), pressed, 0) };
+            unsafe { (self.xtest.XTestFakeKeyEvent)(self.display, code, pressed, 0) };
         }
         self.sync();
     }
