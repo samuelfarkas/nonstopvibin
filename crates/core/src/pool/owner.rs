@@ -481,11 +481,12 @@ async fn terminated(terminate: oneshot::Sender<Terminate>) -> Result<(), AppErro
 const FIRST_PORT: u32 = 10_001;
 const PORTS: u32 = 10_000;
 
-/// A core port on 127.0.0.1 nothing listened on a moment ago. Calls walk the range from a place
-/// the process id picks, so concurrent starts and other instances get different ports.
+/// A core port on 127.0.0.1 nothing listened on a moment ago. Each call walks the range from a
+/// random place, which another local user cannot compute to bind the port first, stepped by a
+/// counter the process's calls share.
 fn unused_port() -> io::Result<u16> {
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let start = std::process::id().wrapping_mul(7_919);
+    let start = u32::from_ne_bytes(nsv_domain::random::bytes::<4>()?);
     for _ in 0..PORTS {
         let offset = start.wrapping_add(NEXT.fetch_add(1, Ordering::Relaxed)) % PORTS;
         let port = u16::try_from(FIRST_PORT + offset).map_err(io::Error::other)?;
