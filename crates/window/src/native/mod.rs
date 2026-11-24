@@ -151,6 +151,12 @@ impl Dialog<'_> {
                 OK,
                 false,
             ),
+            DialogKind::UpdateGone => (
+                "The update is no longer available",
+                "It was removed before it could be installed, and NonstopVibin keeps running. Check for updates to download it again.",
+                OK,
+                true,
+            ),
             DialogKind::CouldNotRestart => ("Could not restart for update", REOPEN, OK, true),
             DialogKind::CouldNotInstall => ("Could not install update", REOPEN, OK, true),
         };

@@ -20,7 +20,7 @@ use crate::install::Install;
 use crate::login::{Login, UNPACKAGED};
 use crate::platform::{LoginItem, Opener, Os, SystemTray};
 use crate::tray::{Action, Look, Popup, Toggle, Tray, TrayLink};
-use crate::update::{Staged, Updates};
+use crate::update::{Closed, Staged, Updates};
 use crate::{ShellHost, UpdateFailed, external};
 
 #[derive(Debug, Clone)]
@@ -373,26 +373,31 @@ impl<H: ShellHost> Shell<'_, H> {
             // The helper notes it.
             FromHelper::Ready => {}
             FromHelper::Closed { view, bounds, last } => {
-                let update = match view {
+                let closed = match view {
                     ViewKind::Main => {
                         self.main = false;
                         self.bounds = bounds.or(self.bounds);
-                        None
+                        Closed::Nothing
                     }
                     ViewKind::Quota => {
                         self.popup = Popup::Closed {
                             at: Some(Instant::now()),
                         };
-                        None
+                        Closed::Nothing
                     }
-                    ViewKind::Dialog { kind, choice } => self.updates.closed(kind, choice),
+                    ViewKind::Dialog { kind, choice } => self.updates.closed(kind, choice).await,
                 };
                 if last {
                     // The next view needs a new helper.
                     self.helper_gone(None);
                 }
-                if let Some(update) = update {
-                    return self.install(update).await;
+                match closed {
+                    Closed::Nothing => {}
+                    Closed::Install(update) => return self.install(update).await,
+                    Closed::Gone => {
+                        let kind = DialogKind::UpdateGone;
+                        self.show(View::Dialog { kind }).await;
+                    }
                 }
             }
             FromHelper::Bridge { id, call } => {

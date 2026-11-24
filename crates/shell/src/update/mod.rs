@@ -2,7 +2,8 @@
 //! update parts of desktop/main.ts): packaged builds with `updatesEnabled` update on macOS and
 //! from an `AppImage`; a deb or a development run never does. The first check runs 30 s after
 //! start, then every 6 h. A found update is downloaded, verified and staged beside the app
-//! before "An update is ready" asks; "Restart to update" stops the daemon and swaps it in.
+//! before "An update is ready" asks; "Restart to update" stops the daemon and swaps it in, or
+//! says it is gone when another instance of the install has cleared the staging folder.
 //!
 //! A release is trusted when `SHA256SUMS` carries the release key's minisign signature (when
 //! this build embeds `build/update-signing.pub`), the feed and the payload match their lines in
@@ -59,6 +60,17 @@ enum Mode {
     /// macOS cannot replace the bundle where it is: the menu item says to move it.
     MoveFirst,
     On(Box<Updater>),
+}
+
+/// What a closed dialog asks of the shell.
+#[derive(Debug)]
+pub(crate) enum Closed {
+    Nothing,
+    /// "Restart to update": stop the daemon and swap this in.
+    Install(Staged),
+    /// "Restart to update" found the update gone: the app keeps running, and the next check
+    /// downloads it again.
+    Gone,
 }
 
 /// What [`UpdateTarget::detect`] found.
@@ -146,12 +158,25 @@ impl Updates {
         }
     }
 
-    /// A dialog closed with the user's choice: the staged update to install when it was
-    /// "Restart to update".
-    pub(crate) fn closed(&mut self, kind: DialogKind, choice: Choice) -> Option<Staged> {
-        match &mut self.0 {
-            Mode::On(updater) => updater.machine.closed(kind, choice),
-            _ => None,
+    /// A dialog closed with the user's choice. "Restart to update" installs the staged update
+    /// if it is still there: another instance of this install removes it when it starts.
+    pub(crate) async fn closed(&mut self, kind: DialogKind, choice: Choice) -> Closed {
+        let Mode::On(updater) = &mut self.0 else {
+            return Closed::Nothing;
+        };
+        let Some(update) = updater.machine.closed(kind, choice) else {
+            return Closed::Nothing;
+        };
+        match tokio::fs::try_exists(&update.new).await {
+            Ok(true) => Closed::Install(update),
+            Ok(false) => {
+                tracing::warn!("the staged update is gone; the next check downloads it again");
+                Closed::Gone
+            }
+            Err(error) => {
+                tracing::warn!("could not find the staged update: {error}");
+                Closed::Gone
+            }
         }
     }
 
@@ -458,6 +483,66 @@ mod tests {
                 assert!(!staging.exists());
                 assert_eq!(version(&current), installed);
             }
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A second start of the same install clears the staging folder, as `Updates::detect` does.
+    /// "Restart to update" in the first then says the update is gone instead of stopping the
+    /// daemon, and the next check downloads it again; with the update still there, it installs.
+    #[tokio::test]
+    async fn restart_to_update_finds_an_update_a_second_start_removed_gone() {
+        let root = std::env::temp_dir().join(format!("nsv-update-gone-{}", std::process::id()));
+        drop(fs::remove_dir_all(&root));
+        let current = root.join("Applications/NonstopVibin.app");
+        app(&current, true, "old");
+        let install = Install {
+            executable: Some(current.join("Contents/MacOS/NonstopVibin")),
+            resources: current.join("Contents/Resources"),
+            packaged: true,
+            app_image: Some(current.clone()),
+            bundle: Some(current.clone()),
+        };
+        let Detected::Target(target) = Target::detect(&install) else {
+            panic!("{current:?} is not an update target");
+        };
+        let staging = staging(&target);
+        let mut updates = Updates(Mode::On(Box::new(Updater {
+            target,
+            current: AppVersion::current(),
+            machine: Machine::new(),
+            timer: tokio::time::interval(EVERY),
+            check: None,
+        })));
+        for second_start in [true, false] {
+            let Mode::On(on) = &mut updates.0 else {
+                panic!("updates are off");
+            };
+            assert_eq!(on.machine.check(false), Some(Command::Check));
+            let new = staging.join("unpacked/NonstopVibin.app");
+            app(&new, true, "new");
+            let staged = Staged {
+                new,
+                current: current.clone(),
+                executable: PathBuf::from("/nonexistent/app"),
+                staging: staging.clone(),
+            };
+            assert_eq!(
+                on.machine.checked(Checked::Ready(staged)),
+                Some(Command::Show(DialogKind::UpdateReady))
+            );
+            if second_start {
+                remove(&staging);
+            }
+            let closed = updates
+                .closed(DialogKind::UpdateReady, Choice::Accept)
+                .await;
+            if second_start {
+                assert!(matches!(closed, Closed::Gone), "{closed:?}");
+            } else {
+                assert!(matches!(closed, Closed::Install(_)), "{closed:?}");
+            }
+            assert_eq!(version(&current), "old");
         }
         fs::remove_dir_all(&root).unwrap();
     }

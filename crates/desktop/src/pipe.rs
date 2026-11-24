@@ -67,6 +67,8 @@ pub enum DialogKind {
     NoUpdates,
     UpdateFailed,
     MoveToApplications,
+    /// "Restart to update" found the staged update gone.
+    UpdateGone,
     /// The daemon could not stop for "Restart to update".
     CouldNotRestart,
     /// The update could not be swapped in or started.

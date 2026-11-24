@@ -236,7 +236,7 @@ Downloads happen in the background. A native dialog offers **Restart to update**
 or **Later**, defaulting to Later because restart interrupts connected agents.
 After Later, use the same menu command to install the downloaded update. Ordinary
 Quit does not opt into installation. Checks and downloads are serialized, and
-background failures remain quiet. Restart closes the local service, swaps in the new version, and starts it. The
+background failures remain quiet. Restart closes the local service, swaps in the new version, and starts it. Another instance of the same install (with its own data directory) clears the downloaded update when it starts; Restart then says the update is no longer available and keeps the app running, and the next check downloads it again. The
 app verifies the release before it swaps anything: its signed `SHA256SUMS`,
 the feed and the payload hashes, and on macOS the bundle's signature and core
 ([SECURITY.md](../SECURITY.md#app-updates)). Credentials, the database and installed core updates remain in
