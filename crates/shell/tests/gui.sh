@@ -12,6 +12,8 @@ trap 'rm -rf "$bin"' EXIT
 cargo_args=""
 while [ $# -gt 0 ] && [ "$1" != "--" ]; do cargo_args="$cargo_args $1"; shift; done
 [ $# -gt 0 ] && shift
+# The idle measurement takes a minute and asserts nothing: it runs only when a filter names it.
+[ $# -gt 0 ] || set -- --skip measure_idle
 # shellcheck disable=SC2086
 cargo build -p nsv-window $cargo_args
 # shellcheck disable=SC2086

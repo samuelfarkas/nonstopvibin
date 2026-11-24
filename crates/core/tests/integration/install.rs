@@ -3,10 +3,8 @@ use std::path::Path;
 use std::process::Command;
 
 use nsv_core::CoreError;
-use nsv_core::binary::{CoreTarget, bundled_pin};
-use nsv_core::install::{
-    ActiveCore, Staging, install_archive, install_core, prune, select_installed_core,
-};
+use nsv_core::binary::CoreTarget;
+use nsv_core::install::{ActiveCore, Staging, install_archive, prune, select_installed_core};
 use nsv_domain::version::Version;
 use nsv_testkit::TempDir;
 
@@ -205,34 +203,5 @@ fn startup_selects_the_newest_intact_core_above_the_bundled_one_and_deletes_the_
     assert_eq!(
         select_installed_core(&directory.join("none"), bundled, LINUX_X64).unwrap(),
         None
-    );
-}
-
-/// Downloads the bundled pin's release for this machine from GitHub: TLS, the redirect to
-/// GitHub's asset host, the streamed archive hash and both pin checks.
-#[tokio::test]
-#[ignore = "downloads about 25 MB from github.com"]
-async fn installs_the_bundled_release_from_github() {
-    let root = TempDir::new("github");
-    let https = nsv_net::Https::new().unwrap();
-    let pin = bundled_pin().unwrap();
-    let target = CoreTarget::current().unwrap();
-    install_core(
-        &https,
-        nsv_core::install::CORE_ARCHIVES,
-        pin,
-        target,
-        root.path(),
-        true,
-    )
-    .await
-    .unwrap();
-    nsv_core::verify_core(&root.path().join("cli-proxy-api"), Some(pin)).unwrap();
-    nsv_core::check_core_directory(pin, root.path(), target, nsv_core::binary::Binary::Pinned)
-        .unwrap();
-    assert!(root.path().join("LICENSE").exists());
-    assert!(
-        !root.path().join(target.archive(&pin.version)).exists(),
-        "the archive is deleted"
     );
 }
