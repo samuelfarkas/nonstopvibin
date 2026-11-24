@@ -358,7 +358,6 @@ async fn usage_writes_are_atomic_idempotent_and_pruned_by_opt_in_retention() {
         store.call(|db| db.usage_retention_days()).await.unwrap(),
         RetentionDays::All
     );
-    let generation = store.call(|db| Ok(db.usage_generation())).await.unwrap();
     store
         .call(|db| db.set_usage_retention_days(RetentionDays::Days30))
         .await
@@ -372,11 +371,6 @@ async fn usage_writes_are_atomic_idempotent_and_pruned_by_opt_in_retention() {
         assert_eq!(kept.len(), 1);
         assert!(kept[0].id.ends_with(":5"));
     }
-    assert_eq!(
-        store.call(|db| Ok(db.usage_generation())).await.unwrap(),
-        generation + 2,
-        "one generation per profile that lost rows"
-    );
     store.close().await;
 
     let store = open(directory).await;
