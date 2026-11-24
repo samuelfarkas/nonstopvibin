@@ -60,7 +60,7 @@ impl ImportCatalog {
 
     /// Lists each directory's regular `*.json` files whose `type` is a provider with credential
     /// files. Missing directories and unrelated, unreadable or malformed files are skipped
-    /// without exposing their contents. Ids are the SHA-256 of the path, in hexadecimal.
+    /// without exposing their contents. Ids are the SHA-256 of the path's bytes, in hexadecimal.
     pub fn scan(&mut self) -> Vec<ImportSource> {
         let mut found = Vec::new();
         self.files.clear();
@@ -97,7 +97,7 @@ impl ImportCatalog {
                 let identity = entry
                     .filter(|entry| entry.organizations)
                     .map_or_else(SeatIdentity::default, |_| claude_identity(&raw));
-                let id = sha256_hex(path.to_string_lossy().as_bytes());
+                let id = sha256_hex(path.as_os_str().as_encoded_bytes());
                 self.files.insert(id.clone(), path);
                 found.push(ImportSource {
                     id,

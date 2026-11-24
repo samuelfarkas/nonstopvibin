@@ -479,6 +479,33 @@ fn imports_scan_known_folders_as_typescript_did() {
     );
 }
 
+/// File names that are not UTF-8 but read alike as text still get an id each, and each id
+/// reads its own file. macOS file systems take only UTF-8 names.
+#[cfg(target_os = "linux")]
+#[test]
+fn imports_tell_apart_names_that_read_alike_as_text() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let home = TempDir::new("imports-bytes");
+    let cli = home.path().join(".cli-proxy-api");
+    fs::create_dir_all(&cli).unwrap();
+    for (name, email) in [
+        (&b"seat-\xfe.json"[..], "one@example.com"),
+        (&b"seat-\xff.json"[..], "two@example.com"),
+    ] {
+        let content = json!({ "type": "codex", "email": email }).to_string();
+        fs::write(cli.join(std::ffi::OsStr::from_bytes(name)), content).unwrap();
+    }
+    let mut catalog = ImportCatalog::new(home.path());
+    let found = catalog.scan();
+    assert_eq!(found.len(), 2);
+    assert_ne!(found[0].id, found[1].id);
+    for source in &found {
+        let contents = catalog.contents(&source.id).unwrap();
+        assert_eq!(contents["email"], source.email.as_deref().unwrap());
+    }
+}
+
 fn sha256_hex(text: &str) -> String {
     use sha2::Digest;
     sha2::Sha256::digest(text.as_bytes())
