@@ -7,11 +7,11 @@ use std::io;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
+use nsv_domain::sync::locked;
 use nsv_net::Method;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
@@ -481,17 +481,29 @@ async fn terminated(terminate: oneshot::Sender<Terminate>) -> Result<(), AppErro
 const FIRST_PORT: u32 = 10_001;
 const PORTS: u32 = 10_000;
 
-/// A core port on 127.0.0.1 nothing listened on a moment ago. Each call walks the range from a
-/// random place, which another local user cannot compute to bind the port first, stepped by a
-/// counter the process's calls share.
+/// How many of its latest ports [`unused_port`] never hands out again.
+const RECENT: usize = 16;
+
+/// A core port on 127.0.0.1 nothing listened on a moment ago, and none of the last [`RECENT`]
+/// handed out. Each call walks the range from a random place, which another local user cannot
+/// compute to bind the port first.
 fn unused_port() -> io::Result<u16> {
-    static NEXT: AtomicU32 = AtomicU32::new(0);
-    let start = u32::from_ne_bytes(nsv_domain::random::bytes::<4>()?);
-    for _ in 0..PORTS {
-        let offset = start.wrapping_add(NEXT.fetch_add(1, Ordering::Relaxed)) % PORTS;
-        let port = u16::try_from(FIRST_PORT + offset).map_err(io::Error::other)?;
+    // A core may not have bound its port yet when the next start draws.
+    static HANDED_OUT: Mutex<[u16; RECENT]> = Mutex::new([0; RECENT]);
+    let start = u32::from_ne_bytes(nsv_domain::random::bytes::<4>()?) % PORTS;
+    let mut handed_out = locked(&HANDED_OUT);
+    for step in 0..PORTS {
+        let port = u16::try_from(FIRST_PORT + (start + step) % PORTS).map_err(io::Error::other)?;
+        if handed_out.contains(&port) {
+            continue;
+        }
         match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
-            Ok(_) => return Ok(port),
+            Ok(_) => {
+                handed_out.rotate_left(1);
+                let [.., newest] = &mut *handed_out;
+                *newest = port;
+                return Ok(port);
+            }
             Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
             Err(error) => return Err(error),
         }
@@ -737,11 +749,13 @@ mod tests {
     fn core_ports_differ_and_come_from_below_the_ephemeral_range() {
         let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").unwrap();
         let ephemeral: u16 = range.split_whitespace().next().unwrap().parse().unwrap();
-        let (first, second) = (unused_port().unwrap(), unused_port().unwrap());
+        // None is bound in between, so only the ring keeps a draw from repeating one.
+        let ports: Vec<u16> = (0..RECENT).map(|_| unused_port().unwrap()).collect();
         assert!(
-            first < ephemeral && second < ephemeral,
-            "{first} {second} {range}"
+            ports.iter().all(|&port| port < ephemeral),
+            "{ports:?} {range}"
         );
-        assert_ne!(first, second);
+        let distinct: std::collections::HashSet<u16> = ports.iter().copied().collect();
+        assert_eq!(distinct.len(), RECENT, "{ports:?}");
     }
 }
