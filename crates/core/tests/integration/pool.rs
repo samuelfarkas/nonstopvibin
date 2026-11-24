@@ -189,6 +189,27 @@ async fn management_calls_reach_a_core_only_once_it_answered() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_readiness_request_waits_no_longer_than_the_start_has_left() {
+    let world = World::with_ready(Duration::from_secs(1)).await;
+    let profile = world.profile("Slow check", false, true, false).await;
+    world.fake.script(
+        &profile,
+        [Script {
+            listens_takes: Duration::from_millis(600),
+            ..Script::default()
+        }],
+    );
+    world
+        .run(world.pool().start(&profile, false))
+        .await
+        .unwrap();
+    // The first check took 600 ms of the second the start had.
+    let timeouts = world.fake.timeouts(&profile, "/config");
+    assert_eq!(timeouts.len(), 1, "{timeouts:?}");
+    assert!(timeouts[0] <= Duration::from_millis(400), "{timeouts:?}");
+}
+
+#[tokio::test(start_paused = true)]
 async fn shutdown_completes_after_the_core_could_not_spawn() {
     let world = World::new().await;
     let profile = world.profile("Unlaunchable", false, true, false).await;

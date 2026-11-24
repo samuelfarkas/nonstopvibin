@@ -56,6 +56,8 @@ pub struct Script {
     /// Another local user's program holds its port and answers every call to it as a ready
     /// core would, so the core does not own its port.
     pub squatted: bool,
+    /// How long checking that it owns its port takes, as `lsof` can on macOS.
+    pub listens_takes: Duration,
 }
 
 impl Default for Script {
@@ -69,6 +71,7 @@ impl Default for Script {
             misses_writes: 0,
             unkillable: false,
             squatted: false,
+            listens_takes: Duration::ZERO,
         }
     }
 }
@@ -238,8 +241,8 @@ struct Cores {
     launched: Vec<Arc<Core>>,
     knobs: Knobs,
     requests: usize,
-    /// Every management call: the profile, method, path with query, and when.
-    calls: Vec<(ProfileId, Method, String, Instant)>,
+    /// Every management call: the profile, method, path with query, when, and its timeout.
+    calls: Vec<(ProfileId, Method, String, Instant, Duration)>,
     /// Data directories whose ledgers were reaped.
     reaped: Vec<PathBuf>,
     states: usize,
@@ -339,8 +342,8 @@ impl FakeCores {
             .unwrap()
             .calls
             .iter()
-            .filter(|(called, _, path, _)| called == profile && path.starts_with(prefix))
-            .map(|(_, method, path, _)| (method.clone(), path.clone()))
+            .filter(|(called, _, path, ..)| called == profile && path.starts_with(prefix))
+            .map(|(_, method, path, ..)| (method.clone(), path.clone()))
             .collect()
     }
 
@@ -352,8 +355,21 @@ impl FakeCores {
             .unwrap()
             .calls
             .iter()
-            .filter(|(called, _, path, _)| called == profile && path.starts_with(prefix))
-            .map(|(_, _, _, at)| *at)
+            .filter(|(called, _, path, ..)| called == profile && path.starts_with(prefix))
+            .map(|(_, _, _, at, _)| *at)
+            .collect()
+    }
+
+    /// The timeout of each management call to `profile`'s cores whose path starts with `prefix`.
+    #[must_use]
+    pub fn timeouts(&self, profile: &ProfileId, prefix: &str) -> Vec<Duration> {
+        self.0
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|(called, _, path, ..)| called == profile && path.starts_with(prefix))
+            .map(|(.., timeout)| *timeout)
             .collect()
     }
 
@@ -517,6 +533,7 @@ impl FakeCores {
             call.method.clone(),
             target.clone(),
             Instant::now(),
+            call.timeout,
         ));
         let intercepted = self
             .knobs(|knobs| knobs.intercept.clone())
@@ -879,6 +896,10 @@ impl CoreHandle for Handle {
 
     fn listens(&self, port: u16) -> BoxFuture<'static, io::Result<bool>> {
         let owned = port == self.0.port && !self.0.script.squatted;
-        Box::pin(async move { Ok(owned) })
+        let takes = self.0.script.listens_takes;
+        Box::pin(async move {
+            tokio::time::sleep(takes).await;
+            Ok(owned)
+        })
     }
 }

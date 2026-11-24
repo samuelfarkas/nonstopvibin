@@ -691,8 +691,7 @@ impl Launch {
         let deadline = Instant::now() + self.context.ready;
         let mut last = String::new();
         loop {
-            let now = Instant::now();
-            if now >= deadline {
+            if Instant::now() >= deadline {
                 return Err(Unready::Late(last));
             }
             let owned = handle.listens(port);
@@ -713,7 +712,8 @@ impl Launch {
                     &Method::GET,
                     "/config",
                     None,
-                    deadline - now,
+                    // After the check, which can take seconds on macOS.
+                    deadline.saturating_duration_since(Instant::now()),
                 )
                 .await
             };
