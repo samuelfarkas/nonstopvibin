@@ -83,7 +83,7 @@ tray-icon = { version = "0.26.1", default-features = false }
 url = "2.5.9"
 wry = "0.57.3"
 x11-dl = "2.21.0"
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+zbus = { version = "6.3.0", default-features = false, features = ["tokio"] }
 
 [workspace.lints.rust]
 # Each crate also states #![forbid(unsafe_code)] or a reasoned, scoped allow.
