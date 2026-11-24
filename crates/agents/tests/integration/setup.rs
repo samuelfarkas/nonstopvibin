@@ -121,7 +121,9 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         // Best effort: the socket directory lives outside the scratch directory.
-        drop(fs::remove_dir_all(self.setup.socket_directory()));
+        drop(fs::remove_dir_all(
+            DataDir::new(&self.root.root).socket_directory(),
+        ));
     }
 }
 
@@ -674,7 +676,13 @@ async fn updates_and_disconnects_keep_preferences_and_refuse_edits_and_symbolic_
     );
     assert_eq!(json_file(&claude_file), claude_existing);
     let mut escape = profile("5e0c1a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b", "escape", "Escape");
-    symlink(&f.root.root, f.setup.directory().join("escape")).unwrap();
+    symlink(
+        &f.root.root,
+        DataDir::new(&f.root.root)
+            .agent_connections()
+            .join("escape"),
+    )
+    .unwrap();
     assert_refused(
         f.install_in(&escape, Agent::Codex, &f.project, "m").await,
         "without symbolic links",
@@ -756,8 +764,9 @@ async fn special_files_and_shared_roots_are_refused() {
 
     let shared = f.root.root.join("codex-shared");
     directory(&shared, 0o777);
+    let other = DataDir::new(f.root.root.join("other-data"));
     let custom = AgentSetup::new(
-        &DataDir::new(f.root.root.join("other-data")),
+        &other,
         f.broker.source(),
         AgentDirectories {
             moved: [(Agent::Codex, shared)].into(),
@@ -772,7 +781,7 @@ async fn special_files_and_shared_roots_are_refused() {
         "directory you own, without symbolic links or shared write access",
     );
     custom.close().await.unwrap();
-    drop(fs::remove_dir_all(custom.socket_directory()));
+    drop(fs::remove_dir_all(other.socket_directory()));
     f.setup.close().await.unwrap();
 }
 

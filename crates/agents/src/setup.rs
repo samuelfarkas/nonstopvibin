@@ -142,21 +142,6 @@ impl AgentSetup {
         }
     }
 
-    #[must_use]
-    pub fn directory(&self) -> &Path {
-        &self.inner.directory
-    }
-
-    #[must_use]
-    pub fn socket_directory(&self) -> &Path {
-        &self.inner.socket_directory
-    }
-
-    #[must_use]
-    pub fn socket_path(&self) -> &Path {
-        &self.inner.socket_path
-    }
-
     /// At startup, rewrites connections whose files are still exactly ours but stale (another
     /// port, profile name, template or manifest version), for every profile given, running or
     /// not. Anything removed or edited is left alone and reported for the user to resolve in

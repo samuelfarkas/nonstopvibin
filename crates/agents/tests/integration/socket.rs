@@ -10,6 +10,7 @@ use nsv_agents::AgentSetup;
 use nsv_domain::error::AppError;
 use nsv_domain::registry::Agent;
 use nsv_domain::wire::{AgentSetupInput, Profile};
+use nsv_files::DataDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -69,12 +70,16 @@ impl Instance {
     async fn key_of(&self, helper: &str) -> String {
         String::from_utf8(run(helper, &[], &self.root.root).await.stdout).unwrap()
     }
+
+    fn data(&self) -> DataDir {
+        DataDir::new(&self.root.root)
+    }
 }
 
 impl Drop for Instance {
     fn drop(&mut self) {
         // Best effort: the socket directory lives outside the scratch directory.
-        drop(fs::remove_dir_all(self.setup.socket_directory()));
+        drop(fs::remove_dir_all(self.data().socket_directory()));
     }
 }
 
@@ -86,8 +91,8 @@ fn mode(path: &std::path::Path) -> u32 {
 async fn the_socket_is_owner_only_and_a_live_one_is_not_taken_over() {
     let instance = Instance::new();
     let helper = instance.install(&instance.setup).await.unwrap();
-    assert_eq!(mode(instance.setup.socket_directory()), 0o700);
-    assert_eq!(mode(instance.setup.socket_path()), 0o600);
+    assert_eq!(mode(&instance.data().socket_directory()), 0o700);
+    assert_eq!(mode(&instance.data().credential_socket()), 0o600);
     let second = instance.second();
     let refused = second
         .restore(std::slice::from_ref(&instance.profile), 4318)
@@ -106,7 +111,7 @@ async fn the_socket_is_owner_only_and_a_live_one_is_not_taken_over() {
     );
     instance.setup.close().await.unwrap();
     assert!(
-        !instance.setup.socket_path().exists(),
+        !instance.data().credential_socket().exists(),
         "closing removes the socket"
     );
 }
@@ -114,10 +119,10 @@ async fn the_socket_is_owner_only_and_a_live_one_is_not_taken_over() {
 #[tokio::test]
 async fn a_stale_socket_left_by_a_crash_is_replaced() {
     let instance = Instance::new();
-    directory(instance.setup.socket_directory(), 0o700);
+    directory(&instance.data().socket_directory(), 0o700);
     // A socket file nothing listens on any more, as a crashed instance leaves it.
-    drop(UnixListener::bind(instance.setup.socket_path()).unwrap());
-    assert!(instance.setup.socket_path().exists());
+    drop(UnixListener::bind(instance.data().credential_socket()).unwrap());
+    assert!(instance.data().credential_socket().exists());
     let helper = instance.install(&instance.setup).await.unwrap();
     assert_eq!(instance.key_of(&helper).await, format!("{}\n", key('A')));
     instance.setup.close().await.unwrap();
@@ -126,19 +131,19 @@ async fn a_stale_socket_left_by_a_crash_is_replaced() {
 #[tokio::test]
 async fn any_other_file_at_the_socket_path_is_refused() {
     let instance = Instance::new();
-    directory(instance.setup.socket_directory(), 0o700);
-    fs::write(instance.setup.socket_path(), "not a socket").unwrap();
+    directory(&instance.data().socket_directory(), 0o700);
+    fs::write(instance.data().credential_socket(), "not a socket").unwrap();
     let refused = instance.install(&instance.setup).await.unwrap_err();
     assert_eq!(
         refused.to_string(),
         "The agent connection path is occupied by an unexpected file."
     );
     assert_eq!(
-        fs::read_to_string(instance.setup.socket_path()).unwrap(),
+        fs::read_to_string(instance.data().credential_socket()).unwrap(),
         "not a socket"
     );
-    fs::remove_file(instance.setup.socket_path()).unwrap();
-    directory(instance.setup.socket_directory(), 0o755);
+    fs::remove_file(instance.data().credential_socket()).unwrap();
+    directory(&instance.data().socket_directory(), 0o755);
     let refused = instance.install(&instance.setup).await.unwrap_err();
     assert_eq!(
         refused.to_string(),
@@ -150,7 +155,7 @@ async fn any_other_file_at_the_socket_path_is_refused() {
 async fn an_oversized_request_head_is_refused_without_a_key() {
     let instance = Instance::new();
     instance.install(&instance.setup).await.unwrap();
-    let mut stream = UnixStream::connect(instance.setup.socket_path())
+    let mut stream = UnixStream::connect(instance.data().credential_socket())
         .await
         .unwrap();
     let request = format!(

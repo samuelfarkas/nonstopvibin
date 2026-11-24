@@ -189,7 +189,10 @@ async fn typescript_connections_are_recognised_restored_and_removed() {
     assert_eq!(failures, [left.clone(), left]);
     let placeholders = Placeholders::new([
         (
-            copy.setup.socket_directory().to_string_lossy().into_owned(),
+            DataDir::new(&copy.data)
+                .socket_directory()
+                .to_string_lossy()
+                .into_owned(),
             "<socket-dir>".to_owned(),
         ),
         (

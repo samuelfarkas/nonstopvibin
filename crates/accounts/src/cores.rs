@@ -323,16 +323,6 @@ impl Cores {
         self.accounts.list(profile).await
     }
 
-    /// Reads the profile's accounts from its usable core again; see [`Accounts::sync`].
-    ///
-    /// # Errors
-    /// The sync's.
-    pub async fn sync_accounts(&self, profile: &ProfileId) -> Result<(), AppError> {
-        self.accounts.sync(&self.pool, profile).await?;
-        self.scheduler.catch_up();
-        Ok(())
-    }
-
     /// Runs `change` after the credential changes queued before it, so it ends even if its
     /// caller stops waiting; see `Credentials::queue`.
     ///
@@ -509,24 +499,6 @@ impl Cores {
         let account = self.credentials.import(profile, raw).await?;
         self.scheduler.catch_up();
         Ok(account)
-    }
-
-    /// Imports a credential that replaces `account`'s; see `Credentials::import_credential`.
-    ///
-    /// # Errors
-    /// The import's.
-    pub async fn reconnect(
-        &self,
-        profile: &ProfileId,
-        raw: Map<String, Value>,
-        account: AccountId,
-    ) -> Result<Account, AppError> {
-        let imported = self
-            .credentials
-            .import_credential(profile, raw, Some(account))
-            .await?;
-        self.scheduler.catch_up();
-        Ok(imported)
     }
 
     /// `POST …/api-accounts`; see `Credentials::add_api_account`.

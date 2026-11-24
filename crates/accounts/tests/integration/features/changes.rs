@@ -273,18 +273,6 @@ async fn imports_are_validated_and_deduplicated_within_a_profile_only() {
         assert_eq!(world.cores.accounts(profile).await.unwrap().len(), 1);
     }
     assert_ne!(ids[0], ids[1]);
-    let gone = credentials
-        .reconnect(
-            &profiles[0],
-            object(&raw),
-            AccountId::parse("gone.json").unwrap(),
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(
-        (gone.message.as_str(), gone.status),
-        ("The subscription to reconnect no longer exists.", 409)
-    );
 }
 
 #[tokio::test]
@@ -502,8 +490,8 @@ async fn codex_resets_need_a_running_profile_and_retry_an_uncertain_redemption_w
         raw.to_string(),
     )
     .unwrap();
+    // The start lists the account: a core's start ends after its accounts are read.
     world.cores.start(&profile).await.unwrap();
-    world.cores.sync_accounts(&profile).await.unwrap();
 
     let redemptions = Arc::new(Mutex::new(Vec::<String>::new()));
     let fail = Arc::new(AtomicBool::new(true));

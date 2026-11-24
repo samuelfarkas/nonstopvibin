@@ -21,7 +21,7 @@ mod setup;
 mod socket;
 
 pub use catalog::{CatalogAnswer, connection_models, curated, gateway_catalog};
-pub use connection::{agent_environment, native_provider};
+pub use connection::agent_environment;
 pub use error::AgentError;
 pub use manifest::{
     Issue, PROJECT_LENGTH, project_issues, selection_issues, setup_issues, validate_setup,

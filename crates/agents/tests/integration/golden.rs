@@ -148,7 +148,10 @@ impl<'a> Scenario<'a> {
         let home = self.home.to_string_lossy().into_owned();
         let mut pairs = vec![
             (
-                self.setup.socket_directory().to_string_lossy().into_owned(),
+                DataDir::new(&self.data)
+                    .socket_directory()
+                    .to_string_lossy()
+                    .into_owned(),
                 "<socket-dir>".to_owned(),
             ),
             (
@@ -399,7 +402,9 @@ async fn credential_socket(cases: &[&Value]) -> Vec<String> {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let actual = if name.starts_with("socket ") {
-            let mut stream = UnixStream::connect(setup.socket_path()).await.unwrap();
+            let mut stream = UnixStream::connect(DataDir::new(&data).credential_socket())
+                .await
+                .unwrap();
             stream
                 .write_all(case["input"].as_str().unwrap().as_bytes())
                 .await

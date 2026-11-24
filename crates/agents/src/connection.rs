@@ -24,7 +24,7 @@ pub(crate) const PROVIDER_PREFIX: &str = provider_prefix!();
 
 /// The provider a connected agent lists for a profile.
 #[must_use]
-pub fn native_provider(profile: &Profile) -> String {
+pub(crate) fn native_provider(profile: &Profile) -> String {
     format!("{PROVIDER_PREFIX}{}", profile.slug)
 }
 
