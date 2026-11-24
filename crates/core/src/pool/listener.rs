@@ -7,14 +7,18 @@ use std::io;
 /// socket of the process `pid`.
 #[cfg(target_os = "linux")]
 pub(super) async fn owned(pid: u32, port: u16) -> io::Result<bool> {
+    use std::fs::File;
+    use std::io::BufReader;
+
     crate::processes::blocking(move || {
-        let tcp = std::fs::read_to_string("/proc/net/tcp")?;
-        let tcp6 = match std::fs::read_to_string("/proc/net/tcp6") {
+        let mut tables = vec![BufReader::new(File::open("/proc/net/tcp")?)];
+        match File::open("/proc/net/tcp6") {
+            Ok(table) => tables.push(BufReader::new(table)),
             // IPv6 is disabled.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-            read => read?,
-        };
-        Ok(only_listeners(&[&tcp, &tcp6], port, &sockets(pid)?))
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        only_listeners(tables, port, || sockets(pid))
     })
     .await
 }
@@ -95,23 +99,43 @@ impl Socket {
     }
 }
 
-/// Whether `tables`, as `/proc/net/tcp` and `/proc/net/tcp6` read, list a listener that takes
-/// connections to 127.0.0.1:`port`, all of them among `sockets`. A line it cannot read refuses.
+/// The most of one table line read; the kernel writes them under 200 bytes.
 #[cfg(target_os = "linux")]
-fn only_listeners(tables: &[&str], port: u16, sockets: &[u64]) -> bool {
-    let mut held = false;
-    for line in tables.iter().flat_map(|table| table.lines().skip(1)) {
-        let Some(socket) = Socket::read(line) else {
-            return false;
-        };
-        if socket.listening && socket.loopback && socket.port == port {
-            if !sockets.contains(&socket.inode) {
-                return false;
+const LINE: u64 = 512;
+
+/// Whether `tables`, as `/proc/net/tcp` and `/proc/net/tcp6` read, list a listener that takes
+/// connections to 127.0.0.1:`port`, all of them among the `sockets` read after the tables. A
+/// line it cannot read, or one cut at [`LINE`], refuses.
+#[cfg(target_os = "linux")]
+fn only_listeners<R: io::BufRead>(
+    tables: impl IntoIterator<Item = R>,
+    port: u16,
+    sockets: impl FnOnce() -> io::Result<Vec<u64>>,
+) -> io::Result<bool> {
+    use std::io::{BufRead, Read};
+
+    let mut listeners = Vec::new();
+    let mut line = String::new();
+    for mut table in tables {
+        let mut header = true;
+        loop {
+            line.clear();
+            if (&mut table).take(LINE).read_line(&mut line)? == 0 {
+                break;
             }
-            held = true;
+            if std::mem::take(&mut header) {
+                continue;
+            }
+            let Some(socket) = line.strip_suffix('\n').and_then(Socket::read) else {
+                return Ok(false);
+            };
+            if socket.listening && socket.loopback && socket.port == port {
+                listeners.push(socket.inode);
+            }
         }
     }
-    held
+    let sockets = sockets()?;
+    Ok(!listeners.is_empty() && listeners.iter().all(|inode| sockets.contains(inode)))
 }
 
 /// Whether the process `pid` listens on 127.0.0.1:`port`.
@@ -154,6 +178,18 @@ mod tests {
         text
     }
 
+    /// [`only_listeners`] over `tables` and the sockets `sockets`.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "test support: neither a byte slice nor the sockets can fail"
+    )]
+    fn only(tables: &[&str], port: u16, sockets: &[u64]) -> bool {
+        only_listeners(tables.iter().map(|table| table.as_bytes()), port, || {
+            Ok(sockets.to_vec())
+        })
+        .unwrap()
+    }
+
     // Port 10001 is 2711 in hex; the core's listener is inode 4242.
     const CORE: &str = "   0: 0100007F:2711 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0000000000000000 100 0 0 10 0";
     // A connection the core accepted has the core's port as its local one.
@@ -164,32 +200,35 @@ mod tests {
     fn a_port_is_the_cores_only_when_every_loopback_listener_on_it_is_a_core_socket() {
         let none6 = table(&[]);
         let owned = table(&[CORE, ACCEPTED, ELSEWHERE]);
-        assert!(only_listeners(&[&owned, &none6], 10_001, &[3, 4242]));
+        assert!(only(&[&owned, &none6], 10_001, &[3, 4242]));
 
         // Another user listens on 127.0.0.1 and the core has not bound yet.
-        assert!(!only_listeners(&[&owned, &none6], 10_001, &[3, 5151]));
+        assert!(!only(&[&owned, &none6], 10_001, &[3, 5151]));
 
         // Another user's wildcard listener beside the core's, over IPv4 or IPv4-mapped IPv6.
         let any = "   3: 00000000:2711 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 999 1 0000000000000000 100 0 0 10 0";
         let wildcard = table(&[CORE, any]);
-        assert!(!only_listeners(&[&wildcard, &none6], 10_001, &[4242]));
+        assert!(!only(&[&wildcard, &none6], 10_001, &[4242]));
         let mapped6 = "   1: 0000000000000000FFFF00000100007F:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 998 1 0000000000000000 100 0 0 10 0";
         let mapped_any6 = "   2: 0000000000000000FFFF000000000000:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 997 1 0000000000000000 100 0 0 10 0";
         for foreign in [mapped6, mapped_any6] {
             let tcp6 = table(&[foreign]);
-            assert!(
-                !only_listeners(&[&owned, &tcp6], 10_001, &[4242]),
-                "{foreign}"
-            );
+            assert!(!only(&[&owned, &tcp6], 10_001, &[4242]), "{foreign}");
         }
 
         // Another user's listener on `::` beside the core's is IPv6-only: 127.0.0.1 reaches the
         // core alone.
         let any6 = "   0: 00000000000000000000000000000000:2711 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 999 1 0000000000000000 100 0 0 10 0";
-        assert!(only_listeners(&[&owned, &table(&[any6])], 10_001, &[4242]));
+        assert!(only(&[&owned, &table(&[any6])], 10_001, &[4242]));
 
         // Nothing listens on the port yet.
         let missing = table(&[ACCEPTED, ELSEWHERE]);
-        assert!(!only_listeners(&[&missing, &none6], 10_001, &[4242, 5151]));
+        assert!(!only(&[&missing, &none6], 10_001, &[4242, 5151]));
+
+        // A line it cannot read, or one longer than the kernel writes, refuses.
+        let unreadable = table(&[CORE, "   1: garbage"]);
+        assert!(!only(&[&unreadable, &none6], 10_001, &[4242]));
+        let padded = format!("{CORE}{}", " ".repeat(512));
+        assert!(!only(&[&table(&[&padded]), &none6], 10_001, &[4242]));
     }
 }
