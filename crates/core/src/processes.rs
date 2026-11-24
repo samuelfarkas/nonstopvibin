@@ -406,14 +406,14 @@ impl<I: Identify> Ledger<I> {
                 continue;
             };
             // Unprovable this time (e.g. ps could not run): the entry stays for the next start.
-            if let Err(error) = self.reap(&name, &path, &entry).await {
+            if let Err(error) = self.reap(&name, path, &entry).await {
                 tracing::warn!(%error, ?name, "a recorded core was not reaped; its entry stays");
             }
         }
         Ok(())
     }
 
-    async fn reap(&self, name: &OsStr, path: &Path, entry: &Entry) -> io::Result<()> {
+    async fn reap(&self, name: &OsStr, path: PathBuf, entry: &Entry) -> io::Result<()> {
         if self.identify.identify(entry.owner.pid).await?.as_deref()
             == Some(entry.owner.identity.as_str())
         {
@@ -426,7 +426,6 @@ impl<I: Identify> Ledger<I> {
         {
             self.stop_orphan(entry).await?;
         }
-        let path = path.to_owned();
         blocking(move || forget(&path)).await
     }
 
@@ -477,7 +476,7 @@ fn read_ledger(ledger: &Path) -> Vec<(OsString, PathBuf, Option<Entry>)> {
 }
 
 /// Runs file work on the blocking pool, off the runtime thread.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> io::Result<T> + Send + 'static,
 ) -> io::Result<T> {
     tokio::task::spawn_blocking(work)

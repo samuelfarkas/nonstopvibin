@@ -7,7 +7,7 @@ use std::io;
 /// socket of the process `pid`.
 #[cfg(target_os = "linux")]
 pub(super) async fn owned(pid: u32, port: u16) -> io::Result<bool> {
-    tokio::task::spawn_blocking(move || {
+    crate::processes::blocking(move || {
         let tcp = std::fs::read_to_string("/proc/net/tcp")?;
         let tcp6 = match std::fs::read_to_string("/proc/net/tcp6") {
             // IPv6 is disabled.
@@ -17,7 +17,6 @@ pub(super) async fn owned(pid: u32, port: u16) -> io::Result<bool> {
         Ok(only_listeners(&[&tcp, &tcp6], port, &sockets(pid)?))
     })
     .await
-    .map_err(io::Error::other)?
 }
 
 /// The inodes of the sockets `pid` has open.
