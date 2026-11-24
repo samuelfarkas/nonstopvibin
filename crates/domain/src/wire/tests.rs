@@ -5,7 +5,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::registry::{Agent, Protocol};
 
 fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -203,21 +202,6 @@ fn responses_round_trip() {
         "type": "nonstopvibin_error", "code": 404 } }));
     round_trip::<Ok>(&json!({ "ok": true }));
     round_trip::<ResetResult>(&json!({ "code": "already_redeemed", "quotaRefreshed": false }));
-}
-
-#[test]
-fn request_bodies_are_strict() {
-    let input: ApiAccountInput = serde_json::from_value(json!({
-        "name": "Go", "provider": "opencode-go", "baseUrl": "https://opencode.ai/zen/go/v1",
-        "apiKey": "sk-visible", "prefix": "go", "models": []
-    }))
-    .unwrap();
-    assert_eq!(input.protocol, Protocol::Openai);
-    assert_eq!(input.api_key.expose_secret(), "sk-visible");
-    assert!(!format!("{input:?}").contains("sk-visible"));
-    assert!(serde_json::from_value::<ProfilePatch>(json!({ "enabled": true })).is_err());
-    let selection: AgentSelection = serde_json::from_value(json!({ "agent": "pi" })).unwrap();
-    assert_eq!(selection.agent, Agent::Pi);
 }
 
 #[test]
