@@ -9,7 +9,9 @@ use nsv_agents::AgentDirectories;
 use nsv_core::binary::{BINARY, CHECKOUT_DIRECTORY, PACKAGED_DIRECTORY};
 use nsv_core::install::CoreSource;
 use nsv_files::{DataDir, LockError, ServerLock};
-use nsv_server::{AllowedHost, Boundaries, CoreOptions, Daemon, Options, Session, panic};
+use nsv_server::{
+    AllowedHost, Boundaries, CoreOptions, Daemon, Options, Session, StartError, panic,
+};
 use nsv_shell::{Failure, Install};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
@@ -129,6 +131,17 @@ impl Signals {
     }
 }
 
+/// Why the daemon did not start. The desktop app takes its port from `NONSTOPVIBIN_PORT`, not
+/// from `--port`.
+fn start_failure(error: &StartError, desktop: bool) -> CliError {
+    match error {
+        StartError::PortInUse(port) if desktop => CliError::new(format!(
+            "Port {port} on 127.0.0.1 is already in use. Stop the other program, or set NONSTOPVIBIN_PORT to another port before starting NonstopVibin."
+        )),
+        _ => CliError::from_display(error),
+    }
+}
+
 /// Starts the daemon, cancelling on a signal. `None` when a signal came first: everything
 /// started is stopped again.
 async fn start(
@@ -136,10 +149,11 @@ async fn start(
     options: Options,
     lock: ServerLock,
 ) -> Result<Option<Daemon>, CliError> {
+    let desktop = options.desktop.is_some();
     let boundaries = Boundaries::production().map_err(CliError::from_display)?;
     let daemon = tokio::select! {
         started = Daemon::start(options, boundaries, lock) => {
-            started.map_err(CliError::from_display)?
+            started.map_err(|error| start_failure(&error, desktop))?
         }
         () = signals.received() => return Ok(None),
     };
