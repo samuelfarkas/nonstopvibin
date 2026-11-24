@@ -83,6 +83,21 @@ fn atomic_writes_replace_the_file_with_its_mode_and_leave_no_temporary() {
 }
 
 #[test]
+fn a_replaced_file_is_written_even_when_its_directory_cannot_be_synced() {
+    let temp = TempDir::new("write-atomic-unsynced");
+    let folder = temp.path().join("folder");
+    fs::create_dir(&folder).unwrap();
+    let path = folder.join("settings.json");
+    fs::write(&path, "old").unwrap();
+    // Write and search but no read: the rename works, opening the folder to sync it does not.
+    set_mode(&folder, 0o300);
+    let written = write_atomic(&path, b"new", 0o600);
+    set_mode(&folder, 0o700);
+    written.unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}
+
+#[test]
 fn owner_only_directories_are_created_tightened_and_vetted_before_chmod() {
     let temp = TempDir::new("owner-only");
     let nested = temp.path().join("a").join("b");

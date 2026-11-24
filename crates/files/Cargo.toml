@@ -13,6 +13,7 @@ nsv-domain.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 nsv-testkit.workspace = true
