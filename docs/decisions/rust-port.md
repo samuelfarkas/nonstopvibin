@@ -259,6 +259,8 @@ it. These differences are deliberate, each with its reason in the commit or test
   carries it instead.
 - **Updates.** The update keeps `NONSTOPVIBIN_DATA_DIR` and `NONSTOPVIBIN_PORT`; once the
   release key is committed, a minisign signature over `SHA256SUMS` is required too.
+- **Service unit.** A new unit leaves `MemoryDenyWriteExecute` off as unverified with the cores,
+  where main's comment cited the JavaScript JIT.
 
 ## What would change these decisions
 

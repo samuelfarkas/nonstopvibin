@@ -402,6 +402,11 @@ mod golden {
 
     #[test]
     fn units_render_and_update_as_the_typescript_cli_wrote_them() {
+        // On purpose: the daemon is no longer JavaScript, so the unit no longer cites a JIT.
+        let reason = (
+            "MemoryDenyWriteExecute (the\n# JavaScript JIT needs it).",
+            "MemoryDenyWriteExecute (not\n# verified with the CLIProxyAPI cores the service runs).",
+        );
         for case in cases("renderUnit ") {
             let input = &case["input"];
             let rendered = render_unit(
@@ -409,7 +414,12 @@ mod golden {
                 &strings(&input["args"]),
                 &environment(&input["environment"]),
             );
-            assert_eq!(outcome(rendered), expected(&case), "{}", case["name"]);
+            let (output, error) = expected(&case);
+            let output = output.map(|unit| {
+                assert!(unit.contains(reason.0), "{}", case["name"]);
+                unit.replace(reason.0, reason.1)
+            });
+            assert_eq!(outcome(rendered), (output, error), "{}", case["name"]);
         }
         for case in cases("updateUnit ") {
             let input = &case["input"];

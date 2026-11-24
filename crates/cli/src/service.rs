@@ -67,8 +67,8 @@ UMask=0077
 NoNewPrivileges=true
 # Deliberately not set: PrivateTmp (the agent credential socket lives in
 # /tmp/nonstopvibin-UID-*), ProtectHome/ProtectSystem (agent settings are
-# written to ~/.claude, ~/.codex and similar), MemoryDenyWriteExecute (the
-# JavaScript JIT needs it).
+# written to ~/.claude, ~/.codex and similar), MemoryDenyWriteExecute (not
+# verified with the CLIProxyAPI cores the service runs).
 
 [Install]
 WantedBy=default.target
