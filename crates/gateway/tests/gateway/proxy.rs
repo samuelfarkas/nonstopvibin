@@ -341,6 +341,61 @@ async fn an_upgrade_relays_the_handshake_and_bytes() {
     within(LIMIT, "the release", || gateway.in_flight(&work()) == 0).await;
 }
 
+/// A WebSocket core that switches protocols and then sends nothing. With `hang_up` it closes
+/// at once; otherwise it holds the socket open and ignores EOF.
+async fn switching_core(hang_up: bool) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_until(&mut socket, &mut Vec::new(), b"\r\n\r\n").await;
+        socket
+            .write_all(
+                b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        if !hang_up {
+            std::future::pending::<()>().await;
+        }
+    });
+    address
+}
+
+#[tokio::test]
+async fn a_relay_ends_when_either_side_closes_and_the_other_stays_silent() {
+    for core_hangs_up in [true, false] {
+        let core = switching_core(core_hangs_up).await;
+        let host = TestHost::work(Wake::At(core));
+        let activity = Arc::clone(&host.activity);
+        let (address, gateway) = spawn_gateway(host).await;
+        let mut agent = TcpStream::connect(address).await.unwrap();
+        agent
+            .write_all(&handshake(address.port(), &key('a')))
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        read_until(&mut agent, &mut received, b"\r\n\r\n").await;
+        assert_eq!(parse_head(&received).unwrap().0.status, 101);
+        if !core_hangs_up {
+            // The agent's FIN; it keeps reading.
+            agent.shutdown().await.unwrap();
+        }
+        within(LIMIT, "the release", || {
+            activity.lock().unwrap().last()
+                == Some(&(WORK.to_owned(), Activity::Closed { last: true }))
+        })
+        .await;
+        assert_eq!(gateway.in_flight(&work()), 0);
+        let mut rest = Vec::new();
+        tokio::time::timeout(LIMIT, agent.read_to_end(&mut rest))
+            .await
+            .expect("the gateway closes the agent's socket")
+            .unwrap();
+        assert!(rest.is_empty(), "{rest:?}");
+    }
+}
+
 #[tokio::test]
 async fn a_refused_upgrade_is_a_proxy_error() {
     for (core, key, status) in [

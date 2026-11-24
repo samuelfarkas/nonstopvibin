@@ -306,7 +306,8 @@ impl<H: Host> Gateway<H> {
 
     /// Answers a WebSocket handshake under `/v1` or `/p/`, after the server's Host and Origin
     /// checks. On the core's `101` it relays the handshake and then bytes in both directions,
-    /// without parsing frames, until either side closes. Any other outcome is
+    /// without parsing frames. Once either direction ends, by EOF or an error, it closes both
+    /// sockets and counts the relay out. Any other outcome is
     /// `HTTP/1.1 <status> Proxy error` with `Connection: close`.
     pub async fn upgrade(&self, mut request: Request<Incoming>) -> Response<Body> {
         match self.relay(&mut request).await {
@@ -347,12 +348,14 @@ impl<H: Host> Gateway<H> {
         tokio::spawn(async move {
             let _flight = flight;
             if let (Ok(agent), Ok(core)) = tokio::join!(agent, core) {
-                // Either side closing or failing ends the relay; the result has no one to go to.
-                let _relayed = tokio::io::copy_bidirectional(
-                    &mut TokioIo::new(agent),
-                    &mut TokioIo::new(core),
-                )
-                .await;
+                let (mut agent_read, mut agent_write) = tokio::io::split(TokioIo::new(agent));
+                let (mut core_read, mut core_write) = tokio::io::split(TokioIo::new(core));
+                // Not `copy_bidirectional`, which waits for both directions: a silent agent
+                // would hold a closed core's lease forever. The results have no one to go to.
+                tokio::select! {
+                    _ = tokio::io::copy(&mut agent_read, &mut core_write) => {}
+                    _ = tokio::io::copy(&mut core_read, &mut agent_write) => {}
+                }
             }
         });
         Ok(reply)
