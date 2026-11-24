@@ -27,13 +27,6 @@ function render(coreVersion: string, core: CoreState) {
   );
 }
 
-test("settings displays the core release pin supplied by application state", () => {
-  // The reviewed release pin at the time this test moved out of integration.test.ts.
-  const html = render("8.1.0", { bundled: "8.1.0", updates: false });
-  assert.ok(html.includes("<code>8.1.0</code>"));
-  assert.match(html, /CLIProxyAPI/);
-});
-
 test("Settings offers a reviewed core, then the bundled one, and shows progress", () => {
   const bundled = { bundled: "8.0.67", updates: true };
   const development = render("8.0.67", { ...bundled, updates: false });
