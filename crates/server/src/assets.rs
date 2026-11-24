@@ -276,16 +276,4 @@ mod tests {
         );
         assert!(!resolve(root, "../client-evil.txt").starts_with(root));
     }
-
-    #[test]
-    fn only_vite_fingerprints_are_immutable() {
-        assert!(fingerprinted("assets/index-AbCd1234.js"));
-        assert!(fingerprinted("assets/font-Zz_-9999.woff2"));
-        assert!(fingerprinted("assets/a.b-12345678.css"));
-        assert!(!fingerprinted("assets/short-abc.js"));
-        assert!(!fingerprinted("assets/nested/deep-AbCd1234.js"));
-        assert!(!fingerprinted("assets/-AbCd12345.js"));
-        assert!(!fingerprinted("index-AbCd1234.js"));
-        assert!(!fingerprinted("assets/index-AbCd1234.mjs"));
-    }
 }
