@@ -112,7 +112,8 @@ pub struct AuthEntry {
 
 /// Every profile's keys by client-key digest. The store publishes a new snapshot before it
 /// acknowledges any profile or secret write, so the gateway never reads SQLite and a deleted
-/// or rotated key fails closed at once.
+/// or rotated key fails closed at once. A client key the store cannot read fails every
+/// profile; a core key, only its own.
 #[derive(Debug)]
 pub struct AuthSnapshot(Result<HashMap<KeyDigest, AuthEntry>, Arc<StoreError>>);
 
@@ -262,7 +263,18 @@ impl Db {
         let mut entries = HashMap::new();
         for profile in self.profiles()? {
             let client_key = self.client_key(&profile.id)?;
-            let core_key = self.core_key(&profile.id)?;
+            // Only this profile's requests need its core key: without one, only they fail.
+            let core_key = match self.core_key(&profile.id) {
+                Ok(core_key) => core_key,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        profile = %profile.id,
+                        "a profile's core key could not be read"
+                    );
+                    continue;
+                }
+            };
             entries.insert(
                 client_key.digest(),
                 AuthEntry {

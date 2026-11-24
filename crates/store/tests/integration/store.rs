@@ -747,6 +747,38 @@ async fn the_auth_snapshot_is_current_when_a_write_returns_and_fails_closed() {
 }
 
 #[tokio::test]
+async fn a_core_key_the_store_cannot_read_refuses_only_its_own_profile() {
+    let temp = TempDir::new("auth-core-key");
+    let store = open(temp.path()).await;
+    let auth = store.auth();
+    let kept = store.call(|db| db.create_profile("Kept")).await.unwrap();
+    let broken = store.call(|db| db.create_profile("Broken")).await.unwrap();
+    let (kept_id, broken_id) = (kept.id.clone(), broken.id.clone());
+    let (kept_key, broken_key) = store
+        .call(move |db| Ok((db.client_key(&kept_id)?, db.client_key(&broken_id)?)))
+        .await
+        .unwrap();
+    raw(temp.path())
+        .execute(
+            "UPDATE secrets SET encrypted='AAAA' WHERE id=?",
+            [format!("{}:core", broken.id)],
+        )
+        .unwrap();
+    store
+        .call(move |db| db.save_profile(&broken))
+        .await
+        .unwrap();
+    let snapshot = auth.borrow();
+    let entry = owner(&snapshot, kept_key.expose_secret()).unwrap().unwrap();
+    assert_eq!(entry.profile, kept.id);
+    assert!(
+        owner(&snapshot, broken_key.expose_secret())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn a_store_that_cannot_read_its_profile_facts_does_not_open_as_if_it_had_none() {
     let temp = TempDir::new("facts-unreadable");
     let store = open(temp.path()).await;
