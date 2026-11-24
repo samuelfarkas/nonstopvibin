@@ -180,13 +180,14 @@ async fn real_world(
         })
         .await
         .unwrap();
+    // The default activity window puts the trailing usage drain long after the test's kill. A
+    // drain in flight at the kill fails, and the scheduler reports a failed drain, as main did.
     let timing = Timing {
         restart: RestartTiming {
             coalesce: 200,
             ..TIMING.restart
         },
         usage_retry: Duration::from_millis(200),
-        activity: Duration::from_millis(500),
         idle,
         ..*TIMING
     };
