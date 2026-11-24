@@ -67,7 +67,9 @@ pub struct ProfileFact {
 }
 
 impl ProfileFact {
-    /// It has a subscription, so the app keeps its core running (`keepsRunning`).
+    /// It has a subscription, whose quota and routing need the core, so the app keeps its core
+    /// running and starts it again when it is not. Every way to add one starts the profile, so
+    /// a profile with one is a profile the user meant to run.
     #[must_use]
     pub const fn kept(&self) -> bool {
         self.api + self.oauth > 0
