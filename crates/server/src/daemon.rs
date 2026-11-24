@@ -189,8 +189,12 @@ impl App {
         self.prices.close().await;
         advance(&self.phase, Phase::Closed);
         self.store.close().await;
-        if let Err(error) = Session::remove(&self.directory, std::process::id()) {
-            failures.push(error.to_string());
+        let directory = self.directory.clone();
+        let pid = std::process::id();
+        match tokio::task::spawn_blocking(move || Session::remove(&directory, pid)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => failures.push(error.to_string()),
+            Err(error) => failures.push(error.to_string()),
         }
         if let Some(lock) = locked(&self.lock).take() {
             lock.release();
@@ -225,7 +229,12 @@ impl Daemon {
         lock: ServerLock,
     ) -> Result<Self, StartError> {
         // An unclean exit's file would hand a second launch a token nobody holds.
-        Session::discard(lock.directory()).map_err(StartError::Session)?;
+        let directory = lock.directory().clone();
+        tokio::task::spawn_blocking(move || Session::discard(&directory))
+            .await
+            .map_err(io::Error::other)
+            .flatten()
+            .map_err(StartError::Session)?;
         let directory = lock.directory().clone();
         let vault = tokio::task::spawn_blocking(move || Vault::open(&directory)).await??;
         let store = Store::open(lock.directory(), vault).await?;
@@ -386,7 +395,12 @@ impl Daemon {
             version: VERSION.to_owned(),
             started_at: (app.shared.clock)(),
         };
-        session.write(&app.directory).map_err(StartError::Session)?;
+        let (written, directory) = (session.clone(), app.directory.clone());
+        tokio::task::spawn_blocking(move || written.write(&directory))
+            .await
+            .map_err(io::Error::other)
+            .flatten()
+            .map_err(StartError::Session)?;
         app.session.get_or_init(|| session);
         Ok(())
     }
