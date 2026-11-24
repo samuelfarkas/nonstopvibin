@@ -14,7 +14,7 @@ use nsv_files::DataDir;
 use nsv_net::{Loopback, LoopbackRequest, Method, NetError, Response, loopback};
 
 use super::BoxFuture;
-use crate::processes::{CoreProcess, Ledger, Ps, forget, spawn_core};
+use crate::processes::{CoreProcess, Ledger, Ps, blocking, forget, spawn_core};
 
 /// Launches cores and carries the pool's loopback requests.
 pub trait Backend: Send + Sync + 'static {
@@ -122,9 +122,9 @@ struct Process {
 impl Process {
     /// Removes the exited core's ledger entry. An entry left by a failed removal names a
     /// process that is gone, which the next instance's reaping removes.
-    fn forget(&mut self) {
+    async fn forget(&mut self) {
         if let Some(entry) = self.entry.take() {
-            let _ = forget(&entry);
+            let _ = blocking(move || forget(&entry)).await;
         }
     }
 }
@@ -149,7 +149,7 @@ impl CoreHandle for Process {
     fn wait(&mut self) -> BoxFuture<'_, io::Result<ExitStatus>> {
         Box::pin(async {
             let status = self.core.wait().await;
-            self.forget();
+            self.forget().await;
             status
         })
     }
@@ -157,7 +157,7 @@ impl CoreHandle for Process {
     fn terminate(&mut self) -> BoxFuture<'_, io::Result<ExitStatus>> {
         Box::pin(async {
             let status = self.core.terminate().await;
-            self.forget();
+            self.forget().await;
             status
         })
     }

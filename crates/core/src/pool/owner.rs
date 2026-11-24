@@ -647,14 +647,22 @@ impl Launch {
 
     /// The binary exists, the profile too, and its config is written for a free port.
     async fn prepare(&self) -> Result<(u16, Arc<CoreKeys>), AppError> {
-        if !self.binary.exists() {
-            return Err(AppError::new(
+        let binary = Arc::clone(&self.binary);
+        // A stat and up to a range of binds: off the runtime thread.
+        let port = crate::processes::blocking(move || {
+            if binary.exists() {
+                unused_port().map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
+        .map_err(|error| AppError::new(format!("Could not allocate core port: {error}"), 503))?
+        .ok_or_else(|| {
+            AppError::new(
                 "The bundled proxy core is missing. Run bun run core:install, then start the profile.",
                 503,
-            ));
-        }
-        let port = unused_port().map_err(|error| {
-            AppError::new(format!("Could not allocate core port: {error}"), 503)
+            )
         })?;
         let config = write_config(&self.context.store, self.profile.clone(), port)
             .await
