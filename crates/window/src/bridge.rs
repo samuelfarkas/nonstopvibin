@@ -376,11 +376,15 @@ mod tests {
 
     #[test]
     fn script_embeds_its_parameters_as_literals() {
-        let script = script(&origin(), NONCE, true, false);
+        // Whitespace collapsed, so a reformatted template still passes.
+        let script = script(&origin(), NONCE, true, false)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(script.contains(r#"if (location.origin !== "http://127.0.0.1:4100") return;"#));
         assert!(script.contains(&format!("const nonce = \"{NONCE}\";")));
-        assert!(script.contains("if (true)\n    window.addEventListener(\"keydown\""));
-        assert!(script.contains("if (false)\n    window.addEventListener(\"mousedown\""));
+        assert!(script.contains("if (true) window.addEventListener(\"keydown\""));
+        assert!(script.contains("if (false) window.addEventListener(\"mousedown\""));
         assert!(script.contains(
             r#"const methods = ["bootstrap","openExternal","copy","showWindow","releaseWindow","setLoginItem","getLoginItem","revealData","chooseProject"];"#
         ));
