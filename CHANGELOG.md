@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
+The first tagged and published release. Its changes include everything listed
+under 0.2.0.
+
 ### Added
 
 - The CLIProxyAPI core updates from **Settings → Proxy core** without a new app
@@ -78,7 +83,9 @@
 - Releases no longer publish blockmaps. Installed Electron builds download the
   whole update instead of a difference.
 
-## [0.2.0] - 2026-11-17
+## 0.2.0 - 2026-11-17
+
+Never tagged or published; its changes first ship in 0.3.0.
 
 ### Added
 
@@ -216,5 +223,5 @@ Release candidate only; it was never tagged or published. Its changes first ship
 - Added macOS DMG and Linux AppImage/deb packaging. macOS builds are unsigned and
   not notarized.
 
-[Unreleased]: https://github.com/samuelfarkas/nonstopvibin/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/samuelfarkas/nonstopvibin/releases/tag/v0.2.0
+[Unreleased]: https://github.com/samuelfarkas/nonstopvibin/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/samuelfarkas/nonstopvibin/releases/tag/v0.3.0

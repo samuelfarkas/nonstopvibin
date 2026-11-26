@@ -45,7 +45,7 @@ No response-time commitment is currently offered.
 Every pull request and every release runs them: the build, test, smoke and packaging
 checks in [checks.yml](.github/workflows/checks.yml) and the dependency, tooling and
 secret scans in [security.yml](.github/workflows/security.yml). To run them locally,
-follow the checklist in [releases](docs/releases.md#first-release-020); if DeepSec is
+follow the checklist in [releases](docs/releases.md#first-release-030); if DeepSec is
 installed, also run `bun run security:tooling`. Dependency audits fail
 at high severity, and `cargo deny check` and `cargo audit` check the Rust
 workspace against `deny.toml` and RustSec; inspect moderate findings too. Secret scans redact output.
