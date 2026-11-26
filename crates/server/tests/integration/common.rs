@@ -28,7 +28,12 @@ pub(crate) fn now() -> i64 {
 /// The cases of `tests/golden/<area>.json`.
 pub(crate) fn golden(area: &str) -> Vec<Value> {
     let path = Path::new(REPOSITORY).join(format!("tests/golden/{area}.json"));
-    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    // The goldens were recorded at version 0.2.0; `/state` reports the workspace version.
+    let text = std::fs::read_to_string(path).unwrap().replace(
+        r#""version":"0.2.0""#,
+        concat!(r#""version":""#, env!("CARGO_PKG_VERSION"), '"'),
+    );
+    serde_json::from_str(&text).unwrap()
 }
 
 /// models.dev answers with the recorder's fixed catalog; every other outside request, the core

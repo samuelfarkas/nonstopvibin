@@ -23,7 +23,11 @@ pub(crate) fn fixed() -> i64 {
 pub(crate) fn cases(area: &str) -> Vec<Value> {
     let path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../tests/golden/{area}.json"));
-    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    // The goldens were recorded at version 0.2.0; the user agent follows the workspace version.
+    let text = fs::read_to_string(path)
+        .unwrap()
+        .replace("nonstopvibin/0.2.0", nsv_net::USER_AGENT);
+    serde_json::from_str(&text).unwrap()
 }
 
 pub(crate) fn case<'a>(cases: &'a [Value], name: &str) -> &'a Value {

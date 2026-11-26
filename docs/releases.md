@@ -2,7 +2,7 @@
 
 GitHub Actions builds releases; GitHub Releases hosts installers and update metadata.
 No separate update server is required. Updates are enabled by
-`updatesEnabled: true` in `package.json` from 0.2.0, the first tagged release. The
+`updatesEnabled: true` in `package.json` since 0.2.0; 0.3.0 is the first tagged release. The
 release repository is
 [samuelfarkas/nonstopvibin](https://github.com/samuelfarkas/nonstopvibin).
 Development builds and Linux deb installations do not auto-update.
@@ -27,7 +27,7 @@ Remaining owner steps:
    `build / checks (macos-26)`, `build / checks (ubuntu-24.04)`, `dependencies` and
    `secrets` checks from the shared [checks workflow](../.github/workflows/checks.yml).
 2. Run an actual upgrade between two released versions on a Mac before advertising
-   updates. The first chance is 0.2.0 to the next release.
+   updates. The first chance is 0.3.0 to the next release.
 3. Before the first Rust release, create the minisign key pair, commit its public
    key as `build/update-signing.pub`, and create the protected `release` environment,
    limited to `v*` tags, with the secret key
@@ -79,13 +79,13 @@ alone cannot supply a macOS update. Releases have no blockmaps: an Electron buil
 that finds none downloads the whole payload, and the Rust updater always does.
 The GitHub-generated source ZIP is not an update payload.
 
-## First release (0.2.0)
+## First release (0.3.0)
 
-`package.json` is at 0.2.0 with updates enabled, and `CHANGELOG.md` has a `[0.2.0]`
+`package.json` is at 0.3.0 with updates enabled, and `CHANGELOG.md` has a `[0.3.0]`
 section. Work through these steps in order.
 
-1. **Preconditions.** `main` is protected as described above, and the 0.2.0 changes
-   are merged through a reviewed pull request with green checks. No `v0.2.0` tag or release exists yet
+1. **Preconditions.** `main` is protected as described above, and the 0.3.0 changes
+   are merged through a reviewed pull request with green checks. No `v0.3.0` tag or release exists yet
    (`git ls-remote --tags origin`, `gh release list`). The tag ruleset blocks
    deleting or moving a pushed tag, so push it only when everything else is ready.
 2. **Create the update-signing key** and the `release` environment as described in
@@ -108,10 +108,10 @@ section. Work through these steps in order.
    bun run dist:server && bun run test:server
    bun run security:deps
    bun run security:install && bun run security:secrets && bun run security:history
-   GITHUB_REPOSITORY=samuelfarkas/nonstopvibin bun scripts/verify-release.mjs v0.2.0
+   GITHUB_REPOSITORY=samuelfarkas/nonstopvibin bun scripts/verify-release.mjs v0.3.0
    ```
 
-   The `[0.2.0]` date in `CHANGELOG.md` must equal the day you push the tag
+   The `[0.3.0]` date in `CHANGELOG.md` must equal the day you push the tag
    (`date +%F`). If it does not, correct it through a reviewed pull request first.
 
 4. **Tag** the merged revision:
@@ -119,8 +119,8 @@ section. Work through these steps in order.
    ```sh
    git switch main
    git pull --ff-only
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 
 5. **The Release workflow** then verifies the tag, version, `updatesEnabled` and
@@ -132,7 +132,7 @@ section. Work through these steps in order.
    publishes the release with generated notes. If a job fails for a reason that needs
    no source change, such as a runner outage, re-run the failed jobs. If the source
    must change, release 0.2.1 instead; the tag cannot be moved.
-6. **Confirm the result.** `gh release view v0.2.0` shows a published, non-prerelease
+6. **Confirm the result.** `gh release view v0.3.0` shows a published, non-prerelease
    release with every asset `scripts/verify-release.mjs` requires (the installers,
    both update feeds and both server archives) and `SHA256SUMS` (with
    `SHA256SUMS.minisig` once the update-signing key exists). In a folder
@@ -142,7 +142,7 @@ section. Work through these steps in order.
    with **Open Anyway** in **System Settings → Privacy & Security**.
    `codesign -d -r- /Applications/NonstopVibin.app` prints
    `designated => identifier "app.nonstopvibin.desktop"`. The app launches, quits,
-   and reopens with its data. Settings shows 0.2.0, and **Check for updates…**
+   and reopens with its data. Settings shows 0.3.0, and **Check for updates…**
    reports that no updates are available.
 
 ## Updating the CLIProxyAPI core
@@ -259,7 +259,7 @@ with `bun scripts/verify-rust-package.ts <artifact>` and launch the packaged app
 which holds the updater in its daemon.
 
 Before advertising updates, use synthetic profiles to test two macOS versions
-installed from the DMG and two AppImage versions (the first pair is 0.2.0 and the
+installed from the DMG and two AppImage versions (the first pair is 0.3.0 and the
 release after it):
 update discovery, Later, explicit restart, shutdown of the core/gateway, restored
 credentials/profile identity, and offline/corrupt-download recovery. Verify beta

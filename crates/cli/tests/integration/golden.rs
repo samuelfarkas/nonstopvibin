@@ -155,10 +155,17 @@ fn the_cli_answers_as_the_typescript_cli_did() {
     );
     state_stub();
 
-    let cases: Vec<Value> = serde_json::from_slice(
-        &std::fs::read(Path::new(REPOSITORY).join("tests/golden/cli.json")).unwrap(),
-    )
-    .unwrap();
+    // Recorded at version 0.2.0: the binary's own banners follow the workspace version, while
+    // the stub `server.json` above still says 0.2.0.
+    let version = env!("CARGO_PKG_VERSION");
+    let text = std::fs::read_to_string(Path::new(REPOSITORY).join("tests/golden/cli.json"))
+        .unwrap()
+        .replace(
+            "NonstopVibin 0.2.0 — headless",
+            &format!("NonstopVibin {version} — headless"),
+        )
+        .replace("nonstopvibin 0.2.0 (", &format!("nonstopvibin {version} ("));
+    let cases: Vec<Value> = serde_json::from_str(&text).unwrap();
     let plain = cases
         .iter()
         .find(|case| case["name"] == "renderUnit plain")
