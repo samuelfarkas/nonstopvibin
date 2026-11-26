@@ -329,7 +329,12 @@ async fn quota_refreshes_and_resets_replay_in_order() {
     }
     assert_eq!(replayed, 16);
 
-    let resets = Resets::new(store.clone(), Arc::clone(&source), Arc::new(Available));
+    let resets = Resets::new(
+        store.clone(),
+        Arc::clone(&source),
+        Arc::new(Available),
+        fixed,
+    );
     let identity = chatgpt["codex-pro.json"].clone();
     for case in named(&cases, "reset ") {
         let input = &case["input"];

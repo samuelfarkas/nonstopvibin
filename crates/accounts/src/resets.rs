@@ -1,11 +1,13 @@
 //! Banked rate-limit resets (`src/server/reset-credits.ts`): listing a subscription's resets and
-//! redeeming one. Codex lists credits; Claude lists the reset grants Claude Code offers
-//! (`cedar_ember`). A redemption keeps its request id in the store until the outcome is known,
-//! so a retry after a failure, an ambiguous answer or a restart redeems the same reset once.
+//! redeeming one. Codex lists credits; Claude lists the reset grants Claude Code 2.1.332 offers
+//! (`cedar_ember`), and only to Claude Code, so Claude calls present the identity the core does.
+//! A redemption keeps its request id in the store until the outcome is known, so a retry after
+//! a failure, an ambiguous answer or a restart redeems the same reset once.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use nsv_core::upstream::CLAUDE_CODE_USER_AGENT;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
@@ -16,8 +18,8 @@ use nsv_store::Store;
 use serde_json::{Map, Value, json};
 
 use crate::quota::{
-    CLAUDE_API, CLAUDE_WINDOWS, CODEX_API, QuotaError, QuotaSource, Quotas, RefreshQuota,
-    UpstreamRequest, call_upstream, status_text,
+    CLAUDE_API, CODEX_API, QuotaError, QuotaSource, Quotas, RefreshQuota, UpstreamRequest,
+    call_upstream, status_text,
 };
 use crate::source::PoolSource;
 use crate::task::Exclusive;
@@ -53,6 +55,7 @@ pub fn reset_credits(value: &Value) -> Option<ResetCredits> {
     Some(ResetCredits {
         available_count,
         credits,
+        note: None,
     })
 }
 
@@ -115,85 +118,247 @@ fn grant_id(id: &str) -> bool {
 }
 
 /// Claude's reset grants, read from the `cedar_ember` block of its usage answer as Claude Code
-/// reads it, as credits: one per grant with resets left, `available` only for the grant Claude
-/// redeems next while it can be used now. No block, or an ineligible subscription, lists none.
-/// `None` for a block that does not match the schema; a grant that does not is skipped.
+/// 2.1.332 offers them: one credit per kind of reset (Fable, full, 5-hour, weekly) that has
+/// resets left, `available` when one of its grants can be used now, which is the one a claim
+/// redeems. A grant past its end at `now` (milliseconds since the epoch) is not usable. An
+/// ineligible subscription lists none and says why in `note`; no block lists none. `None` for a
+/// block that does not match the schema; a grant that does not is skipped.
 #[must_use]
-pub fn claude_credits(value: &Value) -> Option<ResetCredits> {
+pub fn claude_credits(value: &Value, now: i64) -> Option<ResetCredits> {
     let mut credits = ResetCredits {
         available_count: 0,
         credits: Vec::new(),
+        note: None,
     };
     let status = match value.as_object()?.get(CLAUDE_PROGRAM) {
         None | Some(Value::Null) => return Some(credits),
         Some(status) => status.as_object()?,
     };
     if !status.get("eligible")?.as_bool()? {
+        credits.note = Some(ineligible(js::text(status.get("ineligible_reason"))).to_owned());
         return Some(credits);
     }
-    let next = status.get("next_grant_id").and_then(Value::as_str);
+    // Each kind's grants in Claude's order, and the first usable one: what Claude Code offers.
+    let mut kinds: Vec<(Grant, Option<Grant>, u32)> = Vec::new();
     let grants = status.get("grants").and_then(Value::as_array);
-    for (credit, left) in grants
+    for grant in grants
         .into_iter()
         .flatten()
-        .filter_map(|grant| claude_grant(grant, next))
+        .filter_map(|grant| Grant::read(grant, status, now))
     {
-        if credit.status == "available" {
+        let Some((_, target, left)) = kinds
+            .iter_mut()
+            .find(|(first, ..)| first.kind == grant.kind)
+        else {
+            let target = grant.why.is_none().then(|| grant.clone());
+            let left = grant.left;
+            kinds.push((grant, target, left));
+            continue;
+        };
+        *left = left.saturating_add(grant.left);
+        if target.is_none() && grant.why.is_none() {
+            *target = Some(grant);
+        }
+    }
+    for (first, target, left) in kinds {
+        if left == 0 {
+            continue;
+        }
+        if target.is_some() {
             credits.available_count = credits.available_count.saturating_add(left);
         }
-        credits.credits.push(credit);
+        credits.credits.push(target.unwrap_or(first).credit(left));
     }
     Some(credits)
 }
 
-/// One grant with resets left as a credit, and how many it has left.
-fn claude_grant(value: &Value, next: Option<&str>) -> Option<(ResetCredit, u32)> {
-    let grant = value.as_object()?;
-    let id = grant.get("id")?.as_str().filter(|id| grant_id(id))?;
-    let left = whole(grant.get("resets_left")?).filter(|left| *left > 0)?;
-    let total = grant.get("resets_total").and_then(whole).unwrap_or(0);
-    let flag = |key| grant.get(key).and_then(Value::as_bool);
-    let usable =
-        next == Some(id) && flag("usable_now").unwrap_or(false) && !flag("paused").unwrap_or(false);
-    let limits: Vec<&str> = grant
-        .get("clears")?
-        .as_array()?
-        .iter()
-        .filter_map(|key| {
-            CLAUDE_WINDOWS
-                .iter()
-                .find(|(window, ..)| Some(*window) == key.as_str())
-                .map(|(_, label, _)| *label)
-        })
-        .collect();
-    let count = if total >= left {
-        format!("{left} of {total} left")
-    } else {
-        format!("{left} left")
-    };
-    let description = if limits.is_empty() {
-        count
-    } else {
-        format!("Refills {} · {count}", limits.join(", "))
-    };
-    let label = grant
-        .get("label")
-        .and_then(Value::as_str)
-        .map(js::trim)
-        .filter(|label| !label.is_empty());
-    let credit = ResetCredit {
-        id: id.to_owned(),
-        reset_type: "Usage reset".to_owned(),
-        status: if usable { "available" } else { "unavailable" }.to_owned(),
-        expires_at: grant
+/// Why Claude offers a subscription no resets (`ineligible_reason`), in words.
+fn ineligible(reason: Option<&str>) -> &'static str {
+    match reason {
+        Some("surface") => "Claude offers resets only to Claude Code and claude.ai.",
+        Some("cli_version") => {
+            "Claude offers resets only to a newer Claude Code. Update NonstopVibin to see them."
+        }
+        Some("unavailable") => "Claude could not check resets. Try again later.",
+        _ => "Claude offers this subscription no resets right now.",
+    }
+}
+
+/// A Claude reset grant as Claude Code reads one.
+#[derive(Clone)]
+struct Grant {
+    id: String,
+    left: u32,
+    /// Claude Code's name for its kind.
+    kind: &'static str,
+    /// The limits it refills, in words.
+    limits: String,
+    expires_at: Option<String>,
+    /// Why it cannot be used now; `None` when it can.
+    why: Option<&'static str>,
+}
+
+impl Grant {
+    /// A grant Claude Code would list: unpaused, with resets left or usable, and not past its
+    /// end at `now`. `None` otherwise and for one that does not match the schema.
+    fn read(value: &Value, status: &Map<String, Value>, now: i64) -> Option<Self> {
+        let grant = value.as_object()?;
+        let id = grant.get("id")?.as_str().filter(|id| grant_id(id))?;
+        let left = whole(grant.get("resets_left")?)?;
+        let flag = |key, default| grant.get(key).and_then(Value::as_bool).unwrap_or(default);
+        let usable = flag("usable_now", false);
+        if flag("paused", false) || (left == 0 && !usable) {
+            return None;
+        }
+        let clears = windows(grant.get("clears"));
+        let fable = flag("gives_back_weekly", false);
+        let kind = match (fable, js::text(grant.get("type"))) {
+            (true, _) => "Fable reset",
+            (false, Some("full")) => "Full reset",
+            (false, Some("session")) => "5-hour reset",
+            (false, Some("weekly")) => "Weekly reset",
+            _ => match (
+                clears.contains(&"five_hour"),
+                clears.iter().any(|window| *window != "five_hour"),
+            ) {
+                (true, false) => "5-hour reset",
+                (false, true) => "Weekly reset",
+                _ => "Full reset",
+            },
+        };
+        let expires_at = grant
             .get("ends_at")
             .and_then(Value::as_str)
             .filter(|time| time::is_offset_datetime(time))
-            .map(str::to_owned),
-        title: label.map(|label| Some(label.to_owned())),
-        description: Some(Some(description)),
+            .map(str::to_owned);
+        // Claude Code offers no grant past its end, though Claude may still call it usable; its
+        // resets cannot be used, so they do not count either.
+        if expires_at
+            .as_deref()
+            .and_then(time::parse_iso)
+            .is_some_and(|end| end <= now)
+        {
+            return None;
+        }
+        let why = (!usable).then(|| unusable(grant, status, &clears, fable));
+        Some(Self {
+            id: id.to_owned(),
+            left,
+            kind,
+            limits: refills(&clears, fable),
+            expires_at,
+            why,
+        })
+    }
+
+    /// The credit for this grant's kind, with `left` resets across the kind.
+    fn credit(self, left: u32) -> ResetCredit {
+        let mut description = format!("Refills your {} · {left} left", self.limits);
+        if let Some(why) = self.why {
+            description = format!("{description} · {why}");
+        }
+        ResetCredit {
+            id: self.id,
+            reset_type: self.kind.to_owned(),
+            status: if self.why.is_none() {
+                "available"
+            } else {
+                "unavailable"
+            }
+            .to_owned(),
+            expires_at: self.expires_at,
+            title: None,
+            description: Some(Some(description)),
+        }
+    }
+}
+
+/// A usage window list (`clears`, `blocking`, `exhausted`); anything else is empty.
+fn windows(value: Option<&Value>) -> Vec<&str> {
+    value
+        .and_then(Value::as_array)
+        .map_or_default(|windows| windows.iter().filter_map(Value::as_str).collect())
+}
+
+/// The limits a grant refills, as Claude Code names them: "Fable and 5-hour limits".
+fn refills(clears: &[&str], fable: bool) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    let mut add = |name| {
+        if !names.contains(&name) {
+            names.push(name);
+        }
     };
-    Some((credit, left))
+    if fable {
+        add("Fable");
+    }
+    for window in clears {
+        match *window {
+            "five_hour" => add("5-hour"),
+            "seven_day" => add("weekly"),
+            "seven_day_opus" => add("Opus weekly"),
+            "seven_day_sonnet" => add("Sonnet weekly"),
+            "seven_day_overage_included" => add(if fable { "Fable" } else { "weekly" }),
+            _ => {}
+        }
+    }
+    match names.split_last() {
+        None => "limits".to_owned(),
+        Some((last, [])) => format!("{last} limit"),
+        Some((last, rest)) => format!("{} and {last} limits", rest.join(", ")),
+    }
+}
+
+/// Why a grant cannot be used now, in Claude Code's words: Claude's own reason, else one read
+/// from the status the way Claude Code reads it.
+fn unusable(
+    grant: &Map<String, Value>,
+    status: &Map<String, Value>,
+    clears: &[&str],
+    fable: bool,
+) -> &'static str {
+    let refills = |window: &str| clears.contains(&window) || (window == "seven_day" && fable);
+    let reason = js::text(grant.get("unavailable_reason")).unwrap_or_else(|| {
+        if js::text(status.get("cooldown_until")).is_some() {
+            return "cooldown";
+        }
+        let blocking = windows(grant.get("blocking"));
+        if let Some(window) = blocking.iter().find_map(|window| match *window {
+            "five_hour" => Some("blocked_five_hour"),
+            "seven_day" => Some("blocked_seven_day"),
+            "seven_day_opus" => Some("blocked_opus"),
+            "seven_day_sonnet" => Some("blocked_sonnet"),
+            _ => None,
+        }) {
+            return window;
+        }
+        if !blocking.is_empty() {
+            return "blocked_other";
+        }
+        let at_limit = status.get("at_limit").and_then(Value::as_bool) == Some(true);
+        if at_limit
+            && !windows(status.get("exhausted"))
+                .iter()
+                .any(|window| refills(window))
+        {
+            return "cannot_clear";
+        }
+        if grant.get("use_requires_limit").and_then(Value::as_bool) == Some(false) {
+            "unavailable"
+        } else {
+            "needs_limit"
+        }
+    });
+    match reason {
+        "cooldown" => "try again in a minute",
+        "blocked_five_hour" => "can't be used while you're at your 5-hour limit",
+        "blocked_seven_day" => "can't be used while you're at your weekly limit",
+        "blocked_opus" => "can't be used while you're at your Opus weekly limit",
+        "blocked_sonnet" => "can't be used while you're at your Sonnet weekly limit",
+        "blocked_other" => "can't be used while you're at another limit it doesn't refill",
+        "cannot_clear" => "doesn't refill the limit you've reached",
+        "needs_limit" => "usable once you reach a limit it refills",
+        _ => "can't be used right now",
+    }
 }
 
 /// Claude's answer to a claim (`result`), as Claude Code reads it.
@@ -213,6 +378,15 @@ fn claude_result(value: &Value) -> Result<ResetResultCode, AppError> {
         )),
         _ => Err(unknown_outcome()),
     }
+}
+
+/// A Claude reset call as the Claude Code the core presents itself as.
+fn claude_code(method: &'static str, url: String) -> UpstreamRequest {
+    let mut request = UpstreamRequest::claude(method, url);
+    request
+        .header
+        .push(("User-Agent", CLAUDE_CODE_USER_AGENT.to_owned()));
+    request
 }
 
 fn unknown_outcome() -> AppError {
@@ -258,7 +432,7 @@ impl Subscription {
                 format!("{CODEX_API}/rate-limit-reset-credits"),
                 Some(identity),
             ),
-            Seat::Claude { .. } => UpstreamRequest::claude(
+            Seat::Claude { .. } => claude_code(
                 "GET",
                 format!("{CLAUDE_API}/oauth/usage?{CLAUDE_PROGRAM}=1&skip_spend=1"),
             ),
@@ -277,7 +451,7 @@ impl Subscription {
                 json!({ "credit_id": credit, "redeem_request_id": request_id }),
             ),
             Seat::Claude { organization, .. } => (
-                UpstreamRequest::claude(
+                claude_code(
                     "POST",
                     format!("{CLAUDE_API}/organizations/{organization}/reset_rate_limits"),
                 ),
@@ -295,16 +469,19 @@ pub struct Resets<S = PoolSource, Q = Quotas<PoolSource>> {
     store: Store,
     source: S,
     quotas: Arc<Q>,
+    /// Milliseconds since the epoch.
+    clock: fn() -> i64,
     redeeming: Exclusive<String>,
 }
 
 impl<S: QuotaSource, Q: RefreshQuota> Resets<S, Q> {
     #[must_use]
-    pub fn new(store: Store, source: S, quotas: Arc<Q>) -> Self {
+    pub fn new(store: Store, source: S, quotas: Arc<Q>, clock: fn() -> i64) -> Self {
         Self {
             store,
             source,
             quotas,
+            clock,
             redeeming: Exclusive::new(),
         }
     }
@@ -407,7 +584,7 @@ impl<S: QuotaSource, Q: RefreshQuota> Resets<S, Q> {
             .await?;
         match subscription.seat {
             Seat::Codex(_) => reset_credits(&body),
-            Seat::Claude { .. } => claude_credits(&body),
+            Seat::Claude { .. } => claude_credits(&body, (self.clock)()),
         }
         .ok_or_else(|| {
             AppError::new(

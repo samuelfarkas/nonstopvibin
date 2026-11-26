@@ -1,6 +1,6 @@
 {
   "name": "nonstopvibin",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "updatesEnabled": true,
   "description": "A local desktop proxy for using AI subscriptions with coding agents.",
   "private": true,
