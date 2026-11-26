@@ -940,11 +940,17 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     let account = AccountId::parse("fixture.json").unwrap();
     let source = Arc::new(reset_source(None));
     let available = Arc::new(Refresh(Ok(QuotaStatus::Available)));
-    let resets = Resets::new(store.clone(), Arc::clone(&source), Arc::clone(&available));
+    let resets = Resets::new(
+        store.clone(),
+        Arc::clone(&source),
+        Arc::clone(&available),
+        fixed,
+    );
     let unrefreshed = Resets::new(
         store.clone(),
         Arc::clone(&source),
         Arc::new(Refresh(Err(()))),
+        fixed,
     );
     let consume = async |answer: Value, resets: &Resets<Arc<StubSource>, Refresh>| {
         source.queue([answer]);
@@ -1008,7 +1014,12 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
 
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let gated = Arc::new(reset_source(Some(Arc::clone(&gate))));
-    let resets = Resets::new(store.clone(), Arc::clone(&gated), Arc::clone(&available));
+    let resets = Resets::new(
+        store.clone(),
+        Arc::clone(&gated),
+        Arc::clone(&available),
+        fixed,
+    );
     gated.queue([json!({ "status_code": 200, "body": { "code": "reset" } })]);
     let (running, concurrent) =
         tokio::join!(resets.consume(&owner, &account, "credit-one"), async {
@@ -1039,6 +1050,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
             ..reset_source(None)
         },
         available,
+        fixed,
     );
     let Err(QuotaError::App(error)) = stopped.credits(&owner, &account).await else {
         panic!()
@@ -1077,6 +1089,7 @@ async fn claude_reset_grants_list_one_credit_per_kind_as_claude_code_offers_them
         store.clone(),
         Arc::clone(&source),
         Arc::new(Refresh(Ok(QuotaStatus::Available))),
+        fixed,
     );
     let list = async |status: Value| {
         source.queue([json!({ "status_code": 200, "body": {
@@ -1105,6 +1118,9 @@ async fn claude_reset_grants_list_one_credit_per_kind_as_claude_code_offers_them
             { "id": "full-reset", "resets_total": 1, "resets_left": 0, "clears": ["five_hour", "seven_day"],
               "usable_now": false, "type": "full", "unavailable_reason": "unavailable" },
             fable("launch-fable", 0, false),
+            // Ended before the test clock's 2026-11-22: never offered, never counted.
+            { "id": "ended-fable", "resets_left": 1, "ends_at": "2026-11-20T00:00:00+00:00",
+              "clears": ["five_hour"], "usable_now": true, "gives_back_weekly": true },
             fable("launch-fable-12mo", 1, true),
             fable("launch-fable-6mo", 1, true),
             { "id": "weekly-gift", "resets_left": 1, "ends_at": null, "clears": ["seven_day"],
@@ -1188,6 +1204,7 @@ async fn claude_reset_grants_list_one_credit_per_kind_as_claude_code_offers_them
         store.clone(),
         unverified,
         Arc::new(Refresh(Ok(QuotaStatus::Available))),
+        fixed,
     );
     let Err(QuotaError::App(error)) = resets.credits(&owner, &account).await else {
         panic!("a seat without its organization was asked")
@@ -1207,6 +1224,7 @@ async fn claude_claims_reuse_a_request_id_only_until_claude_names_an_outcome() {
         store.clone(),
         Arc::clone(&source),
         Arc::new(Refresh(Ok(QuotaStatus::Available))),
+        fixed,
     );
     // The outcome, and the request id sent.
     let claim = async |result: &str| {

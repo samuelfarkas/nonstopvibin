@@ -232,7 +232,7 @@ impl Cores {
             },
         )?;
         Ok(Self {
-            resets: Resets::new(store.clone(), source, Arc::clone(&quotas)),
+            resets: Resets::new(store.clone(), source, Arc::clone(&quotas), clock),
             scheduler,
             pool,
             accounts,

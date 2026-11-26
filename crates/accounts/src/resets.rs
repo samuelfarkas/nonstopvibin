@@ -120,10 +120,11 @@ fn grant_id(id: &str) -> bool {
 /// Claude's reset grants, read from the `cedar_ember` block of its usage answer as Claude Code
 /// 2.1.332 offers them: one credit per kind of reset (Fable, full, 5-hour, weekly) that has
 /// resets left, `available` when one of its grants can be used now, which is the one a claim
-/// redeems. An ineligible subscription lists none and says why in `note`; no block lists none.
-/// `None` for a block that does not match the schema; a grant that does not is skipped.
+/// redeems. A grant past its end at `now` (milliseconds since the epoch) is not usable. An
+/// ineligible subscription lists none and says why in `note`; no block lists none. `None` for a
+/// block that does not match the schema; a grant that does not is skipped.
 #[must_use]
-pub fn claude_credits(value: &Value) -> Option<ResetCredits> {
+pub fn claude_credits(value: &Value, now: i64) -> Option<ResetCredits> {
     let mut credits = ResetCredits {
         available_count: 0,
         credits: Vec::new(),
@@ -143,7 +144,7 @@ pub fn claude_credits(value: &Value) -> Option<ResetCredits> {
     for grant in grants
         .into_iter()
         .flatten()
-        .filter_map(|grant| Grant::read(grant, status))
+        .filter_map(|grant| Grant::read(grant, status, now))
     {
         let Some((_, target, left)) = kinds
             .iter_mut()
@@ -198,9 +199,9 @@ struct Grant {
 }
 
 impl Grant {
-    /// A grant Claude Code would list: unpaused, with resets left or usable. `None` otherwise
-    /// and for one that does not match the schema.
-    fn read(value: &Value, status: &Map<String, Value>) -> Option<Self> {
+    /// A grant Claude Code would list: unpaused, with resets left or usable, and not past its
+    /// end at `now`. `None` otherwise and for one that does not match the schema.
+    fn read(value: &Value, status: &Map<String, Value>, now: i64) -> Option<Self> {
         let grant = value.as_object()?;
         let id = grant.get("id")?.as_str().filter(|id| grant_id(id))?;
         let left = whole(grant.get("resets_left")?)?;
@@ -225,21 +226,27 @@ impl Grant {
                 _ => "Full reset",
             },
         };
-        let why = if usable {
-            None
-        } else {
-            Some(unusable(grant, status, &clears, fable))
-        };
+        let expires_at = grant
+            .get("ends_at")
+            .and_then(Value::as_str)
+            .filter(|time| time::is_offset_datetime(time))
+            .map(str::to_owned);
+        // Claude Code offers no grant past its end, though Claude may still call it usable; its
+        // resets cannot be used, so they do not count either.
+        if expires_at
+            .as_deref()
+            .and_then(time::parse_iso)
+            .is_some_and(|end| end <= now)
+        {
+            return None;
+        }
+        let why = (!usable).then(|| unusable(grant, status, &clears, fable));
         Some(Self {
             id: id.to_owned(),
             left,
             kind,
             limits: refills(&clears, fable),
-            expires_at: grant
-                .get("ends_at")
-                .and_then(Value::as_str)
-                .filter(|time| time::is_offset_datetime(time))
-                .map(str::to_owned),
+            expires_at,
             why,
         })
     }
@@ -462,16 +469,19 @@ pub struct Resets<S = PoolSource, Q = Quotas<PoolSource>> {
     store: Store,
     source: S,
     quotas: Arc<Q>,
+    /// Milliseconds since the epoch.
+    clock: fn() -> i64,
     redeeming: Exclusive<String>,
 }
 
 impl<S: QuotaSource, Q: RefreshQuota> Resets<S, Q> {
     #[must_use]
-    pub fn new(store: Store, source: S, quotas: Arc<Q>) -> Self {
+    pub fn new(store: Store, source: S, quotas: Arc<Q>, clock: fn() -> i64) -> Self {
         Self {
             store,
             source,
             quotas,
+            clock,
             redeeming: Exclusive::new(),
         }
     }
@@ -574,7 +584,7 @@ impl<S: QuotaSource, Q: RefreshQuota> Resets<S, Q> {
             .await?;
         match subscription.seat {
             Seat::Codex(_) => reset_credits(&body),
-            Seat::Claude { .. } => claude_credits(&body),
+            Seat::Claude { .. } => claude_credits(&body, (self.clock)()),
         }
         .ok_or_else(|| {
             AppError::new(
