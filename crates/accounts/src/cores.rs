@@ -26,7 +26,7 @@ use crate::accounts::Accounts;
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::quota::{QuotaError, Quotas};
-use crate::resets::CodexResets;
+use crate::resets::Resets;
 use crate::sandbox::{self, Backends};
 use crate::scheduler::{Host, Scheduler, Timing, Tracked};
 use crate::sign_in::{SignIn, SignInOptions};
@@ -66,7 +66,7 @@ pub struct Cores {
     quotas: Arc<Quotas<PoolSource>>,
     credentials: Credentials,
     sign_in: SignIn,
-    resets: CodexResets,
+    resets: Resets,
     updates: CoreUpdates,
     store: Store,
     backends: Backends,
@@ -232,7 +232,7 @@ impl Cores {
             },
         )?;
         Ok(Self {
-            resets: CodexResets::new(store.clone(), source, Arc::clone(&quotas)),
+            resets: Resets::new(store.clone(), source, Arc::clone(&quotas)),
             scheduler,
             pool,
             accounts,
@@ -542,7 +542,7 @@ impl Cores {
         Ok(())
     }
 
-    /// `GET …/reset-credits`; see [`CodexResets::credits`].
+    /// `GET …/reset-credits`; see [`Resets::credits`].
     ///
     /// # Errors
     /// The resets'.
@@ -554,7 +554,7 @@ impl Cores {
         self.resets.credits(profile, account).await
     }
 
-    /// `POST …/reset-credits/consume`; see [`CodexResets::consume`].
+    /// `POST …/reset-credits/consume`; see [`Resets::consume`].
     ///
     /// # Errors
     /// The resets'.

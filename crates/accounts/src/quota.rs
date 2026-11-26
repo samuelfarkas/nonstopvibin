@@ -29,6 +29,8 @@ use crate::task::Exclusive;
 
 /// `ChatGPT`'s backend for Codex subscriptions: quota and banked resets.
 pub const CODEX_API: &str = "https://chatgpt.com/backend-api/wham";
+/// Anthropic's API for Claude subscriptions: usage and reset grants.
+pub const CLAUDE_API: &str = "https://api.anthropic.com/api";
 const XAI_BILLING: &str = "https://cli-chat-proxy.grok.com/v1/billing";
 const OPENCODE_TIMEOUT: Duration = Duration::from_secs(15);
 const OPENCODE_LIMIT: u64 = 1024 * 1024;
@@ -47,6 +49,17 @@ pub trait QuotaSource: Send + Sync {
 
     /// Whether the profile's core can take management calls (`CorePool.usable`).
     fn usable(&self, profile: &ProfileId) -> bool;
+
+    /// Whether the core held a quota cooldown for the account at the last account sync.
+    fn quota_cooldown(&self, profile: &ProfileId, account: &AccountId) -> bool;
+
+    /// `POST /v0/management/reset-quota` on the profile's core: forgets the quota and cooldown
+    /// state of the credential `auth_index`.
+    fn reset_cooldown(
+        &self,
+        profile: &ProfileId,
+        auth_index: &str,
+    ) -> impl Future<Output = Result<(), AppError>> + Send;
 
     /// `POST /v0/management/api-call` on the profile's core with `body`; answers the core's
     /// JSON (`{ status_code, body }`).
@@ -71,6 +84,18 @@ impl<T: QuotaSource> QuotaSource for Arc<T> {
 
     fn usable(&self, profile: &ProfileId) -> bool {
         T::usable(self, profile)
+    }
+
+    fn quota_cooldown(&self, profile: &ProfileId, account: &AccountId) -> bool {
+        T::quota_cooldown(self, profile, account)
+    }
+
+    fn reset_cooldown(
+        &self,
+        profile: &ProfileId,
+        auth_index: &str,
+    ) -> impl Future<Output = Result<(), AppError>> + Send {
+        T::reset_cooldown(self, profile, auth_index)
     }
 
     fn api_call(
@@ -102,6 +127,15 @@ impl UpstreamRequest {
             ],
             data: None,
         }
+    }
+
+    /// A call to Anthropic's OAuth account API as the Claude subscription.
+    pub(crate) fn claude(method: &'static str, url: String) -> Self {
+        let mut request = Self::bearer(method, url);
+        request
+            .header
+            .push(("anthropic-beta", CLAUDE_OAUTH_BETA.to_owned()));
+        request
     }
 
     /// A call to `ChatGPT`'s Codex backend as the subscription `chatgpt_account_id`.
@@ -318,7 +352,7 @@ fn window(
 }
 
 /// Claude's account-wide and per-model windows: key, label, scoped.
-const CLAUDE_WINDOWS: [(&str, &str, bool); 6] = [
+pub(crate) const CLAUDE_WINDOWS: [(&str, &str, bool); 6] = [
     ("five_hour", "5-hour", false),
     ("seven_day", "Weekly", false),
     ("seven_day_opus", "Opus weekly", true),
@@ -595,6 +629,18 @@ fn xai_quota(body: &Value) -> Vec<QuotaWindow> {
     windows
 }
 
+/// Whether a reading shows room in every window, the account's and each model's: a quota
+/// cooldown the core holds is then stale. A window of unknown usage proves nothing.
+fn has_headroom(quota: &Quota) -> bool {
+    quota.status == QuotaStatus::Available
+        && !quota.windows.is_empty()
+        && quota.windows.iter().all(|window| {
+            window
+                .remaining_percent
+                .is_some_and(|remaining| remaining.0 > 0.0)
+        })
+}
+
 /// Reads a provider's quota answer, which may be wrapped in a JSON string, at `now`
 /// (milliseconds since the epoch). Unknown providers read no windows.
 ///
@@ -731,10 +777,24 @@ impl<S: QuotaSource> Quotas<S> {
                 }
             },
         };
-        let (profile, account, stored) = (profile.clone(), account_id.clone(), quota.clone());
+        let (id, account_key, stored) = (profile.clone(), account_id.clone(), quota.clone());
         self.store
-            .call(move |db| db.save_quota(&profile, &account, &stored))
+            .call(move |db| db.save_quota(&id, &account_key, &stored))
             .await?;
+        // The provider took a reset (on its site, here, or early) that the core cannot see: it
+        // would keep refusing the credential until its own cooldown ends. Still this check's
+        // turn, so a newer reading cannot be overtaken by this clear.
+        if has_headroom(&quota)
+            && self.source.quota_cooldown(profile, account_id)
+            && let Some(index) = account
+                .auth_index
+                .as_deref()
+                .filter(|index| !index.is_empty())
+            && let Err(error) = self.source.reset_cooldown(profile, index).await
+        {
+            // The cooldown stays listed, so the next refresh tries again.
+            tracing::warn!(%error, "could not clear a quota cooldown the provider has lifted");
+        }
         drop(running);
         Ok(quota)
     }
@@ -771,14 +831,11 @@ impl<S: QuotaSource> Quotas<S> {
             };
         let payload = match source {
             QuotaProvider::Claude => {
-                let mut request = UpstreamRequest::bearer(
-                    "GET",
-                    "https://api.anthropic.com/api/oauth/usage".to_owned(),
-                );
-                request
-                    .header
-                    .push(("anthropic-beta", CLAUDE_OAUTH_BETA.to_owned()));
-                send(request, None).await?
+                send(
+                    UpstreamRequest::claude("GET", format!("{CLAUDE_API}/oauth/usage")),
+                    None,
+                )
+                .await?
             }
             QuotaProvider::Codex => {
                 let id = self.source.chatgpt_account_id(profile, &account.id);

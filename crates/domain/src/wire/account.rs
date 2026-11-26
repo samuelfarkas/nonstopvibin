@@ -151,7 +151,8 @@ pub struct ImportSource {
     pub organization_name: Option<String>,
 }
 
-/// Codex's banked rate-limit resets, in the upstream's snake case.
+/// A subscription's banked rate-limit resets: Codex's in its snake case, and Claude's reset
+/// grants read into the same shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ResetCredits {

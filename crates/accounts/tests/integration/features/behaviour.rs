@@ -10,7 +10,7 @@ use nsv_accounts::api_accounts::api_account;
 use nsv_accounts::catalog::{CatalogError, ModelCatalog};
 use nsv_accounts::pricing::{PricingError, UsagePrices, estimate_usd, normalized_tokens};
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
-use nsv_accounts::resets::CodexResets;
+use nsv_accounts::resets::Resets;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::{Protocol, RetentionDays};
@@ -796,6 +796,98 @@ async fn a_check_queued_behind_a_running_one_answers_the_stored_quota_once_it_is
     store.close().await;
 }
 
+#[tokio::test]
+async fn a_reading_with_room_in_every_window_clears_the_quota_cooldown_the_core_still_holds() {
+    let directory = TempDir::new("quota-cooldown");
+    let store = open_store(directory.path()).await;
+    let owner = profile(&store, "Owner").await;
+    let source = Arc::new(StubSource {
+        accounts: vec![
+            subscription("cooling.json", "claude"),
+            subscription("ready.json", "claude"),
+        ],
+        cooling: ["cooling.json".to_owned()].into(),
+        ..StubSource::default()
+    });
+    let quotas = Quotas::new(store.clone(), Arc::clone(&source), unavailable(), fixed);
+    // The `auth_index` of each cooldown a refresh cleared.
+    let refresh = async |account: &str, answer: Value| {
+        source.queue([answer]);
+        quotas
+            .refresh(&owner, &AccountId::parse(account).unwrap())
+            .await
+            .unwrap();
+        std::mem::take(&mut *source.cleared.lock().unwrap())
+    };
+    let usage = |five_hour: u32, opus: u32| {
+        json!({ "status_code": 200, "body": {
+            "five_hour": { "utilization": five_hour },
+            "seven_day": { "utilization": 40 },
+            "seven_day_opus": { "utilization": opus },
+        } })
+    };
+
+    assert!(
+        refresh("cooling.json", usage(100, 10)).await.is_empty(),
+        "the account is still at its limit"
+    );
+    assert!(
+        refresh("cooling.json", usage(0, 100)).await.is_empty(),
+        "a model is still at its limit"
+    );
+    let unknown = json!({ "status_code": 200, "body": {
+        "five_hour": { "utilization": 0 },
+        "seven_day_opus": { "resets_at": "2026-12-01T00:00:00Z" },
+    } });
+    assert!(
+        refresh("cooling.json", unknown).await.is_empty(),
+        "a window of unknown usage may still be at its limit"
+    );
+    assert!(
+        refresh("ready.json", usage(0, 10)).await.is_empty(),
+        "the core holds no cooldown"
+    );
+    assert_eq!(
+        refresh("cooling.json", usage(0, 10)).await,
+        ["fixture-index"],
+        "a reset the core did not see"
+    );
+    assert!(
+        refresh("cooling.json", json!({ "status_code": 500, "body": "" }))
+            .await
+            .is_empty(),
+        "a failed check keeps the last reading but proves nothing"
+    );
+
+    // A clear still in flight keeps the account's turn: no newer check can be overtaken by it.
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let source = Arc::new(StubSource {
+        accounts: vec![subscription("cooling.json", "claude")],
+        cooling: ["cooling.json".to_owned()].into(),
+        clear_gate: Some(Arc::clone(&gate)),
+        ..StubSource::default()
+    });
+    let quotas = Quotas::new(store.clone(), Arc::clone(&source), unavailable(), fixed);
+    let cooling = AccountId::parse("cooling.json").unwrap();
+    source.queue([usage(0, 10), usage(100, 10)]);
+    let (first, second) = tokio::join!(quotas.refresh(&owner, &cooling), async {
+        while source.cleared.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let second = quotas.refresh(&owner, &cooling).await;
+        gate.add_permits(1);
+        second
+    });
+    first.unwrap();
+    assert_eq!(
+        remaining(&second.unwrap()),
+        100.0,
+        "the stored reading answers"
+    );
+    assert_eq!(source.take_calls().len(), 1, "the provider is asked once");
+    store.close().await;
+}
+
 struct Refresh(Result<QuotaStatus, ()>);
 
 impl RefreshQuota for Refresh {
@@ -847,13 +939,13 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
     let account = AccountId::parse("fixture.json").unwrap();
     let source = Arc::new(reset_source(None));
     let available = Arc::new(Refresh(Ok(QuotaStatus::Available)));
-    let resets = CodexResets::new(store.clone(), Arc::clone(&source), Arc::clone(&available));
-    let unrefreshed = CodexResets::new(
+    let resets = Resets::new(store.clone(), Arc::clone(&source), Arc::clone(&available));
+    let unrefreshed = Resets::new(
         store.clone(),
         Arc::clone(&source),
         Arc::new(Refresh(Err(()))),
     );
-    let consume = async |answer: Value, resets: &CodexResets<Arc<StubSource>, Refresh>| {
+    let consume = async |answer: Value, resets: &Resets<Arc<StubSource>, Refresh>| {
         source.queue([answer]);
         let result = resets.consume(&owner, &account, "credit-one").await;
         (result, redeem_request_id(&source.take_calls()))
@@ -915,7 +1007,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
 
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let gated = Arc::new(reset_source(Some(Arc::clone(&gate))));
-    let resets = CodexResets::new(store.clone(), Arc::clone(&gated), Arc::clone(&available));
+    let resets = Resets::new(store.clone(), Arc::clone(&gated), Arc::clone(&available));
     gated.queue([json!({ "status_code": 200, "body": { "code": "reset" } })]);
     let (running, concurrent) =
         tokio::join!(resets.consume(&owner, &account, "credit-one"), async {
@@ -939,7 +1031,7 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
         (409, "A reset is already in progress for this subscription.")
     );
 
-    let stopped = CodexResets::new(
+    let stopped = Resets::new(
         store.clone(),
         StubSource {
             stopped: true,
@@ -954,6 +1046,172 @@ async fn redemptions_retry_with_the_same_request_until_the_outcome_is_known() {
         (error.status, error.message.as_str()),
         (409, "Start this profile first.")
     );
+    store.close().await;
+}
+
+const ORGANIZATION: &str = "bbbbbbbb-0000-4000-8000-000000000001";
+
+fn claude_seat() -> StubSource {
+    let mut account = subscription("claude.json", "claude");
+    account.organization_uuid = Some(ORGANIZATION.to_owned());
+    account.account_uuid = Some("aaaaaaaa-0000-4000-8000-000000000001".to_owned());
+    StubSource {
+        accounts: vec![account],
+        ..StubSource::default()
+    }
+}
+
+#[tokio::test]
+async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available() {
+    let directory = TempDir::new("claude-resets");
+    let store = open_store(directory.path()).await;
+    let owner = profile(&store, "Owner").await;
+    let account = AccountId::parse("claude.json").unwrap();
+    let source = Arc::new(claude_seat());
+    let resets = Resets::new(
+        store.clone(),
+        Arc::clone(&source),
+        Arc::new(Refresh(Ok(QuotaStatus::Available))),
+    );
+    let list = async |status: Value| {
+        source.queue([json!({ "status_code": 200, "body": {
+            "five_hour": { "utilization": 100 },
+            "cedar_ember": status,
+        } })]);
+        resets
+            .credits(&owner, &account)
+            .await
+            .map(|credits| serde_json::to_value(credits).unwrap())
+    };
+
+    let listed = list(json!({
+        "eligible": true, "next_grant_id": "holiday",
+        "grants": [
+            { "id": "holiday", "label": "Holiday reset", "resets_total": 3, "resets_left": 2,
+              "ends_at": "2026-12-31T00:00:00Z", "clears": ["five_hour", "seven_day", "seven_day_omelette"],
+              "paused": false, "usable_now": true, "blocking": [] },
+            { "id": "later", "label": " ", "resets_left": 1, "ends_at": null,
+              "clears": ["seven_day_opus"], "usable_now": true, "blocking": [] },
+            { "id": "spent", "resets_left": 0, "clears": [], "blocking": [] },
+            { "id": "Not A Grant", "resets_left": 1, "clears": [], "blocking": [] },
+        ],
+    }))
+    .await
+    .unwrap();
+    assert_eq!(
+        listed,
+        json!({ "available_count": 2, "credits": [
+            { "id": "holiday", "reset_type": "Usage reset", "status": "available",
+              "expires_at": "2026-12-31T00:00:00Z", "title": "Holiday reset",
+              "description": "Refills 5-hour, Weekly · 2 of 3 left" },
+            { "id": "later", "reset_type": "Usage reset", "status": "unavailable",
+              "expires_at": null, "description": "Refills Opus weekly · 1 left" },
+        ] })
+    );
+    let call = source.take_calls().pop().unwrap();
+    assert_eq!(
+        (&call["auth_index"], &call["method"], &call["url"]),
+        (
+            &json!("fixture-index"),
+            &json!("GET"),
+            &json!("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
+        )
+    );
+    assert_eq!(call["header"]["anthropic-beta"], "oauth-2025-04-20");
+
+    let paused = list(json!({
+        "eligible": true, "next_grant_id": "holiday",
+        "grants": [{ "id": "holiday", "resets_left": 1, "clears": [], "paused": true, "usable_now": true }],
+    }))
+    .await
+    .unwrap();
+    assert_eq!(
+        (&paused["available_count"], &paused["credits"][0]["status"]),
+        (&json!(0), &json!("unavailable"))
+    );
+    let none = json!({ "available_count": 0, "credits": [] });
+    assert_eq!(list(Value::Null).await.unwrap(), none, "not in the program");
+    assert_eq!(
+        list(json!({ "eligible": false, "ineligible_reason": "tier" }))
+            .await
+            .unwrap(),
+        none
+    );
+    let Err(QuotaError::App(error)) = list(json!({ "grants": [] })).await else {
+        panic!("a block without eligibility was read")
+    };
+    assert_eq!(
+        (error.status, error.message.as_str()),
+        (502, "Claude reset information is unavailable.")
+    );
+
+    let mut unverified = claude_seat();
+    unverified.accounts[0].organization_uuid = None;
+    let resets = Resets::new(
+        store.clone(),
+        unverified,
+        Arc::new(Refresh(Ok(QuotaStatus::Available))),
+    );
+    let Err(QuotaError::App(error)) = resets.credits(&owner, &account).await else {
+        panic!("a seat without its organization was asked")
+    };
+    assert_eq!(error.status, 409);
+    store.close().await;
+}
+
+#[tokio::test]
+async fn claude_claims_reuse_a_request_id_only_until_claude_names_an_outcome() {
+    let directory = TempDir::new("claude-claims");
+    let store = open_store(directory.path()).await;
+    let owner = profile(&store, "Owner").await;
+    let account = AccountId::parse("claude.json").unwrap();
+    let source = Arc::new(claude_seat());
+    let resets = Resets::new(
+        store.clone(),
+        Arc::clone(&source),
+        Arc::new(Refresh(Ok(QuotaStatus::Available))),
+    );
+    // The outcome, and the request id sent.
+    let claim = async |result: &str| {
+        source.queue([json!({ "status_code": 200, "body": { "result": result } })]);
+        let outcome = resets.consume(&owner, &account, "holiday").await;
+        let call = source.take_calls().pop().unwrap();
+        assert_eq!(
+            call["url"],
+            format!("https://api.anthropic.com/api/organizations/{ORGANIZATION}/reset_rate_limits")
+        );
+        let data: Value = serde_json::from_str(call["data"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            (&data["program"], &data["grant_id"]),
+            (&json!("cedar_ember"), &json!("holiday"))
+        );
+        let code = outcome.map(|result| serde_json::to_value(result.code).unwrap());
+        (code, data["request_id"].as_str().unwrap().to_owned())
+    };
+    let status = |outcome: Result<Value, QuotaError>| match outcome {
+        Err(QuotaError::App(error)) => error.status,
+        other => panic!("an outcome Claude did not name settled: {other:?}"),
+    };
+
+    let (unknown, first) = claim("unavailable").await;
+    assert_eq!(status(unknown), 502);
+    let (busy, retried) = claim("cooldown").await;
+    assert_eq!(status(busy), 409);
+    assert_eq!(retried, first, "a retry claims with the same request id");
+    let (reset, settled) = claim("reset").await;
+    assert_eq!(reset.unwrap(), "reset");
+    assert_eq!(settled, first);
+    let (_, next) = claim("not_limited").await;
+    assert_ne!(next, first, "a grant's next reset is a new request");
+    let (ineligible, fresh) = claim("ineligible").await;
+    assert_eq!(ineligible.unwrap(), "no_credit");
+    assert_ne!(fresh, next);
+
+    let Err(QuotaError::App(error)) = resets.consume(&owner, &account, "../holiday").await else {
+        panic!("a malformed grant id was claimed")
+    };
+    assert_eq!(error.status, 400);
+    assert!(source.take_calls().is_empty(), "Claude is never asked");
     store.close().await;
 }
 

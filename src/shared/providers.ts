@@ -75,6 +75,7 @@ export const providers = {
       core: "anthropic",
       limits: "5-hour · weekly · opus weekly",
     },
+    bankedResets: true,
     reconnect: true,
     organizations: true,
   },

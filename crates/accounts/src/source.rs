@@ -7,7 +7,7 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::wire::Account;
 use nsv_net::Method;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::accounts::Accounts;
 use crate::quota::{QuotaSource, Quotas};
@@ -30,6 +30,22 @@ impl QuotaSource for PoolSource {
 
     fn usable(&self, profile: &ProfileId) -> bool {
         self.pool.state().usable(profile)
+    }
+
+    fn quota_cooldown(&self, profile: &ProfileId, account: &AccountId) -> bool {
+        self.accounts.quota_cooldown(profile, account.as_str())
+    }
+
+    async fn reset_cooldown(&self, profile: &ProfileId, auth_index: &str) -> Result<(), AppError> {
+        self.pool
+            .management(
+                profile,
+                &Method::POST,
+                "/reset-quota",
+                Some(&json!({ "auth_index": auth_index })),
+            )
+            .await
+            .map(drop)
     }
 
     async fn api_call(&self, profile: &ProfileId, body: Value) -> Result<Value, AppError> {

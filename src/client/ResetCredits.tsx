@@ -69,10 +69,8 @@ export function ResetCredits({
       );
       setMessage(
         {
-          reset:
-            "Reset applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy and clear its saved cooldown.",
-          already_redeemed:
-            "This reset was already applied. If requests still report exhausted quota, quit and reopen NonstopVibin to restart the profile proxy.",
+          reset: "Reset applied.",
+          already_redeemed: "This reset was already applied.",
           nothing_to_reset:
             "There are no eligible usage windows to reset. No reset was used.",
           no_credit: "This reset is no longer available. No reset was used.",
@@ -95,7 +93,7 @@ export function ResetCredits({
   return (
     <section
       className="reset-credits"
-      aria-label="Banked Codex resets"
+      aria-label="Banked resets"
       aria-busy={busy}
     >
       <div className="reset-credits-heading">
@@ -108,7 +106,9 @@ export function ResetCredits({
                 ? "Checking availability…"
                 : credits
                   ? credits.available_count === 0
-                    ? "No resets available"
+                    ? credits.credits.length > 0
+                      ? "No resets can be used right now"
+                      : "No resets available"
                     : `${credits.available_count} ${credits.available_count === 1 ? "reset" : "resets"} available`
                   : error
                     ? "Availability couldn’t be checked"
