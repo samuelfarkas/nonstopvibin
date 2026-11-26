@@ -11,6 +11,15 @@
   **Use bundled** goes back to the core the app shipped with. A dot on Settings
   marks an available update. `bun run core:pin` writes the pin for an upstream
   release, and a workflow opens a pull request for each new upstream release.
+- Claude subscriptions show the usage resets Claude offers them in their details
+  and can redeem one after confirmation, as Codex banked resets already could.
+
+### Fixed
+
+- A limit reset done on claude.ai, chatgpt.com or in the app no longer leaves the
+  subscription cooling down in its proxy core until the old reset time: when a
+  quota check shows room in every window again, the app clears the core's quota
+  cooldown for that account. Quota is checked while the app's window is open.
 
 ### Changed
 

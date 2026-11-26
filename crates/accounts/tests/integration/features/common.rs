@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::future::{Future, ready};
 use std::path::Path;
@@ -48,6 +48,10 @@ pub(crate) fn replaced(value: &Value, pairs: &[(&str, &str)]) -> Value {
 pub(crate) struct StubSource {
     pub(crate) accounts: Vec<Account>,
     pub(crate) chatgpt: HashMap<String, String>,
+    /// Accounts the core lists with a quota cooldown.
+    pub(crate) cooling: HashSet<String>,
+    /// The `auth_index` of each `/reset-quota` call.
+    pub(crate) cleared: Mutex<Vec<String>>,
     pub(crate) stopped: bool,
     pub(crate) answers: Mutex<VecDeque<Value>>,
     pub(crate) calls: Mutex<Vec<Value>>,
@@ -78,6 +82,19 @@ impl QuotaSource for StubSource {
 
     fn usable(&self, _: &ProfileId) -> bool {
         !self.stopped
+    }
+
+    fn quota_cooldown(&self, _: &ProfileId, account: &AccountId) -> bool {
+        self.cooling.contains(account.as_str())
+    }
+
+    fn reset_cooldown(
+        &self,
+        _: &ProfileId,
+        auth_index: &str,
+    ) -> impl Future<Output = Result<(), AppError>> + Send {
+        self.cleared.lock().unwrap().push(auth_index.to_owned());
+        ready(Ok(()))
     }
 
     async fn api_call(&self, _: &ProfileId, body: Value) -> Result<Value, AppError> {

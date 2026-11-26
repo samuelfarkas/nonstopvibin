@@ -83,6 +83,27 @@ async fn dead_refresh_tokens_show_as_reconnect_needed_instead_of_a_cooldown() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_sync_notes_the_credentials_the_core_keeps_from_requests_for_quota() {
+    let file = |name: &str, cooldown: Value| json!({ "name": name, "provider": "claude", "auth_index": name, "cooldowns": [cooldown] });
+    let (world, profile) = started(json!({ "files": [
+        file("weekly.json", json!({ "scope": "credential", "reason": "credential_quota", "retry_at": "2026-12-01T00:00:00Z", "remaining_seconds": 3600 })),
+        file("model.json", json!({ "scope": "model", "model_key": "claude-fixture", "reason": "quota", "retry_at": "2026-12-01T00:00:00Z", "remaining_seconds": 60 })),
+        file("failing.json", json!({ "scope": "credential", "reason": "unknown", "http_status": 503, "retry_at": "2026-12-01T00:00:00Z", "remaining_seconds": 60 })),
+        { "name": "ready.json", "provider": "claude", "auth_index": "ready", "cooldowns": [] },
+    ] }))
+    .await;
+    world
+        .run(world.accounts.sync(world.pool(), &profile))
+        .await
+        .unwrap();
+    let cooling: Vec<&str> = ["weekly.json", "model.json", "failing.json", "ready.json"]
+        .into_iter()
+        .filter(|account| world.accounts.quota_cooldown(&profile, account))
+        .collect();
+    assert_eq!(cooling, ["weekly.json", "model.json"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn account_sync_rereads_a_claude_identity_only_when_its_file_changes_and_repairs_only_loose_modes()
  {
     let (world, profile) = started(json!({ "files": [

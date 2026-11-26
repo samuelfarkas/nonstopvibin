@@ -12,7 +12,7 @@ use nsv_accounts::api_accounts::{api_account, go_model_protocol};
 use nsv_accounts::identity::{SeatIdentity, claude_identity, same_seat, verify_claude_identity};
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
-use nsv_accounts::resets::{CodexResets, reset_credits, reset_result};
+use nsv_accounts::resets::{Resets, reset_credits, reset_result};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId, is_uuid};
 use nsv_domain::secret::ApiKey;
@@ -329,7 +329,7 @@ async fn quota_refreshes_and_resets_replay_in_order() {
     }
     assert_eq!(replayed, 16);
 
-    let resets = CodexResets::new(store.clone(), Arc::clone(&source), Arc::new(Available));
+    let resets = Resets::new(store.clone(), Arc::clone(&source), Arc::new(Available));
     let identity = chatgpt["codex-pro.json"].clone();
     for case in named(&cases, "reset ") {
         let input = &case["input"];

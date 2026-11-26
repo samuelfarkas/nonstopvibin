@@ -47,7 +47,37 @@ Retries for the same account and credit reuse a persisted redemption ID, includi
 after an uncertain network response or app restart. Successful IDs remain saved;
 definitive `nothing_to_reset` and `no_credit` responses permit a fresh attempt.
 
-Pinned cores since 8.0.67 include upstream’s
-[cooldown clearing fix](https://github.com/router-for-me/CLIProxyAPI/commit/80234b5).
 Synthetic tests cover the adapter and management boundaries; live credit
 redemption has not been tested and no real credit was consumed during development.
+
+## Claude usage resets
+
+Open a Claude subscription’s details to load the usage resets Claude offers it.
+The app lists each reset grant with resets left, which limits it refills and when
+it expires; only the grant Claude would redeem next, while it is usable now, offers
+**Review reset**. Confirm **Use 1 reset** to redeem one, then usage refreshes.
+Nothing is redeemed automatically, and subscriptions outside the program list none.
+
+This follows the official Claude Code client (2.1.292, its `cedar_ember` program):
+the grants come from `GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1`
+and a claim is `POST https://api.anthropic.com/api/organizations/<organization>/reset_rate_limits`
+with the grant and a request ID, sent through CLIProxyAPI’s authenticated management
+`/api-call` with the seat’s own token. Neither endpoint is a documented public API,
+so Claude can change or refuse it; the app does not imitate Claude Code’s client
+headers, and reports the outcome Claude names. A seat without a verified organization and
+account must be reconnected first.
+
+A retry after an uncertain answer reuses the request ID, including after an app
+restart. A grant holds several resets, so once Claude names an outcome the next
+claim uses a new ID. Claude’s at-limit-only `juniper_tide` offer is not supported;
+live claims have not been tested and no real reset was used during development.
+
+## Resets made elsewhere
+
+The proxy core keeps an account it saw at a limit out of routing until the reset
+time the provider gave it, even after a reset on claude.ai, chatgpt.com or in this
+app. When a quota check finds room in every window, account-wide and per model,
+while the core still lists a quota cooldown for that account, the app clears it
+through the core’s `POST /v0/management/reset-quota`. Quota is checked while the
+app’s window is open and after a reset in the app, so open the app after a reset
+made elsewhere. Cooldowns for other reasons, such as errors, are left alone.

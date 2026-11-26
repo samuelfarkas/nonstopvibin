@@ -274,12 +274,14 @@ export function SubscriptionsPage({
                       {a.quota?.plan && <span>{planLabel(a.quota.plan)}</span>}
                     </span>
                     {providerEntry(a.provider)?.bankedResets &&
-                      a.kind === "oauth" && (
+                      a.kind === "oauth" &&
+                      // Only Codex usage reports a count; Claude's resets show in its details.
+                      a.quota?.bankedResets !== undefined && (
                         <span
-                          className={`account-resets ${!stale && (a.quota?.bankedResets ?? 0) > 0 ? "available" : ""}`}
+                          className={`account-resets ${!stale && a.quota.bankedResets > 0 ? "available" : ""}`}
                         >
                           <RefreshCw size={13} aria-hidden="true" />
-                          {stale || a.quota?.bankedResets === undefined
+                          {stale
                             ? "Check banked resets"
                             : a.quota.bankedResets === 0
                               ? "No banked resets"

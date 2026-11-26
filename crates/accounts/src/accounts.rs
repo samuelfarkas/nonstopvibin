@@ -2,7 +2,7 @@
 //! read from Claude credential files (`crate::identity`), and the account list the UI, quota
 //! and resets read. A port of `accounts.ts`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -102,6 +102,8 @@ struct Version {
 struct Profile {
     claude: HashMap<String, Version>,
     chatgpt: HashMap<String, String>,
+    /// Accounts the core keeps from requests for a quota reason.
+    quota_cooldowns: HashSet<String>,
 }
 
 /// The accounts of every profile: syncs from cores and what the last sync learned.
@@ -129,6 +131,12 @@ impl Accounts {
     #[must_use]
     pub fn chatgpt_account_id(&self, profile: &ProfileId, account: &str) -> Option<String> {
         self.with(profile, |state| state.chatgpt.get(account).cloned())
+    }
+
+    /// Whether the core held a quota cooldown for the account when the last sync read it.
+    #[must_use]
+    pub fn quota_cooldown(&self, profile: &ProfileId, account: &str) -> bool {
+        self.with(profile, |state| state.quota_cooldowns.contains(account))
     }
 
     /// Reads the profile's account list from its usable core and stores it; unchanged metadata
@@ -174,6 +182,7 @@ impl Accounts {
         self.with(profile, |state| state.claude = parsed);
         repaired.map_err(AppError::internal)?;
         let mut chatgpt = HashMap::new();
+        let mut quota_cooldowns = HashSet::new();
         let accounts: Vec<Account> = files
             .iter()
             .filter_map(|value| {
@@ -185,6 +194,9 @@ impl Accounts {
                 {
                     chatgpt.insert(account.id.as_str().to_owned(), id.to_owned());
                 }
+                if quota_cooldown(file) {
+                    quota_cooldowns.insert(account.id.as_str().to_owned());
+                }
                 Some(account)
             })
             .collect();
@@ -193,7 +205,10 @@ impl Accounts {
             return Ok(None);
         }
         let count = accounts.len();
-        self.with(profile, |state| state.chatgpt = chatgpt);
+        self.with(profile, |state| {
+            state.chatgpt = chatgpt;
+            state.quota_cooldowns = quota_cooldowns;
+        });
         let id = profile.clone();
         self.store
             .call(move |db| db.save_account_metadata(&id, &accounts))
@@ -349,6 +364,21 @@ fn provider(file: &Map<String, Value>, fallback: &str) -> String {
             || fallback.to_owned(),
             |value| string(Some(value)).into_owned(),
         )
+}
+
+/// Whether a listing entry's `cooldowns` hold one for a quota reason, the credential's or a
+/// model's (`CooldownSnapshotForAuth` in the core).
+fn quota_cooldown(file: &Map<String, Value>) -> bool {
+    file.get("cooldowns")
+        .and_then(Value::as_array)
+        .is_some_and(|cooldowns| {
+            cooldowns.iter().any(|cooldown| {
+                matches!(
+                    text(record(Some(cooldown)).get("reason")),
+                    Some("quota" | "credential_quota")
+                )
+            })
+        })
 }
 
 /// One entry of the listing as a stored OAuth account, or nothing for a runtime-only file, an
