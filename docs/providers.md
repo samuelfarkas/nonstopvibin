@@ -52,25 +52,39 @@ redemption has not been tested and no real credit was consumed during developmen
 
 ## Claude usage resets
 
-Open a Claude subscription’s details to load the usage resets Claude offers it.
-The app lists each reset grant with resets left, which limits it refills and when
-it expires; only the grant Claude would redeem next, while it is usable now, offers
-**Review reset**. Confirm **Use 1 reset** to redeem one, then usage refreshes.
-Nothing is redeemed automatically, and subscriptions outside the program list none.
+Open a Claude subscription’s details to load the limit resets Claude offers it:
+the same ones claude.ai shows under **Settings → Usage**. The app lists one row per
+kind of reset (Fable, full, 5-hour, weekly) with how many are left, which limits it
+refills and when it expires. A kind Claude lets you use now offers **Review reset**;
+confirm **Use 1 reset** to redeem its first usable grant, as Claude Code does, then
+usage refreshes. A kind you cannot use yet says why, in Claude Code’s words, such as
+“usable once you reach a limit it refills”. When Claude offers the subscription no
+resets, the panel shows its reason. Nothing is redeemed automatically.
 
-This follows the official Claude Code client (2.1.292, its `cedar_ember` program):
+This follows the official Claude Code client (2.1.332, its `cedar_ember` program):
 the grants come from `GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1`
 and a claim is `POST https://api.anthropic.com/api/organizations/<organization>/reset_rate_limits`
 with the grant and a request ID, sent through CLIProxyAPI’s authenticated management
-`/api-call` with the seat’s own token. Neither endpoint is a documented public API,
-so Claude can change or refuse it; the app does not imitate Claude Code’s client
-headers, and reports the outcome Claude names. A seat without a verified organization and
-account must be reconnected first.
+`/api-call` with the seat’s own token. Neither endpoint is a documented public API.
+
+**Client identity.** Claude lists and redeems resets only for Claude Code: any other
+client gets `ineligible_reason: "surface"` and no grants, and an old Claude Code gets
+`"cli_version"`. Like CLIProxyAPI’s own Management Center, the app therefore sends
+these calls with the Claude Code User-Agent its proxy core already presents for every
+Claude request, `claude-cli/2.1.321 (external, cli)` (`crates/core/src/upstream.rs`;
+re-read it when the core pin moves). Anthropic’s
+[terms](https://code.claude.com/docs/en/legal-and-compliance) reserve subscription
+sign-in for Claude Code and Anthropic’s own apps and allow enforcement without
+notice; using a reset this way carries the same risk to the account as the rest of
+the app’s Claude support. Resets can always be used on claude.ai instead, and the app
+then clears its cooldown as described below.
 
 A retry after an uncertain answer reuses the request ID, including after an app
 restart. A grant holds several resets, so once Claude names an outcome the next
-claim uses a new ID. Claude’s at-limit-only `juniper_tide` offer is not supported;
-live claims have not been tested and no real reset was used during development.
+claim uses a new ID. A seat without a verified organization and account must be
+reconnected first. Claude’s at-limit-only `juniper_tide` offer is not supported.
+Listing was checked live against two Claude seats; no real reset was redeemed during
+development.
 
 ## Resets made elsewhere
 

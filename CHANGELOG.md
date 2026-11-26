@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
+### Fixed
+
+- Claude subscriptions now list the limit resets Claude offers them, such as Fable
+  resets, instead of "No resets available". Claude answers these calls only for
+  Claude Code, so the app now sends them with the Claude Code identity its proxy
+  core already uses, as CLIProxyAPI's Management Center does. See
+  [Claude usage resets](docs/providers.md#claude-usage-resets) for the account risk.
+- Claude resets are listed one row per kind (Fable, full, 5-hour, weekly) with
+  how many are left, as Claude Code offers them. Every usable kind can be
+  redeemed, not only the grant Claude would use next, and a kind that cannot be
+  used yet says why. When Claude offers a subscription no resets, the panel says
+  why instead of "No resets available".
+
 ## [0.3.0] - 2026-11-26
 
 The first tagged and published release. Its changes include everything listed
@@ -223,5 +238,6 @@ Release candidate only; it was never tagged or published. Its changes first ship
 - Added macOS DMG and Linux AppImage/deb packaging. macOS builds are unsigned and
   not notarized.
 
-[Unreleased]: https://github.com/samuelfarkas/nonstopvibin/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/samuelfarkas/nonstopvibin/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/samuelfarkas/nonstopvibin/releases/tag/v0.3.1
 [0.3.0]: https://github.com/samuelfarkas/nonstopvibin/releases/tag/v0.3.0

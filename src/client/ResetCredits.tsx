@@ -106,9 +106,10 @@ export function ResetCredits({
                 ? "Checking availability…"
                 : credits
                   ? credits.available_count === 0
-                    ? credits.credits.length > 0
-                      ? "No resets can be used right now"
-                      : "No resets available"
+                    ? credits.note ||
+                      (credits.credits.length > 0
+                        ? "No resets can be used right now"
+                        : "No resets available")
                     : `${credits.available_count} ${credits.available_count === 1 ? "reset" : "resets"} available`
                   : error
                     ? "Availability couldn’t be checked"
@@ -134,7 +135,11 @@ export function ResetCredits({
       {credits &&
         !selected &&
         credits.credits
-          .filter((credit) => credit.status === "available")
+          // Claude lists resets it cannot use now with the reason; other statuses stay hidden.
+          .filter(
+            (credit) =>
+              credit.status === "available" || credit.status === "unavailable",
+          )
           .map((credit) => (
             <div key={credit.id} className="reset-credit-row">
               <div className="reset-credit-copy">
@@ -154,6 +159,7 @@ export function ResetCredits({
                 disabled={
                   busy ||
                   !running ||
+                  credit.status !== "available" ||
                   (!!credit.expires_at &&
                     Date.parse(credit.expires_at) <= Date.now())
                 }

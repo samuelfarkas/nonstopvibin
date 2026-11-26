@@ -158,6 +158,10 @@ pub struct ImportSource {
 pub struct ResetCredits {
     pub available_count: u32,
     pub credits: Vec<ResetCredit>,
+    /// Why the provider offers this subscription no resets, when it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

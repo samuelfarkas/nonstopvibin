@@ -352,7 +352,7 @@ fn window(
 }
 
 /// Claude's account-wide and per-model windows: key, label, scoped.
-pub(crate) const CLAUDE_WINDOWS: [(&str, &str, bool); 6] = [
+const CLAUDE_WINDOWS: [(&str, &str, bool); 6] = [
     ("five_hour", "5-hour", false),
     ("seven_day", "Weekly", false),
     ("seven_day_opus", "Opus weekly", true),

@@ -11,6 +11,7 @@ use nsv_accounts::catalog::{CatalogError, ModelCatalog};
 use nsv_accounts::pricing::{PricingError, UsagePrices, estimate_usd, normalized_tokens};
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
 use nsv_accounts::resets::Resets;
+use nsv_core::upstream::CLAUDE_CODE_USER_AGENT;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::{Protocol, RetentionDays};
@@ -1062,7 +1063,11 @@ fn claude_seat() -> StubSource {
 }
 
 #[tokio::test]
-async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available() {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one Claude status per case, each with its answer"
+)]
+async fn claude_reset_grants_list_one_credit_per_kind_as_claude_code_offers_them() {
     let directory = TempDir::new("claude-resets");
     let store = open_store(directory.path()).await;
     let owner = profile(&store, "Owner").await;
@@ -1075,7 +1080,7 @@ async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available(
     );
     let list = async |status: Value| {
         source.queue([json!({ "status_code": 200, "body": {
-            "five_hour": { "utilization": 100 },
+            "seven_day": { "utilization": 100 },
             "cedar_ember": status,
         } })]);
         resets
@@ -1083,17 +1088,29 @@ async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available(
             .await
             .map(|credits| serde_json::to_value(credits).unwrap())
     };
+    let fable = |id: &str, left: u32, usable: bool| {
+        json!({ "id": id, "label": "New model launch", "resets_total": 1, "resets_left": left,
+                "ends_at": "2027-03-09T07:59:00+00:00",
+                "clears": ["five_hour", "seven_day_overage_included"], "paused": false,
+                "usable_now": usable, "use_requires_limit": false, "blocking": [], "type": "full",
+                "gives_back_weekly": true,
+                "unavailable_reason": if usable { Value::Null } else { json!("unavailable") } })
+    };
 
+    // As Claude answered a Team seat at its weekly limit: two usable Fable grants, spent ones.
     let listed = list(json!({
-        "eligible": true, "next_grant_id": "holiday",
+        "eligible": true, "at_limit": true, "exhausted": ["seven_day"],
+        "next_grant_id": "launch-fable-12mo", "cooldown_until": null,
         "grants": [
-            { "id": "holiday", "label": "Holiday reset", "resets_total": 3, "resets_left": 2,
-              "ends_at": "2026-12-31T00:00:00Z", "clears": ["five_hour", "seven_day", "seven_day_omelette"],
-              "paused": false, "usable_now": true, "blocking": [] },
-            { "id": "later", "label": " ", "resets_left": 1, "ends_at": null,
-              "clears": ["seven_day_opus"], "usable_now": true, "blocking": [] },
-            { "id": "spent", "resets_left": 0, "clears": [], "blocking": [] },
-            { "id": "Not A Grant", "resets_left": 1, "clears": [], "blocking": [] },
+            { "id": "full-reset", "resets_total": 1, "resets_left": 0, "clears": ["five_hour", "seven_day"],
+              "usable_now": false, "type": "full", "unavailable_reason": "unavailable" },
+            fable("launch-fable", 0, false),
+            fable("launch-fable-12mo", 1, true),
+            fable("launch-fable-6mo", 1, true),
+            { "id": "weekly-gift", "resets_left": 1, "ends_at": null, "clears": ["seven_day"],
+              "usable_now": false, "blocking": ["five_hour"], "type": "weekly" },
+            { "id": "paused", "resets_left": 1, "clears": ["five_hour"], "paused": true, "usable_now": true },
+            { "id": "Not A Grant", "resets_left": 1, "clears": [], "usable_now": true },
         ],
     }))
     .await
@@ -1101,11 +1118,12 @@ async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available(
     assert_eq!(
         listed,
         json!({ "available_count": 2, "credits": [
-            { "id": "holiday", "reset_type": "Usage reset", "status": "available",
-              "expires_at": "2026-12-31T00:00:00Z", "title": "Holiday reset",
-              "description": "Refills 5-hour, Weekly · 2 of 3 left" },
-            { "id": "later", "reset_type": "Usage reset", "status": "unavailable",
-              "expires_at": null, "description": "Refills Opus weekly · 1 left" },
+            { "id": "launch-fable-12mo", "reset_type": "Fable reset", "status": "available",
+              "expires_at": "2027-03-09T07:59:00+00:00",
+              "description": "Refills your Fable and 5-hour limits · 2 left" },
+            { "id": "weekly-gift", "reset_type": "Weekly reset", "status": "unavailable",
+              "expires_at": null,
+              "description": "Refills your weekly limit · 1 left · can't be used while you're at your 5-hour limit" },
         ] })
     );
     let call = source.take_calls().pop().unwrap();
@@ -1117,25 +1135,44 @@ async fn claude_reset_grants_list_as_credits_only_the_next_usable_one_available(
             &json!("https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
         )
     );
-    assert_eq!(call["header"]["anthropic-beta"], "oauth-2025-04-20");
+    assert_eq!(
+        (
+            &call["header"]["anthropic-beta"],
+            &call["header"]["User-Agent"]
+        ),
+        (&json!("oauth-2025-04-20"), &json!(CLAUDE_CODE_USER_AGENT)),
+        "Claude lists resets only to Claude Code"
+    );
 
-    let paused = list(json!({
-        "eligible": true, "next_grant_id": "holiday",
-        "grants": [{ "id": "holiday", "resets_left": 1, "clears": [], "paused": true, "usable_now": true }],
+    let early = list(json!({
+        "eligible": true, "at_limit": false,
+        "grants": [{ "id": "session-gift", "resets_left": 1, "clears": ["five_hour"], "usable_now": false }],
     }))
     .await
     .unwrap();
     assert_eq!(
-        (&paused["available_count"], &paused["credits"][0]["status"]),
-        (&json!(0), &json!("unavailable"))
+        (
+            &early["available_count"],
+            &early["credits"][0]["reset_type"],
+            &early["credits"][0]["description"]
+        ),
+        (
+            &json!(0),
+            &json!("5-hour reset"),
+            &json!("Refills your 5-hour limit · 1 left · usable once you reach a limit it refills")
+        )
     );
-    let none = json!({ "available_count": 0, "credits": [] });
-    assert_eq!(list(Value::Null).await.unwrap(), none, "not in the program");
     assert_eq!(
-        list(json!({ "eligible": false, "ineligible_reason": "tier" }))
+        list(Value::Null).await.unwrap(),
+        json!({ "available_count": 0, "credits": [] }),
+        "not in the program"
+    );
+    assert_eq!(
+        list(json!({ "eligible": false, "ineligible_reason": "surface", "grants": [] }))
             .await
             .unwrap(),
-        none
+        json!({ "available_count": 0, "credits": [],
+                "note": "Claude offers resets only to Claude Code and claude.ai." })
     );
     let Err(QuotaError::App(error)) = list(json!({ "grants": [] })).await else {
         panic!("a block without eligibility was read")
@@ -1180,6 +1217,7 @@ async fn claude_claims_reuse_a_request_id_only_until_claude_names_an_outcome() {
             call["url"],
             format!("https://api.anthropic.com/api/organizations/{ORGANIZATION}/reset_rate_limits")
         );
+        assert_eq!(call["header"]["User-Agent"], CLAUDE_CODE_USER_AGENT);
         let data: Value = serde_json::from_str(call["data"].as_str().unwrap()).unwrap();
         assert_eq!(
             (&data["program"], &data["grant_id"]),
