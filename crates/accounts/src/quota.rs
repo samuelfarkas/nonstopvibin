@@ -629,18 +629,15 @@ fn xai_quota(body: &Value) -> Vec<QuotaWindow> {
     windows
 }
 
-/// Whether a reading leaves room in every window, the account's and each model's, and knows at
-/// least one: a quota cooldown the core holds is then stale.
+/// Whether a reading shows room in every window, the account's and each model's: a quota
+/// cooldown the core holds is then stale. A window of unknown usage proves nothing.
 fn has_headroom(quota: &Quota) -> bool {
     quota.status == QuotaStatus::Available
-        && quota
-            .windows
-            .iter()
-            .any(|window| window.remaining_percent.is_some())
+        && !quota.windows.is_empty()
         && quota.windows.iter().all(|window| {
             window
                 .remaining_percent
-                .is_none_or(|remaining| remaining.0 > 0.0)
+                .is_some_and(|remaining| remaining.0 > 0.0)
         })
 }
 
@@ -784,9 +781,9 @@ impl<S: QuotaSource> Quotas<S> {
         self.store
             .call(move |db| db.save_quota(&id, &account_key, &stored))
             .await?;
-        drop(running);
         // The provider took a reset (on its site, here, or early) that the core cannot see: it
-        // would keep refusing the credential until its own cooldown ends.
+        // would keep refusing the credential until its own cooldown ends. Still this check's
+        // turn, so a newer reading cannot be overtaken by this clear.
         if has_headroom(&quota)
             && self.source.quota_cooldown(profile, account_id)
             && let Some(index) = account
@@ -798,6 +795,7 @@ impl<S: QuotaSource> Quotas<S> {
             // The cooldown stays listed, so the next refresh tries again.
             tracing::warn!(%error, "could not clear a quota cooldown the provider has lifted");
         }
+        drop(running);
         Ok(quota)
     }
 

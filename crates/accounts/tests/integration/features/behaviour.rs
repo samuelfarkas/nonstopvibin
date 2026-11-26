@@ -835,6 +835,14 @@ async fn a_reading_with_room_in_every_window_clears_the_quota_cooldown_the_core_
         refresh("cooling.json", usage(0, 100)).await.is_empty(),
         "a model is still at its limit"
     );
+    let unknown = json!({ "status_code": 200, "body": {
+        "five_hour": { "utilization": 0 },
+        "seven_day_opus": { "resets_at": "2026-12-01T00:00:00Z" },
+    } });
+    assert!(
+        refresh("cooling.json", unknown).await.is_empty(),
+        "a window of unknown usage may still be at its limit"
+    );
     assert!(
         refresh("ready.json", usage(0, 10)).await.is_empty(),
         "the core holds no cooldown"
@@ -850,6 +858,33 @@ async fn a_reading_with_room_in_every_window_clears_the_quota_cooldown_the_core_
             .is_empty(),
         "a failed check keeps the last reading but proves nothing"
     );
+
+    // A clear still in flight keeps the account's turn: no newer check can be overtaken by it.
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let source = Arc::new(StubSource {
+        accounts: vec![subscription("cooling.json", "claude")],
+        cooling: ["cooling.json".to_owned()].into(),
+        clear_gate: Some(Arc::clone(&gate)),
+        ..StubSource::default()
+    });
+    let quotas = Quotas::new(store.clone(), Arc::clone(&source), unavailable(), fixed);
+    let cooling = AccountId::parse("cooling.json").unwrap();
+    source.queue([usage(0, 10), usage(100, 10)]);
+    let (first, second) = tokio::join!(quotas.refresh(&owner, &cooling), async {
+        while source.cleared.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let second = quotas.refresh(&owner, &cooling).await;
+        gate.add_permits(1);
+        second
+    });
+    first.unwrap();
+    assert_eq!(
+        remaining(&second.unwrap()),
+        100.0,
+        "the stored reading answers"
+    );
+    assert_eq!(source.take_calls().len(), 1, "the provider is asked once");
     store.close().await;
 }
 
