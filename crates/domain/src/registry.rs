@@ -220,6 +220,7 @@ closed_enum!(
     /// records carry the core's provider strings, which include unknown ones, so they stay
     /// `String`.
     Provider {
+        ClaudeAgent = "claude-agent",
         Claude = "claude",
         Codex = "codex",
         Antigravity = "antigravity",

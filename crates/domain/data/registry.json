@@ -1,5 +1,10 @@
 {
   "providers": {
+    "claude-agent": {
+      "label": "Claude Agent",
+      "catalog": "anthropic",
+      "nativeAgent": "claude"
+    },
     "claude": {
       "label": "Claude",
       "catalog": "anthropic",

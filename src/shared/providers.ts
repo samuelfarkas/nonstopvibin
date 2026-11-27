@@ -60,6 +60,15 @@ export type ProviderEntry = ProviderFields &
   );
 // One entry per provider. Key order is the order of the app's pickers.
 export const providers = {
+  // The user's own signed-in Claude Code serves the subscription: no sign-in through the
+  // core, and no API key the user enters.
+  "claude-agent": {
+    label: "Claude Agent",
+    visible: true,
+    icon: "claude",
+    catalog: "anthropic",
+    nativeAgent: "claude",
+  },
   claude: {
     label: "Claude",
     visible: true,

@@ -5,4 +5,4 @@
  * records carry the core's provider strings, which include unknown ones, so they stay
  * `String`.
  */
-export type Provider = "claude" | "codex" | "antigravity" | "kimi" | "xai" | "opencode-go" | "openai" | "anthropic" | "gemini" | "custom";
+export type Provider = "claude-agent" | "claude" | "codex" | "antigravity" | "kimi" | "xai" | "opencode-go" | "openai" | "anthropic" | "gemini" | "custom";

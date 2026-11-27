@@ -243,7 +243,11 @@ impl QuotaProvider {
             Provider::Antigravity => Self::Antigravity,
             Provider::Xai => Self::Xai,
             Provider::OpencodeGo => Self::OpencodeGo,
-            Provider::Openai | Provider::Anthropic | Provider::Gemini | Provider::Custom => {
+            Provider::ClaudeAgent
+            | Provider::Openai
+            | Provider::Anthropic
+            | Provider::Gemini
+            | Provider::Custom => {
                 return None;
             }
         })
