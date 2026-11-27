@@ -45,7 +45,7 @@ pub use api::{
     AccountPatch, AccountRoute, ApiAccountInput, ApiError, ApiErrorBody, ApiErrorType,
     ApiModelInput, CallbackBody, ClientKeyResponse, CoreInstallBody, CreateProfileBody, CreditBody,
     ImportBody, ImportSourceBody, OAuthStartBody, Ok, PlainRoute, ProfilePatch, ProfileRoute,
-    ROUTES, RetentionBody, Route, StateBody,
+    ROUTES, RetentionBody, Route, StateBody, UsageHub,
 };
 pub use model::{
     CatalogModel, ContextTier, Cost, CostTier, Modality, Model, ModelMetadata, TierType,

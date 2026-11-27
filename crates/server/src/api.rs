@@ -15,19 +15,20 @@ use nsv_accounts::cores::Cores;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
 use nsv_agents::{AgentSetup, connection_models};
-use nsv_domain::endpoint::{profile_endpoint, profile_path};
+use nsv_domain::endpoint::{profile_base, profile_endpoint, profile_path};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
+use nsv_domain::secret::HubKey;
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
     AccountRoute, AppState, ClientKeyResponse, Model, PlainRoute, Profile, ProfileRoute,
-    ProfileState, ROUTES, Route,
+    ProfileState, ROUTES, Route, UsageHub,
 };
 use nsv_gateway::{Body, Refusal};
 use nsv_net::{Loopback, LoopbackRequest, loopback};
-use nsv_store::Store;
+use nsv_store::{Db, Store, StoreError};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -320,6 +321,8 @@ impl Api {
                     },
                 )
             }
+            ProfileRoute::UsageHub => self.usage_hub(id, Db::ensure_hub_key).await,
+            ProfileRoute::UsageHubReplace => self.usage_hub(id, Db::rotate_hub_key).await,
             ProfileRoute::Models => {
                 let metadata = query(url, "metadata").as_deref() == Some("1");
                 let models = self.core_models(id).await?;
@@ -419,6 +422,26 @@ impl Api {
                 json(StatusCode::OK, &result)
             }
         }
+    }
+
+    /// The profile's usage hub, with the hub key `key` reads or issues.
+    async fn usage_hub(
+        &self,
+        id: &ProfileId,
+        key: fn(&mut Db, &ProfileId) -> Result<HubKey, StoreError>,
+    ) -> Result<Response<Body>, AppError> {
+        let found = id.clone();
+        let (slug, key) = self
+            .store
+            .call(move |db| Ok((db.profile(&found)?.slug, key(db, &found)?)))
+            .await?;
+        json(
+            StatusCode::OK,
+            &UsageHub {
+                url: profile_base(self.shared.port, slug.as_str()),
+                key: key.expose_secret().to_owned(),
+            },
+        )
     }
 
     /// The models a profile's core lists; a dormant core starts for them.

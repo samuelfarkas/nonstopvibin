@@ -50,6 +50,7 @@ fn export(out: &Path) {
         AgentSelection,
         Ok,
         ClientKeyResponse,
+        UsageHub,
         ApiError,
         CreateProfileBody,
         RetentionBody,

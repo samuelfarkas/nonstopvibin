@@ -8,4 +8,5 @@ mod common;
 mod desktop;
 mod features;
 mod golden;
+mod hub;
 mod lifecycle;
