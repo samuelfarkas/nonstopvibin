@@ -234,7 +234,8 @@ impl Sessions {
         locked(&self.state)
     }
 
-    /// Routes `conversation` and claims what serves it, waiting while every process streams.
+    /// Routes `conversation` and claims what serves it, waiting while every process is busy:
+    /// streaming, starting or holding tool calls.
     pub(crate) async fn claim(
         self: &Arc<Self>,
         conversation: &Conversation,
@@ -334,7 +335,8 @@ impl Sessions {
         }))
     }
 
-    /// Makes room for one more process: the least recently used idle or holding one stops.
+    /// Makes room for one more process: the least recently used idle one stops. A session
+    /// holding tool calls is busy: only its own deadline stops it.
     fn evict(&self, state: &mut State) {
         if state.lives.len() < LIVE_LIMIT {
             return;
@@ -343,7 +345,7 @@ impl Sessions {
             .lives
             .iter()
             .enumerate()
-            .filter(|(_, live)| live.deadline().is_some())
+            .filter(|(_, live)| matches!(live.activity, Activity::Idle { .. }))
             .min_by_key(|(_, live)| live.used)
             .map(|(index, _)| index)
         else {
@@ -599,9 +601,13 @@ fn reclaim(state: &mut State, index: usize) -> Option<(u64, mpsc::Sender<Request
     Some((live.key, requests))
 }
 
-/// Whether one more process fits, if need be by stopping an idle or holding one.
+/// Whether one more process fits, if need be by stopping an idle one.
 fn room(state: &State) -> bool {
-    state.lives.len() < LIVE_LIMIT || state.lives.iter().any(|live| live.deadline().is_some())
+    state.lives.len() < LIVE_LIMIT
+        || state
+            .lives
+            .iter()
+            .any(|live| matches!(live.activity, Activity::Idle { .. }))
 }
 
 /// Removes `paths`, ignoring files already gone. Blocks on the file system.

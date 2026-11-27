@@ -459,6 +459,13 @@ impl World {
 
     /// A harness request to the core with its key; the JSON answer.
     async fn post(&self, target: &str, body: &Value) -> Value {
+        let (status, answer) = self.call(target, body).await;
+        assert!((200..300).contains(&status), "{status}: {answer}");
+        answer
+    }
+
+    /// A harness request to the core with its key; the status and the JSON answer.
+    async fn call(&self, target: &str, body: &Value) -> (u16, Value) {
         let authorization = format!("Bearer {}", self.key);
         let body = body.to_string();
         let response = loopback(LoopbackRequest {
@@ -476,8 +483,8 @@ impl World {
         .await
         .unwrap();
         let text = String::from_utf8_lossy(&response.body).into_owned();
-        assert!(response.ok(), "{}: {text}", response.status);
-        serde_json::from_str(&text).unwrap()
+        let answer = serde_json::from_str(&text).unwrap_or_else(|_| panic!("{text}"));
+        (response.status.as_u16(), answer)
     }
 
     /// What the fake claude processes logged, in order.
@@ -696,6 +703,55 @@ async fn a_client_that_hangs_up_interrupts_the_turn() {
     world.stop().await;
 }
 
+/// Three conversations hold tool calls, so a fourth waits for room instead of stopping one:
+/// the first's answers still continue its held turn, then the fourth is served.
+async fn a_session_holding_tool_calls_is_never_stopped_for_room() {
+    let world = World::new("cae-room").await;
+    let mut held = Vec::new();
+    for n in 1..=3 {
+        let user =
+            json!({ "role": "user", "content": format!("conversation {n}: please use the tool") });
+        let first = world
+            .post(
+                "/v1/chat/completions",
+                &json!({ "model": MODEL, "messages": [user], "tools": [read_tool()] }),
+            )
+            .await;
+        assert_eq!(
+            first["choices"][0]["finish_reason"], "tool_calls",
+            "{first}"
+        );
+        held.push((user, first["choices"][0]["message"].clone()));
+    }
+    let (user, message) = &held[0];
+    let fourth = json!({
+        "model": MODEL, "tools": [read_tool()],
+        "messages": [{ "role": "user", "content": "a fourth conversation" }],
+    });
+    let answered = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(world.starts().len(), 3, "{:?}", world.log());
+        let assistant = json!({ "role": "assistant", "content": message["content"], "tool_calls": message["tool_calls"] });
+        let answer = json!({ "role": "tool", "tool_call_id": message["tool_calls"][0]["id"], "content": "the file body" });
+        world
+            .post(
+                "/v1/chat/completions",
+                &json!({ "model": MODEL, "messages": [user, assistant, answer], "tools": [read_tool()] }),
+            )
+            .await
+    };
+    let (fourth, answered) = tokio::join!(world.post("/v1/chat/completions", &fourth), answered);
+    assert_eq!(
+        answered["choices"][0]["message"]["content"], "results: the file body",
+        "{answered}"
+    );
+    assert_eq!(
+        fourth["choices"][0]["message"]["content"], "echo: a fourth conversation",
+        "{fourth}"
+    );
+    world.stop().await;
+}
+
 /// The manual check with the real Claude Code: `NSV_E2E_CLAUDE` names a script that runs it
 /// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
 /// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
@@ -761,7 +817,7 @@ fn block_on(test: impl Future<Output = ()>) {
 }
 
 fn run_tests(arguments: &[String]) -> ExitCode {
-    let tests: [(&str, fn()); 4] = [
+    let tests: [(&str, fn()); 5] = [
         (
             "a_chat_completions_tool_call_round_trips_through_one_claude_process",
             || block_on(a_chat_completions_tool_call_round_trips_through_one_claude_process()),
@@ -777,6 +833,10 @@ fn run_tests(arguments: &[String]) -> ExitCode {
         ("a_client_that_hangs_up_interrupts_the_turn", || {
             block_on(a_client_that_hangs_up_interrupts_the_turn());
         }),
+        (
+            "a_session_holding_tool_calls_is_never_stopped_for_room",
+            || block_on(a_session_holding_tool_calls_is_never_stopped_for_room()),
+        ),
     ];
     let filters: Vec<&String> = arguments.iter().filter(|a| !a.starts_with('-')).collect();
     let mut passed = 0;
