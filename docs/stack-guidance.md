@@ -51,14 +51,18 @@ The daemon runs on Tokio's `current_thread` runtime, measured at 0 idle wakeups.
 Never block it. SQLite runs on the store thread (`crates/store/src/store.rs`), and
 other blocking work goes through `spawn_blocking`. Every queue is bounded, and
 `std::thread::sleep` is disallowed (`clippy.toml`). One scheduler task sleeps until
-the earliest deadline; add a deadline to it instead of a polling loop. Measure
+the earliest deadline; add a deadline to it instead of a polling loop. Claude
+Agent's two timers are the exceptions, and each ends with its work: one task per
+profile sleeps until its sessions' next deadline and ends when no `claude` is live,
+and each held tool call reports progress every 30 s until it is answered. Measure
 idle PSS and wakeups before and after a change that adds a task, a timer or a
 dependency, as [the evidence record](decisions/rust-port-evidence.md) does.
 
 Each crate forbids `unsafe` code, except the macOS shell, which allows it one
-call at a time for `SMAppService`. Secrets are `secrecy` newtypes without
-`Serialize`, and client keys compare in constant time. The gateway crate cannot
-name the management client, so a profile key cannot reach management.
+call at a time for `SMAppService`, and Claude Agent on Linux, which allows the one
+`pre_exec` that gives each `claude` `PR_SET_PDEATHSIG`. Secrets are `secrecy`
+newtypes without `Serialize`, and client keys compare in constant time. The gateway
+crate cannot name the management client, so a profile key cannot reach management.
 
 Desktop and development use the same local AES-GCM vault. Preserve owner-only
 permissions on vault.key, SQLite, and core credential files. The key lives beside
