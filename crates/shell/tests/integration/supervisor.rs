@@ -104,7 +104,7 @@ fn forwards_bridge_calls_remembers_bounds_and_quits_from_the_helper() {
             json!({"type": "OpenMain", "profile": "11111111-2222-4333-8444-555555555555"}),
             json!({"type": "Bridge", "id": 1, "method": "getLoginItem"}),
             json!({"type": "Bridge", "id": 2, "method": "setLoginItem", "arg": true}),
-            json!({"type": "Bridge", "id": 3, "method": "openExternal", "arg": "http://claude.ai/"}),
+            json!({"type": "Bridge", "id": 3, "method": "openExternal", "arg": "http://chatgpt.com/"}),
             json!({"type": "OpenExternal", "url": "https://evil.example/"}),
             json!({"type": "Closed", "view": {"window": "main"}, "bounds": bounds, "last": true}),
         ],

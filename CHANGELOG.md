@@ -37,7 +37,7 @@
   resets, instead of "No resets available". Claude answers these calls only for
   Claude Code, so the app now sends them with the Claude Code identity its proxy
   core already uses, as CLIProxyAPI's Management Center does. See
-  [Claude usage resets](docs/providers.md#claude-usage-resets) for the account risk.
+  [Claude usage resets](https://github.com/samuelfarkas/nonstopvibin/blob/v0.3.1/docs/providers.md#claude-usage-resets) for the account risk.
 - Claude resets are listed one row per kind (Fable, full, 5-hour, weekly) with
   how many are left, as Claude Code offers them. Every usable kind can be
   redeemed, not only the grant Claude would use next, and a kind that cannot be

@@ -427,7 +427,7 @@ async fn refresh_checks_api_key_quota_while_the_core_is_held_or_cannot_start() {
                 assert_eq!(held.status, 409);
                 assert_eq!(
                     held.message,
-                    "This profile is reconnecting a subscription. Try again in a moment."
+                    "This profile's core is being replaced. Try again in a moment."
                 );
                 Ok(())
             }

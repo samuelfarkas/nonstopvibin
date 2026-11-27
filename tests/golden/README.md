@@ -110,8 +110,9 @@ sign-ins were retired for Claude Agent:
   `GET /state` lists none and the Personal profile is no longer kept running: no missing-core
   error, and its agent setup answers. The import scan offers no Claude file, and
   `oauth unknown provider` lists no Claude.
-- `cli.json` forwards only Codex's sign-in port, and the desktop opens no Claude host: the
-  `external url` cases on `claude.ai` are refused.
+- `cli.json` forwards only Codex's sign-in port, and the desktop opens no Claude host:
+  `https://claude.ai/login` is refused, and the case, port, scheme and user-name cases moved
+  from `claude.ai` to `chatgpt.com` with their recorded outcomes.
 
 ## Gitleaks
 

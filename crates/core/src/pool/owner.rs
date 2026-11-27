@@ -299,7 +299,7 @@ impl Owner {
         }
         if slot.held {
             let _ = reply.send(Err(AppError::new(
-                "This profile is reconnecting a subscription. Try again in a moment.",
+                "This profile's core is being replaced. Try again in a moment.",
                 409,
             )));
             return;

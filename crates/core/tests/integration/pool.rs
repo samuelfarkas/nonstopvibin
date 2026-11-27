@@ -342,7 +342,7 @@ async fn a_core_held_stopped_for_a_credential_swap_cannot_start_until_the_swap_e
     assert!(!alive, "stopped before the swap");
     let refused = refused.unwrap_err();
     assert_eq!(refused.status, 409);
-    assert!(refused.message.contains("reconnecting"), "{refused:?}");
+    assert!(refused.message.contains("being replaced"), "{refused:?}");
     assert!(
         world.pool().state().running(&profile),
         "running again after the swap"
