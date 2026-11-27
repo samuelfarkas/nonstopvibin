@@ -30,6 +30,7 @@ import {
 import type {
   Account,
   AppState,
+  ClaudeAgentStatus,
   ImportSource,
   OAuthReview,
   OAuthStatus,
@@ -96,6 +97,13 @@ export function AddSubscription({
   const fileNames = importFiles.map((file) => file.name).join(", ");
   const [sources, setSources] = useState<ImportSource[]>([]);
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  // Claude Agent's status, for the profile it was read for.
+  const [agentCheck, setAgentCheck] = useState<{
+    profileId: string;
+    status: ClaudeAgentStatus;
+  }>();
+  const agent =
+    agentCheck?.profileId === profile.id ? agentCheck.status : undefined;
   useEffect(() => {
     let cancelled = false;
     api("GET /profiles/:profileId/oauth-session", {
@@ -219,6 +227,19 @@ export function AddSubscription({
     setReview(undefined);
     setVerificationFailed(false);
     await openExternal(next.url);
+  }
+  async function checkAgent() {
+    const status = await api("GET /profiles/:profileId/claude-agent", {
+      params: { profileId: profile.id },
+    });
+    setAgentCheck({ profileId: profile.id, status });
+  }
+  async function connectAgent() {
+    const next = await api("POST /profiles/:profileId/claude-agent", {
+      params: { profileId: profile.id },
+    });
+    await onSaved(next);
+    onSelectProfile(profile.id);
   }
   async function chooseAgain() {
     await cancelSignIn();
@@ -576,8 +597,79 @@ export function AddSubscription({
               ))}
             </div>
           )}
-          {tab === "oauth" && (
+          {tab === "oauth" && agent && (
+            <div className="claude-agent">
+              <p className="field-note">
+                Runs your own signed-in Claude Code for this profile, which is
+                lower risk than the cloaked Claude sign-in.
+              </p>
+              {agent.claude ? (
+                <div className="device-code">
+                  <p>
+                    {agent.signedIn
+                      ? "Claude Code is signed in. To use another account, run:"
+                      : "Sign Claude Code in for this profile in a terminal:"}
+                  </p>
+                  <code>{agent.signIn}</code>
+                  <CopyButton
+                    text={agent.signIn}
+                    label="Copy command"
+                    onError={setError}
+                  />
+                </div>
+              ) : (
+                <p className="info-note">
+                  Claude Code (claude) was not found. Install it, then choose
+                  Claude Agent again.
+                </p>
+              )}
+              <div className="button-row">
+                <button
+                  className="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setAgentCheck(undefined);
+                    setError("");
+                  }}
+                >
+                  <ArrowLeft size={14} aria-hidden="true" /> Back
+                </button>
+                <button
+                  className="button primary"
+                  disabled={busy || !agent.claude}
+                  onClick={() => run(connectAgent)}
+                >
+                  {busy ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    "Connect"
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+          {tab === "oauth" && !agent && (
             <div className="provider-options">
+              {!organizationsOnly && (
+                <button
+                  className="provider-option"
+                  disabled={busy}
+                  onClick={() => run(checkAgent)}
+                >
+                  <span>
+                    <strong>Claude Agent</strong>
+                    <code>
+                      Your own signed-in Claude Code · lower risk than the
+                      cloaked Claude sign-in
+                    </code>
+                  </span>
+                  {busy ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : (
+                    <ArrowRight size={14} />
+                  )}
+                </button>
+              )}
               {oauthProviders
                 .filter(
                   (provider) =>

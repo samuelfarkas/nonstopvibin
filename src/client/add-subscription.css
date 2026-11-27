@@ -191,6 +191,20 @@
   letter-spacing: 0.12em;
 }
 
+.claude-agent {
+  margin-top: 14px;
+}
+
+.claude-agent .device-code code {
+  font-size: var(--text-caption);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.claude-agent > .button-row {
+  margin-top: 16px;
+}
+
 .oauth-progress .waiting.loading {
   padding: 14px 0 4px;
 }
