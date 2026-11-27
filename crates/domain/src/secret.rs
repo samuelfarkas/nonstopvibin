@@ -82,6 +82,11 @@ secret!(
     /// An upstream provider API key of an API-key account.
     ApiKey
 );
+secret!(
+    /// The key a usage hub client such as T3 Code sends for one profile. It reads that
+    /// profile's limits and never reaches management or the agent API.
+    HubKey
+);
 
 /// Secrets this application issues: a prefix and 32 random bytes in base64url.
 macro_rules! generated {
@@ -99,7 +104,8 @@ generated!(
     ClientKey = CLIENT_KEY_PREFIX,
     CoreKey = "",
     ManagementKey = "",
-    SessionToken = ""
+    SessionToken = "",
+    HubKey = "nvh_"
 );
 
 /// The client-key alphabet and length that installed credential helpers already match.

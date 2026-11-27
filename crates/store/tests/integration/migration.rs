@@ -105,6 +105,9 @@ fn observe(db: &mut Db, expected: &Value) -> Result<Value, StoreError> {
                 .management_key(&ProfileId::parse(owner)?)?
                 .expose_secret()
                 .to_owned(),
+            "hub" => db
+                .hub_key(&ProfileId::parse(owner)?)?
+                .map_or_else(String::new, |key| key.expose_secret().to_owned()),
             "api" => db
                 .api_key(&AccountId::parse(owner)?)?
                 .expose_secret()
@@ -327,16 +330,18 @@ async fn reads_a_typescript_data_directory_and_writes_one_in_the_same_format() {
     );
     let new = created.id.clone();
     let id = new.clone();
-    let (client, core, management) = store
+    let (client, core, management, hub) = store
         .call(move |db| {
             Ok((
                 db.client_key(&id)?,
                 db.core_key(&id)?,
                 db.management_key(&id)?,
+                db.hub_key(&id)?,
             ))
         })
         .await
         .unwrap();
+    let hub = hub.expect("a new profile has a usage hub key");
     assert!(ClientKey::well_formed(client.expose_secret()));
     for key in [core.expose_secret(), management.expose_secret()] {
         assert_eq!(key.len(), 43);
@@ -353,6 +358,7 @@ async fn reads_a_typescript_data_directory_and_writes_one_in_the_same_format() {
         format!("{new}:management"),
         management.expose_secret().into(),
     );
+    secrets.insert(format!("{new}:hub"), hub.expose_secret().into());
 
     store
         .call(|db| {

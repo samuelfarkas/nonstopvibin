@@ -681,6 +681,7 @@ async fn secret_and_setting_rows_keep_the_ids_stored_databases_already_use() {
     let mut secrets = vec![
         format!("{profile}:client"),
         format!("{profile}:core"),
+        format!("{profile}:hub"),
         format!("{profile}:management"),
         "account:api".to_owned(),
     ];
@@ -708,6 +709,78 @@ async fn secret_and_setting_rows_keep_the_ids_stored_databases_already_use() {
         .await
         .unwrap();
     assert_ne!(fresh, request);
+}
+
+#[tokio::test]
+async fn usage_hub_keys_are_issued_once_replaced_on_demand_and_found_by_slug() {
+    let temp = TempDir::new("hub-key");
+    let store = open(temp.path()).await;
+    let profile = store.call(|db| db.create_profile("Hub")).await.unwrap();
+    let id = profile.id.clone();
+    let (issued, ensured) = store
+        .call(move |db| Ok((db.hub_key(&id)?, db.ensure_hub_key(&id)?)))
+        .await
+        .unwrap();
+    let issued = issued.expect("a new profile has a hub key");
+    let shape = issued.expose_secret().strip_prefix("nvh_").unwrap();
+    assert_eq!(shape.len(), 43);
+    assert!(
+        shape
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    );
+    assert_eq!(ensured.expose_secret(), issued.expose_secret());
+    let encrypted: String = raw(temp.path())
+        .query_row(
+            "SELECT encrypted FROM secrets WHERE id=?",
+            [format!("{}:hub", profile.id)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!encrypted.contains(issued.expose_secret()));
+
+    let id = profile.id.clone();
+    let (rotated, read) = store
+        .call(move |db| Ok((db.rotate_hub_key(&id)?, db.hub_key(&id)?.unwrap())))
+        .await
+        .unwrap();
+    assert_ne!(rotated.expose_secret(), issued.expose_secret());
+    assert_eq!(read.expose_secret(), rotated.expose_secret());
+
+    // A profile created before hub keys has none until one is ensured, then keeps it.
+    raw(temp.path())
+        .execute(
+            "DELETE FROM secrets WHERE id=?",
+            [format!("{}:hub", profile.id)],
+        )
+        .unwrap();
+    let id = profile.id.clone();
+    let (missing, first, second) = store
+        .call(move |db| {
+            Ok((
+                db.hub_key(&id)?,
+                db.ensure_hub_key(&id)?,
+                db.ensure_hub_key(&id)?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+    assert_eq!(first.expose_secret(), second.expose_secret());
+
+    let slug = profile.slug.as_str().to_owned();
+    let (found, unknown, injected) = store
+        .call(move |db| {
+            Ok((
+                db.profile_by_slug(&slug)?,
+                db.profile_by_slug("other")?,
+                db.profile_by_slug("' OR 1=1 --")?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(found, Some(profile));
+    assert_eq!((unknown, injected), (None, None));
 }
 
 #[tokio::test]
