@@ -274,6 +274,8 @@ async fn the_hub_answers_its_four_endpoints_and_only_on_loopback() {
     ] {
         let answer = hub(&app, method, path, &key, None).await;
         assert_eq!(refusal(&answer), (404, &not_found), "{method} {path}");
+        let keyless = raw(&app, method, path, &[], b"").await;
+        assert_eq!(refusal(&keyless), (404, &not_found), "{method} {path}");
     }
     let files = "/p/alpha/v0/management/auth-files";
     let authorization = format!("Bearer {key}");
@@ -308,6 +310,8 @@ async fn the_hub_answers_its_four_endpoints_and_only_on_loopback() {
             &json!("The agent API accepts local agent clients, not browser origins.")
         )
     );
+    app.ok("POST", &format!("/profiles/{profile}/start"), None)
+        .await;
     assert_eq!(
         hub(&app, "GET", files, &key, None).await,
         (200, json!({ "files": [] }))
@@ -466,6 +470,14 @@ async fn refused_calls_never_reach_a_core() {
             ),
             400,
         ),
+        // The core would put the account's token in the body sent to chatgpt.com.
+        (
+            with_data(
+                api_call("alpha-codex", "POST", CODEX_CONSUME),
+                r#"{"redeem_request_id":"r","credit_id":"$TOKEN$"}"#,
+            ),
+            400,
+        ),
         (json!({ "method": "GET", "url": CODEX_USAGE }), 400),
     ];
     for (call, status) in &refused {
@@ -541,7 +553,7 @@ async fn models_lists_only_the_ids_the_core_routes_to_a_hub_account() {
 }
 
 #[tokio::test]
-async fn a_stopped_profile_lists_its_accounts_and_starts_no_core_for_a_call() {
+async fn a_stopped_profile_answers_409_and_starts_no_core() {
     let root = TempDir::new("hub-stopped");
     let data = root.path().join("data");
     owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
@@ -571,20 +583,11 @@ async fn a_stopped_profile_lists_its_accounts_and_starts_no_core_for_a_call() {
     assert!(app.fake.launches().is_empty());
 
     let base = "/p/alpha/v0/management";
-    assert_eq!(
-        hub(&app, "GET", &format!("{base}/auth-files"), &key, None).await,
-        (
-            200,
-            json!({ "files": [{
-                "id": "codex.json", "auth_index": "stopped-codex", "provider": "codex",
-                "disabled": false,
-            }] })
-        )
-    );
     let not_started = json!("Start this profile first.");
     let call = api_call("stopped-codex", "GET", CODEX_USAGE);
     let reset = json!({ "auth_index": "stopped-codex" });
     for answer in [
+        hub(&app, "GET", &format!("{base}/auth-files"), &key, None).await,
         hub(&app, "POST", &format!("{base}/api-call"), &key, Some(&call)).await,
         hub(
             &app,

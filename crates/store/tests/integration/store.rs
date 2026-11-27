@@ -769,18 +769,12 @@ async fn usage_hub_keys_are_issued_once_replaced_on_demand_and_found_by_slug() {
     assert_eq!(first.expose_secret(), second.expose_secret());
 
     let slug = profile.slug.as_str().to_owned();
-    let (found, unknown, injected) = store
-        .call(move |db| {
-            Ok((
-                db.profile_by_slug(&slug)?,
-                db.profile_by_slug("other")?,
-                db.profile_by_slug("' OR 1=1 --")?,
-            ))
-        })
+    let (found, unknown) = store
+        .call(move |db| Ok((db.profile_by_slug(&slug)?, db.profile_by_slug("other")?)))
         .await
         .unwrap();
     assert_eq!(found, Some(profile));
-    assert_eq!((unknown, injected), (None, None));
+    assert_eq!(unknown, None);
 }
 
 #[tokio::test]

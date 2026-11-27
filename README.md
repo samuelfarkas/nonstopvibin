@@ -96,8 +96,8 @@ banked Codex resets. It cannot reach the agent API or other management endpoints
 
 - The hub answers on the loopback address only. It is not served on `--allow-host`
   names.
-- Limits are read only while the profile runs. A stopped profile lists its
-  subscriptions without their limits.
+- Limits are read only while the profile runs. The hub never starts a core: a
+  stopped profile answers HTTP 409, and T3 Code shows its last reading.
 - A T3 Code thread shows the hub's pooled limits only when its agent's base URL
   has the same origin as the hub URL, such as `http://127.0.0.1:<port>`. T3 Code
   compares only the origin, so it pools every hub you add for this app into every

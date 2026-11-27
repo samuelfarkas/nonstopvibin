@@ -231,25 +231,21 @@ export function Connect({ profile }: { profile: ProfileState }) {
           </p>
         </details>
       )}
-      <UsageHubSetup profile={profile} onError={setError} />
+      <UsageHubSetup profile={profile} />
     </div>
   );
 }
 
 /** The hub T3 Code reads this profile's limits from: its URL and key, loaded on first open. */
-function UsageHubSetup({
-  profile,
-  onError,
-}: {
-  profile: ProfileState;
-  onError(message: string): void;
-}) {
+function UsageHubSetup({ profile }: { profile: ProfileState }) {
   const [hub, setHub] = useState<UsageHub | null>(null);
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [revealed, setRevealed] = useState(false);
   const [replacing, setReplacing] = useState(false);
   async function load() {
     setLoading(true);
+    setError("");
     try {
       setHub(
         await api("GET /profiles/:profileId/usage-hub", {
@@ -257,13 +253,14 @@ function UsageHubSetup({
         }),
       );
     } catch (e) {
-      onError(messageOf(e, "Could not load the usage hub."));
+      setError(messageOf(e, "Could not load the usage hub."));
     } finally {
       setLoading(false);
     }
   }
   async function replace() {
     setReplacing(true);
+    setError("");
     try {
       setHub(
         await api("POST /profiles/:profileId/usage-hub", {
@@ -272,7 +269,7 @@ function UsageHubSetup({
       );
       setRevealed(true);
     } catch (e) {
-      onError(messageOf(e, "Could not replace the hub key."));
+      setError(messageOf(e, "Could not replace the hub key."));
     } finally {
       setReplacing(false);
     }
@@ -289,6 +286,11 @@ function UsageHubSetup({
         In T3 Code, open Settings → Usage → Add a CLIProxyAPI hub, then paste
         this URL and key.
       </p>
+      {error && (
+        <div className="inline-error" role="alert">
+          {error}
+        </div>
+      )}
       {hub ? (
         <div className="panel endpoint-panel">
           <div className="endpoint-row">
@@ -296,7 +298,7 @@ function UsageHubSetup({
               <span className="label">Hub URL</span>
               <code>{hub.url}</code>
             </div>
-            <CopyButton text={hub.url} onError={onError} />
+            <CopyButton text={hub.url} onError={setError} />
           </div>
           <div className="endpoint-row">
             <div>
@@ -312,7 +314,7 @@ function UsageHubSetup({
               >
                 {revealed ? "Hide" : "Reveal"}
               </button>
-              <CopyButton text={hub.key} onError={onError} />
+              <CopyButton text={hub.key} onError={setError} />
               <button
                 className="button small"
                 disabled={replacing}

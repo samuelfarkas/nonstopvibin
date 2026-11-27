@@ -152,7 +152,14 @@ fn redemption(data: Option<&str>) -> Result<String, AppError> {
         .as_object()
         .filter(|fields| fields.len() == 2)
         .ok_or_else(invalid)?;
-    let id = |key| fields.get(key).and_then(Value::as_str).ok_or_else(invalid);
+    // The core puts the account's token in place of `$TOKEN$`; it never goes into a body.
+    let id = |key| {
+        fields
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.contains('$'))
+            .ok_or_else(invalid)
+    };
     Ok(
         json!({ "redeem_request_id": id("redeem_request_id")?, "credit_id": id("credit_id")? })
             .to_string(),

@@ -58,7 +58,8 @@ impl Hub {
         Self { store, cores }
     }
 
-    /// Answers a request [`target`] names, once it presented the profile's hub key.
+    /// Answers a request [`target`] names: an endpoint the hub serves, the profile's hub key,
+    /// then a core that takes requests.
     pub(crate) async fn answer(
         &self,
         request: Request<Incoming>,
@@ -66,12 +67,17 @@ impl Hub {
     ) -> Result<Response<Body>, AppError> {
         let (slug, tail) = target(url.path()).ok_or_else(not_found)?;
         let slug = ProfileSlug::parse(slug).map_err(|_| not_found())?;
-        let profile = self.authorize(slug, request.headers()).await?;
         let (.., endpoint) = ENDPOINTS
             .iter()
             .find(|(method, path, _)| *method == request.method().as_str() && *path == tail)
             .ok_or_else(not_found)?;
+        let profile = self.authorize(slug, request.headers()).await?;
         let cores = &self.cores;
+        // Polling never starts or keeps a core: a profile that cannot take requests says so,
+        // and T3 Code keeps its last reading.
+        if !cores.pool().state().usable(&profile) {
+            return Err(AppError::not_started());
+        }
         let answer = match endpoint {
             Endpoint::Files => cores.hub_files(&profile).await?,
             Endpoint::Models => {
