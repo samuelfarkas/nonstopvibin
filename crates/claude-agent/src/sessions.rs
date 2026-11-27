@@ -506,11 +506,12 @@ impl Sessions {
         }
     }
 
-    /// Stops every process and forgets every record, waiting for the processes to exit. The
-    /// sessions stay closed: a request still waiting for room is refused, since the engine no
-    /// longer lists them.
-    pub(crate) async fn close(&self) {
-        let tasks: Vec<JoinHandle<()>> = {
+    /// Stops every process and forgets every record; answers the processes' tasks, which end
+    /// once they exited. The sessions stay closed: a request still waiting for room is refused,
+    /// since the engine no longer lists them.
+    #[must_use]
+    pub(crate) fn close(&self) -> Vec<JoinHandle<()>> {
+        let tasks = {
             let mut state = self.lock();
             state.closed = true;
             let lives = std::mem::take(&mut state.lives);
@@ -525,9 +526,7 @@ impl Sessions {
                 .collect()
         };
         self.changed.notify_waiters();
-        for task in tasks {
-            let _ = task.await;
-        }
+        tasks
     }
 
     /// Stops processes whose idle or holding time ran out, sleeping until the next such

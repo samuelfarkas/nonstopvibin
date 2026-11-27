@@ -648,17 +648,20 @@ impl<H: Host> Engine<H> {
     /// Stops the profile's processes and forgets its sessions, as when its account goes.
     pub async fn forget(&self, profile: &ProfileId) {
         let sessions = locked(&self.inner.profiles).remove(profile);
-        if let Some(sessions) = sessions {
-            sessions.close().await;
+        for task in sessions.iter().flat_map(|sessions| sessions.close()) {
+            let _ = task.await;
         }
     }
 
-    /// Stops every process; requests after this are refused.
+    /// Stops every process, every profile's at once; requests after this are refused.
     pub async fn close(&self) {
         self.inner.closed.store(true, Ordering::Release);
-        let all: Vec<Arc<Sessions>> = locked(&self.inner.profiles).values().cloned().collect();
-        for sessions in all {
-            sessions.close().await;
+        let tasks: Vec<_> = locked(&self.inner.profiles)
+            .values()
+            .flat_map(|sessions| sessions.close())
+            .collect();
+        for task in tasks {
+            let _ = task.await;
         }
     }
 }
