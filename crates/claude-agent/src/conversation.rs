@@ -211,17 +211,41 @@ impl Settings {
 }
 
 /// A Messages request: its settings, the turns before its last, and the user turn it ends with.
+/// The digests and the fingerprint are computed once, before routing takes the state lock.
 #[derive(Debug, Clone)]
 pub(crate) struct Conversation {
     pub(crate) settings: Settings,
     pub(crate) stream: bool,
     pub(crate) history: Vec<Turn>,
     pub(crate) tail: Turn,
+    digests: Vec<Digest>,
+    tail_digest: Digest,
+    fingerprint: Fingerprint,
 }
 
 impl Conversation {
-    pub(crate) fn history_digests(&self) -> Vec<Digest> {
-        self.history.iter().map(Turn::digest).collect()
+    fn new(settings: Settings, stream: bool, history: Vec<Turn>, tail: Turn) -> Self {
+        Self {
+            digests: history.iter().map(Turn::digest).collect(),
+            tail_digest: tail.digest(),
+            fingerprint: settings.fingerprint(),
+            settings,
+            stream,
+            history,
+            tail,
+        }
+    }
+
+    pub(crate) fn history_digests(&self) -> &[Digest] {
+        &self.digests
+    }
+
+    pub(crate) const fn tail_digest(&self) -> Digest {
+        self.tail_digest
+    }
+
+    pub(crate) const fn fingerprint(&self) -> &Fingerprint {
+        &self.fingerprint
     }
 }
 
@@ -385,21 +409,18 @@ pub(crate) fn parse(body: &[u8]) -> Result<Conversation, Invalid> {
         .get("output_config")
         .and_then(|config| text_of(config.get("effort")))
         .and_then(Effort::parse);
-    Ok(Conversation {
-        settings: Settings {
-            model,
-            effort,
-            max_tokens: request
-                .get("max_tokens")
-                .and_then(Value::as_u64)
-                .filter(|tokens| *tokens > 0),
-            system: system(request.get("system")),
-            tools: tools(request.get("tools")).into(),
-        },
-        stream: request.get("stream").and_then(Value::as_bool) == Some(true),
-        history,
-        tail,
-    })
+    let settings = Settings {
+        model,
+        effort,
+        max_tokens: request
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .filter(|tokens| *tokens > 0),
+        system: system(request.get("system")),
+        tools: tools(request.get("tools")).into(),
+    };
+    let stream = request.get("stream").and_then(Value::as_bool) == Some(true);
+    Ok(Conversation::new(settings, stream, history, tail))
 }
 
 // ---- What Claude Code receives ----

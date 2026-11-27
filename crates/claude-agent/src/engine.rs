@@ -378,7 +378,7 @@ impl<H: Host> Engine<H> {
             body,
             stream: conversation.stream,
         };
-        let tail = conversation.tail.digest();
+        let tail = conversation.tail_digest();
         let (key, requests, turn, results) = match plan {
             Plan::Continue {
                 key,

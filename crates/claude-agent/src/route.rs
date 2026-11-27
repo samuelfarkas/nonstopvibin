@@ -74,13 +74,12 @@ pub(crate) fn route(
     }
     let answered: HashSet<&str> = tail.result_ids().into_iter().collect();
     let only_answers = !answered.is_empty() && !tail.has_message();
-    let fingerprint = conversation.settings.fingerprint();
     let mut changed = None;
     for (index, live) in lives.iter().enumerate() {
-        if live.seen != history.as_slice() {
+        if live.seen != history {
             continue;
         }
-        let same = *live.fingerprint == fingerprint;
+        let same = live.fingerprint == conversation.fingerprint();
         match live.activity {
             Activity::Holding(calls)
                 if same
@@ -110,7 +109,7 @@ pub(crate) fn route(
         };
     }
     if answered.is_empty()
-        && let Some(index) = records.iter().rposition(|seen| *seen == history.as_slice())
+        && let Some(index) = records.iter().rposition(|seen| *seen == history)
     {
         return Route::Resume {
             from: Stopped::Record(index),
@@ -169,7 +168,7 @@ mod tests {
     fn seen(messages: &Value) -> Vec<Digest> {
         let mut with_tail = messages.as_array().unwrap().clone();
         with_tail.push(user("next"));
-        request(&Value::Array(with_tail)).history_digests()
+        request(&Value::Array(with_tail)).history_digests().to_vec()
     }
 
     fn text(value: &str) -> Value {

@@ -297,7 +297,7 @@ impl Sessions {
             }
             Route::Fresh { message } if room(&state) => {
                 let session = nsv_domain::random::uuid().map_err(|_| Closed)?;
-                let seen = conversation.history_digests();
+                let seen = conversation.history_digests().to_vec();
                 (Persistence::New(session), seen, None, message)
             }
             Route::Side { message } if room(&state) => {
@@ -315,7 +315,7 @@ impl Sessions {
                 Persistence::New(id) | Persistence::Resume(id) => Some(id.clone()),
                 Persistence::None => None,
             },
-            fingerprint: conversation.settings.fingerprint(),
+            fingerprint: conversation.fingerprint().clone(),
             seen,
             activity: Activity::Starting,
             used: Instant::now(),
