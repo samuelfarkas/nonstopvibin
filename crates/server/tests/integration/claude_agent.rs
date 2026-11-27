@@ -67,14 +67,12 @@ async fn a_signed_in_claude_code_connects_one_claude_agent_subscription() {
         status,
         json!({
             "claude": app.root.path().join("claude").to_str().unwrap(),
-            "configDir": config.to_str().unwrap(),
             "signIn": format!(
                 "CLAUDE_CONFIG_DIR={} {} auth login",
                 config.display(),
                 app.root.path().join("claude").display()
             ),
             "signedIn": true,
-            "tokenSource": "claude.ai",
         })
     );
     let (status, _) = app.call("POST", &route, None).await;
@@ -192,13 +190,13 @@ async fn the_engine_answers_local_agent_clients_only() {
     let profile = app.profile("Agent").await;
     app.ok("POST", &format!("/profiles/{profile}/claude-agent"), None)
         .await;
-    let path = format!("/claude-agent/{profile}/v1/models");
+    let path = format!("/claude-agent/{profile}/v1/messages");
     let request = async |headers: &[(&str, &str)]| {
         let headers: Vec<(String, String)> = headers
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect();
-        let answer = send(app.daemon.port(), "GET", &path, &headers, b"").await;
+        let answer = send(app.daemon.port(), "POST", &path, &headers, b"").await;
         let body: Value = serde_json::from_slice(&answer.body).unwrap();
         (answer.status, body)
     };

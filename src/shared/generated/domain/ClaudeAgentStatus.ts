@@ -10,17 +10,9 @@ export type ClaudeAgentStatus = {
  */
 claude?: string, 
 /**
- * The profile's Claude Code configuration directory.
- */
-configDir: string, 
-/**
  * The command that signs Claude Code in for this profile.
  */
 signIn: string, signedIn: boolean, 
-/**
- * Where Claude Code's credential comes from, as it names it.
- */
-tokenSource?: string, 
 /**
  * Why the sign-in could not be read.
  */

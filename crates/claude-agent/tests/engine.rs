@@ -335,7 +335,6 @@ impl Host for Agent {
     fn account(&self, _: &ProfileId) -> impl Future<Output = Option<Account>> + Send {
         std::future::ready(Some(Account {
             key: ApiKey::new(AGENT_KEY),
-            models: vec![MODEL.to_owned()],
         }))
     }
 }

@@ -1,5 +1,5 @@
-//! The engine's HTTP side: `/claude-agent/<profile>/v1/messages`, `/v1/models` and `/mcp`,
-//! the profiles' [`Sessions`], and the sign-in probe.
+//! The engine's HTTP side: `/claude-agent/<profile>/v1/messages` and `/mcp`, the profiles'
+//! [`Sessions`], and the sign-in probe.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -44,7 +44,6 @@ const PROBE: Duration = Duration::from_secs(30);
 pub struct Account {
     /// The key the profile's core presents.
     pub key: ApiKey,
-    pub models: Vec<String>,
 }
 
 /// What the engine needs from the rest of the daemon.
@@ -67,8 +66,6 @@ pub struct Options {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
     pub signed_in: bool,
-    /// Where its credential comes from, as Claude Code names it.
-    pub token_source: Option<String>,
     pub email: Option<String>,
     /// The models it offers, by full name, without repeats.
     pub models: Vec<String>,
@@ -201,7 +198,6 @@ fn target(path: &str) -> Option<(&str, &str)> {
 /// The path below `/claude-agent/<profile>`.
 enum Target {
     Messages,
-    Models,
     Mcp,
 }
 
@@ -225,7 +221,6 @@ impl<H: Host> Engine<H> {
             let profile = ProfileId::parse(profile).ok()?;
             let target = match rest {
                 "v1/messages" => Target::Messages,
-                "v1/models" => Target::Models,
                 "mcp" => Target::Mcp,
                 _ => return None,
             };
@@ -239,14 +234,12 @@ impl<H: Host> Engine<H> {
         }
         match (target, request.method()) {
             (Target::Messages, &Method::POST) => self.messages(&profile, request).await,
-            (Target::Models, &Method::GET) => self.models(&profile, request.headers()).await,
             (Target::Mcp, &Method::POST) => self.mcp(&profile, request).await,
-            (Target::Mcp, &Method::DELETE) => json(StatusCode::OK, &json!({})),
             _ => {
                 let mut refused = refuse(405, "invalid_request_error", "Method not allowed.");
                 refused
                     .headers_mut()
-                    .insert(header::ALLOW, HeaderValue::from_static("GET, POST, DELETE"));
+                    .insert(header::ALLOW, HeaderValue::from_static("POST"));
                 refused
             }
         }
@@ -257,31 +250,6 @@ impl<H: Host> Engine<H> {
         let presented = bearer(headers)?.to_owned();
         let account = self.inner.host.account(profile).await?;
         account.key.matches(&presented).then_some(account)
-    }
-
-    async fn models(&self, profile: &ProfileId, headers: &HeaderMap) -> Response<Body> {
-        let Some(account) = self.authorized(profile, headers).await else {
-            return refuse(401, "authentication_error", "Invalid API key.");
-        };
-        let data: Vec<Value> = account
-            .models
-            .iter()
-            .map(|id| {
-                json!({
-                    "type": "model", "id": id, "display_name": id,
-                    "created_at": "1970-01-01T00:00:00Z",
-                })
-            })
-            .collect();
-        json(
-            StatusCode::OK,
-            &json!({
-                "data": data,
-                "has_more": false,
-                "first_id": account.models.first(),
-                "last_id": account.models.last(),
-            }),
-        )
     }
 
     /// `claude` as the options name it or as found on this machine.
@@ -623,18 +591,15 @@ impl<H: Host> Engine<H> {
     /// sign-in state.
     pub async fn status(&self, profile: &ProfileId) -> ClaudeAgentStatus {
         let (found, sign_in, probed) = self.probe(profile).await;
-        let config = self.inner.options.data.claude_agent_config(profile);
-        let (signed_in, token_source, error) = match (&found, probed) {
-            (Some(_), Ok(probe)) => (probe.signed_in, probe.token_source, None),
-            (Some(_), Err(unready)) => (false, None, Some(unready.message)),
-            (None, _) => (false, None, None),
+        let (signed_in, error) = match (&found, probed) {
+            (Some(_), Ok(probe)) => (probe.signed_in, None),
+            (Some(_), Err(unready)) => (false, Some(unready.message)),
+            (None, _) => (false, None),
         };
         ClaudeAgentStatus {
             claude: found.map(|found| found.path.to_string_lossy().into_owned()),
-            config_dir: config.to_string_lossy().into_owned(),
             sign_in,
             signed_in,
-            token_source,
             error,
         }
     }
@@ -780,7 +745,6 @@ fn read_probe(response: &Value) -> Option<Probe> {
     }
     Some(Probe {
         signed_in: token_source.is_some() || field("apiKeySource").is_some(),
-        token_source: token_source.or_else(|| field("apiKeySource")),
         email: field("email"),
         models,
     })
@@ -808,7 +772,6 @@ mod tests {
             read_probe(&response),
             Some(Probe {
                 signed_in: true,
-                token_source: Some("claude.ai".to_owned()),
                 email: Some("me@example.com".to_owned()),
                 models: vec!["claude-opus-5-5".to_owned(), "claude-sonnet-5-5".to_owned()],
             })
@@ -821,7 +784,6 @@ mod tests {
             read_probe(&signed_out),
             Some(Probe {
                 signed_in: false,
-                token_source: None,
                 email: None,
                 models: Vec::new(),
             })

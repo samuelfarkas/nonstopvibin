@@ -10,8 +10,8 @@ use nsv_domain::registry::Provider;
 use nsv_files::DataDir;
 use nsv_store::Store;
 
-/// The engine's view of the store: the profile's enabled Claude Agent account, its key from
-/// the vault and its models.
+/// The engine's view of the store: the profile's enabled Claude Agent account and its key
+/// from the vault.
 pub(crate) struct Accounts(pub(crate) Store);
 
 impl Host for Accounts {
@@ -28,7 +28,6 @@ impl Host for Accounts {
                 };
                 Ok(Some(Account {
                     key: db.api_key(&account.id)?,
-                    models: account.models.into_iter().map(|model| model.id).collect(),
                 }))
             })
             .await

@@ -55,14 +55,9 @@ pub struct ClaudeAgentStatus {
     /// Where `claude` was found; absent when it was not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude: Option<String>,
-    /// The profile's Claude Code configuration directory.
-    pub config_dir: String,
     /// The command that signs Claude Code in for this profile.
     pub sign_in: String,
     pub signed_in: bool,
-    /// Where Claude Code's credential comes from, as it names it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_source: Option<String>,
     /// Why the sign-in could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
