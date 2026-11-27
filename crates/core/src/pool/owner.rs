@@ -685,9 +685,14 @@ impl Launch {
                 503,
             )
         })?;
-        let config = write_config(&self.context.store, self.profile.clone(), port)
-            .await
-            .map_err(AppError::from)?;
+        let config = write_config(
+            &self.context.store,
+            self.profile.clone(),
+            port,
+            self.context.daemon,
+        )
+        .await
+        .map_err(AppError::from)?;
         if self.context.closing() {
             return Err(AppError::shutting_down());
         }

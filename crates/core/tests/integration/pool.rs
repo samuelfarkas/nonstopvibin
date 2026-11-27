@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, Pool, READY};
+use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, Launch, Pool, READY};
 use nsv_core::processes::KILL_GRACE;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -43,9 +43,12 @@ impl World {
         let drain = Arc::new(Drain::default());
         let pool = Pool::new(
             paused.store.clone(),
-            paused.binary.clone(),
-            Arc::new(paused.backend()),
-            ready,
+            Launch {
+                binary: paused.binary.clone(),
+                backend: Arc::new(paused.backend()),
+                ready,
+                daemon: None,
+            },
             Arc::<Drain>::clone(&drain),
         );
         drain.0.set(pool.clone()).ok().unwrap();

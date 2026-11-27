@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nsv_core::pool::{Backend, NoHooks, Pool};
+use nsv_core::pool::{Backend, Launch, NoHooks, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_files::{DataDir, owner_only_directory, unique_directory};
@@ -70,9 +70,12 @@ impl Sandbox {
         };
         let pool = Pool::new(
             store.clone(),
-            binary,
-            backends(&directory),
-            ready,
+            Launch {
+                binary,
+                backend: backends(&directory),
+                ready,
+                daemon: None,
+            },
             Arc::new(NoHooks),
         );
         Ok(Self {

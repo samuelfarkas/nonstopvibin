@@ -37,6 +37,16 @@ pub fn profile_base(port: u16, slug: &str) -> String {
     format!("{}{}", loopback_origin(port), profile_path(slug))
 }
 
+/// The prefix of the Claude Agent engine's routes, `/claude-agent/<profile id>`.
+pub const CLAUDE_AGENT_ROUTES: &str = "/claude-agent/";
+
+/// The Anthropic base URL at which a profile's core reaches its Claude Agent engine on the
+/// daemon's `port`; the core adds `/v1`.
+#[must_use]
+pub fn claude_agent_base(port: u16, profile: &ProfileId) -> String {
+    format!("{}{CLAUDE_AGENT_ROUTES}{profile}", loopback_origin(port))
+}
+
 /// The OpenAI-style base URL of one profile on the gateway.
 #[must_use]
 pub fn profile_endpoint(port: u16, slug: &str) -> String {

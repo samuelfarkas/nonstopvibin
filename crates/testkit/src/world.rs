@@ -316,6 +316,7 @@ impl World {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }),
                 app,
+                daemon_port: None,
             })
             .unwrap(),
         );

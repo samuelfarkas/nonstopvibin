@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_core::install::CoreSource;
-use nsv_core::pool::{BoxFuture, Pool, PoolState};
+use nsv_core::pool::{BoxFuture, Launch, Pool, PoolState};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::OAuthProvider;
@@ -58,6 +58,9 @@ pub struct CoresOptions {
     pub sign_in_accepted: Arc<dyn Fn() + Send + Sync>,
     /// This build's version: [`AppVersion::current`].
     pub app: AppVersion,
+    /// The daemon's loopback port, where cores reach Claude Agent accounts; `None` where
+    /// nothing serves them.
+    pub daemon_port: Option<u16>,
 }
 
 /// The pool's scheduler and the account features that drive it.
@@ -166,13 +169,17 @@ impl Cores {
             report,
             sign_in_accepted,
             app,
+            daemon_port,
         } = options;
         let accounts = Arc::new(Accounts::new(store.clone()));
         let (scheduler, (source, quotas, credentials, sign_in)) = Scheduler::new(
             store.clone(),
-            binary.clone(),
-            backends(store.directory()),
-            ready,
+            Launch {
+                binary: binary.clone(),
+                backend: backends(store.directory()),
+                ready,
+                daemon: daemon_port,
+            },
             Arc::clone(&accounts),
             timing,
             |pool| {

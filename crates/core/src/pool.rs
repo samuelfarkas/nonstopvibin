@@ -248,6 +248,9 @@ impl Hooks for NoHooks {
 /// What the owner and its tasks share.
 struct Context {
     store: Store,
+    /// The daemon's port, where Claude Agent accounts are served; `None` where nothing serves
+    /// them.
+    daemon: Option<u16>,
     backend: Arc<dyn Backend>,
     hooks: Arc<dyn Hooks>,
     ready: Duration,
@@ -275,17 +278,28 @@ pub struct Pool {
     context: Arc<Context>,
 }
 
+/// How a pool's cores start.
+pub struct Launch {
+    /// The core binary.
+    pub binary: PathBuf,
+    pub backend: Arc<dyn Backend>,
+    /// How long a new core gets to answer: [`READY`] in the daemon.
+    pub ready: Duration,
+    /// The daemon's port, at which cores reach Claude Agent accounts; `None` where nothing
+    /// serves them.
+    pub daemon: Option<u16>,
+}
+
 impl Pool {
-    /// Starts the owner task on the current runtime. `ready` bounds readiness waits ([`READY`]
-    /// in the daemon).
+    /// Starts the owner task on the current runtime.
     #[must_use]
-    pub fn new(
-        store: Store,
-        binary: PathBuf,
-        backend: Arc<dyn Backend>,
-        ready: Duration,
-        hooks: Arc<dyn Hooks>,
-    ) -> Self {
+    pub fn new(store: Store, launch: Launch, hooks: Arc<dyn Hooks>) -> Self {
+        let Launch {
+            binary,
+            backend,
+            ready,
+            daemon,
+        } = launch;
         let (commands, queue) = mpsc::channel(QUEUE);
         let (published, state) = watch::channel(Arc::new(PoolState {
             closing: false,
@@ -294,6 +308,7 @@ impl Pool {
         }));
         let context = Arc::new(Context {
             store,
+            daemon,
             backend,
             hooks,
             ready,
@@ -486,9 +501,14 @@ impl Pool {
         profile: &ProfileId,
         port: u16,
     ) -> Result<crate::config::CoreConfiguration, AppError> {
-        write_config(&self.context.store, profile.clone(), port)
-            .await
-            .map_err(AppError::from)
+        write_config(
+            &self.context.store,
+            profile.clone(),
+            port,
+            self.context.daemon,
+        )
+        .await
+        .map_err(AppError::from)
     }
 
     /// A management request to the profile's latest core, once it answered and until it is

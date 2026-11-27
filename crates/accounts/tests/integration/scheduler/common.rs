@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use nsv_accounts::accounts::Accounts;
 use nsv_accounts::scheduler::{Host, Scheduler, TIMING, Timing};
-use nsv_core::pool::{BoxFuture, Pool};
+use nsv_core::pool::{BoxFuture, Launch, Pool};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_testkit::paused::Paused;
@@ -115,9 +115,12 @@ impl World {
         let accounts = Arc::new(Accounts::new(paused.store.clone()));
         let (scheduler, ()) = Scheduler::new(
             paused.store.clone(),
-            paused.binary.clone(),
-            Arc::new(paused.backend()),
-            ready,
+            Launch {
+                binary: paused.binary.clone(),
+                backend: Arc::new(paused.backend()),
+                ready,
+                daemon: None,
+            },
             Arc::clone(&accounts),
             timing,
             |_| (shared, ()),

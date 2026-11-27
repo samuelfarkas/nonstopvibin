@@ -180,6 +180,7 @@ pub(crate) fn configuration(
                 .map(|(_, key)| key.clone())
                 .expect("a key per account"))
         },
+        None,
     )
     .unwrap()
 }
@@ -309,6 +310,68 @@ fn replays_the_golden_applied_comparisons() {
 }
 
 #[test]
+fn a_claude_agent_account_points_at_its_profiles_engine_and_never_cloaks() {
+    let profile = profile("round-robin", false);
+    let accounts: Vec<ApiAccount> = vec![
+        serde_json::from_value(json!({
+            "id": "agent", "name": "Claude Agent", "provider": "claude-agent", "baseUrl": "",
+            "prefix": "", "models": [
+                { "id": "claude-opus-5-5", "protocol": "anthropic" },
+                { "id": "claude-haiku-5-5", "protocol": "anthropic" },
+            ],
+            "disabled": false,
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "id": "api", "name": "API", "provider": "anthropic",
+            "baseUrl": "https://api.anthropic.com/v1", "prefix": "",
+            "models": [{ "id": "claude-opus-5-5", "protocol": "anthropic" }], "disabled": false,
+        }))
+        .unwrap(),
+    ];
+    let config = |daemon| {
+        CoreConfiguration::new(
+            &profile,
+            9000,
+            "<auth>".to_owned(),
+            (CoreKey::new("core"), ManagementKey::new("management")),
+            &accounts,
+            |id: &AccountId| Ok(ApiKey::new(format!("key-{id}"))),
+            daemon,
+        )
+        .unwrap()
+        .to_json()
+    };
+    assert_eq!(
+        config(Some(8317))["claude-api-key"],
+        json!([
+            {
+                "api-key": "key-agent", "prefix": "",
+                "base-url": "http://127.0.0.1:8317/claude-agent/00000000-0000-4000-8000-000000000001",
+                "headers": {},
+                "models": [
+                    { "name": "claude-opus-5-5", "alias": "claude-opus-5-5" },
+                    { "name": "claude-haiku-5-5", "alias": "claude-haiku-5-5" },
+                ],
+                "cloak": { "mode": "never" },
+            },
+            {
+                "api-key": "key-api", "prefix": "", "base-url": "https://api.anthropic.com",
+                "headers": {}, "models": [{ "name": "claude-opus-5-5", "alias": "claude-opus-5-5" }],
+            },
+        ])
+    );
+    // Without a daemon to serve it, as in a sign-in sandbox, the account is left out.
+    assert_eq!(
+        config(None)["claude-api-key"],
+        json!([{
+            "api-key": "key-api", "prefix": "", "base-url": "https://api.anthropic.com",
+            "headers": {}, "models": [{ "name": "claude-opus-5-5", "alias": "claude-opus-5-5" }],
+        }])
+    );
+}
+
+#[test]
 fn credentials_never_cross_endpoints_whose_urls_share_a_suffix() {
     let custom = |id: &str, name: &str, base_url: &str, model: &str| {
         let stored = json!({
@@ -396,7 +459,9 @@ async fn replays_the_golden_slugs_and_the_unknown_profile() {
         .find(|case| case["name"] == "config unknown profile")
         .unwrap();
     let missing = ProfileId::parse("00000000-0000-4000-8000-00000000dead").unwrap();
-    let error = write_config(&store, missing.clone(), 1).await.unwrap_err();
+    let error = write_config(&store, missing.clone(), 1, None)
+        .await
+        .unwrap_err();
     let StoreError::App(error) = error else {
         panic!("{error:?}")
     };
@@ -428,7 +493,7 @@ async fn the_store_writes_an_owner_only_config_in_place() {
         .call(move |db| db.save_api_account(&id, &stored, Some(&key)))
         .await
         .unwrap();
-    let config = write_config(&store, profile.id.clone(), 8317)
+    let config = write_config(&store, profile.id.clone(), 8317, None)
         .await
         .unwrap();
     let path = DataDir::new(root.path()).core_config(&profile.id);
@@ -452,7 +517,7 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     // The core watches this inode: a rewrite keeps it, even after the mode was loosened.
     let inode = fs::metadata(&path).unwrap().ino();
     fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
-    write_config(&store, profile.id.clone(), 8318)
+    write_config(&store, profile.id.clone(), 8318, None)
         .await
         .unwrap();
     assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
@@ -464,8 +529,8 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     saved.session_affinity = false;
     store.call(move |db| db.save_profile(&saved)).await.unwrap();
     let (first, second) = tokio::join!(
-        write_config(&store, profile.id.clone(), 1235),
-        write_config(&store, profile.id.clone(), 1236),
+        write_config(&store, profile.id.clone(), 1235, None),
+        write_config(&store, profile.id.clone(), 1236, None),
     );
     let (first, second) = (first.unwrap(), second.unwrap());
     assert_eq!([first.port, second.port], [1235, 1236]);
@@ -478,12 +543,12 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
     assert!(
-        write_config(&store, profile.id.clone(), 1237)
+        write_config(&store, profile.id.clone(), 1237, None)
             .await
             .is_err()
     );
     fs::remove_dir(&path).unwrap();
-    let recovered = write_config(&store, profile.id.clone(), 1238)
+    let recovered = write_config(&store, profile.id.clone(), 1238, None)
         .await
         .unwrap();
     assert_eq!(recovered.port, 1238);
@@ -497,7 +562,7 @@ async fn the_store_writes_an_owner_only_config_in_place() {
     fs::remove_file(&path).unwrap();
     std::os::unix::fs::symlink(&target, &path).unwrap();
     assert!(
-        write_config(&store, profile.id.clone(), 8319)
+        write_config(&store, profile.id.clone(), 8319, None)
             .await
             .is_err()
     );

@@ -7,7 +7,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use nsv_domain::endpoint::OPENCODE_SESSION_HEADER;
+use nsv_domain::endpoint::{OPENCODE_SESSION_HEADER, claude_agent_base};
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{Protocol, Provider, Strategy, registry};
@@ -47,6 +47,9 @@ pub struct KeyEntry {
     pub base_url: String,
     pub headers: BTreeMap<&'static str, String>,
     pub models: Vec<ModelEntry>,
+    /// `cloak: {mode: never}`: the core sends the caller's request as it is, never dressed up
+    /// as Claude Code. A Claude Agent account's own Claude Code makes the upstream request.
+    pub never_cloak: bool,
 }
 
 /// The settings of one core that vary; everything else in its config is fixed.
@@ -82,7 +85,8 @@ fn upstream_headers(upstream: Provider) -> BTreeMap<&'static str, String> {
 
 impl CoreConfiguration {
     /// The config of `profile`'s core on `port` with its keys and enabled `accounts`;
-    /// `api_key` answers an account's upstream key.
+    /// `api_key` answers an account's upstream key. A Claude Agent account points at the
+    /// engine on the daemon's port `daemon`, and is left out where no daemon serves it.
     ///
     /// # Errors
     /// What `api_key` returns, or [`StoreError::Json`] when a model list does not serialize.
@@ -93,12 +97,20 @@ impl CoreConfiguration {
         (core_key, management_key): (CoreKey, ManagementKey),
         accounts: &[ApiAccount],
         mut api_key: impl FnMut(&AccountId) -> Result<ApiKey, StoreError>,
+        daemon: Option<u16>,
     ) -> Result<Self, StoreError> {
         let providers = &registry().providers;
         let mut compatible: Vec<CompatibleEntry> = Vec::new();
         let mut claude = Vec::new();
         let mut responses = Vec::new();
         for account in accounts.iter().filter(|account| !account.disabled) {
+            let engine = match (account.provider, daemon) {
+                (Provider::ClaudeAgent, Some(daemon)) => {
+                    Some(claude_agent_base(daemon, &profile.id))
+                }
+                (Provider::ClaudeAgent, None) => continue,
+                _ => None,
+            };
             let headers = providers
                 .get(account.provider)
                 .preset
@@ -144,9 +156,12 @@ impl CoreConfiguration {
                     Protocol::Anthropic => claude.push(KeyEntry {
                         api_key: key,
                         prefix: account.prefix.clone(),
-                        base_url: without_v1(&account.base_url).to_owned(),
+                        base_url: engine
+                            .clone()
+                            .unwrap_or_else(|| without_v1(&account.base_url).to_owned()),
                         headers: headers.clone(),
                         models,
+                        never_cloak: engine.is_some(),
                     }),
                     Protocol::Responses => responses.push(KeyEntry {
                         api_key: key,
@@ -154,6 +169,7 @@ impl CoreConfiguration {
                         base_url: account.base_url.clone(),
                         headers: headers.clone(),
                         models,
+                        never_cloak: false,
                     }),
                 }
             }
@@ -181,13 +197,17 @@ impl CoreConfiguration {
                 .collect()
         };
         let key_entry = |entry: &KeyEntry| {
-            json!({
+            let mut value = json!({
                 "api-key": entry.api_key.expose_secret(),
                 "prefix": entry.prefix,
                 "base-url": entry.base_url,
                 "headers": entry.headers,
                 "models": models(&entry.models),
-            })
+            });
+            if let (true, Value::Object(fields)) = (entry.never_cloak, &mut value) {
+                fields.insert("cloak".to_owned(), json!({ "mode": "never" }));
+            }
+            value
         };
         let compatible: Vec<Value> = self
             .openai_compatibility
@@ -264,7 +284,8 @@ fn without_v1(base_url: &str) -> &str {
         .unwrap_or(base_url)
 }
 
-/// Writes `profile`'s config for a core on `port` and answers it, in one store section: the
+/// Writes `profile`'s config for a core on `port`, whose Claude Agent accounts the daemon on
+/// port `daemon` serves, and answers it, in one store section: the
 /// profile, keys and accounts are read and the file written with nothing in between, so
 /// writes for one profile never interleave. The profile and credential directories become
 /// owner-only. The file is rewritten in place, owner-only, because the core watches its
@@ -277,6 +298,7 @@ pub async fn write_config(
     store: &Store,
     profile: ProfileId,
     port: u16,
+    daemon: Option<u16>,
 ) -> Result<CoreConfiguration, StoreError> {
     let directory = store.directory().clone();
     store
@@ -296,9 +318,15 @@ pub async fn write_config(
                 .to_owned();
             let keys = (db.core_key(&profile)?, db.management_key(&profile)?);
             let accounts = db.api_accounts(&profile)?;
-            let config = CoreConfiguration::new(&record, port, auth_dir, keys, &accounts, |id| {
-                db.api_key(id)
-            })?;
+            let config = CoreConfiguration::new(
+                &record,
+                port,
+                auth_dir,
+                keys,
+                &accounts,
+                |id| db.api_key(id),
+                daemon,
+            )?;
             write_in_place(
                 &directory.core_config(&profile),
                 config.to_yaml().as_bytes(),

@@ -294,6 +294,7 @@ impl Daemon {
                 outside: Arc::clone(&outside),
                 source: options.core.source,
                 app: AppVersion::current(),
+                daemon_port: Some(port),
                 clock,
                 report: Arc::new(move |message| reported.errors.report(message)),
                 sign_in_accepted: Arc::new(move || {
