@@ -34,6 +34,8 @@ use crate::source::PoolSource;
 use crate::task::Report;
 use crate::updates::{CoreUpdates, UpdateOptions};
 
+mod hub;
+
 pub struct CoresOptions {
     pub store: Store,
     /// The bundled core.

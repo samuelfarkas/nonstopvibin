@@ -117,7 +117,7 @@ pub struct UpstreamRequest {
 }
 
 impl UpstreamRequest {
-    fn bearer(method: &'static str, url: String) -> Self {
+    pub(crate) fn bearer(method: &'static str, url: String) -> Self {
         Self {
             method,
             url,
