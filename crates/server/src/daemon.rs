@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use nsv_accounts::Backends;
+use nsv_accounts::accounts::retire_claude_sign_ins;
 use nsv_accounts::catalog::{ModelCatalog, ProfileModels};
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
@@ -126,7 +127,8 @@ pub enum StartError {
     /// No entropy for the session token or the interface's version.
     #[error(transparent)]
     Entropy(io::Error),
-    /// The cores could not be set up, or the core could not be selected and checked.
+    /// The cores could not be set up, retired Claude sign-ins could not be deleted, or the core
+    /// could not be selected and checked.
     #[error(transparent)]
     Cores(AppError),
     /// An earlier `server.json` could not be removed, or this one written.
@@ -251,7 +253,12 @@ impl Daemon {
         let directory = lock.directory().clone();
         let vault = tokio::task::spawn_blocking(move || Vault::open(&directory)).await??;
         let store = Store::open(lock.directory(), vault).await?;
-        match Self::assemble(options, boundaries, lock, store.clone()).await {
+        // Before anything is served: a request could start a core, which would load them.
+        let assembled = match retire_claude_sign_ins(&store).await {
+            Ok(()) => Self::assemble(options, boundaries, lock, store.clone()).await,
+            Err(error) => Err(StartError::Cores(error)),
+        };
+        match assembled {
             Ok(daemon) => Ok(daemon),
             Err(error) => {
                 store.close().await;
@@ -365,10 +372,9 @@ impl Daemon {
         Ok(Self(app))
     }
 
-    /// Selects and checks the core, reaps cores and core checks an earlier run left, deletes
-    /// retired Claude sign-ins, starts the profiles that are kept running (the others start on
-    /// their first request), checks for a core update in the background, restores agent
-    /// connections, and writes
+    /// Selects and checks the core, reaps cores and core checks an earlier run left, starts
+    /// the profiles that are kept running (the others start on their first request), checks
+    /// for a core update in the background, restores agent connections, and writes
     /// `server.json`: a desktop daemon first, since a second launch finds it there and the
     /// cores may take a while. Dropping it part-way is safe: [`Daemon::close`] stops whatever
     /// it started.

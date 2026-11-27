@@ -239,11 +239,12 @@ impl Accounts {
 const RETIRED_CLAUDE: &str = "claude";
 
 /// Deletes every profile's Claude sign-in credentials and drops their accounts from the
-/// stored lists. Startup runs it before any core starts.
+/// stored lists. The daemon runs it before it serves requests, so no core it starts loads one.
 ///
 /// # Errors
-/// A store failure, or a credential directory or file that cannot be read or deleted.
-pub(crate) async fn retire_claude_sign_ins(store: &Store) -> Result<(), AppError> {
+/// A store failure, or a credential directory that cannot be listed or a Claude credential
+/// that cannot be deleted.
+pub async fn retire_claude_sign_ins(store: &Store) -> Result<(), AppError> {
     for profile in store.call(|db| db.profiles()).await? {
         let directory = store.directory().credentials(&profile.id);
         tokio::task::spawn_blocking(move || delete_claude_credentials(&directory))
@@ -261,7 +262,9 @@ pub(crate) async fn retire_claude_sign_ins(store: &Store) -> Result<(), AppError
     Ok(())
 }
 
-/// Blocking.
+/// Deletes the Claude credentials under `directory` that the core would load: as its loader
+/// does, every `.json` name in any case, in subdirectories too, symbolic links read through,
+/// and the `type` trimmed and compared in any case. Blocking.
 fn delete_claude_credentials(directory: &Path) -> Result<(), AppError> {
     let listing = match fs::read_dir(directory) {
         Ok(listing) => listing,
@@ -270,17 +273,23 @@ fn delete_claude_credentials(directory: &Path) -> Result<(), AppError> {
     };
     for entry in listing {
         let entry = entry.map_err(AppError::internal)?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.file_type().map_err(AppError::internal)?.is_file() || !has_json_extension(&name) {
+        let (path, kind) = (entry.path(), entry.file_type().map_err(AppError::internal)?);
+        if kind.is_dir() {
+            delete_claude_credentials(&path)?;
             continue;
         }
-        let path = entry.path();
-        let content = fs::read(&path).map_err(AppError::internal)?;
-        // A file that is not JSON is one the core cannot load either.
-        let Ok(raw) = serde_json::from_slice::<Value>(&content) else {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if !has_json_extension(&name) {
+            continue;
+        }
+        // A file this user cannot read, or that is not JSON, the core cannot load either.
+        let Ok(Ok(raw)) = fs::read(&path).map(|content| serde_json::from_slice::<Value>(&content))
+        else {
             continue;
         };
-        if text(raw.get("type")) == Some(RETIRED_CLAUDE) {
+        let retired = text(raw.get("type"))
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case(RETIRED_CLAUDE));
+        if retired {
             fs::remove_file(&path).map_err(AppError::internal)?;
         }
     }

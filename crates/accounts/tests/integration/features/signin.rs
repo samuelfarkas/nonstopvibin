@@ -621,24 +621,40 @@ async fn an_expired_sign_in_is_refused_and_shutdown_ends_one_whose_core_stopped(
 }
 
 #[tokio::test]
-async fn launch_deletes_claude_sign_ins_and_their_accounts_and_keeps_the_rest() {
+async fn retiring_deletes_the_claude_sign_ins_the_core_would_load_and_their_accounts() {
+    use std::os::unix::fs::PermissionsExt;
     let world = World::new("oauth-retired").await;
     let (first, second) = (world.profile("First").await, world.profile("Second").await);
-    let claude = json!({
-        "type": "claude",
-        "email": "claude@example.invalid",
-        "access_token": "synthetic-claude-access",
-        "refresh_token": "synthetic-claude-refresh",
-    });
+    let claude = |kind: &str| {
+        json!({
+            "type": kind,
+            "email": "claude@example.invalid",
+            "access_token": "synthetic-claude-access",
+            "refresh_token": "synthetic-claude-refresh",
+        })
+        .to_string()
+    };
     let write = |profile, name: &str, content: String| {
         let path = world.credential_file(profile, name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
+        std::fs::write(&path, content).unwrap();
+        path
     };
-    write(&first, "claude-a.json", claude.to_string());
+    // Every form the core's loader reads: any case of `.json` and `type`, a padded `type`, a
+    // subdirectory, and a symbolic link to a credential elsewhere.
+    write(&first, "claude-a.json", claude("claude"));
+    write(&first, "CLAUDE-B.JSON", claude(" Claude "));
+    write(&first, "nested/claude-c.json", claude("claude"));
+    let elsewhere = world.data().join("elsewhere.json");
+    std::fs::write(&elsewhere, claude("claude")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, world.credential_file(&first, "linked.json")).unwrap();
     write(&first, "codex-a.json", codex().to_string());
     write(&first, "notes.json", "not json".to_owned());
-    write(&second, "claude-b.json", claude.to_string());
+    let locked = write(&first, "locked.json", claude("claude"));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Root reads it anyway, and then it is deleted like any other.
+    let unreadable = std::fs::read(&locked).is_err();
+    write(&second, "claude-b.json", claude("claude"));
     let listed = |id: &str, provider: &str| -> Account {
         serde_json::from_value(json!({
             "id": id, "name": provider, "provider": provider, "kind": "oauth",
@@ -659,18 +675,30 @@ async fn launch_deletes_claude_sign_ins_and_their_accounts_and_keeps_the_rest() 
             .unwrap();
     }
 
-    world.cores.launch().await.unwrap();
+    nsv_accounts::accounts::retire_claude_sign_ins(&world.store)
+        .await
+        .unwrap();
 
     let left = |profile| names(&world.store.directory().credentials(profile));
-    assert_eq!(left(&first), ["codex-a.json", "notes.json"]);
+    let mut kept = vec!["codex-a.json", "nested", "notes.json"];
+    if unreadable {
+        // This user cannot read it, so neither can the core.
+        kept.insert(1, "locked.json");
+    }
+    assert_eq!(left(&first), kept);
+    assert_eq!(
+        names(&world.credential_file(&first, "nested")),
+        Vec::<String>::new()
+    );
+    assert!(elsewhere.exists(), "only the link goes");
     assert_eq!(left(&second), Vec::<String>::new());
     let profile = first.clone();
-    let kept = world
+    let accounts = world
         .store
         .call(move |db| db.account_metadata(&profile))
         .await
         .unwrap();
-    let ids: Vec<&str> = kept.iter().map(|account| account.id.as_str()).collect();
+    let ids: Vec<&str> = accounts.iter().map(|account| account.id.as_str()).collect();
     assert_eq!(ids, ["codex-a.json"]);
-    world.cores.shutdown().await.unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o600)).ok();
 }

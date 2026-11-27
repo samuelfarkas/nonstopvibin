@@ -95,6 +95,30 @@ async fn start(
     Daemon::start(options, boundaries, lock).await.unwrap()
 }
 
+/// Claude sign-ins are deleted before the daemon answers anything: a request during restore
+/// could otherwise start a core that loads one.
+#[tokio::test]
+async fn claude_sign_ins_are_gone_before_the_daemon_serves() {
+    let root = TempDir::new("desktop-retired");
+    let data = seeded(&root).await;
+    let directory = DataDir::new(&data);
+    let store = Store::open(&directory, Vault::open(&directory).unwrap())
+        .await
+        .unwrap();
+    let profile = store.call(|db| db.profiles()).await.unwrap()[0].id.clone();
+    store.close().await;
+    let credential = directory.credentials(&profile).join("claude-a.json");
+    std::fs::create_dir_all(credential.parent().unwrap()).unwrap();
+    std::fs::write(
+        &credential,
+        json!({ "type": "claude", "access_token": "synthetic" }).to_string(),
+    )
+    .unwrap();
+    let daemon = start(&root, &data, None, None).await;
+    assert!(!credential.exists());
+    daemon.close().await.unwrap();
+}
+
 #[tokio::test]
 async fn a_second_launch_brings_the_desktop_window_forward() {
     let root = TempDir::new("desktop-show");

@@ -22,7 +22,7 @@ use nsv_store::Store;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
-use crate::accounts::{self, Accounts};
+use crate::accounts::Accounts;
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::quota::{QuotaError, Quotas};
@@ -579,9 +579,8 @@ impl Cores {
 
     /// At startup: profiles start from the core `CoreUpdates::select` picks. Cores a dead
     /// earlier instance left are stopped (the profiles' and the core checks'), core checks
-    /// and retired Claude sign-ins are deleted, the profiles start and scheduling begins. An
-    /// installed build then checks for a core update in the background; offline stays quiet,
-    /// as Settings checks again.
+    /// are deleted, the profiles start and scheduling begins. An installed build then checks
+    /// for a core update in the background; offline stays quiet, as Settings checks again.
     ///
     /// # Errors
     /// A bundled core that is missing or fails its check, a ledger or file-system error, or
@@ -592,7 +591,6 @@ impl Cores {
         // one running.
         self.pool.reap_orphans().await.map_err(AppError::internal)?;
         sandbox::discard_all(self.store.directory(), &self.backends).await?;
-        accounts::retire_claude_sign_ins(&self.store).await?;
         self.scheduler.launch().await?;
         if self.updates.enabled() {
             let updates = self.updates.clone();
