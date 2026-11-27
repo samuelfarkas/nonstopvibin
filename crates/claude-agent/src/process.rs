@@ -17,9 +17,10 @@ pub(crate) const ENTRYPOINT: &str = "nonstopvibin";
 const INHERITED: [&str; 5] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
 
 /// The switches that keep Claude Code to the harness's conversation: no `CLAUDE.md` files,
-/// memory, compaction, tool search, advisor, fallbacks or away summaries. MCP tool output is
+/// memory, compaction, tool search, advisor, fallbacks or away summaries, and no nonessential
+/// traffic, which includes a session-title request on every new session. MCP tool output is
 /// capped where a harness's own tool output would not be.
-const SWITCHES: [(&str, &str); 11] = [
+const SWITCHES: [(&str, &str); 12] = [
     ("CLAUDE_CODE_ENTRYPOINT", ENTRYPOINT),
     ("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1"),
     ("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "1"),
@@ -30,6 +31,7 @@ const SWITCHES: [(&str, &str); 11] = [
     ("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "1"),
     ("CLAUDE_CODE_ENABLE_AWAY_SUMMARY", "0"),
     ("CLAUDE_CODE_POLISHED_DEWDROP", "drop"),
+    ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
     ("MAX_MCP_OUTPUT_TOKENS", "200000"),
 ];
 
@@ -351,6 +353,7 @@ mod tests {
                 ("CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "1"),
                 ("CLAUDE_CODE_ENABLE_AWAY_SUMMARY", "0"),
                 ("CLAUDE_CODE_POLISHED_DEWDROP", "drop"),
+                ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
                 ("MAX_MCP_OUTPUT_TOKENS", "200000"),
                 ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096"),
             ]

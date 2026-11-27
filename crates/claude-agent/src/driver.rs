@@ -81,6 +81,7 @@ fn user(content: &[Value]) -> Vec<u8> {
         "message": { "role": "user", "content": content },
         "parent_tool_use_id": null,
         "session_id": "",
+        "client_composed": true,
     })
     .to_string()
     .into_bytes();

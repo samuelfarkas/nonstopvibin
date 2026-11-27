@@ -353,6 +353,11 @@ struct World {
 
 impl World {
     async fn new(name: &str) -> Self {
+        Self::running(name, std::env::current_exe().unwrap()).await
+    }
+
+    /// A world whose engine runs `program` as `claude`.
+    async fn running(name: &str, program: PathBuf) -> Self {
         let root = TempDir::new(name);
         let data = DataDir::new(root.path().join("data"));
         nsv_files::owner_only_directory(data.path(), || Ok::<(), std::io::Error>(())).unwrap();
@@ -381,7 +386,7 @@ impl World {
             Options {
                 data: data.clone(),
                 port: daemon,
-                program: Some(std::env::current_exe().unwrap()),
+                program: Some(program),
             },
         );
         let served = engine.clone();
@@ -691,6 +696,53 @@ async fn a_client_that_hangs_up_interrupts_the_turn() {
     world.stop().await;
 }
 
+/// The manual check with the real Claude Code: `NSV_E2E_CLAUDE` names a script that runs it
+/// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
+/// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
+/// `NSV_E2E_HOLD` seconds if set.
+async fn the_real_claude_code_answers_through_the_engine(program: PathBuf) {
+    let world = World::running("cae-real", program).await;
+    let echo = json!({ "type": "function", "function": {
+        "name": "echo", "description": "Echo x back.",
+        "parameters": { "type": "object", "properties": { "x": { "type": "number" } }, "required": ["x"] },
+    } });
+    let user = json!({ "role": "user", "content": "call echo twice" });
+    let first = world
+        .post(
+            "/v1/chat/completions",
+            &json!({ "model": MODEL, "messages": [{ "role": "system", "content": "HARNESS SYSTEM PROMPT" }, user], "tools": [echo] }),
+        )
+        .await;
+    println!("first: {first}");
+    let message = &first["choices"][0]["message"];
+    let calls = message["tool_calls"].as_array().unwrap();
+    let mut messages = vec![
+        json!({ "role": "system", "content": "HARNESS SYSTEM PROMPT" }),
+        user,
+        json!({ "role": "assistant", "content": message["content"], "tool_calls": calls }),
+    ];
+    for call in calls {
+        messages.push(json!({ "role": "tool", "tool_call_id": call["id"], "content": format!("echoed {}", call["function"]["arguments"].as_str().unwrap()) }));
+    }
+    // `NSV_E2E_HOLD` seconds before answering: Claude Code waits on the held call meanwhile.
+    if let Some(seconds) = std::env::var("NSV_E2E_HOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+    }
+    let second = world
+        .post(
+            "/v1/chat/completions",
+            &json!({ "model": MODEL, "messages": messages, "tools": [echo] }),
+        )
+        .await;
+    println!("second: {second}");
+    let text = second["choices"][0]["message"]["content"].as_str().unwrap();
+    assert!(text.starts_with("got results:"), "{second}");
+    world.stop().await;
+}
+
 fn block_on(test: impl Future<Output = ()>) {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -719,6 +771,14 @@ fn run_tests(arguments: &[String]) -> ExitCode {
     ];
     let filters: Vec<&String> = arguments.iter().filter(|a| !a.starts_with('-')).collect();
     let mut passed = 0;
+    if let Some(program) = std::env::var_os("NSV_E2E_CLAUDE") {
+        println!("test the_real_claude_code_answers_through_the_engine ...");
+        block_on(the_real_claude_code_answers_through_the_engine(
+            program.into(),
+        ));
+        println!("test the_real_claude_code_answers_through_the_engine ... ok");
+        return ExitCode::SUCCESS;
+    }
     for (name, test) in tests {
         if filters.is_empty() || filters.iter().any(|filter| name.contains(filter.as_str())) {
             println!("test {name} ...");
