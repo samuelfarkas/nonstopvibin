@@ -356,7 +356,11 @@ impl<H: Host> Engine<H> {
         let plan = match sessions.claim(&conversation).await {
             Ok(plan) => plan,
             Err(sessions::Closed) => {
-                return refuse(503, "overloaded_error", "NonstopVibin is shutting down.");
+                return refuse(
+                    503,
+                    "overloaded_error",
+                    "Claude Agent stopped serving this profile.",
+                );
             }
         };
         self.serve(&sessions, plan, &conversation, &found).await
@@ -645,7 +649,7 @@ impl<H: Host> Engine<H> {
     pub async fn forget(&self, profile: &ProfileId) {
         let sessions = locked(&self.inner.profiles).remove(profile);
         if let Some(sessions) = sessions {
-            sessions.close(false).await;
+            sessions.close().await;
         }
     }
 
@@ -654,7 +658,7 @@ impl<H: Host> Engine<H> {
         self.inner.closed.store(true, Ordering::Release);
         let all: Vec<Arc<Sessions>> = locked(&self.inner.profiles).values().cloned().collect();
         for sessions in all {
-            sessions.close(true).await;
+            sessions.close().await;
         }
     }
 }

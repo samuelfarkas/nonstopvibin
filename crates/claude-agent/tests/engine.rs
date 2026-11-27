@@ -752,6 +752,39 @@ async fn a_session_holding_tool_calls_is_never_stopped_for_room() {
     world.stop().await;
 }
 
+/// A request waiting for room when the profile's account goes is refused, and no `claude`
+/// starts for it.
+async fn a_request_waiting_for_room_is_refused_once_the_account_goes() {
+    let world = World::new("cae-forget").await;
+    for n in 1..=3 {
+        let user =
+            json!({ "role": "user", "content": format!("conversation {n}: please use the tool") });
+        let first = world
+            .post(
+                "/v1/chat/completions",
+                &json!({ "model": MODEL, "messages": [user], "tools": [read_tool()] }),
+            )
+            .await;
+        assert_eq!(
+            first["choices"][0]["finish_reason"], "tool_calls",
+            "{first}"
+        );
+    }
+    let fourth = json!({
+        "model": MODEL, "tools": [read_tool()],
+        "messages": [{ "role": "user", "content": "a fourth conversation" }],
+    });
+    let forgotten = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        world.engine.forget(&world.profile).await;
+    };
+    let ((status, refused), ()) =
+        tokio::join!(world.call("/v1/chat/completions", &fourth), forgotten);
+    assert_ne!(status, 200, "{refused}");
+    assert_eq!(world.starts().len(), 3, "{:?}", world.log());
+    world.stop().await;
+}
+
 /// The manual check with the real Claude Code: `NSV_E2E_CLAUDE` names a script that runs it
 /// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
 /// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
@@ -817,7 +850,7 @@ fn block_on(test: impl Future<Output = ()>) {
 }
 
 fn run_tests(arguments: &[String]) -> ExitCode {
-    let tests: [(&str, fn()); 5] = [
+    let tests: [(&str, fn()); 6] = [
         (
             "a_chat_completions_tool_call_round_trips_through_one_claude_process",
             || block_on(a_chat_completions_tool_call_round_trips_through_one_claude_process()),
@@ -836,6 +869,10 @@ fn run_tests(arguments: &[String]) -> ExitCode {
         (
             "a_session_holding_tool_calls_is_never_stopped_for_room",
             || block_on(a_session_holding_tool_calls_is_never_stopped_for_room()),
+        ),
+        (
+            "a_request_waiting_for_room_is_refused_once_the_account_goes",
+            || block_on(a_request_waiting_for_room_is_refused_once_the_account_goes()),
         ),
     ];
     let filters: Vec<&String> = arguments.iter().filter(|a| !a.starts_with('-')).collect();

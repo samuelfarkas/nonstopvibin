@@ -205,7 +205,7 @@ pub(crate) enum Plan {
     },
 }
 
-/// Shutdown began.
+/// The sessions were closed: shutdown began, or the profile's account went.
 #[derive(Debug)]
 pub(crate) struct Closed;
 
@@ -506,11 +506,13 @@ impl Sessions {
         }
     }
 
-    /// Stops every process and forgets every record, waiting for the processes to exit.
-    pub(crate) async fn close(&self, closing: bool) {
+    /// Stops every process and forgets every record, waiting for the processes to exit. The
+    /// sessions stay closed: a request still waiting for room is refused, since the engine no
+    /// longer lists them.
+    pub(crate) async fn close(&self) {
         let tasks: Vec<JoinHandle<()>> = {
             let mut state = self.lock();
-            state.closed |= closing;
+            state.closed = true;
             let lives = std::mem::take(&mut state.lives);
             let records = std::mem::take(&mut state.records);
             for record in &records {
