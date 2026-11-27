@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Claude Agent**: a profile's Claude subscription can be served by your own
+  signed-in Claude Code instead of a Claude sign-in in the proxy core. Claude Code
+  makes the requests to Anthropic itself, with its own identity and the entrypoint
+  label `nonstopvibin`; the harness's tools reach it over a local MCP server.
+  **Sign in → Claude Agent** shows the sign-in command for the profile and connects
+  it. A profile holds one Claude Agent subscription and no Claude sign-ins beside it.
+  This is lower risk than the cloaked Claude sign-in, not sanctioned use; see
+  [Claude Agent](docs/providers.md#claude-agent).
+
 - T3 Code can show a profile's subscription limits. Each profile serves a
   CLIProxyAPI-compatible usage hub at `http://127.0.0.1:<port>/p/<slug>` behind its
   own hub key. **Connect agents → Show limits in T3 Code** shows the URL and the key

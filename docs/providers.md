@@ -3,6 +3,7 @@
 | Service                       | Connection                                                             | Quota adapter                                                 | Verification in this build                                                             |
 | ----------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | ChatGPT / Codex               | CLIProxyAPI OAuth; existing auth JSON                                  | Actual duration labels, primary/secondary/code-review windows | Core sign-in session lifecycle tested; live account inference and quota not yet tested |
+| Claude Agent                  | Your own signed-in Claude Code (`claude`)                              | None yet; a reached limit answers 429                         | Engine tested with a fake `claude` and the real one against a local fake upstream      |
 | Claude subscriptions          | CLIProxyAPI OAuth; existing auth JSON                                  | 5-hour, weekly and additional model windows                   | Parser and session plumbing tested; live account inference and quota not yet tested    |
 | Anthropic API                 | API key                                                                | Subscription quota does not apply                             | Native Messages and cross-protocol paths through the real core to local fixtures       |
 | OpenCode Go                   | Subscription API key                                                   | Rolling, weekly, monthly                                      | Discovery and wire-protocol handling implemented; live Go key still needed             |
@@ -28,6 +29,42 @@ For custom routes, cross-protocol reasoning/thinking metadata comes from CLIProx
 Subscription support follows the bundled [CLIProxyAPI core](https://github.com/router-for-me/CLIProxyAPI), which supports Claude OAuth login and multi-account load balancing. Connect a Claude subscription through **Sign in → Claude**, or import an existing CLIProxyAPI auth file into its profile. Anthropic API keys are a separate connection option.
 
 OpenCode Go is a subscription accessed with an API key, rather than an OAuth sign-in. It publishes model-specific wire protocols; nonstopvibin prefers discovery metadata and handles known model families. [OpenCode Go documentation](https://opencode.ai/docs/go/).
+
+## Claude Agent
+
+**Sign in → Claude Agent** serves a profile's Claude subscription through your own
+signed-in Claude Code instead of a Claude sign-in in the proxy core. Claude Code makes
+every request to Anthropic itself, with its real client identity and the entrypoint
+label `nonstopvibin`, and nonstopvibin never reads or copies the Claude login. Pi, Codex
+and OpenCode reach it through the profile as they reach any other subscription.
+
+1. Install Claude Code, so `claude` is on `PATH` or in `~/.local/bin` or
+   `~/.claude/local`.
+2. Run the sign-in command the app shows, once per profile:
+   `CLAUDE_CONFIG_DIR=<data>/claude-agent/<profile id> claude auth login`. The profile
+   gets its own Claude Code configuration, so your everyday `claude` login is untouched.
+3. Choose **Connect**. The models are the ones Claude Code offers that sign-in.
+
+A profile holds one Claude Agent subscription and no Claude sign-ins beside it, so
+nothing rotates between Claude accounts; a reached limit is a 429. Each conversation
+runs in a `claude` process with no built-in tools, no settings files and no
+`CLAUDE.md`. The harness's own tools reach it over a local MCP server. Up to three run
+per profile, and an idle one stops after five minutes. A client that hangs up
+interrupts its turn. How it works is in
+[the decision record](decisions/claude-agent.md).
+
+**Account risk.** Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance)
+says that developers building products or services with the Agent SDK should use
+API-key authentication, and that OAuth is meant for ordinary use of Claude Code and
+Anthropic's native apps. In January 2026 an Anthropic staff post on X called
+third-party harnesses that use Claude subscriptions a Terms of Service violation.
+Claude Agent removes the client imitation and the credential handling of the cloaked
+Claude sign-in, so it carries less risk than that route. It does not make driving a
+subscription from other harnesses sanctioned.
+
+Not verified yet: traffic of a real subscription, a real plan-limit 429 and its reset
+time, and macOS. On Linux a `claude` process dies with the daemon; on macOS it exits
+once its turn ends and its input closes.
 
 ## Codex banked resets
 
