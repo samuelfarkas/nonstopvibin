@@ -38,8 +38,8 @@ every request to Anthropic itself, with its real client identity and the entrypo
 label `nonstopvibin`, and nonstopvibin never reads or copies the Claude login. Pi, Codex
 and OpenCode reach it through the profile as they reach any other subscription.
 
-1. Install Claude Code, so `claude` is on `PATH` or in `~/.local/bin` or
-   `~/.claude/local`.
+1. Install Claude Code, so `claude` is on `PATH`, in `~/.local/bin` or
+   `~/.claude/local`, or in `/opt/homebrew/bin` or `/usr/local/bin`.
 2. Run the sign-in command the app shows, once per profile:
    `CLAUDE_CONFIG_DIR=<data>/claude-agent/<profile id> claude auth login`. The profile
    gets its own Claude Code configuration, so your everyday `claude` login is untouched.

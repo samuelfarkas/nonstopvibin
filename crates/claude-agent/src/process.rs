@@ -49,7 +49,8 @@ fn executable(path: &Path) -> bool {
 }
 
 /// `claude` on `path`, else in `~/.local/bin` or `~/.claude/local`, where its installers put
-/// it. Blocks on the file system.
+/// it, or in the bin directories of Homebrew and its npm, which a macOS app started from the
+/// Finder does not have on its `PATH`. Blocks on the file system.
 pub(crate) fn find(path: Option<&OsStr>, home: Option<&Path>) -> Option<Found> {
     let listed = path
         .into_iter()
@@ -63,10 +64,11 @@ pub(crate) fn find(path: Option<&OsStr>, home: Option<&Path>) -> Option<Found> {
             on_path: true,
         });
     }
-    let home = home?;
-    [".local/bin/claude", ".claude/local/claude"]
-        .iter()
-        .map(|relative| home.join(relative))
+    home.into_iter()
+        .flat_map(|home| {
+            [".local/bin/claude", ".claude/local/claude"].map(|in_home| home.join(in_home))
+        })
+        .chain(["/opt/homebrew/bin/claude", "/usr/local/bin/claude"].map(PathBuf::from))
         .find(|candidate| executable(candidate))
         .map(|path| Found {
             path,
@@ -399,6 +401,5 @@ mod tests {
                 on_path: true
             })
         );
-        assert_eq!(find(None, None), None);
     }
 }
