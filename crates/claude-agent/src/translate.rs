@@ -278,11 +278,12 @@ impl Response {
                 ] {
                     if delta.get("type").and_then(Value::as_str) == Some(kind) {
                         let piece = delta.get(field).and_then(Value::as_str).unwrap_or_default();
-                        let joined = format!(
-                            "{}{piece}",
-                            block.get(field).and_then(Value::as_str).unwrap_or_default()
-                        );
-                        block.insert(field.to_owned(), Value::String(joined));
+                        match block.get_mut(field) {
+                            Some(Value::String(joined)) => joined.push_str(piece),
+                            _ => {
+                                block.insert(field.to_owned(), Value::String(piece.to_owned()));
+                            }
+                        }
                     }
                 }
                 if let Some(json) = delta.get("partial_json").and_then(Value::as_str) {
