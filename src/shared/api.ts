@@ -5,6 +5,7 @@ import type { AccountPatch } from "./generated/domain/AccountPatch.ts";
 import type { AgentSelection } from "./generated/domain/AgentSelection.ts";
 import type { ApiAccountInput } from "./generated/domain/ApiAccountInput.ts";
 import type { CallbackBody } from "./generated/domain/CallbackBody.ts";
+import type { ClaudeAgentStatus } from "./generated/domain/ClaudeAgentStatus.ts";
 import type { ClientKeyResponse } from "./generated/domain/ClientKeyResponse.ts";
 import type { CoreInstallBody } from "./generated/domain/CoreInstallBody.ts";
 import type { CreateProfileBody } from "./generated/domain/CreateProfileBody.ts";
@@ -131,6 +132,10 @@ interface RouteTypes {
     body: ApiAccountInput;
     response: AppState;
   };
+  /** Whether the user's own Claude Code is installed and signed in for this profile. */
+  "GET /profiles/:profileId/claude-agent": { response: ClaudeAgentStatus };
+  /** Adds the profile's Claude Agent subscription; 409 beside Claude sign-ins or another one. */
+  "POST /profiles/:profileId/claude-agent": { response: AppState };
   /** A second desktop launch; only the desktop app serves it. */
   "POST /desktop/show": { response: Ok };
 }

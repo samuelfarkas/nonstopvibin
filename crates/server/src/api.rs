@@ -32,6 +32,7 @@ use nsv_store::{Db, Store, StoreError};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::claude_agent::{self, ClaudeAgent};
 use crate::parse;
 use crate::session::LOOPBACK_LIMIT;
 use crate::shared::{Shared, VERSION};
@@ -166,36 +167,17 @@ fn ok() -> Value {
 
 /// What the management API answers from.
 pub(crate) struct Api {
-    shared: Arc<Shared>,
-    store: Store,
-    cores: Arc<Cores>,
-    agents: Arc<AgentSetup>,
-    models: ProfileModels,
-    prices: Arc<UsagePrices>,
-    imports: Arc<Mutex<ImportCatalog>>,
+    pub(crate) shared: Arc<Shared>,
+    pub(crate) store: Store,
+    pub(crate) cores: Arc<Cores>,
+    pub(crate) agents: Arc<AgentSetup>,
+    pub(crate) models: ProfileModels,
+    pub(crate) prices: Arc<UsagePrices>,
+    pub(crate) imports: Arc<Mutex<ImportCatalog>>,
+    pub(crate) claude_agent: ClaudeAgent,
 }
 
 impl Api {
-    pub(crate) fn new(
-        shared: Arc<Shared>,
-        store: Store,
-        cores: Arc<Cores>,
-        agents: Arc<AgentSetup>,
-        models: ProfileModels,
-        prices: Arc<UsagePrices>,
-        imports: ImportCatalog,
-    ) -> Self {
-        Self {
-            shared,
-            store,
-            cores,
-            agents,
-            models,
-            prices,
-            imports: Arc::new(Mutex::new(imports)),
-        }
-    }
-
     pub(crate) async fn answer(
         &self,
         request: Request<Incoming>,
@@ -401,6 +383,10 @@ impl Api {
                 let state = self.state().await?;
                 json(StatusCode::CREATED, &state)
             }
+            ProfileRoute::ClaudeAgentStatus => {
+                json(StatusCode::OK, &self.claude_agent.status(id).await)
+            }
+            ProfileRoute::ClaudeAgentConnect => self.connect_claude_agent(id).await,
         }
     }
 
@@ -419,7 +405,13 @@ impl Api {
                 self.state_reply().await
             }
             AccountRoute::Remove => {
-                cores.remove_account(id, &account_id(account)?).await?;
+                let account = account_id(account)?;
+                let agent = claude_agent::is_claude_agent(&self.store, id, &account).await?;
+                cores.remove_account(id, &account).await?;
+                // Its processes would wait out their idle time; no request can reach them now.
+                if agent {
+                    self.claude_agent.forget(id).await;
+                }
                 self.state_reply().await
             }
             AccountRoute::ResetCredits => {
@@ -434,6 +426,19 @@ impl Api {
                 json(StatusCode::OK, &result)
             }
         }
+    }
+
+    /// Adds the profile's Claude Agent subscription once its Claude Code is signed in, named
+    /// after the signed-in email.
+    async fn connect_claude_agent(&self, id: &ProfileId) -> Result<Response<Body>, AppError> {
+        let ready = self
+            .claude_agent
+            .ready(id)
+            .await
+            .map_err(|unready| AppError::new(unready.message, unready.status))?;
+        let name = ready.email.unwrap_or_else(|| "Claude Agent".to_owned());
+        self.cores.add_claude_agent(id, name, ready.models).await?;
+        json(StatusCode::CREATED, &self.state().await?)
     }
 
     /// The profile's usage hub, with the hub key `key` reads or issues.

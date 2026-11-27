@@ -17,9 +17,11 @@ use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{encode_uri_component, text};
-use nsv_domain::registry::{OAuthProvider, Provider, registry};
-use nsv_domain::secret::same_secret;
-use nsv_domain::wire::{Account, AccountKind, AccountPatch, ApiAccountInput, OAuthAction};
+use nsv_domain::registry::{OAuthProvider, Protocol, Provider, registry};
+use nsv_domain::secret::{ApiKey, same_secret};
+use nsv_domain::wire::{
+    Account, AccountKind, AccountPatch, ApiAccount, ApiAccountInput, ApiModel, Extra, OAuthAction,
+};
 use nsv_files::write_atomic;
 use nsv_net::Method;
 use nsv_store::Store;
@@ -206,6 +208,9 @@ impl Credentials {
                 400,
             ));
         }
+        if provider == Provider::Claude.as_str() {
+            self.0.accounts.refuse_beside_claude_agent(profile).await?;
+        }
         let files = self.0.accounts.credential_files(profile).await?;
         let prior = match &reconnect {
             Some(id) => Some(
@@ -369,6 +374,69 @@ impl Credentials {
         .await?;
         self.0.quotas.refresh(profile, &account.id).await?;
         Ok(())
+    }
+
+    /// `POST …/claude-agent`: adds the profile's Claude Agent subscription, served by the
+    /// user's own Claude Code with `models`. Its core presents a new random key to the engine.
+    ///
+    /// # Errors
+    /// 409 when the profile already has one or has Claude sign-ins, or the store's, start's or
+    /// configuration's error.
+    pub async fn add_claude_agent(
+        &self,
+        profile: &ProfileId,
+        name: String,
+        models: Vec<String>,
+    ) -> Result<(), AppError> {
+        let (this, id) = (self.clone(), profile.clone());
+        self.queue(async move {
+            let seats = this.0.accounts.list(&id).await?;
+            if seats.iter().any(|account| {
+                account.kind == AccountKind::OAuth && account.provider == Provider::Claude.as_str()
+            }) {
+                return Err(AppError::new(
+                    "This profile has Claude sign-ins. Add Claude Agent to another profile, or remove them first.",
+                    409,
+                ));
+            }
+            let key = ApiKey::generate().map_err(AppError::internal)?;
+            let account = ApiAccount {
+                id: AccountId::parse(&nsv_domain::random::uuid().map_err(AppError::internal)?)
+                    .map_err(AppError::internal)?,
+                name,
+                provider: Provider::ClaudeAgent,
+                base_url: String::new(),
+                prefix: String::new(),
+                models: models
+                    .into_iter()
+                    .map(|model| ApiModel {
+                        id: model,
+                        protocol: Protocol::Anthropic,
+                        extra: Extra::new(),
+                    })
+                    .collect(),
+                disabled: false,
+                extra: Extra::new(),
+            };
+            let profile = id.clone();
+            this.0
+                .store
+                .call(move |db| {
+                    let existing = db.api_accounts(&profile)?;
+                    if existing.iter().any(|known| known.provider == Provider::ClaudeAgent) {
+                        return Err(AppError::new(
+                            "This profile already has a Claude Agent subscription.",
+                            409,
+                        )
+                        .into());
+                    }
+                    db.save_api_account(&profile, &account, Some(&key))
+                })
+                .await?;
+            this.0.pool.start(&id, false).await?;
+            this.0.pool.configure(&id).await
+        })
+        .await
     }
 
     /// `PATCH …/accounts/:accountId`: pauses or resumes an account, or changes its priority or

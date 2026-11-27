@@ -429,6 +429,9 @@ impl Cores {
         provider: OAuthProvider,
         reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
+        if provider == OAuthProvider::Claude {
+            self.accounts.refuse_beside_claude_agent(profile).await?;
+        }
         self.sign_in.begin(profile, provider, reconnect).await
     }
 
@@ -520,6 +523,24 @@ impl Cores {
         input: ApiAccountInput,
     ) -> Result<(), AppError> {
         let added = self.credentials.add_api_account(profile, input).await;
+        self.scheduler.catch_up();
+        added
+    }
+
+    /// `POST …/claude-agent`; see `Credentials::add_claude_agent`.
+    ///
+    /// # Errors
+    /// As `Credentials::add_claude_agent`.
+    pub async fn add_claude_agent(
+        &self,
+        profile: &ProfileId,
+        name: String,
+        models: Vec<String>,
+    ) -> Result<(), AppError> {
+        let added = self
+            .credentials
+            .add_claude_agent(profile, name, models)
+            .await;
         self.scheduler.catch_up();
         added
     }

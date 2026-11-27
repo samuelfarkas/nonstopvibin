@@ -21,4 +21,4 @@ mod route;
 mod sessions;
 mod translate;
 
-pub use engine::{Account, Engine, Host, Options, Probe};
+pub use engine::{Account, Engine, Host, Options, Probe, Unready};

@@ -216,6 +216,31 @@ impl Accounts {
         Ok(Some(count))
     }
 
+    /// Refuses a Claude sign-in or credential for a profile with a Claude Agent subscription:
+    /// a profile's Claude requests go one way, never both.
+    ///
+    /// # Errors
+    /// 409 when the profile has a Claude Agent account, or a store failure.
+    pub async fn refuse_beside_claude_agent(&self, profile: &ProfileId) -> Result<(), AppError> {
+        let profile = profile.clone();
+        let agent = self
+            .store
+            .call(move |db| {
+                Ok(db
+                    .api_accounts(&profile)?
+                    .iter()
+                    .any(|account| account.provider == Provider::ClaudeAgent))
+            })
+            .await?;
+        if agent {
+            return Err(AppError::new(
+                "This profile has a Claude Agent subscription. Sign in to Claude in another profile.",
+                409,
+            ));
+        }
+        Ok(())
+    }
+
     /// The profile's accounts as the UI lists them: its OAuth accounts as last synced, then its
     /// API-key accounts, each with its stored quota (`Accounts.list`).
     ///

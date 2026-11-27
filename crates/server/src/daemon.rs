@@ -35,6 +35,8 @@ use tokio::task::JoinError;
 use crate::api::Api;
 use crate::assets::Assets;
 use crate::checks::{Admission, AllowedHost, Checks};
+use crate::claude_agent::{self, ClaudeAgent};
+
 use crate::desktop::Desktop;
 use crate::failure::{self, Errors};
 use crate::gateway_host::GatewayHost;
@@ -72,6 +74,8 @@ pub struct Boundaries {
     pub clock: fn() -> i64,
     /// The scheduler's periods.
     pub timing: Timing,
+    /// The `claude` program Claude Agent runs; `None` finds the user's own.
+    pub claude: Option<PathBuf>,
 }
 
 impl Boundaries {
@@ -88,6 +92,7 @@ impl Boundaries {
             outside: Arc::new(Https::new()?),
             clock: || epoch_ms(SystemTime::now()),
             timing: *TIMING,
+            claude: None,
         })
     }
 }
@@ -143,6 +148,8 @@ pub(crate) struct App {
     assets: Assets,
     gateway: Gateway<GatewayHost>,
     hub: Hub,
+    /// The Claude Agent engine and the `claude` processes it runs.
+    claude_agent: ClaudeAgent,
     store: Store,
     /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
     /// and core updates.
@@ -174,6 +181,9 @@ impl App {
             Admission::Refused(error) => Err(error),
             Admission::Api(url) => self.api.answer(request, &url).await,
             Admission::Hub(url) => self.hub.answer(request, &url).await,
+            Admission::ClaudeAgent(url) => {
+                return self.claude_agent.answer(request, url.path()).await;
+            }
             Admission::Asset { path, head } => self.assets.answer(&request, &path, head).await,
         };
         answered
@@ -186,6 +196,7 @@ impl App {
         if let Err(error) = self.agents.close().await {
             failures.push(error.to_string());
         }
+        self.claude_agent.close().await;
         if let Err(error) = self.cores.shutdown().await {
             failures.push(error.message);
         }
@@ -261,6 +272,7 @@ impl Daemon {
             outside,
             clock,
             timing,
+            claude,
         } = boundaries;
         let now = UNIX_EPOCH + Duration::from_millis(u64::try_from(clock()).unwrap_or(0));
         store.call(move |db| db.prune_usage(now)).await?;
@@ -309,21 +321,23 @@ impl Daemon {
         let models = ProfileModels::new(Arc::clone(&catalog), store.clone());
         let prices = Arc::new(UsagePrices::new(store.clone(), catalog, outside, clock));
         let imports = ImportCatalog::new(&options.agents.home);
+        let claude_agent = claude_agent::engine(&store, lock.directory(), port, claude);
         let agents = Arc::new(AgentSetup::new(
             lock.directory(),
             connection_source(phase.subscribe(), &store, &cores, port),
             options.agents,
         ));
         let app = Arc::new(App {
-            api: Api::new(
-                Arc::clone(&shared),
-                store.clone(),
-                Arc::clone(&cores),
-                Arc::clone(&agents),
-                models.clone(),
-                Arc::clone(&prices),
-                imports,
-            ),
+            api: Api {
+                shared: Arc::clone(&shared),
+                store: store.clone(),
+                cores: Arc::clone(&cores),
+                agents: Arc::clone(&agents),
+                models: models.clone(),
+                prices: Arc::clone(&prices),
+                imports: Arc::new(Mutex::new(imports)),
+                claude_agent: claude_agent.clone(),
+            },
             assets: Assets::new(options.client).map_err(StartError::Entropy)?,
             gateway: Gateway::new(GatewayHost::new(
                 Arc::clone(&shared),
@@ -332,6 +346,7 @@ impl Daemon {
                 models,
             )),
             hub: Hub::new(store.clone(), Arc::clone(&cores)),
+            claude_agent,
             shared,
             checks,
             store,

@@ -1895,6 +1895,7 @@ dependencies = [
  "hyper",
  "nsv-accounts",
  "nsv-agents",
+ "nsv-claude-agent",
  "nsv-core",
  "nsv-desktop",
  "nsv-domain",

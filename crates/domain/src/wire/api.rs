@@ -289,6 +289,8 @@ pub enum ProfileRoute {
     Import,
     ImportSource,
     ApiAccount,
+    ClaudeAgentStatus,
+    ClaudeAgentConnect,
 }
 
 /// A route under one account of a profile.
@@ -451,6 +453,16 @@ pub const ROUTES: &[(&str, &str, Route)] = &[
         "POST",
         "/profiles/:profileId/api-account",
         Route::Profile(ProfileRoute::ApiAccount),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/claude-agent",
+        Route::Profile(ProfileRoute::ClaudeAgentStatus),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/claude-agent",
+        Route::Profile(ProfileRoute::ClaudeAgentConnect),
     ),
     // A second desktop launch; only the desktop app serves it.
     (

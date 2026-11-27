@@ -74,6 +74,22 @@ pub struct Probe {
     pub models: Vec<String>,
 }
 
+/// Why Claude Code cannot serve a profile yet: an HTTP status and what to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unready {
+    pub status: u16,
+    pub message: String,
+}
+
+impl Unready {
+    fn new(status: u16, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
 /// Serves Claude Agent accounts; clones share it.
 pub struct Engine<H> {
     inner: Arc<Inner<H>>,
@@ -560,44 +576,74 @@ impl<H: Host> Engine<H> {
         json(StatusCode::OK, &mcp::result(&id, &answered))
     }
 
-    /// Whether Claude Code is installed and signed in for `profile`, without an API call.
+    /// What Claude Code's `initialize` answer says for `profile`, without an API call, and
+    /// the command that signs it in.
+    async fn probe(&self, profile: &ProfileId) -> (Option<Found>, String, Result<Probe, Unready>) {
+        let found = self.found().await;
+        let config = self.inner.options.data.claude_agent_config(profile);
+        let command = sign_in(found.as_ref(), &config);
+        let Some(program) = found.as_ref().map(|found| found.path.clone()) else {
+            return (
+                None,
+                command,
+                Err(Unready::new(
+                    409,
+                    "Claude Code (claude) was not found. Install it first.",
+                )),
+            );
+        };
+        let probed = match self.sessions(profile).await {
+            Ok(sessions) => probe(&program, &sessions.paths).await.ok_or_else(|| {
+                Unready::new(
+                    502,
+                    "Claude Code did not answer. Run claude once in a terminal, then try again.",
+                )
+            }),
+            Err(_) => Err(Unready::new(
+                500,
+                "Claude Agent could not prepare its files.",
+            )),
+        };
+        (found, command, probed)
+    }
+
+    /// Claude Code's sign-in and models for `profile`, once it can serve it.
     ///
     /// # Errors
-    /// When `claude` is missing, the directories cannot be made, or it does not answer.
-    pub async fn probe(&self, profile: &ProfileId) -> Result<Probe, String> {
-        let found = self
-            .found()
-            .await
-            .ok_or("Claude Code (claude) was not found. Install it first.")?;
-        let sessions = self
-            .sessions(profile)
-            .await
-            .map_err(|_| "Claude Agent could not prepare its files.")?;
-        probe(&found.path, &sessions.paths).await.ok_or_else(|| {
-            "Claude Code did not answer. Run claude once in a terminal, then try again.".to_owned()
-        })
+    /// 409 when `claude` is missing, not signed in or offers no models; 502 when it does not
+    /// answer.
+    pub async fn ready(&self, profile: &ProfileId) -> Result<Probe, Unready> {
+        let (_, command, probed) = self.probe(profile).await;
+        let probe = probed?;
+        if !probe.signed_in {
+            return Err(Unready::new(
+                409,
+                format!("Sign Claude Code in for this profile first: {command}"),
+            ));
+        }
+        if probe.models.is_empty() {
+            return Err(Unready::new(
+                409,
+                "Claude Code offers no models for this sign-in.",
+            ));
+        }
+        Ok(probe)
     }
 
     /// What the UI shows before connecting: where `claude` is, the sign-in command, and the
     /// sign-in state.
     pub async fn status(&self, profile: &ProfileId) -> ClaudeAgentStatus {
-        let found = self.found().await;
+        let (found, sign_in, probed) = self.probe(profile).await;
         let config = self.inner.options.data.claude_agent_config(profile);
-        let probed = match &found {
-            Some(_) => Some(self.probe(profile).await),
-            None => None,
-        };
-        let (signed_in, token_source, error) = match probed {
-            Some(Ok(probe)) => (probe.signed_in, probe.token_source, None),
-            Some(Err(error)) => (false, None, Some(error)),
-            None => (false, None, None),
+        let (signed_in, token_source, error) = match (&found, probed) {
+            (Some(_), Ok(probe)) => (probe.signed_in, probe.token_source, None),
+            (Some(_), Err(unready)) => (false, None, Some(unready.message)),
+            (None, _) => (false, None, None),
         };
         ClaudeAgentStatus {
-            claude: found
-                .as_ref()
-                .map(|found| found.path.to_string_lossy().into_owned()),
+            claude: found.map(|found| found.path.to_string_lossy().into_owned()),
             config_dir: config.to_string_lossy().into_owned(),
-            sign_in: sign_in(found.as_ref(), &config),
+            sign_in,
             signed_in,
             token_source,
             error,

@@ -37,4 +37,6 @@ export type RouteKey =
   | "GET /profiles/:profileId/accounts/:accountId/reset-credits"
   | "POST /profiles/:profileId/accounts/:accountId/reset-credits"
   | "POST /profiles/:profileId/api-account"
+  | "GET /profiles/:profileId/claude-agent"
+  | "POST /profiles/:profileId/claude-agent"
   | "POST /desktop/show";

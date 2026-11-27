@@ -30,7 +30,7 @@ pub(crate) struct Running {
     pub(crate) daemon: Daemon,
     desktop: Desktop,
     pub(crate) fake: FakeCores,
-    outside: Arc<StubFetch>,
+    pub(crate) outside: Arc<StubFetch>,
     token: String,
 }
 
@@ -45,6 +45,16 @@ pub(crate) async fn start(
     root: TempDir,
     feed: Option<&str>,
     allow_hosts: Vec<AllowedHost>,
+) -> Running {
+    start_with(root, feed, allow_hosts, None).await
+}
+
+/// [`start`], with Claude Agent running `claude`.
+pub(crate) async fn start_with(
+    root: TempDir,
+    feed: Option<&str>,
+    allow_hosts: Vec<AllowedHost>,
+    claude: Option<std::path::PathBuf>,
 ) -> Running {
     let data = root.path().join("data");
     nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
@@ -73,6 +83,7 @@ pub(crate) async fn start(
         }),
         outside: Arc::<StubFetch>::clone(&outside),
         clock: now,
+        claude,
         ..Boundaries::production().unwrap()
     };
     let lock = DataDir::new(&data).lock().unwrap();

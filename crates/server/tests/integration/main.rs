@@ -4,6 +4,7 @@
 // Marks the whole binary as test code for the workspace's test-only lint exceptions.
 #![cfg(test)]
 
+mod claude_agent;
 mod common;
 mod desktop;
 mod features;
