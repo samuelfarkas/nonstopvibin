@@ -36,7 +36,6 @@ use crate::api::Api;
 use crate::assets::Assets;
 use crate::checks::{Admission, AllowedHost, Checks};
 use crate::claude_agent::{self, ClaudeAgent};
-
 use crate::desktop::Desktop;
 use crate::failure::{self, Errors};
 use crate::gateway_host::GatewayHost;

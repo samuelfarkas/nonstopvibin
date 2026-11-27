@@ -82,6 +82,16 @@ pub(crate) enum Persistence {
     None,
 }
 
+impl Persistence {
+    /// The session id; `None` for a side call.
+    pub(crate) fn session(&self) -> Option<&str> {
+        match self {
+            Self::New(id) | Self::Resume(id) => Some(id),
+            Self::None => None,
+        }
+    }
+}
+
 /// What a process is started for.
 #[derive(Debug)]
 pub(crate) enum Mode<'a> {

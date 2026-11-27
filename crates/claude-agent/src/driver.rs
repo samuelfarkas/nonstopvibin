@@ -70,8 +70,7 @@ pub(crate) struct Driver {
     pub(crate) translator: Translator,
     /// The files it reads, removed once it exits.
     pub(crate) files: Vec<PathBuf>,
-    /// A side call: one turn, no transcript.
-    pub(crate) side: bool,
+    /// The session id; `None` for a side call, which runs one turn and keeps no transcript.
     pub(crate) session: Option<String>,
     /// A turn is in progress, streaming or holding tool calls.
     pub(crate) turning: bool,
@@ -109,12 +108,11 @@ impl Driver {
         mut requests: mpsc::Receiver<Request>,
         mut stop: oneshot::Receiver<bool>,
     ) {
-        let (Some(stdin), Some(stdout)) = (self.child.stdin.take(), self.child.stdout.take())
+        let (Some(mut stdin), Some(stdout)) = (self.child.stdin.take(), self.child.stdout.take())
         else {
             self.finish(End::Exited, None, None).await;
             return;
         };
-        let mut stdin = Some(stdin);
         let mut lines = BufReader::new(stdout).lines();
         let mut sink: Option<Sink> = None;
         let mut tail: Option<Digest> = None;
@@ -135,14 +133,14 @@ impl Driver {
                     interrupted = false;
                     if let Some(content) = content {
                         self.turning = true;
-                        if write(stdin.as_mut(), &user(&content)).await.is_err() {
+                        if write(&mut stdin, &user(&content)).await.is_err() {
                             break End::Exited;
                         }
                     }
                 }
                 () = hung_up(sink.as_ref()), if !interrupted => {
                     interrupted = true;
-                    if write(stdin.as_mut(), INTERRUPT).await.is_err() {
+                    if write(&mut stdin, INTERRUPT).await.is_err() {
                         break End::Exited;
                     }
                 }
@@ -154,7 +152,7 @@ impl Driver {
                 }
             }
         };
-        self.finish(end, sink, stdin).await;
+        self.finish(end, sink, Some(stdin)).await;
     }
 
     /// Handles one stdout line; `Some` when the process must stop.
@@ -194,7 +192,7 @@ impl Driver {
                     answer(current, body);
                     *sink = None;
                     self.turning = false;
-                    if self.side {
+                    if self.session.is_none() {
                         return Some(End::Answered);
                     }
                     if self.translator.diverged() {
@@ -220,8 +218,11 @@ impl Driver {
     /// exit, then SIGKILL. A response still open fails, its files go, and its transcript too
     /// unless it was kept.
     async fn finish(mut self, end: End, sink: Option<Sink>, mut stdin: Option<ChildStdin>) {
-        if self.turning && matches!(end, End::Stopped(_)) {
-            let _ = write(stdin.as_mut(), INTERRUPT).await;
+        if let Some(stdin) = stdin.as_mut()
+            && self.turning
+            && matches!(end, End::Stopped(_))
+        {
+            let _ = write(stdin, INTERRUPT).await;
         }
         drop(stdin);
         if tokio::time::timeout(GRACE, self.child.wait())
@@ -243,7 +244,7 @@ impl Driver {
         let transcript = self
             .session
             .as_deref()
-            .filter(|_| !keep && !self.side)
+            .filter(|_| !keep)
             .and_then(|session| self.sessions.paths.transcript(session));
         tokio::task::spawn_blocking(move || {
             remove(&files);
@@ -260,8 +261,7 @@ fn answer(sink: &mut Sink, body: Option<Bytes>) {
     }
 }
 
-async fn write(stdin: Option<&mut ChildStdin>, bytes: &[u8]) -> std::io::Result<()> {
-    let stdin = stdin.ok_or_else(|| std::io::Error::other("stdin is closed"))?;
+async fn write(stdin: &mut ChildStdin, bytes: &[u8]) -> std::io::Result<()> {
     stdin.write_all(bytes).await?;
     stdin.flush().await
 }

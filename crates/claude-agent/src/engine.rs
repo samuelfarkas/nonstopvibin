@@ -192,6 +192,12 @@ fn sign_in(found: Option<&Found>, config: &Path) -> String {
     )
 }
 
+/// The profile and the rest of a path under `/claude-agent/`, if it is one.
+fn target(path: &str) -> Option<(&str, &str)> {
+    path.strip_prefix(nsv_domain::endpoint::CLAUDE_AGENT_ROUTES)?
+        .split_once('/')
+}
+
 /// The path below `/claude-agent/<profile>`.
 enum Target {
     Messages,
@@ -212,17 +218,10 @@ impl<H: Host> Engine<H> {
         }
     }
 
-    /// The profile and the rest of a path under `/claude-agent/`, if it is one.
-    #[must_use]
-    pub fn target(path: &str) -> Option<(&str, &str)> {
-        path.strip_prefix(nsv_domain::endpoint::CLAUDE_AGENT_ROUTES)?
-            .split_once('/')
-    }
-
     /// Answers a request for `/claude-agent/<profile>/<rest>` that passed the daemon's Host and
     /// Origin checks.
     pub async fn answer(&self, request: Request<Incoming>, path: &str) -> Response<Body> {
-        let target = Self::target(path).and_then(|(profile, rest)| {
+        let target = target(path).and_then(|(profile, rest)| {
             let profile = ProfileId::parse(profile).ok()?;
             let target = match rest {
                 "v1/messages" => Target::Messages,
@@ -450,34 +449,29 @@ impl<H: Host> Engine<H> {
     ) -> std::io::Result<()> {
         let sessions = starting.sessions;
         let paths = &sessions.paths;
-        let name = format!("{}", starting.key);
-        let system = paths.run.join(format!("{name}.system"));
-        let mcp = (!settings.tools.is_empty()).then(|| paths.run.join(format!("{name}.mcp.json")));
-        let config = json!({ "mcpServers": { "client": {
-            "type": "http",
-            "url": format!(
-                "{}/mcp",
-                claude_agent_base(self.inner.options.port, &sessions.profile)
-            ),
-            "headers": { "Authorization": format!("Bearer {}", token.expose_secret()) },
-        } } });
-        let files: Vec<PathBuf> = std::iter::once(system.clone()).chain(mcp.clone()).collect();
-        let (prompt, written, prompt_file) =
-            (settings.system.clone(), files.clone(), system.clone());
+        let key = starting.key;
+        let system = paths.run.join(format!("{key}.system"));
+        let mcp = (!settings.tools.is_empty()).then(|| paths.run.join(format!("{key}.mcp.json")));
+        let mut writes = vec![(system.clone(), settings.system.clone().into_bytes())];
+        if let Some(mcp) = &mcp {
+            let config = json!({ "mcpServers": { "client": {
+                "type": "http",
+                "url": format!(
+                    "{}/mcp",
+                    claude_agent_base(self.inner.options.port, &sessions.profile)
+                ),
+                "headers": { "Authorization": format!("Bearer {}", token.expose_secret()) },
+            } } });
+            writes.push((mcp.clone(), config.to_string().into_bytes()));
+        }
+        let files: Vec<PathBuf> = writes.iter().map(|(path, _)| path.clone()).collect();
         tokio::task::spawn_blocking(move || {
-            nsv_files::write_atomic_unsynced(&prompt_file, prompt.as_bytes(), 0o600)?;
-            if let Some(mcp) = written.get(1) {
-                nsv_files::write_atomic_unsynced(mcp, config.to_string().as_bytes(), 0o600)?;
-            }
-            Ok::<(), std::io::Error>(())
+            writes
+                .iter()
+                .try_for_each(|(path, bytes)| nsv_files::write_atomic_unsynced(path, bytes, 0o600))
         })
         .await
         .map_err(std::io::Error::other)??;
-        let side = persistence == Persistence::None;
-        let session = match &persistence {
-            Persistence::New(id) | Persistence::Resume(id) => Some(id.clone()),
-            Persistence::None => None,
-        };
         let arguments = process::arguments(&Mode::Turns {
             settings,
             system: &system,
@@ -491,7 +485,6 @@ impl<H: Host> Engine<H> {
             match process::command(&found.path, &paths.work, &arguments, environment).spawn() {
                 Ok(child) => child,
                 Err(error) => {
-                    let files = files.clone();
                     tokio::task::spawn_blocking(move || sessions::remove(&files));
                     return Err(error);
                 }
@@ -499,18 +492,17 @@ impl<H: Host> Engine<H> {
         let offered = Arc::new(Offered::new(&settings.tools));
         let driver = Driver {
             sessions: Arc::clone(sessions),
-            key: starting.key,
+            key,
             child,
             translator: Translator::new(offered, Arc::from(sign_in(Some(found), &paths.config))),
             files,
-            side,
-            session,
+            session: persistence.session().map(str::to_owned),
             turning: false,
         };
         let (requests, received) = mpsc::channel(1);
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(driver.run(received, stopped));
-        if !sessions.started(starting.key, requests.clone(), stop, task) {
+        if !sessions.started(key, requests.clone(), stop, task) {
             return Err(std::io::Error::other(
                 "the process was stopped while starting",
             ));
@@ -562,12 +554,10 @@ impl<H: Host> Engine<H> {
                     return json(StatusCode::OK, &mcp::invalid(&id));
                 };
                 return match sessions.answer(key, &call.tool_use, &id) {
-                    Some(Answer::Now(result)) => {
-                        let (send, body) = mpsc::channel(1);
-                        let _ =
-                            send.try_send(mcp::event(&mcp::result(&id, &mcp::outcome(&result))));
-                        events(Body::channel(body))
-                    }
+                    Some(Answer::Now(result)) => events(Body::full(mcp::event(&mcp::result(
+                        &id,
+                        &mcp::outcome(&result),
+                    )))),
                     Some(Answer::Later(waiting)) => hold(id, call.progress, waiting),
                     None => json(StatusCode::NOT_FOUND, &json!({ "error": "Session ended." })),
                 };
@@ -870,18 +860,10 @@ mod tests {
     #[test]
     fn engine_paths_name_a_profile_and_the_rest() {
         assert_eq!(
-            Engine::<NoHost>::target("/claude-agent/p-1/v1/messages"),
+            target("/claude-agent/p-1/v1/messages"),
             Some(("p-1", "v1/messages"))
         );
-        assert_eq!(Engine::<NoHost>::target("/claude-agent/p-1"), None);
-        assert_eq!(Engine::<NoHost>::target("/p/slug/v1/messages"), None);
-    }
-
-    struct NoHost;
-
-    impl Host for NoHost {
-        fn account(&self, _: &ProfileId) -> impl Future<Output = Option<Account>> + Send {
-            std::future::ready(None)
-        }
+        assert_eq!(target("/claude-agent/p-1"), None);
+        assert_eq!(target("/p/slug/v1/messages"), None);
     }
 }

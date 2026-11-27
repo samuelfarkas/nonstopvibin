@@ -358,7 +358,8 @@ struct Message {
     /// Claude Code's block index to the response's, `None` for a dropped call.
     map: HashMap<u64, Option<u64>>,
     calls: Vec<String>,
-    dropped: usize,
+    /// It called a tool the harness did not offer.
+    dropped: bool,
     /// It stopped only on dropped calls: its stop and the next message's start are hidden.
     merged: bool,
 }
@@ -478,7 +479,7 @@ impl Translator {
                 .unwrap_or_default();
             let Some(original) = self.offered.original(name) else {
                 self.message.map.insert(index, None);
-                self.message.dropped += 1;
+                self.message.dropped = true;
                 return;
             };
             set(block, "name", original);
@@ -503,7 +504,7 @@ impl Translator {
             .get("delta")
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str);
-        if stop == Some("tool_use") && self.message.calls.is_empty() && self.message.dropped > 0 {
+        if stop == Some("tool_use") && self.message.calls.is_empty() && self.message.dropped {
             self.message.merged = true;
             self.response.merged_tokens += tokens;
             return;

@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -99,9 +99,7 @@ pub(crate) fn sweep(paths: &Paths) {
 /// What a live process is doing.
 #[derive(Debug)]
 pub(crate) enum Activity {
-    /// Its process is being started for a request.
-    Starting,
-    /// A turn is streaming to a response.
+    /// A turn is streaming to a response, or its process is starting for one.
     Streaming,
     /// Its turn stopped on these calls of the harness's tools.
     Holding { calls: Vec<String>, since: Instant },
@@ -147,18 +145,18 @@ struct Live {
 
 impl Live {
     /// Asks its driver to stop and answers the driver's task.
-    fn stop(mut self, keep: bool) -> Option<JoinHandle<()>> {
+    fn stop(&mut self, keep: bool) -> Option<JoinHandle<()>> {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(keep);
         }
-        self.task
+        self.task.take()
     }
 
     fn deadline(&self) -> Option<Instant> {
         match self.activity {
             Activity::Idle { since } => Some(since + IDLE),
             Activity::Holding { since, .. } => Some(since + HOLDING),
-            Activity::Starting | Activity::Streaming => None,
+            Activity::Streaming => None,
         }
     }
 }
@@ -280,10 +278,10 @@ impl Sessions {
                 from: Stopped::Live(index),
                 message,
             } => {
-                let live = state.lives.remove(index);
-                let session = live.session.clone().unwrap_or_default();
-                let seen = live.seen.clone();
-                (Persistence::Resume(session), seen, live.stop(true), message)
+                let mut live = state.lives.remove(index);
+                let previous = live.stop(true);
+                let session = live.session.unwrap_or_default();
+                (Persistence::Resume(session), live.seen, previous, message)
             }
             Route::Resume {
                 from: Stopped::Record(index),
@@ -311,13 +309,10 @@ impl Sessions {
         let key = state.next;
         state.lives.push(Live {
             key,
-            session: match &persistence {
-                Persistence::New(id) | Persistence::Resume(id) => Some(id.clone()),
-                Persistence::None => None,
-            },
+            session: persistence.session().map(str::to_owned),
             fingerprint: conversation.fingerprint().clone(),
             seen,
-            activity: Activity::Starting,
+            activity: Activity::Streaming,
             used: Instant::now(),
             token: token.clone(),
             tools: Arc::clone(&conversation.settings.tools),
@@ -359,15 +354,13 @@ impl Sessions {
     }
 
     /// Stops `live`; an idle session's record is kept for resuming.
-    fn retire(&self, state: &mut State, live: Live) {
+    fn retire(&self, state: &mut State, mut live: Live) {
         let idle = matches!(live.activity, Activity::Idle { .. });
-        let session = live.session.clone().filter(|_| idle);
-        let seen = live.seen.clone();
         let exiting = live.stop(idle);
-        if let Some(session) = session {
+        if let Some(session) = live.session.filter(|_| idle) {
             state.records.push_back(Record {
                 session,
-                seen,
+                seen: live.seen,
                 exiting,
             });
             while state.records.len() > RECORD_LIMIT {
@@ -380,7 +373,7 @@ impl Sessions {
     }
 
     /// Deletes a forgotten session's transcript.
-    pub(crate) fn forget(&self, session: &str) {
+    fn forget(&self, session: &str) {
         if let Some(path) = self.paths.transcript(session) {
             tokio::task::spawn_blocking(move || {
                 let _ = std::fs::remove_file(path);
@@ -404,15 +397,12 @@ impl Sessions {
         live.requests = Some(requests);
         live.stop = Some(stop);
         live.task = Some(task);
-        live.activity = Activity::Streaming;
         true
     }
 
     /// The process `key` reported its session id.
     pub(crate) fn session_id(&self, key: u64, session: &str) {
-        if let Some(live) = self.lock().lives.iter_mut().find(|live| live.key == key)
-            && live.session.is_some()
-        {
+        if let Some(live) = self.lock().lives.iter_mut().find(|live| live.key == key) {
             live.session = Some(session.to_owned());
         }
     }
@@ -453,8 +443,7 @@ impl Sessions {
     pub(crate) fn ended(&self, key: u64) {
         let mut state = self.lock();
         if let Some(index) = state.lives.iter().position(|live| live.key == key) {
-            let live = state.lives.remove(index);
-            drop(live.stop(false));
+            drop(state.lives.remove(index).stop(false));
         }
         drop(state);
         self.changed.notify_waiters();
@@ -527,7 +516,7 @@ impl Sessions {
             }
             lives
                 .into_iter()
-                .filter_map(|live| live.stop(false))
+                .filter_map(|mut live| live.stop(false))
                 .chain(records.into_iter().filter_map(|record| record.exiting))
                 .collect()
         };
@@ -589,7 +578,7 @@ fn routed(state: &State, conversation: &Conversation) -> Route {
             activity: match &live.activity {
                 Activity::Idle { .. } => route::Activity::Idle,
                 Activity::Holding { calls, .. } => route::Activity::Holding(calls),
-                Activity::Starting | Activity::Streaming => route::Activity::Busy,
+                Activity::Streaming => route::Activity::Busy,
             },
         })
         .collect();
@@ -618,12 +607,14 @@ fn room(state: &State) -> bool {
 /// Removes `paths`, ignoring files already gone. Blocks on the file system.
 pub(crate) fn remove(paths: &[PathBuf]) {
     for path in paths {
-        let _ = std::fs::remove_file(Path::new(path));
+        let _ = std::fs::remove_file(path);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     #[test]
