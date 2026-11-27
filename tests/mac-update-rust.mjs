@@ -196,7 +196,7 @@ try {
   );
   rewrite(
     "Cargo.lock",
-    /^(name = "nsv-[a-z]+"\nversion = )".*"/gm,
+    /^(name = "nsv-[a-z-]+"\nversion = )".*"/gm,
     `$1"${old}"`,
   );
   command("bun", ["scripts/package-mac.ts"], {

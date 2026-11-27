@@ -84,7 +84,7 @@ def rewrite(path, pattern, replacement, count=0):
     open(path, "w").write(text)
 rewrite("package.json", r'^  "version": ".*",$', f'  "version": "{version}",', 1)
 rewrite("Cargo.toml", r'^(\[workspace\.package\]\nversion = )".*"', rf'\1"{version}"')
-rewrite("Cargo.lock", r'^(name = "nsv-[a-z]+"\nversion = )".*"', rf'\1"{version}"')
+rewrite("Cargo.lock", r'^(name = "nsv-[a-z-]+"\nversion = )".*"', rf'\1"{version}"')
 EOF
   NONSTOPVIBIN_TEST_UPDATE_FEED=http://127.0.0.1:$port/ CARGO_PROFILE_RELEASE_LTO=off \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 bun scripts/package-linux.ts >"$work/package-$1.log" 2>&1 ||
