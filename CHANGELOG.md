@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- T3 Code can show a profile's subscription limits. Each profile serves a
+  CLIProxyAPI-compatible usage hub at `http://127.0.0.1:<port>/p/<slug>` behind its
+  own hub key. **Connect agents → Show limits in T3 Code** shows the URL and the key
+  and replaces the key. The hub answers on the loopback address only, sends only
+  the five provider calls T3 Code makes with the app's own headers, and never starts
+  a core. See [Show limits in T3 Code](README.md#show-limits-in-t3-code).
+
 ## [0.3.1] - 2026-11-26
 
 ### Fixed

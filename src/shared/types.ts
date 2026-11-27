@@ -20,6 +20,7 @@ export type { QuotaWindow } from "./generated/domain/QuotaWindow.ts";
 export type { ResetCredits } from "./generated/domain/ResetCredits.ts";
 export type { ResetResult } from "./generated/domain/ResetResult.ts";
 export type { UsagePricing } from "./generated/domain/UsagePricing.ts";
+export type { UsageHub } from "./generated/domain/UsageHub.ts";
 export type { UsageRecord } from "./generated/domain/UsageRecord.ts";
 export type { UsageSummary } from "./generated/domain/UsageSummary.ts";
 

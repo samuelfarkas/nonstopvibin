@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, Plug } from "lucide-react";
-import type { Model, ProfileState } from "../shared/types.ts";
+import type { Model, ProfileState, UsageHub } from "../shared/types.ts";
 import { agentIds, agents, type Agent } from "../shared/agents.ts";
 import { api } from "./api.ts";
 import { messageOf } from "./action.ts";
@@ -231,6 +231,109 @@ export function Connect({ profile }: { profile: ProfileState }) {
           </p>
         </details>
       )}
+      <UsageHubSetup profile={profile} onError={setError} />
     </div>
+  );
+}
+
+/** The hub T3 Code reads this profile's limits from: its URL and key, loaded on first open. */
+function UsageHubSetup({
+  profile,
+  onError,
+}: {
+  profile: ProfileState;
+  onError(message: string): void;
+}) {
+  const [hub, setHub] = useState<UsageHub | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const [replacing, setReplacing] = useState(false);
+  async function load() {
+    setLoading(true);
+    try {
+      setHub(
+        await api("GET /profiles/:profileId/usage-hub", {
+          params: { profileId: profile.id },
+        }),
+      );
+    } catch (e) {
+      onError(messageOf(e, "Could not load the usage hub."));
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function replace() {
+    setReplacing(true);
+    try {
+      setHub(
+        await api("POST /profiles/:profileId/usage-hub", {
+          params: { profileId: profile.id },
+        }),
+      );
+      setRevealed(true);
+    } catch (e) {
+      onError(messageOf(e, "Could not replace the hub key."));
+    } finally {
+      setReplacing(false);
+    }
+  }
+  return (
+    <details
+      className="manual-setup"
+      onToggle={(event) => {
+        if (event.currentTarget.open && !hub && !loading) void load();
+      }}
+    >
+      <summary>Show limits in T3 Code</summary>
+      <p className="hub-steps">
+        In T3 Code, open Settings → Usage → Add a CLIProxyAPI hub, then paste
+        this URL and key.
+      </p>
+      {hub ? (
+        <div className="panel endpoint-panel">
+          <div className="endpoint-row">
+            <div>
+              <span className="label">Hub URL</span>
+              <code>{hub.url}</code>
+            </div>
+            <CopyButton text={hub.url} onError={onError} />
+          </div>
+          <div className="endpoint-row">
+            <div>
+              <span className="label">Hub key</span>
+              <code>
+                {revealed ? hub.key : "nvh_••••••••••••••••••••••••••••"}
+              </code>
+            </div>
+            <div className="endpoint-actions">
+              <button
+                className="button small"
+                onClick={() => setRevealed(!revealed)}
+              >
+                {revealed ? "Hide" : "Reveal"}
+              </button>
+              <CopyButton text={hub.key} onError={onError} />
+              <button
+                className="button small"
+                disabled={replacing}
+                onClick={() => void replace()}
+              >
+                {replacing ? "Replacing…" : "Replace key"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        loading && (
+          <div className="loading">
+            <LoaderCircle className="spin" size={18} /> Loading the hub…
+          </div>
+        )
+      )}
+      <p className="scope-note">
+        Reads the limits of the subscriptions in {profile.name} while it runs.
+        Replacing the key disconnects T3 Code until it has the new one.
+      </p>
+    </details>
   );
 }

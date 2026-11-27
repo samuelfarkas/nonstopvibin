@@ -291,6 +291,11 @@
   margin-bottom: 13px;
 }
 
+.hub-steps {
+  max-width: 72ch;
+  margin: 0 0 10px;
+}
+
 .command-line {
   display: flex;
   align-items: center;
