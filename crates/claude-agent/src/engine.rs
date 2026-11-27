@@ -303,13 +303,6 @@ impl<H: Host> Engine<H> {
             Ok(conversation) => conversation,
             Err(invalid) => return refuse(400, "invalid_request_error", invalid.0),
         };
-        let Some(found) = self.found().await else {
-            return refuse(
-                502,
-                "api_error",
-                "Claude Code (claude) was not found. Install it, sign it in for this profile, then try again.",
-            );
-        };
         let sessions = match self.sessions(profile).await {
             Ok(sessions) => sessions,
             Err(cause) => {
@@ -331,7 +324,7 @@ impl<H: Host> Engine<H> {
                 );
             }
         };
-        self.serve(&sessions, plan, &conversation, &found).await
+        self.serve(&sessions, plan, &conversation).await
     }
 
     /// Hands the claimed process its turn, then answers with what it writes.
@@ -340,7 +333,6 @@ impl<H: Host> Engine<H> {
         sessions: &Arc<Sessions>,
         plan: Plan,
         conversation: &Conversation,
-        found: &Found,
     ) -> Response<Body> {
         let (head, decided) = oneshot::channel();
         let (body, received) = mpsc::channel(64);
@@ -380,6 +372,14 @@ impl<H: Host> Engine<H> {
                     key,
                     done: false,
                 };
+                // Only a new process needs claude: a live one goes on if it was removed since.
+                let Some(found) = self.found().await else {
+                    return refuse(
+                        502,
+                        "api_error",
+                        "Claude Code (claude) was not found. Install it, sign it in for this profile, then try again.",
+                    );
+                };
                 if let Some(previous) = previous {
                     let _ = previous.await;
                 }
@@ -390,7 +390,7 @@ impl<H: Host> Engine<H> {
                 };
                 let settings = &conversation.settings;
                 let started = self
-                    .start(&starting, found, settings, persistence, &token, first)
+                    .start(&starting, &found, settings, persistence, &token, first)
                     .await;
                 if let Err(cause) = started {
                     tracing::warn!(%cause, "Claude Code could not be started");
