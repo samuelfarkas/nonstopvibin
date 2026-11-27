@@ -98,10 +98,10 @@ banked Codex resets. It cannot reach the agent API or other management endpoints
   names.
 - Limits are read only while the profile runs. A stopped profile lists its
   subscriptions without their limits.
-- When a run hits a usage limit without a reset time, T3 Code asks the hubs at the
-  origin of the agent's base URL when the pool refills. It compares only the
-  origin, so it pools every hub you add for this app. Add only the hub of the
-  profile your T3 Code agents use.
+- A T3 Code thread shows the hub's pooled limits only when its agent's base URL
+  has the same origin as the hub URL, such as `http://127.0.0.1:<port>`. T3 Code
+  compares only the origin, so it pools every hub you add for this app into every
+  such thread. Add only the hub of the profile your T3 Code agents use.
 - Redeeming a banked Codex reset in T3 Code spends it.
 
 ## Run on a Linux server

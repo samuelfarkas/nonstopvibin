@@ -192,6 +192,16 @@ impl Cores {
             .ok_or_else(AppError::account_not_found)
     }
 
+    /// A Codex hub account's `ChatGPT` account id, once a sync read it.
+    fn hub_chatgpt_account_id(&self, profile: &ProfileId, account: &Account) -> Option<String> {
+        (account.provider == Provider::Codex.as_str())
+            .then(|| {
+                self.accounts
+                    .chatgpt_account_id(profile, account.id.as_str())
+            })
+            .flatten()
+    }
+
     /// `GET auth-files`: each hub account's id, auth index, provider, email, whether it is
     /// paused, and for Codex its `ChatGPT` account id once a sync read it. Answered from the
     /// store, so a stopped profile lists its accounts too.
@@ -204,12 +214,7 @@ impl Cores {
             .await?
             .into_iter()
             .map(|account| {
-                let chatgpt_account_id = (account.provider == Provider::Codex.as_str())
-                    .then(|| {
-                        self.accounts
-                            .chatgpt_account_id(profile, account.id.as_str())
-                    })
-                    .flatten();
+                let chatgpt_account_id = self.hub_chatgpt_account_id(profile, &account);
                 let mut file = Map::new();
                 file.insert("id".to_owned(), json!(account.id));
                 file.insert("auth_index".to_owned(), json!(account.auth_index));
@@ -280,12 +285,7 @@ impl Cores {
                 403,
             ));
         }
-        let chatgpt_account_id = (provider == Provider::Codex)
-            .then(|| {
-                self.accounts
-                    .chatgpt_account_id(profile, account.id.as_str())
-            })
-            .flatten();
+        let chatgpt_account_id = self.hub_chatgpt_account_id(profile, &account);
         let request = call
             .upstream
             .request(chatgpt_account_id.as_deref(), call.data);
