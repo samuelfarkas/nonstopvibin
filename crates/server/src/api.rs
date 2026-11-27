@@ -15,19 +15,20 @@ use nsv_accounts::cores::Cores;
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::pricing::UsagePrices;
 use nsv_agents::{AgentSetup, connection_models};
-use nsv_domain::endpoint::{profile_endpoint, profile_path};
+use nsv_domain::endpoint::{profile_base, profile_endpoint, profile_path};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::registry;
+use nsv_domain::secret::HubKey;
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
     AccountRoute, AppState, ClientKeyResponse, Model, PlainRoute, Profile, ProfileRoute,
-    ProfileState, ROUTES, Route,
+    ProfileState, ROUTES, Route, UsageHub,
 };
 use nsv_gateway::{Body, Refusal};
 use nsv_net::{Loopback, LoopbackRequest, loopback};
-use nsv_store::Store;
+use nsv_store::{Db, Store, StoreError};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -92,7 +93,7 @@ fn fit<'a>(pattern: &'a str, segments: &'a [String]) -> Option<Vec<(&'a str, &'a
 }
 
 /// `searchParams.get(name)`: the first value.
-fn query(url: &url::Url, name: &str) -> Option<String> {
+pub(crate) fn query(url: &url::Url, name: &str) -> Option<String> {
     url.query_pairs()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.into_owned())
@@ -103,7 +104,10 @@ fn account_id(account: &str) -> Result<AccountId, AppError> {
     AccountId::parse(account).map_err(|_| AppError::account_not_found())
 }
 
-fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Response<Body>, AppError> {
+pub(crate) fn json<T: Serialize>(
+    status: StatusCode,
+    value: &T,
+) -> Result<Response<Body>, AppError> {
     let body = serde_json::to_vec(value).map_err(AppError::internal)?;
     Ok(nsv_gateway::json(status, HeaderMap::new(), body))
 }
@@ -117,14 +121,23 @@ async fn body(request: Request<Incoming>) -> Result<Value, AppError> {
     if !json {
         return Err(AppError::new("Content-Type must be application/json.", 415));
     }
+    read_json(request, BODY_LIMIT, "Payload exceeds 2 MB.").await
+}
+
+/// The request body, at most `limit` bytes (`too_large` answers more), parsed as JSON.
+pub(crate) async fn read_json(
+    request: Request<Incoming>,
+    limit: usize,
+    too_large: &'static str,
+) -> Result<Value, AppError> {
     let mut incoming = request.into_body();
     let mut bytes = Vec::new();
     while let Some(frame) = incoming.frame().await {
         // The client hung up: nothing failed in the app, and no one reads the answer.
         let frame = frame.map_err(|_| AppError::new("", 400))?;
         if let Ok(data) = frame.into_data() {
-            if bytes.len() + data.len() > BODY_LIMIT {
-                return Err(AppError::new("Payload exceeds 2 MB.", 413));
+            if bytes.len() + data.len() > limit {
+                return Err(AppError::new(too_large, 413));
             }
             bytes.extend_from_slice(&data);
         }
@@ -320,6 +333,8 @@ impl Api {
                     },
                 )
             }
+            ProfileRoute::UsageHub => self.usage_hub(id, Db::ensure_hub_key).await,
+            ProfileRoute::UsageHubReplace => self.usage_hub(id, Db::rotate_hub_key).await,
             ProfileRoute::Models => {
                 let metadata = query(url, "metadata").as_deref() == Some("1");
                 let models = self.core_models(id).await?;
@@ -419,6 +434,26 @@ impl Api {
                 json(StatusCode::OK, &result)
             }
         }
+    }
+
+    /// The profile's usage hub, with the hub key `key` reads or issues.
+    async fn usage_hub(
+        &self,
+        id: &ProfileId,
+        key: fn(&mut Db, &ProfileId) -> Result<HubKey, StoreError>,
+    ) -> Result<Response<Body>, AppError> {
+        let found = id.clone();
+        let (slug, key) = self
+            .store
+            .call(move |db| Ok((db.profile(&found)?.slug, key(db, &found)?)))
+            .await?;
+        json(
+            StatusCode::OK,
+            &UsageHub {
+                url: profile_base(self.shared.port, slug.as_str()),
+                key: key.expose_secret().to_owned(),
+            },
+        )
     }
 
     /// The models a profile's core lists; a dormant core starts for them.

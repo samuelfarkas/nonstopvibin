@@ -16,6 +16,8 @@ export type RouteKey =
   | "POST /profiles/:profileId/start"
   | "POST /profiles/:profileId/refresh"
   | "GET /profiles/:profileId/key"
+  | "GET /profiles/:profileId/usage-hub"
+  | "POST /profiles/:profileId/usage-hub"
   | "GET /profiles/:profileId/models"
   | "GET /profiles/:profileId/usage"
   | "GET /profiles/:profileId/agent-setup"

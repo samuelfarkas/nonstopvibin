@@ -22,7 +22,9 @@ requires plaintext OAuth/config files in owner-only directories. See
 [storage documentation](docs/architecture.md) for storage locations.
 
 The Rust daemon enforces these boundaries. The gateway crate cannot name the
-management client, so a profile key cannot reach management endpoints. The
+management client, so a profile key cannot reach management endpoints. A
+profile's usage hub key reaches only the hub's four loopback endpoints, which send
+an allowlist of provider calls with the daemon's own headers. The
 listener checks Host, Origin and the session token. Only the window helper links
 WebKit. It accepts bridge calls only from the main frame of a page on the daemon's
 origin, denies other navigation and new windows, refuses every download but a file

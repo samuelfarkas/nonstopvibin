@@ -79,6 +79,31 @@ not demonstrate a live Codex conversation.
 Closing the window leaves the proxy running in the menu bar. **Quit** stops it.
 **Start at login** is optional in Settings.
 
+## Show limits in T3 Code
+
+T3 Code can show the subscription limits of a profile in its usage panel. Each
+profile serves a CLIProxyAPI-compatible usage hub for this.
+
+1. Start the profile and open **Connect agents**.
+2. Open **Show limits in T3 Code**. Copy the hub URL,
+   `http://127.0.0.1:<port>/p/<slug>`, and the hub key.
+3. In T3 Code, open **Settings → Usage → Add a CLIProxyAPI hub**, then paste the
+   URL and the key.
+
+The hub key reads the limits of this profile's subscriptions and redeems their
+banked Codex resets. It cannot reach the agent API or other management endpoints.
+**Replace key** issues a new key, and T3 Code is refused until it has the new one.
+
+- The hub answers on the loopback address only. It is not served on `--allow-host`
+  names.
+- Limits are read only while the profile runs. The hub never starts a core: a
+  stopped profile answers HTTP 409, and T3 Code shows its last reading.
+- A T3 Code thread shows the hub's pooled limits only when its agent's base URL
+  has the same origin as the hub URL, such as `http://127.0.0.1:<port>`. T3 Code
+  compares only the origin, so it pools every hub you add for this app into every
+  such thread. Add only the hub of the profile your T3 Code agents use.
+- Redeeming a banked Codex reset in T3 Code spends it.
+
 ## Run on a Linux server
 
 Install the headless build on a glibc-based Linux server for trusted co-located

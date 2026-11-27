@@ -1,5 +1,6 @@
 //! The daemon: the loopback listener with its Host, Origin and token checks, the management API,
-//! the agent gateway's host, the interface's files, and the order of startup and shutdown.
+//! the agent gateway's host, the profiles' usage hubs, the interface's files, and the order of
+//! startup and shutdown.
 //!
 //! [`Daemon::start`] opens the store and starts accepting; requests are served from then on.
 //! [`Daemon::restore`] selects the core, reaps orphans, starts the profiles that are kept
@@ -15,6 +16,7 @@ mod daemon;
 mod desktop;
 mod failure;
 mod gateway_host;
+mod hub;
 mod listener;
 pub mod panic;
 mod parse;

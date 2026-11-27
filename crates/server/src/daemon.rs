@@ -38,6 +38,7 @@ use crate::checks::{Admission, AllowedHost, Checks};
 use crate::desktop::Desktop;
 use crate::failure::{self, Errors};
 use crate::gateway_host::GatewayHost;
+use crate::hub::Hub;
 use crate::listener::{self, Phase, advance};
 use crate::session::Session;
 use crate::shared::{Shared, VERSION};
@@ -141,6 +142,7 @@ pub(crate) struct App {
     api: Api,
     assets: Assets,
     gateway: Gateway<GatewayHost>,
+    hub: Hub,
     store: Store,
     /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
     /// and core updates.
@@ -171,6 +173,7 @@ impl App {
             }
             Admission::Refused(error) => Err(error),
             Admission::Api(url) => self.api.answer(request, &url).await,
+            Admission::Hub(url) => self.hub.answer(request, &url).await,
             Admission::Asset { path, head } => self.assets.answer(&request, &path, head).await,
         };
         answered
@@ -327,6 +330,7 @@ impl Daemon {
                 Arc::clone(&cores),
                 models,
             )),
+            hub: Hub::new(store.clone(), Arc::clone(&cores)),
             shared,
             checks,
             store,

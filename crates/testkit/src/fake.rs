@@ -251,6 +251,8 @@ struct Cores {
     states: usize,
     /// Calls with an `Authorization` header that a squatter received.
     squatted: usize,
+    /// The profile and `auth_index` of each `/reset-quota` call.
+    quota_resets: Vec<(ProfileId, String)>,
 }
 
 #[derive(Clone, Default)]
@@ -373,6 +375,19 @@ impl FakeCores {
             .iter()
             .filter(|(called, _, path, ..)| called == profile && path.starts_with(prefix))
             .map(|(.., timeout)| *timeout)
+            .collect()
+    }
+
+    /// The `auth_index` of each `/reset-quota` call to `profile`'s cores, in order.
+    #[must_use]
+    pub fn quota_resets(&self, profile: &ProfileId) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap()
+            .quota_resets
+            .iter()
+            .filter(|(called, _)| called == profile)
+            .map(|(_, index)| index.clone())
             .collect()
     }
 
@@ -607,6 +622,22 @@ impl FakeCores {
                 let count = queue.len().min(500);
                 let page: Vec<Value> = queue.drain(..count).collect();
                 respond(200, &Value::Array(page))
+            }
+            // The models the core routes to the credential `name`: one named after it, and an
+            // entry without a string id.
+            (Method::GET, "/auth-files/models") => respond(
+                200,
+                &json!({ "models": [
+                    { "id": format!("model-for-{}", query("name")), "object": "model", "owned_by": "fixture" },
+                    { "id": 7 },
+                ] }),
+            ),
+            (Method::POST, "/reset-quota") => {
+                self.0.lock().unwrap().quota_resets.push((
+                    core.profile.clone(),
+                    body["auth_index"].as_str().unwrap().to_owned(),
+                ));
+                respond(200, &json!({ "status": "ok" }))
             }
             (Method::POST, "/auth-files") => {
                 write_credential(&core.auth.join(query("name")), &body);

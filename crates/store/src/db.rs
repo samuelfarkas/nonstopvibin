@@ -13,7 +13,7 @@ use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId, ProfileSlug};
 use nsv_domain::random;
 use nsv_domain::registry::{RetentionDays, Strategy, registry};
-use nsv_domain::secret::{ApiKey, ClientKey, CoreKey, KeyDigest, ManagementKey};
+use nsv_domain::secret::{ApiKey, ClientKey, CoreKey, HubKey, KeyDigest, ManagementKey};
 use nsv_domain::time::{epoch_ms, iso_string};
 use nsv_domain::wire::{Account, ApiAccount, Extra, Profile, Quota, UsageRecord};
 use nsv_files::{DataDir, EntryKind, own_entry, owner_only_directory};
@@ -362,8 +362,18 @@ impl Db {
             .ok_or_else(|| AppError::profile_not_found().into())
     }
 
-    /// Creates a disabled fill-first profile with a unique slug and new client, core and
-    /// management keys.
+    /// The profile whose route is `/p/<slug>`.
+    ///
+    /// # Errors
+    /// A database error or a body that is not a profile.
+    pub fn profile_by_slug(&self, slug: &str) -> Result<Option<Profile>, StoreError> {
+        Ok(self
+            .value::<Json<Profile>>("SELECT body FROM profiles WHERE slug=?", [slug])?
+            .map(|Json(profile)| profile))
+    }
+
+    /// Creates a disabled fill-first profile with a unique slug and new client, core,
+    /// management and usage hub keys.
     ///
     /// # Errors
     /// A database, vault or randomness error; nothing is written then.
@@ -400,6 +410,7 @@ impl Db {
             db.set_secret(&secret_id(id, "core"), core.expose_secret())?;
             let management = ManagementKey::generate()?;
             db.set_secret(&secret_id(id, "management"), management.expose_secret())?;
+            db.set_secret(&secret_id(id, "hub"), HubKey::generate()?.expose_secret())?;
             Ok(())
         })?;
         self.facts_stale = true;
@@ -492,6 +503,41 @@ impl Db {
         Ok(ManagementKey::new(
             self.secret(&secret_id(profile.as_str(), "management"))?,
         ))
+    }
+
+    /// The key a usage hub client sends for this profile; `None` for a profile created before
+    /// hub keys, until [`Db::ensure_hub_key`] issues one.
+    ///
+    /// # Errors
+    /// A database error, or a value the vault cannot decrypt.
+    pub fn hub_key(&self, profile: &ProfileId) -> Result<Option<HubKey>, StoreError> {
+        self.value::<String>(
+            "SELECT encrypted FROM secrets WHERE id=?",
+            [secret_id(profile.as_str(), "hub")],
+        )?
+        .map(|encrypted| Ok(HubKey::new(self.vault.decrypt(&encrypted)?)))
+        .transpose()
+    }
+
+    /// The profile's usage hub key, issued now if it has none.
+    ///
+    /// # Errors
+    /// As [`Db::hub_key`], or a vault or randomness error.
+    pub fn ensure_hub_key(&mut self, profile: &ProfileId) -> Result<HubKey, StoreError> {
+        match self.hub_key(profile)? {
+            Some(key) => Ok(key),
+            None => self.rotate_hub_key(profile),
+        }
+    }
+
+    /// Replaces the profile's usage hub key: the previous one stops working at once.
+    ///
+    /// # Errors
+    /// A database, vault or randomness error.
+    pub fn rotate_hub_key(&mut self, profile: &ProfileId) -> Result<HubKey, StoreError> {
+        let key = HubKey::generate()?;
+        self.set_secret(&secret_id(profile.as_str(), "hub"), key.expose_secret())?;
+        Ok(key)
     }
 
     /// # Errors

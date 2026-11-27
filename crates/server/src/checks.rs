@@ -1,5 +1,5 @@
 //! The checks every request passes before its handler: shutdown, Host, the upgrade path, Origin
-//! and the session token for `/api`, and the loopback-only agent gateway.
+//! and the session token for `/api`, and the loopback-only agent gateway and usage hubs.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -13,6 +13,7 @@ use nsv_domain::secret::SessionToken;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::hub;
 use crate::listener::Phase;
 
 /// The Vite development server, whose Host and Origin a development run accepts.
@@ -90,6 +91,8 @@ pub(crate) enum Admission {
     Refused(AppError),
     /// The management API, with the request URL as WHATWG URL parsing sees it.
     Api(url::Url),
+    /// A profile's usage hub, `/p/<slug>/v0/management…`, with the request URL as `Api` has it.
+    Hub(url::Url),
     Gateway,
     Asset {
         path: String,
@@ -216,6 +219,9 @@ impl Checks {
                     "The agent API accepts local agent clients, not browser origins.",
                     403,
                 ));
+            }
+            if hub::target(path).is_some() {
+                return Ok(Admission::Hub(url));
             }
             return Ok(Admission::Gateway);
         }

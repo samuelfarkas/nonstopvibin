@@ -30,6 +30,22 @@ impl std::fmt::Debug for ClientKeyResponse {
     }
 }
 
+/// `GET` and `POST /profiles/:profileId/usage-hub`: where a usage hub client such as T3 Code
+/// reads the profile's limits, and the hub key it sends.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub struct UsageHub {
+    /// `http://127.0.0.1:<port>/p/<slug>`.
+    pub url: String,
+    pub key: String,
+}
+
+impl std::fmt::Debug for UsageHub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UsageHub(<redacted>)")
+    }
+}
+
 /// The body of every error the server answers, under `/api` and elsewhere.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -234,6 +250,8 @@ pub enum ProfileRoute {
     Start,
     Refresh,
     Key,
+    UsageHub,
+    UsageHubReplace,
     Models,
     Usage,
     AgentStatus,
@@ -306,6 +324,16 @@ pub const ROUTES: &[(&str, &str, Route)] = &[
         "GET",
         "/profiles/:profileId/key",
         Route::Profile(ProfileRoute::Key),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/usage-hub",
+        Route::Profile(ProfileRoute::UsageHub),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/usage-hub",
+        Route::Profile(ProfileRoute::UsageHubReplace),
     ),
     (
         "GET",

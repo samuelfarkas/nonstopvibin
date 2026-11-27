@@ -11,7 +11,7 @@ use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
 use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
-use nsv_server::{Boundaries, CoreOptions, Daemon, Desktop, Options};
+use nsv_server::{AllowedHost, Boundaries, CoreOptions, Daemon, Desktop, Options};
 use nsv_testkit::fake::{Directory, FakeCores, response};
 use nsv_testkit::world::{
     ACCOUNT, ORGANIZATION_A, StubFetch, UPDATE, bundled_core, claude, release,
@@ -25,18 +25,27 @@ use crate::common::now;
 
 const FEED: &str = "https://feed.example.invalid/core-release.json";
 
-struct Running {
-    root: TempDir,
-    daemon: Daemon,
+pub(crate) struct Running {
+    pub(crate) root: TempDir,
+    pub(crate) daemon: Daemon,
     desktop: Desktop,
-    fake: FakeCores,
+    pub(crate) fake: FakeCores,
     outside: Arc<StubFetch>,
     token: String,
 }
 
 /// A desktop daemon on a fresh data directory; `feed` makes it an installed build.
 async fn running(name: &str, feed: Option<&str>) -> Running {
-    let root = TempDir::new(name);
+    start(TempDir::new(name), feed, Vec::new()).await
+}
+
+/// A desktop daemon on `root/data`, which may hold a store already, answering `allow_hosts`
+/// too; `feed` makes it an installed build.
+pub(crate) async fn start(
+    root: TempDir,
+    feed: Option<&str>,
+    allow_hosts: Vec<AllowedHost>,
+) -> Running {
     let data = root.path().join("data");
     nsv_files::owner_only_directory(&data, || Ok::<(), std::io::Error>(())).unwrap();
     let fake = FakeCores::default();
@@ -45,7 +54,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
     let desktop = Desktop::default();
     let options = Options {
         port: 0,
-        allow_hosts: Vec::new(),
+        allow_hosts,
         development: false,
         desktop: Some(desktop.clone()),
         client: root.path().join("client"),
@@ -82,7 +91,7 @@ async fn running(name: &str, feed: Option<&str>) -> Running {
 
 impl Running {
     /// `/api<path>` with the session token: the status and the JSON body.
-    async fn call(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
+    pub(crate) async fn call(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
         let mut headers = vec![("Authorization".to_owned(), self.token.clone())];
         let bytes = body.map_or_else(Vec::new, |body| {
             headers.push(("Content-Type".to_owned(), "application/json".to_owned()));
@@ -99,7 +108,7 @@ impl Running {
         (answer.status, serde_json::from_slice(&answer.body).unwrap())
     }
 
-    async fn ok(&self, method: &str, path: &str, body: Option<Value>) -> Value {
+    pub(crate) async fn ok(&self, method: &str, path: &str, body: Option<Value>) -> Value {
         let (status, value) = self.call(method, path, body).await;
         assert!(
             (200..300).contains(&status),
@@ -109,7 +118,7 @@ impl Running {
     }
 
     /// A new profile's id.
-    async fn profile(&self, name: &str) -> String {
+    pub(crate) async fn profile(&self, name: &str) -> String {
         let created = self
             .ok("POST", "/profiles", Some(json!({ "name": name })))
             .await;
@@ -129,7 +138,7 @@ impl Running {
             .clone()
     }
 
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         self.daemon.close().await.unwrap();
         drop(self.root);
     }

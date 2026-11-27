@@ -18,6 +18,7 @@ import type { RetentionBody } from "./generated/domain/RetentionBody.ts";
 import type { RouteKey } from "./generated/domain/RouteKey.ts";
 import type { StateBody } from "./generated/domain/StateBody.ts";
 import type { UsageHistory } from "./generated/domain/UsageHistory.ts";
+import type { UsageHub } from "./generated/domain/UsageHub.ts";
 import type {
   AgentSetup,
   AgentSetupInput,
@@ -57,6 +58,10 @@ interface RouteTypes {
   /** Re-reads the accounts, then the quota of every enabled account. */
   "POST /profiles/:profileId/refresh": { response: AppState };
   "GET /profiles/:profileId/key": { response: ClientKeyResponse };
+  /** The hub T3 Code reads this profile's limits from; issues its key on first use. */
+  "GET /profiles/:profileId/usage-hub": { response: UsageHub };
+  /** Replaces the hub key: a client with the old one is refused until it has the new one. */
+  "POST /profiles/:profileId/usage-hub": { response: UsageHub };
   /** `metadata=1` adds the models.dev limits and prices. */
   "GET /profiles/:profileId/models": {
     query: { metadata?: "1" };
