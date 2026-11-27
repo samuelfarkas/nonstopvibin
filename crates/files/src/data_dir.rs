@@ -129,6 +129,32 @@ impl DataDir {
         self.0.join("core-processes")
     }
 
+    /// Claude Agent's files, below which each profile has its Claude Code configuration
+    /// directory, `<profile id>/`.
+    #[must_use]
+    pub fn claude_agent(&self) -> PathBuf {
+        self.0.join("claude-agent")
+    }
+
+    /// A profile's Claude Code configuration directory: its sign-in and transcripts.
+    #[must_use]
+    pub fn claude_agent_config(&self, profile: &ProfileId) -> PathBuf {
+        self.claude_agent().join(profile.as_str())
+    }
+
+    /// The empty directory a profile's `claude` processes run in.
+    #[must_use]
+    pub fn claude_agent_work(&self, profile: &ProfileId) -> PathBuf {
+        self.claude_agent().join("work").join(profile.as_str())
+    }
+
+    /// The files a profile's running `claude` processes read: system prompts and MCP
+    /// configurations.
+    #[must_use]
+    pub fn claude_agent_run(&self, profile: &ProfileId) -> PathBuf {
+        self.claude_agent().join("run").join(profile.as_str())
+    }
+
     #[must_use]
     pub fn agent_connections(&self) -> PathBuf {
         self.0.join("agent-connections")

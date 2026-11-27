@@ -1,0 +1,37 @@
+[package]
+name = "nsv-claude-agent"
+description = "Claude Agent: a profile's Claude subscription served by the user's own signed-in claude, with the harness's tools over MCP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+nsv-domain.workspace = true
+nsv-files.workspace = true
+nsv-gateway.workspace = true
+rustix.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+nsv-core.workspace = true
+nsv-net.workspace = true
+nsv-store.workspace = true
+nsv-testkit.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+
+# The fake claude is this test binary run with claude's arguments, which libtest's argument
+# parser would refuse; its main runs the tests itself.
+[[test]]
+name = "engine"
+harness = false
+
+[lints]
+workspace = true

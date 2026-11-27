@@ -46,6 +46,28 @@ impl std::fmt::Debug for UsageHub {
     }
 }
 
+/// `GET /profiles/:profileId/claude-agent`: whether the user's own Claude Code can serve the
+/// profile's Claude Agent subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub struct ClaudeAgentStatus {
+    /// Where `claude` was found; absent when it was not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+    /// The profile's Claude Code configuration directory.
+    pub config_dir: String,
+    /// The command that signs Claude Code in for this profile.
+    pub sign_in: String,
+    pub signed_in: bool,
+    /// Where Claude Code's credential comes from, as it names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_source: Option<String>,
+    /// Why the sign-in could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// The body of every error the server answers, under `/api` and elsewhere.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]

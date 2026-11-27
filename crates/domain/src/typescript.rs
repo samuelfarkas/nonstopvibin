@@ -51,6 +51,7 @@ fn export(out: &Path) {
         Ok,
         ClientKeyResponse,
         UsageHub,
+        ClaudeAgentStatus,
         ApiError,
         CreateProfileBody,
         RetentionBody,
