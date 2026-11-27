@@ -390,10 +390,13 @@ impl Credentials {
     ) -> Result<(), AppError> {
         let (this, id) = (self.clone(), profile.clone());
         self.queue(async move {
-            let seats = this.0.accounts.list(&id).await?;
-            if seats.iter().any(|account| {
-                account.kind == AccountKind::OAuth && account.provider == Provider::Claude.as_str()
-            }) {
+            // The credential files are what the core loads, even before an account sync lists
+            // a new one.
+            let files = this.0.accounts.credential_files(&id).await?;
+            if files
+                .iter()
+                .any(|file| text(file.raw.get("type")) == Some(Provider::Claude.as_str()))
+            {
                 return Err(AppError::new(
                     "This profile has Claude sign-ins. Add Claude Agent to another profile, or remove them first.",
                     409,

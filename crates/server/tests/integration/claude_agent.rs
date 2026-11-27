@@ -157,6 +157,26 @@ async fn claude_agent_is_refused_beside_claude_sign_ins_and_before_claude_code_s
         .await;
     assert_eq!(code, 409, "{refused}");
     assert_eq!(accounts(&app, &seats).await.len(), 1);
+
+    // A Claude credential the core holds but the account list has not caught up with, as after
+    // an import whose sync failed, refuses it too.
+    let unsynced = app.profile("Unsynced").await;
+    let auth = app
+        .root
+        .path()
+        .join("data/profiles")
+        .join(&unsynced)
+        .join("auth");
+    std::fs::create_dir_all(&auth).unwrap();
+    std::fs::write(
+        auth.join("claude-unsynced.json"),
+        claude(ORGANIZATION_A, "second").to_string(),
+    )
+    .unwrap();
+    let (code, refused) = app
+        .call("POST", &format!("/profiles/{unsynced}/claude-agent"), None)
+        .await;
+    assert_eq!(code, 409, "{refused}");
     app.close().await;
 }
 
