@@ -505,6 +505,7 @@ impl<H: Host> Engine<H> {
             files,
             side,
             session,
+            turning: false,
         };
         let (requests, received) = mpsc::channel(1);
         let (stop, stopped) = oneshot::channel();

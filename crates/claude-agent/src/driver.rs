@@ -73,6 +73,8 @@ pub(crate) struct Driver {
     /// A side call: one turn, no transcript.
     pub(crate) side: bool,
     pub(crate) session: Option<String>,
+    /// A turn is in progress, streaming or holding tool calls.
+    pub(crate) turning: bool,
 }
 
 fn user(content: &[Value]) -> Vec<u8> {
@@ -131,10 +133,11 @@ impl Driver {
                     sink = Some(next);
                     tail = Some(digest);
                     interrupted = false;
-                    if let Some(content) = content
-                        && write(stdin.as_mut(), &user(&content)).await.is_err()
-                    {
-                        break End::Exited;
+                    if let Some(content) = content {
+                        self.turning = true;
+                        if write(stdin.as_mut(), &user(&content)).await.is_err() {
+                            break End::Exited;
+                        }
                     }
                 }
                 () = hung_up(sink.as_ref()), if !interrupted => {
@@ -190,6 +193,7 @@ impl Driver {
                 Step::Done { turn, body } => {
                     answer(current, body);
                     *sink = None;
+                    self.turning = false;
                     if self.side {
                         return Some(End::Answered);
                     }
@@ -211,9 +215,14 @@ impl Driver {
         None
     }
 
-    /// Ends the process: its stdin closes, it gets [`GRACE`] to exit, then SIGKILL. A response
-    /// still open fails, its files go, and its transcript too unless it was kept.
-    async fn finish(mut self, end: End, sink: Option<Sink>, stdin: Option<ChildStdin>) {
+    /// Ends the process: a turn in progress is interrupted first, since Claude Code holding tool
+    /// calls does not exit when its stdin closes; then its stdin closes, it gets [`GRACE`] to
+    /// exit, then SIGKILL. A response still open fails, its files go, and its transcript too
+    /// unless it was kept.
+    async fn finish(mut self, end: End, sink: Option<Sink>, mut stdin: Option<ChildStdin>) {
+        if self.turning && matches!(end, End::Stopped(_)) {
+            let _ = write(stdin.as_mut(), INTERRUPT).await;
+        }
         drop(stdin);
         if tokio::time::timeout(GRACE, self.child.wait())
             .await

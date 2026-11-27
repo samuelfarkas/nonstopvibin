@@ -123,7 +123,10 @@ harness ─(Chat | Responses | Messages)─▶ daemon gateway /p/<slug>
   crate's one unsafe call, so it dies with the daemon even after a SIGKILL. On macOS it exits
   once its stdin closes, after the turn in progress. The core's shell watchdog was not reused:
   it guards a process only while `ps` shows exactly the command line it was started with, and
-  every `claude` argument list differs. Shutdown stops every process.
+  every `claude` argument list differs. Shutdown stops every process. A process with a turn in
+  progress is interrupted before its stdin closes: Claude Code holding tool calls does not exit
+  on a closed stdin, and would wait out the 5 s grace until SIGKILL (measured: 0.9 s against
+  5.9 s for a stop with two held calls).
 - **Errors.** Claude Code retries API errors itself. Its final error becomes the engine's HTTP
   answer: 429 with `retry-after` when Claude Code reported a reset time, 400 "prompt is too
   long" so harnesses compact, 529 when overloaded, and 401 asking the user to sign in again. A

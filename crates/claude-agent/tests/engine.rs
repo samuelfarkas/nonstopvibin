@@ -699,7 +699,8 @@ async fn a_client_that_hangs_up_interrupts_the_turn() {
 /// The manual check with the real Claude Code: `NSV_E2E_CLAUDE` names a script that runs it
 /// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
 /// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
-/// `NSV_E2E_HOLD` seconds if set.
+/// `NSV_E2E_HOLD` seconds if set. With `NSV_E2E_FORGET`, the account goes while Claude Code
+/// holds the calls instead.
 async fn the_real_claude_code_answers_through_the_engine(program: PathBuf) {
     let world = World::running("cae-real", program).await;
     let echo = json!({ "type": "function", "function": {
@@ -714,6 +715,14 @@ async fn the_real_claude_code_answers_through_the_engine(program: PathBuf) {
         )
         .await;
     println!("first: {first}");
+    // `NSV_E2E_FORGET`: the account goes while Claude Code holds the calls; it must stop
+    // without another upstream request.
+    if std::env::var_os("NSV_E2E_FORGET").is_some() {
+        world.engine.forget(&world.profile).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        world.stop().await;
+        return;
+    }
     let message = &first["choices"][0]["message"];
     let calls = message["tool_calls"].as_array().unwrap();
     let mut messages = vec![
