@@ -12,7 +12,7 @@ use nsv_domain::secret::McpToken;
 use nsv_domain::sync::locked;
 use nsv_files::DataDir;
 use serde_json::Value;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, OnceCell, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
@@ -218,6 +218,8 @@ pub(crate) struct Sessions {
     /// Notified whenever a process changes activity or goes: requests waiting for room and
     /// the deadline task look again.
     changed: Notify,
+    /// The directories exist and what an earlier run left is deleted.
+    prepared: OnceCell<()>,
 }
 
 impl Sessions {
@@ -227,7 +229,27 @@ impl Sessions {
             paths,
             state: Mutex::default(),
             changed: Notify::new(),
+            prepared: OnceCell::new(),
         }
+    }
+
+    /// Creates the directories and sweeps what an earlier run of the daemon left, once: a
+    /// request that comes meanwhile waits, so no sweep deletes the files of a process these
+    /// sessions started.
+    pub(crate) async fn prepare(&self) -> io::Result<()> {
+        let paths = self.paths.clone();
+        self.prepared
+            .get_or_try_init(|| async move {
+                tokio::task::spawn_blocking(move || {
+                    paths.prepare()?;
+                    sweep(&paths);
+                    Ok(())
+                })
+                .await
+                .map_err(io::Error::other)?
+            })
+            .await
+            .copied()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

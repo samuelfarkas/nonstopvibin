@@ -303,25 +303,19 @@ impl<H: Host> Engine<H> {
         .flatten()
     }
 
-    /// The profile's sessions, created with its directories on first use. A new one sweeps
-    /// what an earlier run of the daemon left.
+    /// The profile's sessions, with their directories; the first use sweeps what an earlier
+    /// run of the daemon left.
     async fn sessions(&self, profile: &ProfileId) -> std::io::Result<Arc<Sessions>> {
-        if let Some(sessions) = locked(&self.inner.profiles).get(profile) {
-            return Ok(Arc::clone(sessions));
-        }
-        let paths = Paths::new(&self.inner.options.data, profile);
-        let prepared = paths.clone();
-        tokio::task::spawn_blocking(move || {
-            prepared.prepare()?;
-            sessions::sweep(&prepared);
-            Ok::<(), std::io::Error>(())
-        })
-        .await
-        .map_err(std::io::Error::other)??;
-        let mut profiles = locked(&self.inner.profiles);
-        Ok(Arc::clone(profiles.entry(profile.clone()).or_insert_with(
-            || Arc::new(Sessions::new(profile.clone(), paths)),
-        )))
+        let sessions = Arc::clone(
+            locked(&self.inner.profiles)
+                .entry(profile.clone())
+                .or_insert_with(|| {
+                    let paths = Paths::new(&self.inner.options.data, profile);
+                    Arc::new(Sessions::new(profile.clone(), paths))
+                }),
+        );
+        sessions.prepare().await?;
+        Ok(sessions)
     }
 
     async fn messages(&self, profile: &ProfileId, request: Request<Incoming>) -> Response<Body> {
