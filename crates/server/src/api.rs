@@ -93,7 +93,7 @@ fn fit<'a>(pattern: &'a str, segments: &'a [String]) -> Option<Vec<(&'a str, &'a
 }
 
 /// `searchParams.get(name)`: the first value.
-fn query(url: &url::Url, name: &str) -> Option<String> {
+pub(crate) fn query(url: &url::Url, name: &str) -> Option<String> {
     url.query_pairs()
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.into_owned())
@@ -104,7 +104,10 @@ fn account_id(account: &str) -> Result<AccountId, AppError> {
     AccountId::parse(account).map_err(|_| AppError::account_not_found())
 }
 
-fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Response<Body>, AppError> {
+pub(crate) fn json<T: Serialize>(
+    status: StatusCode,
+    value: &T,
+) -> Result<Response<Body>, AppError> {
     let body = serde_json::to_vec(value).map_err(AppError::internal)?;
     Ok(nsv_gateway::json(status, HeaderMap::new(), body))
 }
@@ -118,14 +121,23 @@ async fn body(request: Request<Incoming>) -> Result<Value, AppError> {
     if !json {
         return Err(AppError::new("Content-Type must be application/json.", 415));
     }
+    read_json(request, BODY_LIMIT, "Payload exceeds 2 MB.").await
+}
+
+/// The request body, at most `limit` bytes (`too_large` answers more), parsed as JSON.
+pub(crate) async fn read_json(
+    request: Request<Incoming>,
+    limit: usize,
+    too_large: &'static str,
+) -> Result<Value, AppError> {
     let mut incoming = request.into_body();
     let mut bytes = Vec::new();
     while let Some(frame) = incoming.frame().await {
         // The client hung up: nothing failed in the app, and no one reads the answer.
         let frame = frame.map_err(|_| AppError::new("", 400))?;
         if let Ok(data) = frame.into_data() {
-            if bytes.len() + data.len() > BODY_LIMIT {
-                return Err(AppError::new("Payload exceeds 2 MB.", 413));
+            if bytes.len() + data.len() > limit {
+                return Err(AppError::new(too_large, 413));
             }
             bytes.extend_from_slice(&data);
         }
