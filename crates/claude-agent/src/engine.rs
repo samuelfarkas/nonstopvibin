@@ -437,13 +437,14 @@ impl<H: Host> Engine<H> {
             writes.push((mcp.clone(), config.to_string().into_bytes()));
         }
         let files: Vec<PathBuf> = writes.iter().map(|(path, _)| path.clone()).collect();
-        tokio::task::spawn_blocking(move || {
+        let written = tokio::task::spawn_blocking(move || {
             writes
                 .iter()
                 .try_for_each(|(path, bytes)| nsv_files::write_atomic_unsynced(path, bytes, 0o600))
         })
         .await
-        .map_err(std::io::Error::other)??;
+        .map_err(std::io::Error::other)
+        .and_then(|written| written);
         let arguments = process::arguments(&Mode::Turns {
             settings,
             system: &system,
@@ -453,14 +454,16 @@ impl<H: Host> Engine<H> {
         let environment = process::environment(&paths.config, settings.max_tokens, |name| {
             std::env::var_os(name)
         });
-        let child =
-            match process::command(&found.path, &paths.work, &arguments, environment).spawn() {
-                Ok(child) => child,
-                Err(error) => {
-                    tokio::task::spawn_blocking(move || sessions::remove(&files));
-                    return Err(error);
-                }
-            };
+        let spawned = written.and_then(|()| {
+            process::command(&found.path, &paths.work, &arguments, environment).spawn()
+        });
+        let child = match spawned {
+            Ok(child) => child,
+            Err(error) => {
+                tokio::task::spawn_blocking(move || sessions::remove(&files));
+                return Err(error);
+            }
+        };
         let offered = Arc::new(Offered::new(&settings.tools));
         let driver = Driver {
             sessions: Arc::clone(sessions),
