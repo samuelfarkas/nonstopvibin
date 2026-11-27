@@ -11,7 +11,7 @@ import {
   QuotaMeter,
   logoState,
 } from "./components.tsx";
-import { accountLabel, age, groupAccountsByProvider } from "./format.ts";
+import { age, groupAccountsByProvider } from "./format.ts";
 import {
   currentHeadroom,
   floor,
@@ -177,9 +177,7 @@ export function TrayView({
                         <summary className="tray-account-summary">
                           <ProviderIcon provider={a.provider} />
                           <span className="tray-account-name">
-                            <strong title={accountLabel(a)}>
-                              {accountLabel(a)}
-                            </strong>
+                            <strong title={a.name}>{a.name}</strong>
                             <small title={a.email || a.status}>
                               {a.email || a.status}
                             </small>

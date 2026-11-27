@@ -270,6 +270,11 @@ async fn launch(root: &Path) -> (Daemon, Placeholders) {
     placeholders.add(socket.to_string_lossy(), "<socket-dir>");
     placeholders.add(data.path().to_string_lossy(), "<data>");
     placeholders.add(agent_home.to_string_lossy(), "<agent-home>");
+    // Agent setup names resolved paths, which macOS puts under `/private`.
+    placeholders.add(
+        fs::canonicalize(&agent_home).unwrap().to_string_lossy(),
+        "<agent-home>",
+    );
     placeholders.add(root.to_string_lossy(), "<root>");
     (daemon, placeholders)
 }

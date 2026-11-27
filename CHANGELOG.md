@@ -4,12 +4,30 @@
 
 ### Added
 
+- **Claude Agent**: a profile's Claude subscription is served by your own signed-in
+  Claude Code. Claude Code makes the requests to Anthropic itself, with its own
+  identity and the entrypoint label `nonstopvibin`; the harness's tools reach it
+  over a local MCP server. **Sign in → Claude Agent** shows the sign-in command for
+  the profile and connects it. A profile holds one Claude Agent subscription. This
+  is lower risk than a proxy that imitates Claude Code, not sanctioned use; see
+  [Claude Agent](docs/providers.md#claude-agent).
+
 - T3 Code can show a profile's subscription limits. Each profile serves a
   CLIProxyAPI-compatible usage hub at `http://127.0.0.1:<port>/p/<slug>` behind its
   own hub key. **Connect agents → Show limits in T3 Code** shows the URL and the key
   and replaces the key. The hub answers on the loopback address only, sends only
-  the five provider calls T3 Code makes with the app's own headers, and never starts
-  a core. See [Show limits in T3 Code](README.md#show-limits-in-t3-code).
+  the provider calls T3 Code makes for Codex and Grok with the app's own headers,
+  and never starts a core. See [Show limits in T3 Code](README.md#show-limits-in-t3-code).
+
+### Removed
+
+- **The Claude sign-in.** The proxy core no longer signs in to Claude or sends other
+  harnesses' requests dressed up as Claude Code. On its first launch this release
+  deletes every profile's Claude sign-ins, their credential files and their
+  accounts; connect Claude Agent instead. Claude quota readings, Claude usage
+  resets, organization seats and reconnecting go with it, and the desktop app no
+  longer opens Claude's pages. A release from before Claude Agent cannot read a
+  store that holds a Claude Agent account, so going back to one is not supported.
 
 ## [0.3.1] - 2026-11-26
 
@@ -19,7 +37,7 @@
   resets, instead of "No resets available". Claude answers these calls only for
   Claude Code, so the app now sends them with the Claude Code identity its proxy
   core already uses, as CLIProxyAPI's Management Center does. See
-  [Claude usage resets](docs/providers.md#claude-usage-resets) for the account risk.
+  [Claude usage resets](https://github.com/samuelfarkas/nonstopvibin/blob/v0.3.1/docs/providers.md#claude-usage-resets) for the account risk.
 - Claude resets are listed one row per kind (Fable, full, 5-hour, weekly) with
   how many are left, as Claude Code offers them. Every usable kind can be
   redeemed, not only the grant Claude would use next, and a kind that cannot be

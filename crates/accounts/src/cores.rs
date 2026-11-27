@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nsv_core::install::CoreSource;
-use nsv_core::pool::{BoxFuture, Pool, PoolState};
+use nsv_core::pool::{BoxFuture, Launch, Pool, PoolState};
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::registry::OAuthProvider;
@@ -58,6 +58,9 @@ pub struct CoresOptions {
     pub sign_in_accepted: Arc<dyn Fn() + Send + Sync>,
     /// This build's version: [`AppVersion::current`].
     pub app: AppVersion,
+    /// The daemon's loopback port, where cores reach Claude Agent accounts; `None` where
+    /// nothing serves them.
+    pub daemon_port: Option<u16>,
 }
 
 /// The pool's scheduler and the account features that drive it.
@@ -166,13 +169,17 @@ impl Cores {
             report,
             sign_in_accepted,
             app,
+            daemon_port,
         } = options;
         let accounts = Arc::new(Accounts::new(store.clone()));
         let (scheduler, (source, quotas, credentials, sign_in)) = Scheduler::new(
             store.clone(),
-            binary.clone(),
-            backends(store.directory()),
-            ready,
+            Launch {
+                binary: binary.clone(),
+                backend: backends(store.directory()),
+                ready,
+                daemon: daemon_port,
+            },
             Arc::clone(&accounts),
             timing,
             |pool| {
@@ -197,12 +204,8 @@ impl Cores {
                     store.clone(),
                     pool.clone(),
                     Arc::clone(&accounts),
-                    credentials.clone(),
                     Arc::clone(&quotas),
                     SignInOptions {
-                        backends: Arc::clone(&backends),
-                        outside: Arc::clone(&outside),
-                        ready,
                         clock,
                         report: Arc::clone(&report),
                         accepted: sign_in_accepted,
@@ -234,7 +237,7 @@ impl Cores {
             },
         )?;
         Ok(Self {
-            resets: Resets::new(store.clone(), source, Arc::clone(&quotas), clock),
+            resets: Resets::new(store.clone(), source, Arc::clone(&quotas)),
             scheduler,
             pool,
             accounts,
@@ -420,9 +423,8 @@ impl Cores {
         &self,
         profile: &ProfileId,
         provider: OAuthProvider,
-        reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
-        self.sign_in.begin(profile, provider, reconnect).await
+        self.sign_in.begin(profile, provider).await
     }
 
     /// `GET …/oauth/status`; see [`SignIn::status`]. A sign-in that ended lets its profile's
@@ -440,18 +442,6 @@ impl Cores {
             self.scheduler.catch_up();
         }
         Ok(status)
-    }
-
-    /// `POST …/oauth/confirm`; see [`SignIn::confirm`].
-    ///
-    /// # Errors
-    /// The sign-in's.
-    pub async fn confirm_sign_in(
-        &self,
-        profile: &ProfileId,
-        state: &str,
-    ) -> Result<OAuthStatus, AppError> {
-        self.sign_in.confirm(profile, state).await
     }
 
     /// `DELETE …/oauth`; see [`SignIn::cancel`]. Its profile's core may stop for being idle
@@ -517,6 +507,24 @@ impl Cores {
         added
     }
 
+    /// `POST …/claude-agent`; see `Credentials::add_claude_agent`.
+    ///
+    /// # Errors
+    /// As `Credentials::add_claude_agent`.
+    pub async fn add_claude_agent(
+        &self,
+        profile: &ProfileId,
+        name: String,
+        models: Vec<String>,
+    ) -> Result<(), AppError> {
+        let added = self
+            .credentials
+            .add_claude_agent(profile, name, models)
+            .await;
+        self.scheduler.catch_up();
+        added
+    }
+
     /// `PATCH …/accounts/:accountId`; see `Credentials::set_account`.
     ///
     /// # Errors
@@ -570,17 +578,17 @@ impl Cores {
     }
 
     /// At startup: profiles start from the core `CoreUpdates::select` picks. Cores a dead
-    /// earlier instance left are stopped (the profiles' and the pending sign-ins'), pending
-    /// sign-ins and core checks are deleted, the profiles start and scheduling begins. An installed build then checks for a core update
-    /// in the background; offline stays quiet, as Settings checks again.
+    /// earlier instance left are stopped (the profiles' and the core checks'), core checks
+    /// are deleted, the profiles start and scheduling begins. An installed build then checks
+    /// for a core update in the background; offline stays quiet, as Settings checks again.
     ///
     /// # Errors
     /// A bundled core that is missing or fails its check, a ledger or file-system error, or
     /// the scheduler's.
     pub async fn launch(&self) -> Result<(), AppError> {
         self.updates.select().await?;
-        // Orphans first: if the pending sign-ins cannot be removed, startup fails without
-        // leaving one running.
+        // Orphans first: if the core checks cannot be removed, startup fails without leaving
+        // one running.
         self.pool.reap_orphans().await.map_err(AppError::internal)?;
         sandbox::discard_all(self.store.directory(), &self.backends).await?;
         self.scheduler.launch().await?;

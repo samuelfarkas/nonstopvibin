@@ -5,15 +5,11 @@
 //!   redirect names ([`nsv_core::upstream::SIGN_IN_PORTS`]), which forwards a callback with the
 //!   session's path and state to the core. A headless server's user pastes the redirect URL
 //!   instead ([`SignIn::callback`]).
-//! - A provider with organizations (Claude) signs in on a throwaway store under
-//!   `oauth-pending/` with a core of its own, recorded in that store's ledger. Its credential
-//!   enters the profile only after Claude names the seat and the user confirms the review.
-//! - Actions (begin, status, confirm, cancel, callback, expiry) run one at a time, each to its
+//! - Actions (begin, status, cancel, callback, expiry) run one at a time, each to its
 //!   end. A pending sign-in keeps its profile's core from stopping for being idle, and core
 //!   updates refuse to restart cores under it.
 
 use std::future::Future;
-use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -21,27 +17,21 @@ use std::time::Duration;
 use hyper::Method as HttpMethod;
 use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
-use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::id::ProfileId;
 use nsv_domain::js::{encode_uri_component, number, text};
-use nsv_domain::registry::{OAuthProvider, Provider, registry};
+use nsv_domain::registry::OAuthProvider;
 use nsv_domain::sync::locked;
-use nsv_domain::wire::{
-    Account, AccountKind, AccountStatus, Extra, OAuthReview, OAuthSession, OAuthStatus,
-};
+use nsv_domain::wire::{OAuthSession, OAuthStatus};
 use nsv_net::Method;
 use nsv_store::Store;
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use tokio::sync::{Mutex, OwnedMutexGuard, watch};
 use tokio::task::AbortHandle;
 use url::Url;
 
-use crate::accounts::{Accounts, credential_path, read_credential};
+use crate::accounts::Accounts;
 use crate::callback::{Callback, Handler, Reply};
-use crate::credentials::{Credentials, SeatMatch};
-use crate::fetch::Outside;
-use crate::identity::{claude_identity, verify_claude_identity};
 use crate::quota::Quotas;
-use crate::sandbox::{Backends, Sandbox};
 use crate::source::PoolSource;
 use crate::task::{Report, detached};
 
@@ -84,11 +74,6 @@ const ACCEPTED: Reply = Reply {
 };
 
 pub struct SignInOptions {
-    pub backends: Backends,
-    /// Identity checks of a reviewed credential.
-    pub outside: Arc<dyn Outside>,
-    /// How long a throwaway store's core gets to answer ([`nsv_core::pool::READY`]).
-    pub ready: Duration,
     /// Milliseconds since the epoch; sessions expire by it.
     pub clock: fn() -> i64,
     pub report: Report,
@@ -109,7 +94,6 @@ struct Inner {
     store: Store,
     pool: Pool,
     accounts: Arc<Accounts>,
-    credentials: Credentials,
     quotas: Arc<Quotas<PoolSource>>,
     options: SignInOptions,
     /// The action queue, and what only actions change.
@@ -123,45 +107,9 @@ struct Inner {
 
 #[derive(Default)]
 struct State {
-    sandbox: Option<SandboxSignIn>,
     expiry: Option<AbortHandle>,
     /// Sessions begun; names the one an expiry timer belongs to.
     begun: u64,
-}
-
-/// A sign-in for a provider with organizations, in a sandbox of its own, so the credential
-/// reaches a profile only after its seat is reviewed.
-struct SandboxSignIn {
-    provider: OAuthProvider,
-    sandbox: Sandbox,
-    accounts: Accounts,
-    progress: Progress,
-}
-
-impl Deref for SandboxSignIn {
-    type Target = Sandbox;
-
-    fn deref(&self) -> &Sandbox {
-        &self.sandbox
-    }
-}
-
-/// How far a sandboxed sign-in got; each step is kept, so a failed later step is retried
-/// without signing in again.
-enum Progress {
-    /// The browser has not finished signing in.
-    Waiting,
-    /// The core holds the credential; its account is not read yet.
-    Authorized,
-    /// The core lists this one account.
-    Listed(String),
-    /// Its credential, read with the core stopped, awaits the provider's verification.
-    Read(Map<String, Value>),
-    /// Verified and matched against the profile's seats.
-    Reviewed {
-        credential: Map<String, Value>,
-        review: Box<OAuthReview>,
-    },
 }
 
 /// The core's view of a pending authorization.
@@ -169,17 +117,6 @@ enum Authorization {
     Ok,
     Error,
     Wait,
-}
-
-/// What the provider's core calls it in its management paths.
-fn core_name(provider: OAuthProvider) -> String {
-    registry()
-        .providers
-        .get(Provider::from(provider))
-        .sign_in
-        .as_ref()
-        .and_then(|sign_in| sign_in.core.clone())
-        .unwrap_or_else(|| provider.as_str().to_owned())
 }
 
 fn state_of(url: &Url) -> Option<String> {
@@ -194,7 +131,6 @@ impl SignIn {
         store: Store,
         pool: Pool,
         accounts: Arc<Accounts>,
-        credentials: Credentials,
         quotas: Arc<Quotas<PoolSource>>,
         options: SignInOptions,
     ) -> Self {
@@ -202,7 +138,6 @@ impl SignIn {
             store,
             pool,
             accounts,
-            credentials,
             quotas,
             options,
             state: Arc::new(Mutex::new(State::default())),
@@ -245,29 +180,25 @@ impl SignIn {
         locked(&self.0.callback).as_ref().map(Callback::port)
     }
 
-    /// `POST …/oauth`: starts a sign-in to `provider` for the profile, or one that replaces
-    /// `reconnect`'s credential.
+    /// `POST …/oauth`: starts a sign-in to `provider` for the profile.
     ///
     /// # Errors
-    /// 503 during shutdown, 404 for an unknown profile or an account that cannot be
-    /// reconnected, 409 while another sign-in is pending or when the callback port is taken,
+    /// 503 during shutdown, 404 for an unknown profile, 409 while another sign-in is pending or when the callback port is taken,
     /// 502 when the core gives no usable sign-in link, or the core's error.
     pub async fn begin(
         &self,
         profile: &ProfileId,
         provider: OAuthProvider,
-        reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
         let profile = profile.clone();
         self.0
             .run(move |inner, mut state| async move {
-                inner.begin(&mut state, profile, provider, reconnect).await
+                inner.begin(&mut state, profile, provider).await
             })
             .await
     }
 
-    /// `GET …/oauth`: whether the browser finished, and for a provider with organizations the
-    /// review of the seat it signed in as.
+    /// `GET …/oauth`: whether the browser finished.
     ///
     /// # Errors
     /// 404 for another profile's or an unknown session, 410 for an expired one, or the failure
@@ -277,21 +208,6 @@ impl SignIn {
         self.0
             .run(move |inner, mut state| async move {
                 inner.status(&mut state, &profile, &key).await
-            })
-            .await
-    }
-
-    /// `POST …/oauth-confirm`: connects the reviewed seat, adding it or replacing the account it
-    /// matches, then ends the sign-in.
-    ///
-    /// # Errors
-    /// As [`SignIn::status`], 409 before the review or for a blocked seat, or the import's
-    /// error; the sign-in stays pending then.
-    pub async fn confirm(&self, profile: &ProfileId, state: &str) -> Result<OAuthStatus, AppError> {
-        let (profile, key) = (profile.clone(), state.to_owned());
-        self.0
-            .run(move |inner, mut state| async move {
-                inner.confirm(&mut state, &profile, &key).await
             })
             .await
     }
@@ -320,7 +236,12 @@ impl SignIn {
         let (profile, redirect) = (profile.clone(), redirect.to_owned());
         self.0
             .run(
-                move |inner, state| async move { inner.forward(&state, &profile, &redirect).await },
+                // The state stays held until the core has the callback.
+                move |inner, state| async move {
+                    let forwarded = inner.forward(&profile, &redirect).await;
+                    drop(state);
+                    forwarded
+                },
             )
             .await
     }
@@ -417,7 +338,6 @@ impl Inner {
         state: &mut State,
         profile: ProfileId,
         provider: OAuthProvider,
-        reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
         if self.pool.state().closing {
             return Err(AppError::shutting_down());
@@ -432,53 +352,7 @@ impl Inner {
             ));
         }
         self.clear(state).await?;
-        let entry = registry().providers.get(Provider::from(provider));
-        if let Some(account) = &reconnect {
-            let listed = self
-                .accounts
-                .list(&profile)
-                .await?
-                .into_iter()
-                .find(|listed| listed.id == *account);
-            if !entry.reconnect
-                || !listed.is_some_and(|listed| {
-                    listed.provider == provider.as_str() && listed.kind == AccountKind::OAuth
-                })
-            {
-                return Err(AppError::new(
-                    format!(
-                        "Choose a {} subscription in this profile to reconnect.",
-                        registry().label(provider.as_str())
-                    ),
-                    404,
-                ));
-            }
-        }
-        let opened = if entry.organizations {
-            match self.sandbox(provider).await {
-                Ok(sandbox) => {
-                    state.sandbox = Some(sandbox);
-                    self.open(state.sandbox.as_deref(), provider, &profile)
-                        .await
-                        .map(|session| OAuthSession {
-                            reconnect_account_id: reconnect
-                                .as_ref()
-                                .map(|account| account.as_str().to_owned()),
-                            ..session
-                        })
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            self.open(None, provider, &profile).await
-        };
-        let session = match opened {
-            Ok(session) => session,
-            Err(error) => {
-                self.clear(state).await?;
-                return Err(error);
-            }
-        };
+        let session = self.open(provider, &profile).await?;
         state.begun += 1;
         self.session.send_replace(Some(session.clone()));
         self.expire_later(state, session.expires_at);
@@ -515,39 +389,16 @@ impl Inner {
         state.expiry = Some(timer.abort_handle());
     }
 
-    /// The sign-in's sandbox.
-    async fn sandbox(&self, provider: OAuthProvider) -> Result<SandboxSignIn, AppError> {
-        let sandbox = Sandbox::open(
-            &self.store,
-            format!("{}-", provider.as_str()),
-            "Pending sign-in",
-            self.pool.state().binary.to_path_buf(),
-            &self.options.backends,
-            self.options.ready,
-        )
-        .await?;
-        Ok(SandboxSignIn {
-            provider,
-            accounts: Accounts::new(sandbox.store.clone()),
-            sandbox,
-            progress: Progress::Waiting,
-        })
-    }
-
-    /// Asks for a sign-in link for `profile`, from the sandbox's core or else the profile's,
-    /// and listens for the browser's return.
+    /// Asks the profile's core for a sign-in link and listens for the browser's return.
     async fn open(
         self: &Arc<Self>,
-        sandbox: Option<&Sandbox>,
         provider: OAuthProvider,
         profile: &ProfileId,
     ) -> Result<OAuthSession, AppError> {
-        let (pool, core) = sandbox.map_or((&self.pool, profile), |sandbox| {
-            (&sandbox.pool, &sandbox.profile)
-        });
-        pool.start(core, false).await?;
-        let path = format!("/{}-auth-url", core_name(provider));
-        let response = pool.management(core, &Method::GET, &path, None).await?;
+        let pool = &self.pool;
+        pool.start(profile, false).await?;
+        let path = format!("/{}-auth-url", provider.as_str());
+        let response = pool.management(profile, &Method::GET, &path, None).await?;
         let no_link = || AppError::new("The provider did not return a sign-in link.", 502);
         let (Some(link), Some(key)) = (
             text(response.get("url")).map(str::to_owned),
@@ -572,7 +423,6 @@ impl Inner {
             started_at: now,
             user_code: text(response.get("user_code")).map(str::to_owned),
             expires_at: now.saturating_add(lifetime),
-            reconnect_account_id: None,
         };
         let link = Url::parse(&link).map_err(|_| no_link())?;
         let Some(redirect) = link
@@ -605,7 +455,8 @@ impl Inner {
                 "/oauth-session?state={}",
                 encode_uri_component(&session.state)
             );
-            pool.management(core, &Method::DELETE, &path, None).await?;
+            pool.management(profile, &Method::DELETE, &path, None)
+                .await?;
             return Err(AppError::new(
                 format!(
                     "Sign-in port {port} is in use. Close any pending sign-in in another app, then try again."
@@ -669,18 +520,13 @@ impl Inner {
         }))
     }
 
-    /// Ends the sign-in in progress: its sandbox, or its pending authorization in the profile's
-    /// core. A step that fails leaves the rest for the next try.
+    /// Ends the sign-in in progress and its pending authorization in the profile's core.
     async fn clear(&self, state: &mut State) -> Result<(), AppError> {
         if let Some(expiry) = state.expiry.take() {
             expiry.abort();
         }
         let pending = self.session.borrow().clone();
-        if let Some(sandbox) = &state.sandbox {
-            self.close_callback(None, false);
-            sandbox.discard().await?;
-            state.sandbox = None;
-        } else if let Some(session) = pending {
+        if let Some(session) = pending {
             let path = format!(
                 "/oauth-session?state={}",
                 encode_uri_component(&session.state)
@@ -725,13 +571,6 @@ impl Inner {
         let failed = || OAuthStatus::Error {
             error: DID_NOT_COMPLETE.to_owned(),
         };
-        if state.sandbox.is_some() {
-            return match self.review(state, profile, &session).await? {
-                Some(review) => Ok(OAuthStatus::Review { review }),
-                None if state.sandbox.is_none() => Ok(failed()),
-                None => Ok(OAuthStatus::Wait),
-            };
-        }
         let pool = &self.pool;
         let authorization = Self::authorization(pool, profile, key).await?;
         if matches!(authorization, Authorization::Wait) {
@@ -752,211 +591,16 @@ impl Inner {
                 !account.disabled && account.provider == provider
             })
             .await?;
-        Ok(OAuthStatus::Ok {
-            account: None,
-            reconnected: None,
-        })
+        Ok(OAuthStatus::Ok)
     }
 
-    /// Takes a sandboxed sign-in as far as it goes: `None` while the browser has not finished,
-    /// or once it failed and the sign-in ended; else the review. Each step that fails is
-    /// retried by the next call.
-    async fn review(
-        &self,
-        state: &mut State,
-        profile: &ProfileId,
-        session: &OAuthSession,
-    ) -> Result<Option<OAuthReview>, AppError> {
-        loop {
-            let Some(sandbox) = state.sandbox.as_ref() else {
-                return Ok(None);
-            };
-            let next = match &sandbox.progress {
-                Progress::Waiting => {
-                    match Self::authorization(&sandbox.pool, &sandbox.profile, &session.state)
-                        .await?
-                    {
-                        Authorization::Wait => return Ok(None),
-                        Authorization::Error => None,
-                        Authorization::Ok => {
-                            self.close_callback(None, false);
-                            Some(Progress::Authorized)
-                        }
-                    }
-                }
-                Progress::Authorized => {
-                    sandbox
-                        .accounts
-                        .sync(&sandbox.pool, &sandbox.profile)
-                        .await?;
-                    match sandbox.accounts.list(&sandbox.profile).await?.as_slice() {
-                        [account] => Some(Progress::Listed(account.id.as_str().to_owned())),
-                        _ => {
-                            return Err(AppError::new(
-                                format!(
-                                    "{} did not return one subscription. Sign in again.",
-                                    registry().label(sandbox.provider.as_str())
-                                ),
-                                502,
-                            ));
-                        }
-                    }
-                }
-                Progress::Listed(id) => {
-                    // Its core stops first, so no refresh replaces the token being moved.
-                    sandbox.pool.stop(&sandbox.profile).await?;
-                    let path = credential_path(&sandbox.directory, &sandbox.profile, id)?;
-                    let limit = registry().limits.credential_file_bytes;
-                    Some(Progress::Read(
-                        tokio::task::spawn_blocking(move || read_credential(&path, limit))
-                            .await
-                            .map_err(AppError::internal)??,
-                    ))
-                }
-                Progress::Read(credential) => {
-                    let credential =
-                        verify_claude_identity(&*self.options.outside, credential).await?;
-                    let review = self
-                        .review_of(profile, sandbox.provider, &credential, session)
-                        .await?;
-                    Some(Progress::Reviewed {
-                        credential,
-                        review: Box::new(review),
-                    })
-                }
-                Progress::Reviewed { review, .. } => return Ok(Some(OAuthReview::clone(review))),
-            };
-            match (next, state.sandbox.as_mut()) {
-                (Some(next), Some(sandbox)) => sandbox.progress = next,
-                // The browser's sign-in failed.
-                (None, _) => {
-                    self.clear(state).await?;
-                    return Ok(None);
-                }
-                (Some(_), None) => return Ok(None),
-            }
-        }
-    }
-
-    /// The pending account a verified credential shows, and how it matches the profile's seats.
-    async fn review_of(
-        &self,
-        profile: &ProfileId,
-        provider: OAuthProvider,
-        credential: &Map<String, Value>,
-        session: &OAuthSession,
-    ) -> Result<OAuthReview, AppError> {
-        let identity = claude_identity(&Value::Object(credential.clone()));
-        let account = Account {
-            id: AccountId::parse("pending").map_err(AppError::internal)?,
-            name: registry().label(provider.as_str()),
-            account_uuid: identity.account_uuid,
-            organization_uuid: identity.organization_uuid,
-            organization_name: identity.organization_name,
-            provider: provider.as_str().to_owned(),
-            kind: AccountKind::OAuth,
-            email: text(credential.get("email")).map(str::to_owned),
-            disabled: false,
-            status: AccountStatus::Ready,
-            priority: 0,
-            auth_index: None,
-            quota: None,
-            prefix: None,
-            model_count: None,
-            extra: Extra::new(),
-        };
-        let reconnect = reconnect_of(session);
-        let (action, message) = self
-            .credentials
-            .match_seat(profile, provider, credential, reconnect.as_ref())
-            .await?
-            .review();
-        Ok(OAuthReview {
-            account,
-            action,
-            message,
-        })
-    }
-
-    async fn confirm(
-        &self,
-        state: &mut State,
-        profile: &ProfileId,
-        key: &str,
-    ) -> Result<OAuthStatus, AppError> {
-        let session = self.current(profile, key)?;
-        let Some(SandboxSignIn {
-            provider,
-            progress: Progress::Reviewed { credential, .. },
-            ..
-        }) = &state.sandbox
-        else {
-            return Err(AppError::new(
-                format!(
-                    "Wait for {} to verify the organization before connecting.",
-                    registry().label(session.provider.as_str())
-                ),
-                409,
-            ));
-        };
-        let (credentials, credential, provider, id, reconnect) = (
-            self.credentials.clone(),
-            credential.clone(),
-            *provider,
-            profile.clone(),
-            reconnect_of(&session),
-        );
-        let connected = self
-            .credentials
-            .queue(async move {
-                let matched = credentials
-                    .match_seat(&id, provider, &credential, reconnect.as_ref())
-                    .await?;
-                let replaced = match matched {
-                    SeatMatch::Blocked(message) => return Err(AppError::new(message, 409)),
-                    SeatMatch::Add => None,
-                    SeatMatch::Reconnect(account) => Some(account),
-                };
-                let reconnected = replaced.is_some();
-                let account = credentials
-                    .import_credential(&id, credential, replaced)
-                    .await?;
-                Ok(OAuthStatus::Ok {
-                    account: Some(account),
-                    reconnected: Some(reconnected),
-                })
-            })
-            .await?;
-        self.clear(state).await?;
-        Ok(connected)
-    }
-
-    async fn forward(
-        &self,
-        state: &State,
-        profile: &ProfileId,
-        redirect: &str,
-    ) -> Result<(), AppError> {
+    async fn forward(&self, profile: &ProfileId, redirect: &str) -> Result<(), AppError> {
         let url = Url::parse(redirect).map_err(|_| AppError::new(MALFORMED.body, 400))?;
         let session = self.current(profile, &state_of(&url).unwrap_or_default())?;
-        let (pool, core) = match &state.sandbox {
-            // Its core already finished this authorization.
-            Some(sandbox) if !matches!(sandbox.progress, Progress::Waiting) => {
-                return Err(AppError::new(NOT_FOUND, 404));
-            }
-            Some(sandbox) => (&sandbox.pool, &sandbox.profile),
-            None => (&self.pool, profile),
-        };
-        let body = json!({ "provider": core_name(session.provider), "redirect_url": redirect });
-        pool.management(core, &Method::POST, "/oauth-callback", Some(&body))
+        let body = json!({ "provider": session.provider.as_str(), "redirect_url": redirect });
+        self.pool
+            .management(profile, &Method::POST, "/oauth-callback", Some(&body))
             .await?;
         Ok(())
     }
-}
-
-fn reconnect_of(session: &OAuthSession) -> Option<AccountId> {
-    session
-        .reconnect_account_id
-        .as_deref()
-        .and_then(|account| AccountId::parse(account).ok())
 }

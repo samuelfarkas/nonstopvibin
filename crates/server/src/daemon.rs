@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hyper::body::Incoming;
 use hyper::{Request, Response};
 use nsv_accounts::Backends;
+use nsv_accounts::accounts::retire_claude_sign_ins;
 use nsv_accounts::catalog::{ModelCatalog, ProfileModels};
 use nsv_accounts::cores::{Cores, CoresOptions};
 use nsv_accounts::fetch::Outside;
@@ -35,6 +36,7 @@ use tokio::task::JoinError;
 use crate::api::Api;
 use crate::assets::Assets;
 use crate::checks::{Admission, AllowedHost, Checks};
+use crate::claude_agent::{self, ClaudeAgent};
 use crate::desktop::Desktop;
 use crate::failure::{self, Errors};
 use crate::gateway_host::GatewayHost;
@@ -72,6 +74,8 @@ pub struct Boundaries {
     pub clock: fn() -> i64,
     /// The scheduler's periods.
     pub timing: Timing,
+    /// The `claude` program Claude Agent runs; `None` finds the user's own.
+    pub claude: Option<PathBuf>,
 }
 
 impl Boundaries {
@@ -88,6 +92,7 @@ impl Boundaries {
             outside: Arc::new(Https::new()?),
             clock: || epoch_ms(SystemTime::now()),
             timing: *TIMING,
+            claude: None,
         })
     }
 }
@@ -122,7 +127,8 @@ pub enum StartError {
     /// No entropy for the session token or the interface's version.
     #[error(transparent)]
     Entropy(io::Error),
-    /// The cores could not be set up, or the core could not be selected and checked.
+    /// The cores could not be set up, retired Claude sign-ins could not be deleted, or the core
+    /// could not be selected and checked.
     #[error(transparent)]
     Cores(AppError),
     /// An earlier `server.json` could not be removed, or this one written.
@@ -143,6 +149,8 @@ pub(crate) struct App {
     assets: Assets,
     gateway: Gateway<GatewayHost>,
     hub: Hub,
+    /// The Claude Agent engine and the `claude` processes it runs.
+    claude_agent: ClaudeAgent,
     store: Store,
     /// The scheduler, its pool and the account features: sign-in, credentials, quota, resets
     /// and core updates.
@@ -174,6 +182,9 @@ impl App {
             Admission::Refused(error) => Err(error),
             Admission::Api(url) => self.api.answer(request, &url).await,
             Admission::Hub(url) => self.hub.answer(request, &url).await,
+            Admission::ClaudeAgent(url) => {
+                return self.claude_agent.answer(request, url.path()).await;
+            }
             Admission::Asset { path, head } => self.assets.answer(&request, &path, head).await,
         };
         answered
@@ -186,6 +197,7 @@ impl App {
         if let Err(error) = self.agents.close().await {
             failures.push(error.to_string());
         }
+        self.claude_agent.close().await;
         if let Err(error) = self.cores.shutdown().await {
             failures.push(error.message);
         }
@@ -241,7 +253,12 @@ impl Daemon {
         let directory = lock.directory().clone();
         let vault = tokio::task::spawn_blocking(move || Vault::open(&directory)).await??;
         let store = Store::open(lock.directory(), vault).await?;
-        match Self::assemble(options, boundaries, lock, store.clone()).await {
+        // Before anything is served: a request could start a core, which would load them.
+        let assembled = match retire_claude_sign_ins(&store).await {
+            Ok(()) => Self::assemble(options, boundaries, lock, store.clone()).await,
+            Err(error) => Err(StartError::Cores(error)),
+        };
+        match assembled {
             Ok(daemon) => Ok(daemon),
             Err(error) => {
                 store.close().await;
@@ -261,6 +278,7 @@ impl Daemon {
             outside,
             clock,
             timing,
+            claude,
         } = boundaries;
         let now = UNIX_EPOCH + Duration::from_millis(u64::try_from(clock()).unwrap_or(0));
         store.call(move |db| db.prune_usage(now)).await?;
@@ -294,6 +312,7 @@ impl Daemon {
                 outside: Arc::clone(&outside),
                 source: options.core.source,
                 app: AppVersion::current(),
+                daemon_port: Some(port),
                 clock,
                 report: Arc::new(move |message| reported.errors.report(message)),
                 sign_in_accepted: Arc::new(move || {
@@ -308,21 +327,23 @@ impl Daemon {
         let models = ProfileModels::new(Arc::clone(&catalog), store.clone());
         let prices = Arc::new(UsagePrices::new(store.clone(), catalog, outside, clock));
         let imports = ImportCatalog::new(&options.agents.home);
+        let claude_agent = claude_agent::engine(&store, lock.directory(), port, claude);
         let agents = Arc::new(AgentSetup::new(
             lock.directory(),
             connection_source(phase.subscribe(), &store, &cores, port),
             options.agents,
         ));
         let app = Arc::new(App {
-            api: Api::new(
-                Arc::clone(&shared),
-                store.clone(),
-                Arc::clone(&cores),
-                Arc::clone(&agents),
-                models.clone(),
-                Arc::clone(&prices),
-                imports,
-            ),
+            api: Api {
+                shared: Arc::clone(&shared),
+                store: store.clone(),
+                cores: Arc::clone(&cores),
+                agents: Arc::clone(&agents),
+                models: models.clone(),
+                prices: Arc::clone(&prices),
+                imports: Arc::new(Mutex::new(imports)),
+                claude_agent: claude_agent.clone(),
+            },
             assets: Assets::new(options.client).map_err(StartError::Entropy)?,
             gateway: Gateway::new(GatewayHost::new(
                 Arc::clone(&shared),
@@ -331,6 +352,7 @@ impl Daemon {
                 models,
             )),
             hub: Hub::new(store.clone(), Arc::clone(&cores)),
+            claude_agent,
             shared,
             checks,
             store,
@@ -350,9 +372,9 @@ impl Daemon {
         Ok(Self(app))
     }
 
-    /// Selects and checks the core, reaps cores and pending sign-ins an earlier run left,
-    /// starts the profiles that are kept running (the others start on their first request),
-    /// checks for a core update in the background, restores agent connections, and writes
+    /// Selects and checks the core, reaps cores and core checks an earlier run left, starts
+    /// the profiles that are kept running (the others start on their first request), checks
+    /// for a core update in the background, restores agent connections, and writes
     /// `server.json`: a desktop daemon first, since a second launch finds it there and the
     /// cores may take a while. Dropping it part-way is safe: [`Daemon::close`] stops whatever
     /// it started.

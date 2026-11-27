@@ -1,5 +1,6 @@
 //! The checks every request passes before its handler: shutdown, Host, the upgrade path, Origin
-//! and the session token for `/api`, and the loopback-only agent gateway and usage hubs.
+//! and the session token for `/api`, and the loopback-only agent gateway, usage hubs and Claude
+//! Agent engine.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -7,7 +8,7 @@ use std::fmt;
 use hyper::body::Incoming;
 use hyper::header::{self, HeaderMap};
 use hyper::{Method, Request, StatusCode};
-use nsv_domain::endpoint::{LOOPBACK_HOST, Origin, PROFILE_ROUTES};
+use nsv_domain::endpoint::{CLAUDE_AGENT_ROUTES, LOOPBACK_HOST, Origin, PROFILE_ROUTES};
 use nsv_domain::error::AppError;
 use nsv_domain::secret::SessionToken;
 use serde::{Deserialize, Serialize};
@@ -93,6 +94,9 @@ pub(crate) enum Admission {
     Api(url::Url),
     /// A profile's usage hub, `/p/<slug>/v0/management…`, with the request URL as `Api` has it.
     Hub(url::Url),
+    /// A profile's Claude Agent engine, `/claude-agent/<profile id>/…`: the core's Messages
+    /// requests and Claude Code's MCP calls, with the request URL as `Api` has it.
+    ClaudeAgent(url::Url),
     Gateway,
     Asset {
         path: String,
@@ -207,7 +211,8 @@ impl Checks {
             }
             return Ok(Admission::Api(url));
         }
-        if path.starts_with("/v1") || path.starts_with(PROFILE_ROUTES) {
+        let engine = path.starts_with(CLAUDE_AGENT_ROUTES);
+        if path.starts_with("/v1") || path.starts_with(PROFILE_ROUTES) || engine {
             if allowed {
                 return Err(AppError::new(
                     "The agent API is only available on the loopback address.",
@@ -222,6 +227,9 @@ impl Checks {
             }
             if hub::target(path).is_some() {
                 return Ok(Admission::Hub(url));
+            }
+            if engine {
+                return Ok(Admission::ClaudeAgent(url));
             }
             return Ok(Admission::Gateway);
         }

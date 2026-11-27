@@ -17,7 +17,6 @@ nsv-files.workspace = true
 nsv-store.workspace = true
 nsv-net.workspace = true
 nsv-core.workspace = true
-serde.workspace = true
 # preserve_order: a queue entry without a request id is named by the hash of its JSON text, which
 # keeps the order the core wrote its keys in, as JSON.parse and JSON.stringify did.
 serde_json = { workspace = true, features = ["preserve_order"] }

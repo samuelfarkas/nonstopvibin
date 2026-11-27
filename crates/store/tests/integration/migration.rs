@@ -185,6 +185,17 @@ fn assert_bodies_round_trip<T: Serialize + DeserializeOwned>(
         .collect();
     assert!(!bodies.is_empty(), "{sql} has rows");
     for body in bodies {
+        // Launch deletes Claude sign-ins' accounts, so no build writes those back.
+        let body = match serde_json::from_str(&body).unwrap() {
+            Value::Array(items) => Value::Array(
+                items
+                    .into_iter()
+                    .filter(|item| item["provider"] != "claude")
+                    .collect(),
+            )
+            .to_string(),
+            _ => body,
+        };
         let value: T = serde_json::from_str(&body).unwrap();
         assert_eq!(serde_json::to_string(&value).unwrap(), body, "{sql}");
     }
@@ -193,6 +204,14 @@ fn assert_bodies_round_trip<T: Serialize + DeserializeOwned>(
 async fn check(store: &Store, data: &Path, expected: &Value) {
     let wanted = expected.clone();
     let observed = store.call(move |db| observe(db, &wanted)).await.unwrap();
+    // Model-scoped windows were Claude sign-ins' only, and this build reads none.
+    let mut expected = expected.clone();
+    for row in expected["quotas"].as_array_mut().unwrap() {
+        for window in row["quota"]["windows"].as_array_mut().unwrap() {
+            window.as_object_mut().unwrap().shift_remove("scoped");
+        }
+    }
+    let expected = &expected;
     for key in KEYS {
         assert_eq!(observed[key], expected[key], "{key}");
     }
@@ -260,7 +279,10 @@ async fn check(store: &Store, data: &Path, expected: &Value) {
     );
     assert_bodies_round_trip::<Profile>(&raw, "SELECT body FROM profiles");
     assert_bodies_round_trip::<ApiAccount>(&raw, "SELECT body FROM api_accounts");
-    assert_bodies_round_trip::<Quota>(&raw, "SELECT body FROM quotas");
+    assert_bodies_round_trip::<Quota>(
+        &raw,
+        "SELECT body FROM quotas WHERE account_id NOT LIKE 'claude-%'",
+    );
     assert_bodies_round_trip::<UsageRecord>(&raw, "SELECT body FROM usage");
     assert_bodies_round_trip::<Vec<Account>>(
         &raw,
@@ -450,7 +472,7 @@ async fn reads_a_typescript_data_directory_and_writes_one_in_the_same_format() {
         "status": "available",
         "windows": [
             { "label": "Monthly", "remainingPercent": 12.5, "resetsAt": null },
-            { "label": "Daily", "remainingPercent": 100, "resetsAt": "2026-11-24T00:00:00.000Z", "scoped": true },
+            { "label": "Daily", "remainingPercent": 100, "resetsAt": "2026-11-24T00:00:00.000Z" },
         ],
         "checkedAt": "2026-11-23T10:00:00.000Z",
         "plan": "pro",

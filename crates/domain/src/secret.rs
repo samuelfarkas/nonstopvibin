@@ -87,6 +87,11 @@ secret!(
     /// profile's limits and never reaches management or the agent API.
     HubKey
 );
+secret!(
+    /// The bearer token of the MCP server one Claude Agent `claude` process reaches the
+    /// harness's tools through, new for every process.
+    McpToken
+);
 
 /// Secrets this application issues: a prefix and 32 random bytes in base64url.
 macro_rules! generated {
@@ -105,7 +110,10 @@ generated!(
     CoreKey = "",
     ManagementKey = "",
     SessionToken = "",
-    HubKey = "nvh_"
+    HubKey = "nvh_",
+    // A Claude Agent account's key, which its core presents to the engine.
+    ApiKey = "nvc_",
+    McpToken = ""
 );
 
 /// The client-key alphabet and length that installed credential helpers already match.

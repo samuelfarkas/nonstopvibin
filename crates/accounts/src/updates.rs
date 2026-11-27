@@ -408,7 +408,7 @@ impl Inner {
         blocking(move || prune(&cores, Some(pin.version)).map_err(|error| io_error(&error))).await
     }
 
-    /// Starts `binary` on a throwaway profile, as a sign-in sandbox does, and lists its models
+    /// Starts `binary` on a throwaway profile and lists its models
     /// through its client key. Startup reaps and deletes what a crash leaves.
     async fn preflight(&self, binary: &Path, version: Version) -> Result<(), AppError> {
         let sandbox = Sandbox::open(

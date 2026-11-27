@@ -12,7 +12,7 @@ use nsv_accounts::accounts::Accounts;
 use nsv_accounts::restart::RestartTiming;
 use nsv_accounts::scheduler::{Host, Scheduler, TIMING, Timing};
 use nsv_core::binary::{CoreTarget, bundled_pin};
-use nsv_core::pool::{BoxFuture, Pool, Processes, READY};
+use nsv_core::pool::{BoxFuture, Launch, Pool, Processes, READY};
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::secret::ApiKey;
@@ -195,9 +195,12 @@ async fn real_world(
     let host: Arc<dyn Host> = Arc::<Reports>::clone(&reports);
     let (scheduler, ()) = Scheduler::new(
         store.clone(),
-        binary,
-        Arc::new(Processes::new(&directory)),
-        READY,
+        Launch {
+            binary,
+            backend: Arc::new(Processes::new(&directory)),
+            ready: READY,
+            daemon: None,
+        },
         Arc::new(Accounts::new(store.clone())),
         timing,
         |_| (host, ()),

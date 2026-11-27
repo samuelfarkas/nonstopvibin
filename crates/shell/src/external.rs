@@ -173,13 +173,13 @@ mod tests {
             .unwrap()["output"]
             .as_array()
             .unwrap();
-        assert_eq!(hosts.len(), 14);
+        assert_eq!(hosts.len(), 11);
         for host in hosts {
             let url = format!("https://{}/", host.as_str().unwrap());
             assert_eq!(safe_external(&url), Ok(url.clone()));
         }
         assert_eq!(
-            safe_external("https://claude.ai:pass@claude.ai/"),
+            safe_external("https://chatgpt.com:pass@chatgpt.com/"),
             Err(NOT_APPROVED.to_owned())
         );
     }
@@ -188,7 +188,7 @@ mod tests {
     /// windows alike.
     #[test]
     fn an_approved_url_over_the_bridge_limit_is_refused() {
-        let at_limit = format!("https://claude.ai/{}", "a".repeat(20_000 - 18));
+        let at_limit = format!("https://chatgpt.com/{}", "a".repeat(20_000 - 20));
         assert_eq!(safe_external(&at_limit), Ok(at_limit.clone()));
         assert_eq!(
             safe_external(&format!("{at_limit}a")),

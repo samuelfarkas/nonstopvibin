@@ -1,21 +1,9 @@
 {
   "providers": {
-    "claude": {
-      "label": "Claude",
+    "claude-agent": {
+      "label": "Claude Agent",
       "catalog": "anthropic",
-      "nativeAgent": "claude",
-      "hosts": [
-        "claude.ai",
-        "console.anthropic.com",
-        "platform.claude.com"
-      ],
-      "credentialFile": true,
-      "signIn": {
-        "core": "anthropic"
-      },
-      "bankedResets": true,
-      "organizations": true,
-      "reconnect": true
+      "nativeAgent": "claude"
     },
     "codex": {
       "label": "Codex",
@@ -26,7 +14,7 @@
         "chatgpt.com"
       ],
       "credentialFile": true,
-      "signIn": {},
+      "signIn": true,
       "bankedResets": true
     },
     "antigravity": {
@@ -35,7 +23,7 @@
         "accounts.google.com"
       ],
       "credentialFile": true,
-      "signIn": {}
+      "signIn": true
     },
     "kimi": {
       "label": "Kimi Code",
@@ -46,7 +34,7 @@
         "kimi.com"
       ],
       "credentialFile": true,
-      "signIn": {}
+      "signIn": true
     },
     "xai": {
       "label": "Grok",
@@ -57,7 +45,7 @@
         "accounts.xai.com"
       ],
       "credentialFile": true,
-      "signIn": {}
+      "signIn": true
     },
     "opencode-go": {
       "label": "OpenCode Go",

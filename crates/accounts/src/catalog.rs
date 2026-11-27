@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
 use nsv_domain::js;
-use nsv_domain::registry::{Provider, registry};
+use nsv_domain::registry::{CORE_CLAUDE, Provider, registry};
 use nsv_domain::sync::locked;
 use nsv_domain::time::iso_string;
 use nsv_domain::wire::{
@@ -208,8 +208,14 @@ fn tier(value: &Value) -> Option<CostTier> {
     })
 }
 
-/// The catalog id of a routing provider: the registry's mapping, else the id itself.
+/// The catalog id of a routing provider: the registry's mapping, Anthropic's for the core's
+/// [`CORE_CLAUDE`] routes, else the id itself.
 fn catalog_provider(provider: &str) -> String {
+    let provider = if provider == CORE_CLAUDE {
+        Provider::Anthropic.as_str()
+    } else {
+        provider
+    };
     Provider::from_id(provider)
         .and_then(|known| registry().providers.get(known).catalog.clone())
         .unwrap_or_else(|| provider.to_owned())

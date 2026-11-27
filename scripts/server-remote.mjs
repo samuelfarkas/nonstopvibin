@@ -14,7 +14,7 @@ import {
   serverPrefix,
 } from "./distribution.ts";
 
-const SIGN_IN_PORTS = [1455, 54545]; // Codex, Claude
+const SIGN_IN_PORTS = [1455]; // Codex
 const [command, destination, ...rest] = process.argv.slice(2);
 let tunnel;
 const fail = (message) => {

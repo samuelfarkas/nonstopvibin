@@ -12,6 +12,7 @@
 mod api;
 mod assets;
 mod checks;
+mod claude_agent;
 mod daemon;
 mod desktop;
 mod failure;

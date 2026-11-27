@@ -6,7 +6,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use nsv_domain::id::ProfileId;
 use nsv_domain::wire::{Account, AccountStatus};
@@ -104,50 +104,24 @@ async fn a_sync_notes_the_credentials_the_core_keeps_from_requests_for_quota() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn account_sync_rereads_a_claude_identity_only_when_its_file_changes_and_repairs_only_loose_modes()
- {
+async fn account_sync_makes_credential_files_owner_only() {
     let (world, profile) = started(json!({ "files": [
-        { "name": "seat.json", "provider": "claude", "auth_index": "seat" },
+        { "name": "codex.json", "provider": "codex", "auth_index": "codex" },
     ] }))
     .await;
     let path = DataDir::new(&world.data)
         .credentials(&profile)
-        .join("seat.json");
-    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-    let write = |organization: &str, modified: SystemTime| {
-        fs::write(
-            &path,
-            json!({ "type": "claude", "organization_name": organization }).to_string(),
-        )
-        .unwrap();
-        fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(modified)
-            .unwrap();
-    };
-    let organization = async || {
-        world
-            .run(world.accounts.sync(world.pool(), &profile))
-            .await
-            .unwrap();
-        metadata(&world, &profile).await[0]
-            .organization_name
-            .clone()
-    };
-    write("Org One", at);
+        .join("codex.json");
+    fs::write(&path, json!({ "type": "codex" }).to_string()).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert_eq!(organization().await.as_deref(), Some("Org One"));
+    world
+        .run(world.accounts.sync(world.pool(), &profile))
+        .await
+        .unwrap();
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    // Same size and time: the cached identity stands, so the file was not read again.
-    write("Org Two", at);
-    assert_eq!(organization().await.as_deref(), Some("Org One"));
-    write("Org Two", at + Duration::from_secs(1));
-    assert_eq!(organization().await.as_deref(), Some("Org Two"));
 }
 
 #[tokio::test(start_paused = true)]

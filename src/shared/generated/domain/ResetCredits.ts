@@ -2,11 +2,6 @@
 import type { ResetCredit } from "./ResetCredit";
 
 /**
- * A subscription's banked rate-limit resets: Codex's in its snake case, and Claude's reset
- * grants read into the same shape.
+ * A subscription's banked rate-limit resets, in Codex's snake case.
  */
-export type ResetCredits = { available_count: number, credits: Array<ResetCredit>, 
-/**
- * Why the provider offers this subscription no resets, when it says.
- */
-note?: string, };
+export type ResetCredits = { available_count: number, credits: Array<ResetCredit>, };

@@ -81,8 +81,8 @@ fn refusal(answer: &(u16, Value)) -> (u16, &Value) {
     (answer.0, &answer.1["error"]["message"])
 }
 
-/// Alpha's core lists a Codex, a Claude and a Grok subscription, a paused Claude one, a Gemini
-/// one and an API key; Beta's a Codex subscription.
+/// Alpha's core lists a Codex, a retired Claude and a Grok subscription, a paused Codex one, a
+/// Gemini one and an API key; Beta's a Codex subscription.
 fn alpha_listing() -> Value {
     json!({ "files": [
         {
@@ -97,7 +97,7 @@ fn alpha_listing() -> Value {
         },
         { "name": "xai.json", "provider": "xai", "auth_index": "alpha-xai", "disabled": false },
         {
-            "name": "claude-paused.json", "provider": "claude", "auth_index": "alpha-paused",
+            "name": "codex-paused.json", "provider": "codex", "auth_index": "alpha-paused",
             "email": "paused@example.invalid", "disabled": true,
         },
         { "name": "gemini.json", "provider": "gemini", "auth_index": "alpha-gemini", "disabled": false },
@@ -332,13 +332,9 @@ async fn auth_files_list_the_hub_accounts_and_nothing_else() {
                     "provider": "codex", "email": "codex@example.invalid", "disabled": false,
                     "id_token": { "chatgpt_account_id": "workspace-alpha" },
                 },
-                {
-                    "id": "claude.json", "auth_index": "alpha-claude", "provider": "claude",
-                    "email": "claude@example.invalid", "disabled": false,
-                },
                 { "id": "xai.json", "auth_index": "alpha-xai", "provider": "xai", "disabled": false },
                 {
-                    "id": "claude-paused.json", "auth_index": "alpha-paused", "provider": "claude",
+                    "id": "codex-paused.json", "auth_index": "alpha-paused", "provider": "codex",
                     "email": "paused@example.invalid", "disabled": true,
                 },
             ] })
@@ -357,9 +353,6 @@ async fn t3_code_s_calls_reach_only_the_profile_s_core_with_this_app_s_headers()
             recorded.lock().unwrap().push(call.clone());
             match call["url"].as_str().unwrap() {
                 XAI_CREDITS => json!({ "status_code": 429, "body": "synthetic provider detail" }),
-                CLAUDE_USAGE => {
-                    json!({ "status_code": 200, "body": { "five_hour": { "utilization": 25 } } })
-                }
                 _ => json!({ "status_code": 200, "body": r#"{"answered":true}"# }),
             }
         });
@@ -368,7 +361,6 @@ async fn t3_code_s_calls_reach_only_the_profile_s_core_with_this_app_s_headers()
         api_call("alpha-codex", "GET", CODEX_USAGE),
         api_call("alpha-codex", "GET", CODEX_CREDITS),
         with_data(api_call("alpha-codex", "POST", CODEX_CONSUME), REDEMPTION),
-        api_call("alpha-claude", "GET", CLAUDE_USAGE),
         api_call("alpha-xai", "GET", XAI_CREDITS),
     ];
     let mut answers = Vec::new();
@@ -382,10 +374,6 @@ async fn t3_code_s_calls_reach_only_the_profile_s_core_with_this_app_s_headers()
             (200, answered.clone()),
             (200, answered.clone()),
             (200, answered),
-            (
-                200,
-                json!({ "status_code": 200, "body": r#"{"five_hour":{"utilization":25}}"# })
-            ),
             (200, json!({ "status_code": 429, "body": "" })),
         ]
     );
@@ -394,10 +382,6 @@ async fn t3_code_s_calls_reach_only_the_profile_s_core_with_this_app_s_headers()
         "Chatgpt-Account-Id": "workspace-alpha", "User-Agent": USER_AGENT,
     });
     let bearer = json!({ "Authorization": "Bearer $TOKEN$", "Content-Type": "application/json" });
-    let claude = json!({
-        "Authorization": "Bearer $TOKEN$", "Content-Type": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-    });
     assert_eq!(
         *seen.lock().unwrap(),
         [
@@ -407,11 +391,10 @@ async fn t3_code_s_calls_reach_only_the_profile_s_core_with_this_app_s_headers()
                 "auth_index": "alpha-codex", "method": "POST", "url": CODEX_CONSUME,
                 "header": codex, "data": REDEMPTION,
             }),
-            json!({ "auth_index": "alpha-claude", "method": "GET", "url": CLAUDE_USAGE, "header": claude }),
             json!({ "auth_index": "alpha-xai", "method": "GET", "url": XAI_CREDITS, "header": bearer }),
         ]
     );
-    assert_eq!(hubs.calls(&hubs.alpha, "/api-call"), 5);
+    assert_eq!(hubs.calls(&hubs.alpha, "/api-call"), 4);
     assert_eq!(hubs.calls(&hubs.beta, "/api-call"), 0);
     hubs.app.close().await;
 }
@@ -437,13 +420,18 @@ async fn refused_calls_never_reach_a_core() {
             403,
         ),
         (api_call("alpha-codex", "get", CODEX_USAGE), 403),
-        // A Claude token never goes to chatgpt.com.
-        (api_call("alpha-claude", "GET", CODEX_USAGE), 403),
+        // A Grok token never goes to chatgpt.com.
+        (api_call("alpha-xai", "GET", CODEX_USAGE), 403),
+        // Claude subscriptions are served by Claude Code: no Claude call, and a retired Claude
+        // sign-in is no hub account.
+        (api_call("alpha-codex", "GET", CLAUDE_USAGE), 403),
+        (api_call("alpha-claude", "GET", CLAUDE_USAGE), 403),
+        (api_call("alpha-claude", "GET", CODEX_USAGE), 404),
         (api_call("alpha-gemini", "GET", CODEX_USAGE), 404),
         (api_call("alpha-api-key", "GET", CODEX_USAGE), 404),
         (api_call("unknown", "GET", CODEX_USAGE), 404),
         (api_call("beta-codex", "GET", CODEX_USAGE), 404),
-        (api_call("alpha-paused", "GET", CLAUDE_USAGE), 409),
+        (api_call("alpha-paused", "GET", CODEX_USAGE), 409),
         (
             with_data(api_call("alpha-codex", "GET", CODEX_USAGE), "{}"),
             400,

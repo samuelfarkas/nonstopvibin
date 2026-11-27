@@ -5,7 +5,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Profile, True};
-use crate::id::AccountId;
 use crate::registry::{OAuthProvider, Protocol, Provider, RetentionDays, Strategy};
 use crate::secret::ApiKey;
 
@@ -44,6 +43,23 @@ impl std::fmt::Debug for UsageHub {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("UsageHub(<redacted>)")
     }
+}
+
+/// `GET /profiles/:profileId/claude-agent`: whether the user's own Claude Code can serve the
+/// profile's Claude Agent subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+pub struct ClaudeAgentStatus {
+    /// Where `claude` was found; absent when it was not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+    /// The command that signs Claude Code in for this profile.
+    pub sign_in: String,
+    pub signed_in: bool,
+    /// Why the sign-in could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// The body of every error the server answers, under `/api` and elsewhere.
@@ -166,14 +182,12 @@ pub struct CoreInstallBody {
 /// `POST /profiles/:profileId/oauth`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct OAuthStartBody {
     pub provider: OAuthProvider,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconnect_account_id: Option<AccountId>,
 }
 
-/// `POST /profiles/:profileId/oauth-confirm`, and the `state` query of the OAuth routes.
+/// The `state` query of the OAuth routes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct StateBody {
@@ -261,12 +275,13 @@ pub enum ProfileRoute {
     SignIn,
     SignInStatus,
     SignInCancel,
-    SignInConfirm,
     SignInSession,
     Callback,
     Import,
     ImportSource,
     ApiAccount,
+    ClaudeAgentStatus,
+    ClaudeAgentConnect,
 }
 
 /// A route under one account of a profile.
@@ -381,11 +396,6 @@ pub const ROUTES: &[(&str, &str, Route)] = &[
         Route::Profile(ProfileRoute::SignInCancel),
     ),
     (
-        "POST",
-        "/profiles/:profileId/oauth-confirm",
-        Route::Profile(ProfileRoute::SignInConfirm),
-    ),
-    (
         "GET",
         "/profiles/:profileId/oauth-session",
         Route::Profile(ProfileRoute::SignInSession),
@@ -429,6 +439,16 @@ pub const ROUTES: &[(&str, &str, Route)] = &[
         "POST",
         "/profiles/:profileId/api-account",
         Route::Profile(ProfileRoute::ApiAccount),
+    ),
+    (
+        "GET",
+        "/profiles/:profileId/claude-agent",
+        Route::Profile(ProfileRoute::ClaudeAgentStatus),
+    ),
+    (
+        "POST",
+        "/profiles/:profileId/claude-agent",
+        Route::Profile(ProfileRoute::ClaudeAgentConnect),
     ),
     // A second desktop launch; only the desktop app serves it.
     (

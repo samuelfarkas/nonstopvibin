@@ -316,6 +316,7 @@ impl World {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }),
                 app,
+                daemon_port: None,
             })
             .unwrap(),
         );
@@ -366,21 +367,3 @@ pub fn names(directory: &Path) -> Vec<String> {
     names.sort();
     names
 }
-
-/// A Claude credential for one seat of `organization`, as the provider returns it.
-#[must_use]
-pub fn claude(organization: &str, token: &str) -> Value {
-    json!({
-        "type": "claude",
-        "email": "same@example.invalid",
-        "access_token": format!("synthetic-access-{token}"),
-        "refresh_token": format!("synthetic-refresh-{token}"),
-        "account_uuid": ACCOUNT,
-        "organization_uuid": organization,
-        "organization_name": if organization == ORGANIZATION_A { "Example A" } else { "Example B" },
-    })
-}
-
-pub const ACCOUNT: &str = "aaaaaaaa-0000-4000-8000-000000000001";
-pub const ORGANIZATION_A: &str = "bbbbbbbb-0000-4000-8000-00000000000a";
-pub const ORGANIZATION_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";

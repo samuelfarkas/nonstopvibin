@@ -27,7 +27,6 @@ export type RouteKey =
   | "POST /profiles/:profileId/oauth"
   | "GET /profiles/:profileId/oauth"
   | "DELETE /profiles/:profileId/oauth"
-  | "POST /profiles/:profileId/oauth-confirm"
   | "GET /profiles/:profileId/oauth-session"
   | "POST /profiles/:profileId/callback"
   | "POST /profiles/:profileId/import"
@@ -37,4 +36,6 @@ export type RouteKey =
   | "GET /profiles/:profileId/accounts/:accountId/reset-credits"
   | "POST /profiles/:profileId/accounts/:accountId/reset-credits"
   | "POST /profiles/:profileId/api-account"
+  | "GET /profiles/:profileId/claude-agent"
+  | "POST /profiles/:profileId/claude-agent"
   | "POST /desktop/show";

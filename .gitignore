@@ -55,3 +55,6 @@ id_ed25519
 # The migration fixture: a data directory the TypeScript version wrote, with fixed synthetic keys.
 !/tests/fixtures/ts-data-dir/data/nonstopvibin.sqlite
 !/tests/fixtures/ts-data-dir/data/vault.key
+# Trimmed claude stream-json recordings the Claude Agent translator tests replay: no
+# paths, environment or credentials.
+!/crates/claude-agent/src/fixtures/*.jsonl

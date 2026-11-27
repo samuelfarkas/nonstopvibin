@@ -37,7 +37,7 @@ const settle = (promise) => promise.then(
     getLoginItem: await settle(bridge.getLoginItem()),
     setLoginItem: await settle(bridge.setLoginItem(true)),
     getLoginItemAfter: await settle(bridge.getLoginItem()),
-    openExternal: await settle(bridge.openExternal("https://claude.ai/login")),
+    openExternal: await settle(bridge.openExternal("https://auth.openai.com/log-in")),
     openDenied: await settle(bridge.openExternal("https://evil.example/")),
     revealData: await settle(bridge.revealData()),
   };
@@ -435,7 +435,7 @@ fn the_tray_drives_the_helper_and_quits_cleanly() {
     assert_eq!(*shown.lock().unwrap(), [database]);
     // The approved call, then the page's denied window through the same allowlist.
     wait_until("the browser opens both pages", || {
-        read_log(&opened) == "https://claude.ai/login\nhttps://chatgpt.com/\n"
+        read_log(&opened) == "https://auth.openai.com/log-in\nhttps://chatgpt.com/\n"
     });
 
     // A click opens the popup, the next closes it, a later one opens it again.

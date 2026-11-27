@@ -3,4 +3,4 @@
 /**
  * A credential file another app left that can be imported.
  */
-export type ImportSource = { id: string, fileName: string, provider: string, email?: string, source: string, accountUuid?: string, organizationUuid?: string, organizationName?: string, };
+export type ImportSource = { id: string, fileName: string, provider: string, email?: string, source: string, };

@@ -7,6 +7,7 @@ members = ["crates/*"]
 default-members = [
     "crates/accounts",
     "crates/agents",
+    "crates/claude-agent",
     "crates/cli",
     "crates/core",
     "crates/desktop",
@@ -31,6 +32,7 @@ repository = "https://github.com/samuelfarkas/nonstopvibin"
 [workspace.dependencies]
 nsv-accounts = { path = "crates/accounts" }
 nsv-agents = { path = "crates/agents" }
+nsv-claude-agent = { path = "crates/claude-agent" }
 nsv-core = { path = "crates/core" }
 nsv-desktop = { path = "crates/desktop" }
 nsv-domain = { path = "crates/domain" }

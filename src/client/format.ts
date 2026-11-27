@@ -1,11 +1,4 @@
 import type { Account } from "../shared/types.ts";
-import { providerLabel } from "../shared/providers.ts";
-
-/** The organization fields an account and an import source share. */
-type SeatIdentity = Pick<
-  Account,
-  "accountUuid" | "organizationUuid" | "organizationName"
->;
 
 export function groupAccountsByProvider(
   accounts: Account[],
@@ -31,21 +24,6 @@ const plans = new Map([
 export function planLabel(plan: string): string {
   const text = plans.get(plan) ?? plan.replace(/[_-]+/g, " ").trim();
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-export function organizationLabel(seat: SeatIdentity): string {
-  return (
-    seat.organizationName ||
-    (seat.organizationUuid
-      ? `Organization ${seat.organizationUuid.slice(0, 8)}`
-      : "")
-  );
-}
-export function accountLabel(account: Account): string {
-  const organization = organizationLabel(account);
-  return organization
-    ? `${organization}${account.name !== providerLabel(account.provider) ? ` · ${account.name}` : ""}`
-    : account.name;
 }
 
 export function resetIn(value: string | null, now = Date.now()): string {

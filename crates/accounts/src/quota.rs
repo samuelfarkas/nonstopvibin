@@ -18,19 +18,16 @@ use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js;
 use nsv_domain::registry::{Provider, registry};
 use nsv_domain::time::{self, iso_string};
-use nsv_domain::wire::{Account, AccountKind, JsNumber, Quota, QuotaStatus, QuotaWindow, True};
+use nsv_domain::wire::{Account, AccountKind, JsNumber, Quota, QuotaStatus, QuotaWindow};
 use nsv_net::USER_AGENT;
 use nsv_store::{Store, StoreError};
 use serde_json::{Map, Value, json};
 
 use crate::fetch::{Outside, Request};
-use crate::identity::CLAUDE_OAUTH_BETA;
 use crate::task::Exclusive;
 
 /// `ChatGPT`'s backend for Codex subscriptions: quota and banked resets.
 pub const CODEX_API: &str = "https://chatgpt.com/backend-api/wham";
-/// Anthropic's API for Claude subscriptions: usage and reset grants.
-pub const CLAUDE_API: &str = "https://api.anthropic.com/api";
 const XAI_BILLING: &str = "https://cli-chat-proxy.grok.com/v1/billing";
 const OPENCODE_TIMEOUT: Duration = Duration::from_secs(15);
 const OPENCODE_LIMIT: u64 = 1024 * 1024;
@@ -129,15 +126,6 @@ impl UpstreamRequest {
         }
     }
 
-    /// A call to Anthropic's OAuth account API as the Claude subscription.
-    pub(crate) fn claude(method: &'static str, url: String) -> Self {
-        let mut request = Self::bearer(method, url);
-        request
-            .header
-            .push(("anthropic-beta", CLAUDE_OAUTH_BETA.to_owned()));
-        request
-    }
-
     /// A call to `ChatGPT`'s Codex backend as the subscription `chatgpt_account_id`.
     pub(crate) fn codex(
         method: &'static str,
@@ -212,7 +200,6 @@ pub enum ParseError {
 /// A provider whose quota the server reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QuotaProvider {
-    Claude,
     Codex,
     Kimi,
     Antigravity,
@@ -237,13 +224,16 @@ impl From<Vec<QuotaWindow>> for Reading {
 impl QuotaProvider {
     fn from_id(provider: &str) -> Option<Self> {
         Some(match Provider::from_id(provider)? {
-            Provider::Claude => Self::Claude,
             Provider::Codex => Self::Codex,
             Provider::Kimi => Self::Kimi,
             Provider::Antigravity => Self::Antigravity,
             Provider::Xai => Self::Xai,
             Provider::OpencodeGo => Self::OpencodeGo,
-            Provider::Openai | Provider::Anthropic | Provider::Gemini | Provider::Custom => {
+            Provider::ClaudeAgent
+            | Provider::Openai
+            | Provider::Anthropic
+            | Provider::Gemini
+            | Provider::Custom => {
                 return None;
             }
         })
@@ -256,7 +246,6 @@ impl QuotaProvider {
 
     fn read(self, body: &Value, now: i64) -> Result<Reading, ParseError> {
         match self {
-            Self::Claude => claude_quota(body, now).map(Reading::from),
             Self::Codex => codex_quota(body, now),
             Self::Kimi => kimi_quota(body, now).map(Reading::from),
             Self::Antigravity => Ok(antigravity_quota(body).into()),
@@ -347,64 +336,7 @@ fn window(
         label: label.into(),
         remaining_percent,
         resets_at,
-        scoped: None,
     }
-}
-
-/// Claude's account-wide and per-model windows: key, label, scoped.
-const CLAUDE_WINDOWS: [(&str, &str, bool); 6] = [
-    ("five_hour", "5-hour", false),
-    ("seven_day", "Weekly", false),
-    ("seven_day_opus", "Opus weekly", true),
-    ("seven_day_sonnet", "Sonnet weekly", true),
-    ("seven_day_oauth_apps", "OAuth weekly", true),
-    ("seven_day_cowork", "Cowork weekly", true),
-];
-
-fn claude_quota(body: &Value, now: i64) -> Result<Vec<QuotaWindow>, ParseError> {
-    let body = Some(body);
-    let mut windows = Vec::new();
-    for (key, label, scoped) in CLAUDE_WINDOWS {
-        let raw = js::field(body, key);
-        if !js::non_empty_record(raw) {
-            continue;
-        }
-        let mut entry = window(
-            label,
-            remaining(js::field(raw, "utilization")),
-            reset(raw, now)?,
-        );
-        entry.scoped = scoped.then_some(True);
-        windows.push(entry);
-    }
-    if let Some(Value::Array(limits)) = js::field(body, "limits") {
-        for item in limits {
-            let item = Some(item);
-            let model = js::text(js::field(
-                js::field(js::field(item, "scope"), "model"),
-                "display_name",
-            ))
-            .map(js::trim);
-            let Some(model) = model.filter(|model| !model.is_empty()) else {
-                continue;
-            };
-            if js::text(js::field(item, "kind")) != Some("weekly_scoped") {
-                continue;
-            }
-            let label = format!("{model} weekly");
-            if windows.iter().any(|window| window.label == label) {
-                continue;
-            }
-            let mut entry = window(
-                label,
-                remaining(js::field(item, "percent")),
-                reset(item, now)?,
-            );
-            entry.scoped = Some(True);
-            windows.push(entry);
-        }
-    }
-    Ok(windows)
 }
 
 fn codex_quota(body: &Value, now: i64) -> Result<Reading, ParseError> {
@@ -830,13 +762,6 @@ impl<S: QuotaSource> Quotas<S> {
                 ))
             };
         let payload = match source {
-            QuotaProvider::Claude => {
-                send(
-                    UpstreamRequest::claude("GET", format!("{CLAUDE_API}/oauth/usage")),
-                    None,
-                )
-                .await?
-            }
             QuotaProvider::Codex => {
                 let id = self.source.chatgpt_account_id(profile, &account.id);
                 send(

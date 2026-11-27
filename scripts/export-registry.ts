@@ -44,7 +44,7 @@ const provider = (entry: ProviderEntry) => ({
   nativeAgent: entry.nativeAgent,
   hosts: entry.hosts,
   credentialFile: entry.credentialFile,
-  signIn: entry.signIn && { core: entry.signIn.core },
+  signIn: entry.signIn !== undefined || undefined,
   apiKey: entry.apiKey,
   preset: entry.preset && {
     name: entry.preset.name,
@@ -53,8 +53,6 @@ const provider = (entry: ProviderEntry) => ({
     upstream: entry.preset.upstream,
   },
   bankedResets: entry.bankedResets,
-  organizations: entry.organizations,
-  reconnect: entry.reconnect,
 });
 const target = join(import.meta.dirname, "../crates/domain/data/registry.json");
 const registry = {

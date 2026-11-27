@@ -342,7 +342,9 @@ impl Running {
             .unwrap();
         let reserved = Port::reserve();
         let port = reserved.number();
-        let config = write_config(store, profile.id.clone(), port).await.unwrap();
+        let config = write_config(store, profile.id.clone(), port, None)
+            .await
+            .unwrap();
         // The core binds it.
         drop(reserved);
         let core = spawn_core(binary, &DataDir::new(data), &profile.id).unwrap();
@@ -732,4 +734,43 @@ async fn the_pinned_core_reads_every_golden_config_as_written() {
         loaded += 1;
     }
     assert_eq!(loaded, 15);
+}
+
+#[tokio::test]
+async fn the_pinned_core_applies_a_claude_agent_entry_with_its_never_cloak() {
+    let binary = pinned_core();
+    let root = TempDir::new("claude-agent-core");
+    let data = root.path().join("data");
+    let store = open(&data).await;
+    let profile = store
+        .call(|db| {
+            let profile = db.create_profile("Claude Agent")?;
+            let account: ApiAccount = serde_json::from_value(json!({
+                "id": "agent", "name": "Claude Agent", "provider": "claude-agent", "baseUrl": "",
+                "prefix": "", "models": [{ "id": "claude-opus-5-5", "protocol": "anthropic" }],
+                "disabled": false,
+            }))
+            .unwrap();
+            db.save_api_account(&profile.id, &account, Some(&ApiKey::new("agent-key")))?;
+            Ok(profile)
+        })
+        .await
+        .unwrap();
+    let reserved = Port::reserve();
+    let port = reserved.number();
+    let config = write_config(&store, profile.id.clone(), port, Some(8317))
+        .await
+        .unwrap();
+    drop(reserved);
+    let mut core = spawn_core(&binary, &DataDir::new(&data), &profile.id).unwrap();
+    let reported = reported_config(port, config.management_key.expose_secret()).await;
+    core.terminate().await.unwrap();
+    store.close().await;
+    assert!(applied(&config, &reported), "{reported}");
+    let entry = &reported["claude-api-key"][0];
+    assert_eq!(entry["cloak"], json!({ "mode": "never" }), "{reported}");
+    assert_eq!(
+        entry["base-url"],
+        format!("http://127.0.0.1:8317/claude-agent/{}", profile.id)
+    );
 }

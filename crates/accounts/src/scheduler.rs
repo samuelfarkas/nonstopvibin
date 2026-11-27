@@ -12,11 +12,10 @@
 //! version.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
-use nsv_core::pool::{Backend, BoxFuture, CoreEvent, CoreId, Hooks, Pool, PoolState};
+use nsv_core::pool::{BoxFuture, CoreEvent, CoreId, Hooks, Launch, Pool, PoolState};
 use nsv_core::upstream;
 use nsv_domain::error::AppError;
 use nsv_domain::id::ProfileId;
@@ -257,15 +256,12 @@ struct Shared {
 pub struct Scheduler(Arc<Shared>);
 
 impl Scheduler {
-    /// The scheduler and its pool, whose cores start from `binary` through `backend` and get
-    /// `ready` to answer. The host's features drive the pool, so `assemble` builds the host
-    /// from it, with whatever else the caller keeps. Nothing is scheduled before
-    /// [`Scheduler::launch`].
+    /// The scheduler and its pool, whose cores start as `launch` says. The host's features
+    /// drive the pool, so `assemble` builds the host from it, with whatever else the caller
+    /// keeps. Nothing is scheduled before [`Scheduler::launch`].
     pub fn new<T>(
         store: Store,
-        binary: PathBuf,
-        backend: Arc<dyn Backend>,
-        ready: Duration,
+        launch: Launch,
         accounts: Arc<Accounts>,
         timing: Timing,
         assemble: impl FnOnce(&Pool) -> (Arc<dyn Host>, T),
@@ -273,7 +269,7 @@ impl Scheduler {
         let mut kept = None;
         let shared = Arc::new_cyclic(|shared| {
             let hooks = Arc::new(PoolHooks(Weak::clone(shared)));
-            let pool = Pool::new(store.clone(), binary, backend, ready, hooks);
+            let pool = Pool::new(store.clone(), launch, hooks);
             let (host, rest) = assemble(&pool);
             kept = Some(rest);
             Shared {

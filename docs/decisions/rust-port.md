@@ -82,25 +82,26 @@ option below. Only the host changes.
 
 ### Code layout
 
-Fourteen crates under `crates/`, edition 2024, one `[workspace.lints]` table. "Depends on"
+Fifteen crates under `crates/`, edition 2024, one `[workspace.lints]` table. "Depends on"
 lists each crate's direct workspace dependencies:
 
-| Crate      | Owns                                                                                                                                                    | Depends on                                                                |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `domain`   | Ids, enums, wire types, the registry, secret newtypes, JavaScript semantics, time, random ids, the daemon's addresses. No file, network or process I/O. | —                                                                         |
-| `files`    | The data directory and every path in it, its single-instance lock, owner and symlink checks, atomic writes.                                             | `domain`                                                                  |
-| `store`    | Vault, SQLite thread.                                                                                                                                   | `domain`, `files`                                                         |
-| `net`      | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring).                                                                             | —                                                                         |
-| `core`     | Core binary pin and hash checks, config, spawn, watchdog, ledger, pool, management client, the reviewed-pin fetch.                                      | `domain`, `files`, `net`, `store`                                         |
-| `accounts` | Accounts, quota, usage drain, the deadline scheduler and its restart policy, sign-in, credentials, core updates, pricing, model catalog.                | `core`, `domain`, `files`, `net`, `store`                                 |
-| `agents`   | The four agent setup writers, native config files, the credential socket.                                                                               | `domain`, `files`                                                         |
-| `gateway`  | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                                                            | `domain`                                                                  |
-| `desktop`  | The desktop contract: the daemon-helper pipe and its handshake, the bridge methods and limits, the tray's and the shell's plain types.                  | `domain`                                                                  |
-| `server`   | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order, the second launch's `Session::show_main`.           | all above                                                                 |
-| `shell`    | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the cli implements.                                                       | `desktop`, `domain`, `files`, `net`; `core` on macOS                      |
-| `window`   | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                                           | `desktop`, `domain`                                                       |
-| `cli`      | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection, the shell's host.                                                    | `agents`, `core`, `files`, `server`, `shell`                              |
-| `testkit`  | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world, a shell host.                | `accounts`, `core`, `desktop`, `domain`, `files`, `net`, `shell`, `store` |
+| Crate          | Owns                                                                                                                                                                          | Depends on                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `domain`       | Ids, enums, wire types, the registry, secret newtypes, JavaScript semantics, time, random ids, the daemon's addresses. No file, network or process I/O.                       | —                                                                         |
+| `files`        | The data directory and every path in it, its single-instance lock, owner and symlink checks, atomic writes.                                                                   | `domain`                                                                  |
+| `store`        | Vault, SQLite thread.                                                                                                                                                         | `domain`, `files`                                                         |
+| `net`          | The loopback HTTP/1 client and the one HTTPS GET client (rustls with ring).                                                                                                   | —                                                                         |
+| `core`         | Core binary pin and hash checks, config, spawn, watchdog, ledger, pool, management client, the reviewed-pin fetch.                                                            | `domain`, `files`, `net`, `store`                                         |
+| `accounts`     | Accounts, quota, usage drain, the deadline scheduler and its restart policy, sign-in, credentials, core updates, pricing, model catalog.                                      | `core`, `domain`, `files`, `net`, `store`                                 |
+| `agents`       | The four agent setup writers, native config files, the credential socket.                                                                                                     | `domain`, `files`                                                         |
+| `gateway`      | Key extraction, routing, header rewrite, HTTP, SSE and upgrade pass-through.                                                                                                  | `domain`                                                                  |
+| `claude-agent` | Claude Agent: the engine that serves a profile's Claude subscription through the user's own `claude`, its sessions and processes, and the MCP server for the harness's tools. | `domain`, `files`, `gateway`                                              |
+| `desktop`      | The desktop contract: the daemon-helper pipe and its handshake, the bridge methods and limits, the tray's and the shell's plain types.                                        | `domain`                                                                  |
+| `server`       | Listener, Host, Origin and token checks, `/api` routes, the UI's files, startup and shutdown order, the second launch's `Session::show_main`.                                 | all above                                                                 |
+| `shell`        | Tray, helper supervision, login item, app updater, behind a `ShellHost` trait the cli implements.                                                                             | `desktop`, `domain`, `files`, `net`; `core` on macOS                      |
+| `window`       | The helper binary: `wry` window, bridge script, IPC, dialogs.                                                                                                                 | `desktop`, `domain`                                                       |
+| `cli`          | The daemon binary: arguments, `serve`, `url`, `status`, `service`, mode selection, the shell's host.                                                                          | `agents`, `core`, `files`, `server`, `shell`                              |
+| `testkit`      | Test support, a dev-dependency only: temp directories, port reservations, chunked bodies, fake cores, the accounts' world, a shell host.                                      | `accounts`, `core`, `desktop`, `domain`, `files`, `net`, `shell`, `store` |
 
 - The gateway receives a request and a `Lease` (profile id, slug, client and core keys, upstream
   address, in-flight guard). A `Lease` holds no management key, and the gateway crate cannot
@@ -123,6 +124,12 @@ lists each crate's direct workspace dependencies:
   blocking threads, kept alive two seconds.
 - One scheduler task sleeps until the earliest deadline (usage drains, account refresh, idle
   stop, restart backoff, retention). With no deadline it never wakes.
+- Claude Agent keeps two timers outside it, each ending with its work: a deadline task per
+  profile, which ends when the profile has no live `claude`, and a 30 s progress timer per held
+  tool call. Measured in the engine's test harness (the engine behind the real core and a fake
+  `claude`, per-thread context switches from `/proc` each second): 1 context switch in 180 s
+  while an idle session waited for its deadline, and 0 in the 75 s after that deadline stopped
+  it. The full daemon binary was not measured.
 - `panic = "unwind"` with overflow checks. A request task's panic ends that request only. A panic
   in the pool, scheduler or store thread starts a graceful shutdown with a non-zero exit, and
   the panic hook logs the location, never the payload.

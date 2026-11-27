@@ -299,7 +299,7 @@ impl Owner {
         }
         if slot.held {
             let _ = reply.send(Err(AppError::new(
-                "This profile is reconnecting a subscription. Try again in a moment.",
+                "This profile's core is being replaced. Try again in a moment.",
                 409,
             )));
             return;
@@ -685,9 +685,14 @@ impl Launch {
                 503,
             )
         })?;
-        let config = write_config(&self.context.store, self.profile.clone(), port)
-            .await
-            .map_err(AppError::from)?;
+        let config = write_config(
+            &self.context.store,
+            self.profile.clone(),
+            port,
+            self.context.daemon,
+        )
+        .await
+        .map_err(AppError::from)?;
         if self.context.closing() {
             return Err(AppError::shutting_down());
         }

@@ -3,4 +3,4 @@
 /**
  * A provider with browser sign-in through the core.
  */
-export type OAuthProvider = "claude" | "codex" | "antigravity" | "kimi" | "xai";
+export type OAuthProvider = "codex" | "antigravity" | "kimi" | "xai";

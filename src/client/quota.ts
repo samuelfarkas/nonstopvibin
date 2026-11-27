@@ -5,12 +5,9 @@ import { quotaStaleMs } from "../shared/vocabulary.ts";
 /** Below this share left, a quota is low. */
 const lowPercent = 20;
 
-/** Lowest remaining account-wide window: the limit a request hits first.
-    Model-scoped windows (Opus, Fable…) never mark the whole account out. */
+/** Lowest remaining window: the limit a request hits first. */
 export function floor(account: Account): number | null {
-  const windows = account.quota?.windows ?? [];
-  const shared = windows.filter((w) => !w.scoped);
-  const values = (shared.length ? shared : windows)
+  const values = (account.quota?.windows ?? [])
     .map((w) => w.remainingPercent)
     .filter((v): v is number => v !== null);
   return values.length ? Math.min(...values) : null;
