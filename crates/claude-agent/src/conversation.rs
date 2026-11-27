@@ -425,91 +425,132 @@ pub(crate) fn parse(body: &[u8]) -> Result<Conversation, Invalid> {
 
 // ---- What Claude Code receives ----
 
-fn part_text(content: &[Part]) -> String {
-    content
-        .iter()
-        .map(|part| match part {
-            Part::Text(text) => text.as_str(),
-            Part::Image { .. } => "[image]",
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn image_block(media_type: &str, data: &str) -> Value {
+    json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": media_type, "data": data },
+    })
 }
 
-/// The history Claude Code has not seen, as one text block: the start of a fresh session.
-pub(crate) fn checkpoint(history: &[Turn]) -> Option<String> {
-    if history.is_empty() {
-        return None;
+/// A user message's content as it is built: text gathers into one block until an image or
+/// another block ends it.
+#[derive(Default)]
+struct Content {
+    blocks: Vec<Value>,
+    text: String,
+}
+
+impl Content {
+    fn flush(&mut self) {
+        if !self.text.is_empty() {
+            let text = std::mem::take(&mut self.text);
+            self.blocks.push(json!({ "type": "text", "text": text }));
+        }
     }
-    let mut out = String::from(
-        "<conversation-checkpoint>\nThis conversation continues from an earlier session. Its history so far:\n",
-    );
+
+    fn block(&mut self, block: Value) {
+        self.flush();
+        self.blocks.push(block);
+    }
+
+    /// An image Claude Code has not seen, from earlier in the conversation or a tool result.
+    /// Claude Code takes a plain image block in a user message for one just pasted: it saves
+    /// a copy to a temporary file and adds a line naming it. Inside a document it passes the
+    /// image on as it is, as `OpenCode` sends earlier images.
+    fn earlier_image(&mut self, media_type: &str, data: &str) {
+        self.block(json!({
+            "type": "document",
+            "source": { "type": "content", "content": [image_block(media_type, data)] },
+        }));
+    }
+
+    /// A tool result as text, since this session never made the call; its images go along.
+    fn tool_result(&mut self, result: &ToolResult) {
+        let error = if result.is_error {
+            " is_error=\"true\""
+        } else {
+            ""
+        };
+        let _ = write!(self.text, "<tool_result id=\"{}\"{error}>", result.id);
+        for (index, part) in result.content.iter().enumerate() {
+            if index > 0 {
+                self.text.push('\n');
+            }
+            match part {
+                Part::Text(text) => self.text.push_str(text),
+                Part::Image { media_type, data } => self.earlier_image(media_type, data),
+            }
+        }
+        self.text.push_str("</tool_result>");
+    }
+
+    fn finish(mut self) -> Vec<Value> {
+        self.flush();
+        self.blocks
+    }
+}
+
+/// The history Claude Code has not seen: the start of a fresh session. None for no history.
+pub(crate) fn checkpoint(history: &[Turn]) -> Vec<Value> {
+    if history.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Content {
+        text: String::from(
+            "<conversation-checkpoint>\nThis conversation continues from an earlier session. Its history so far:\n",
+        ),
+        ..Content::default()
+    };
     for turn in history {
         let role = match turn.role {
             Role::User => "user",
             Role::Assistant => "assistant",
         };
-        let _ = write!(out, "\n<{role}>\n");
+        let _ = write!(out.text, "\n<{role}>\n");
         for block in &turn.blocks {
             match block {
                 Block::Text(text) => {
-                    out.push_str(text);
-                    out.push('\n');
+                    out.text.push_str(text);
+                    out.text.push('\n');
                 }
-                Block::Image { .. } => out.push_str("[image]\n"),
+                Block::Image { media_type, data } => out.earlier_image(media_type, data),
                 Block::ToolUse { id, name, input } => {
                     let _ = writeln!(
-                        out,
+                        out.text,
                         "<tool_use id=\"{id}\" name=\"{name}\">{input}</tool_use>"
                     );
                 }
                 Block::ToolResult(result) => {
-                    let error = if result.is_error {
-                        " is_error=\"true\""
-                    } else {
-                        ""
-                    };
-                    let _ = writeln!(
-                        out,
-                        "<tool_result id=\"{}\"{error}>{}</tool_result>",
-                        result.id,
-                        part_text(&result.content)
-                    );
+                    out.tool_result(result);
+                    out.text.push('\n');
                 }
             }
         }
-        let _ = writeln!(out, "</{role}>");
+        let _ = writeln!(out.text, "</{role}>");
     }
-    out.push_str("</conversation-checkpoint>");
-    Some(out)
+    out.text.push_str("</conversation-checkpoint>");
+    out.finish()
 }
 
-/// The content of a user message for Claude Code: an optional checkpoint, then the turn's
-/// text and images. Tool results become text, since this session never made those calls.
-pub(crate) fn user_content(checkpoint: Option<&str>, turn: &Turn) -> Vec<Value> {
-    let mut content: Vec<Value> = checkpoint
-        .map(|text| json!({ "type": "text", "text": text }))
-        .into_iter()
-        .collect();
+/// The content of a user message for Claude Code: a checkpoint, if any, then the turn's text
+/// and images. Tool results become text, since this session never made those calls.
+pub(crate) fn user_content(checkpoint: Vec<Value>, turn: &Turn) -> Vec<Value> {
+    let mut content = Content {
+        blocks: checkpoint,
+        ..Content::default()
+    };
     for block in &turn.blocks {
         match block {
-            Block::Text(text) => content.push(json!({ "type": "text", "text": text })),
-            Block::Image { media_type, data } => content.push(json!({
-                "type": "image",
-                "source": { "type": "base64", "media_type": media_type, "data": data },
-            })),
+            Block::Text(text) => content.block(json!({ "type": "text", "text": text })),
+            Block::Image { media_type, data } => content.block(image_block(media_type, data)),
             Block::ToolUse { .. } => {}
-            Block::ToolResult(result) => content.push(json!({
-                "type": "text",
-                "text": format!(
-                    "<tool_result id=\"{}\">{}</tool_result>",
-                    result.id,
-                    part_text(&result.content)
-                ),
-            })),
+            Block::ToolResult(result) => {
+                content.tool_result(result);
+                content.flush();
+            }
         }
     }
-    content
+    content.finish()
 }
 
 /// The tool results of a turn.
@@ -686,20 +727,78 @@ mod tests {
             ],
         }));
         assert_eq!(
-            checkpoint(&parsed.history).unwrap(),
-            "<conversation-checkpoint>\nThis conversation continues from an earlier session. Its history so far:\n\
-             \n<user>\nFix the bug.\n</user>\n\
-             \n<assistant>\nLooking.\n<tool_use id=\"toolu_1\" name=\"read\">{\"path\":\"a.rs\"}</tool_use>\n</assistant>\n\
-             </conversation-checkpoint>"
+            checkpoint(&parsed.history),
+            [json!({ "type": "text", "text":
+                "<conversation-checkpoint>\nThis conversation continues from an earlier session. Its history so far:\n\
+                 \n<user>\nFix the bug.\n</user>\n\
+                 \n<assistant>\nLooking.\n<tool_use id=\"toolu_1\" name=\"read\">{\"path\":\"a.rs\"}</tool_use>\n</assistant>\n\
+                 </conversation-checkpoint>" })]
         );
         assert_eq!(
-            user_content(Some("CP"), &parsed.tail),
-            vec![
+            user_content(vec![json!({ "type": "text", "text": "CP" })], &parsed.tail),
+            [
                 json!({ "type": "text", "text": "CP" }),
-                json!({ "type": "text", "text": "<tool_result id=\"toolu_1\">fn main() {}</tool_result>" }),
+                json!({ "type": "text", "text": "<tool_result id=\"toolu_1\" is_error=\"true\">fn main() {}</tool_result>" }),
                 json!({ "type": "text", "text": "Hurry." }),
             ]
         );
-        assert_eq!(checkpoint(&[]), None);
+        assert_eq!(checkpoint(&[]), Vec::<Value>::new());
+    }
+
+    #[test]
+    fn earlier_images_go_along_inside_documents_and_new_ones_as_they_are() {
+        let png = |data: &str| json!({ "type": "base64", "media_type": "image/png", "data": data });
+        let parsed = conversation(&json!({
+            "model": "m",
+            "messages": [
+                { "role": "user", "content": [
+                    { "type": "text", "text": "What is this?" },
+                    { "type": "image", "source": png("AAA") },
+                ] },
+                { "role": "assistant", "content": [
+                    { "type": "tool_use", "id": "toolu_1", "name": "screenshot", "input": {} },
+                ] },
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "toolu_1", "content": [
+                        { "type": "text", "text": "the screen" },
+                        { "type": "image", "source": png("BBB") },
+                    ] },
+                ] },
+                { "role": "assistant", "content": "A login form." },
+                { "role": "user", "content": [
+                    { "type": "text", "text": "And this?" },
+                    { "type": "image", "source": png("CCC") },
+                ] },
+            ],
+        }));
+        let document = |data: &str| {
+            json!({ "type": "document", "source": { "type": "content", "content": [
+                { "type": "image", "source": png(data) },
+            ] } })
+        };
+        let text = |text: &str| json!({ "type": "text", "text": text });
+        assert_eq!(
+            user_content(checkpoint(&parsed.history), &parsed.tail),
+            [
+                text(
+                    "<conversation-checkpoint>\nThis conversation continues from an earlier session. Its history so far:\n\
+                     \n<user>\nWhat is this?\n"
+                ),
+                document("AAA"),
+                text(
+                    "</user>\n\
+                     \n<assistant>\n<tool_use id=\"toolu_1\" name=\"screenshot\">{}</tool_use>\n</assistant>\n\
+                     \n<user>\n<tool_result id=\"toolu_1\">the screen\n"
+                ),
+                document("BBB"),
+                text(
+                    "</tool_result>\n</user>\n\
+                     \n<assistant>\nA login form.\n</assistant>\n\
+                     </conversation-checkpoint>"
+                ),
+                text("And this?"),
+                json!({ "type": "image", "source": png("CCC") }),
+            ]
+        );
     }
 }

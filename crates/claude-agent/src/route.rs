@@ -65,7 +65,7 @@ pub(crate) fn route(
 ) -> Route {
     let tail = &conversation.tail;
     let history = conversation.history_digests();
-    let fresh = || user_content(checkpoint(&conversation.history).as_deref(), tail);
+    let fresh = || user_content(checkpoint(&conversation.history), tail);
     if conversation.settings.tools.is_empty() {
         return Route::Side { message: fresh() };
     }
@@ -95,7 +95,7 @@ pub(crate) fn route(
             Activity::Idle if answered.is_empty() && same => {
                 return Route::Append {
                     session: index,
-                    message: user_content(None, tail),
+                    message: user_content(Vec::new(), tail),
                 };
             }
             Activity::Idle if answered.is_empty() => changed = changed.or(Some(index)),
@@ -105,7 +105,7 @@ pub(crate) fn route(
     if let Some(index) = changed {
         return Route::Resume {
             from: Stopped::Live(index),
-            message: user_content(None, tail),
+            message: user_content(Vec::new(), tail),
         };
     }
     if answered.is_empty()
@@ -113,7 +113,7 @@ pub(crate) fn route(
     {
         return Route::Resume {
             from: Stopped::Record(index),
-            message: user_content(None, tail),
+            message: user_content(Vec::new(), tail),
         };
     }
     Route::Fresh { message: fresh() }
