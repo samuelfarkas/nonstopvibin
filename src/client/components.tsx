@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { Activity, Bot } from "lucide-react";
 import { useState } from "react";
 import type { Account, ProfileState, QuotaWindow } from "../shared/types.ts";
-import { providerEntry, providerLabel } from "../shared/providers.ts";
-import { accountLabel, exactTime, resetIn } from "./format.ts";
+import { providerEntry } from "../shared/providers.ts";
+import { exactTime, resetIn } from "./format.ts";
 import { meterLevel } from "./quota.ts";
 
 // Display widgets both windows draw with. Main-window controls are in controls.tsx.
@@ -120,7 +120,6 @@ export function QuotaMeter({
     <div className={`quota-meter ${stale ? "stale" : ""} ${level}`}>
       <span className="label" title={label ?? window?.label}>
         {label ?? window?.label ?? "limit"}
-        {window?.scoped && <small> model only</small>}
       </span>
       <div className={`quota-value ${level}`}>
         {pct === null || pct === undefined ? (
@@ -157,19 +156,13 @@ export function AccountSummary({ account }: { account: Account }) {
     <div className="account-identity">
       <ProviderIcon provider={account.provider} />
       <div>
-        <strong title={accountLabel(account)}>{accountLabel(account)}</strong>
+        <strong title={account.name}>{account.name}</strong>
         <div className="account-email">
-          {account.organizationUuid && `${providerLabel(account.provider)} · `}
           {account.email ||
             (account.kind === "api-key"
               ? `${account.prefix ? `${account.prefix}/ · ` : ""}${account.modelCount} model${account.modelCount === 1 ? "" : "s"}`
               : "OAuth subscription")}
         </div>
-        {providerEntry(account.provider)?.organizations &&
-          account.kind === "oauth" &&
-          !account.organizationUuid && (
-            <small className="identity-unknown">Organization unverified</small>
-          )}
       </div>
     </div>
   );

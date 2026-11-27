@@ -229,7 +229,7 @@ pub trait Hooks: Send + Sync + 'static {
     fn before_stop(&self, profile: ProfileId) -> BoxFuture<'static, ()>;
 }
 
-/// The hooks of a pool that runs no features, such as a sign-in's.
+/// The hooks of a pool that runs no features, such as a core check's.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoHooks;
 
@@ -657,7 +657,7 @@ impl Pool {
         }
     }
 
-    /// Shuts down a pool that runs no features, such as a sign-in's.
+    /// Shuts down a pool that runs no features, such as a core check's.
     ///
     /// # Errors
     /// See [`Pool::stop_all`].

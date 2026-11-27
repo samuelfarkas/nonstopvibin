@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { Clock3, Pause, Play, RefreshCw } from "lucide-react";
+import { Clock3, Pause, Play } from "lucide-react";
 import type { Account, AppState, ProfileState } from "../shared/types.ts";
 import type { AccountPatch } from "../shared/api.ts";
 import { providerEntry } from "../shared/providers.ts";
 import { nameLength, priorityLimit } from "../shared/vocabulary.ts";
 import { api } from "./api.ts";
 import { useAction } from "./action.ts";
-import { accountLabel, age, exactTime } from "./format.ts";
+import { age, exactTime } from "./format.ts";
 import { isQuotaStale } from "./quota.ts";
 import { AccountSummary, QuotaMeter, Status } from "./components.tsx";
 import { Modal } from "./controls.tsx";
@@ -14,7 +14,6 @@ import { ResetCredits } from "./ResetCredits.tsx";
 import "./account-details.css";
 
 export function AccountDetails({
-  onReconnect,
   account,
   profile,
   onClose,
@@ -22,7 +21,6 @@ export function AccountDetails({
 }: {
   account: Account;
   profile: ProfileState;
-  onReconnect(): void;
   onClose(): void;
   refresh(next?: AppState): Promise<void>;
 }) {
@@ -48,32 +46,6 @@ export function AccountDetails({
       description={`Managed inside ${profile.name}.`}
     >
       <AccountSummary account={account} />
-      {providerEntry(account.provider)?.reconnect &&
-        account.kind === "oauth" && (
-          <div className="subscription-reconnect">
-            <button className="button" onClick={onReconnect} disabled={busy}>
-              <RefreshCw size={14} aria-hidden="true" /> Reconnect subscription
-            </button>
-            <p className="field-note">
-              {account.status === "Reconnect needed"
-                ? "The provider no longer accepts this connection’s sign-in. Reconnect to restore it."
-                : "Sign in again to this organization while keeping this connection’s history and settings."}
-            </p>
-          </div>
-        )}
-      {account.organizationUuid && (
-        <details>
-          <summary>Organization details</summary>
-          <dl className="identity-details">
-            <dt>Organization</dt>
-            <dd>{account.organizationName || "Name not provided"}</dd>
-            <dt>Organization ID</dt>
-            <dd>{account.organizationUuid}</dd>
-            <dt>Account ID</dt>
-            <dd>{account.accountUuid || "Not provided"}</dd>
-          </dl>
-        </details>
-      )}
       <div className="detail-status">
         <Status value={account.status} />
         <span>{age(account.quota?.checkedAt)}</span>
@@ -175,9 +147,9 @@ export function AccountDetails({
         {removing ? (
           <>
             <p>
-              Remove {accountLabel(account)} from {profile.name}? Its saved
-              credentials are deleted here; usage history and any imported
-              source files are kept.
+              Remove {account.name} from {profile.name}? Its saved credentials
+              are deleted here; usage history and any imported source files are
+              kept.
             </p>
             <div className="button-row">
               <button

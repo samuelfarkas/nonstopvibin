@@ -12,7 +12,7 @@ export type Account = {
 /**
  * A credential file name, or an API-key account's id.
  */
-id: AccountId, name: string, accountUuid?: string, organizationUuid?: string, organizationName?: string, 
+id: AccountId, name: string, 
 /**
  * The core's provider string, which may be one this build does not know.
  */

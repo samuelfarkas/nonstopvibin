@@ -1,6 +1,6 @@
 //! Throwaway stores, each with one profile and a pool of its own, under `oauth-pending/`: a
-//! sign-in's, so a credential reaches a profile only after its seat is reviewed, and a core
-//! update's check. Startup reaps and deletes what a crash left.
+//! core update's check. The directory keeps the name it had when Claude sign-ins awaiting
+//! review used it too. Startup reaps and deletes what a crash left.
 
 use std::io;
 use std::path::PathBuf;
@@ -98,8 +98,9 @@ impl Sandbox {
     }
 }
 
-/// At startup, before any core runs: sign-ins pending when the app last stopped never resume,
-/// and core update checks never finish. Their cores are reaped and their stores deleted.
+/// At startup, before any core runs: core update checks running when the app last stopped
+/// never finish, and older builds' pending Claude sign-ins never resume. Their cores are
+/// reaped and their stores deleted.
 ///
 /// # Errors
 /// A ledger or file-system error.

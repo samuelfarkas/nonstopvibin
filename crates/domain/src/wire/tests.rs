@@ -24,6 +24,17 @@ fn fixture() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// `accounts` without Claude sign-ins: launch deletes those, so no build reads them back.
+fn without_claude(accounts: &Value) -> Value {
+    accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|account| account["provider"] != "claude")
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn stored_bodies_round_trip() {
     let fixture = fixture();
@@ -34,13 +45,18 @@ fn stored_bodies_round_trip() {
         round_trip::<Vec<ApiAccount>>(accounts);
     }
     for accounts in fixture["accountMetadata"].as_object().unwrap().values() {
-        round_trip::<Vec<Account>>(accounts);
+        round_trip::<Vec<Account>>(&without_claude(accounts));
     }
     for accounts in fixture["accountsList"].as_object().unwrap().values() {
-        round_trip::<Vec<Account>>(accounts);
+        round_trip::<Vec<Account>>(&without_claude(accounts));
     }
-    let quotas = fixture["quotas"].as_array().unwrap();
-    assert_eq!(quotas.len(), 6);
+    let quotas: Vec<&Value> = fixture["quotas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| !row["accountId"].as_str().unwrap().starts_with("claude-"))
+        .collect();
+    assert_eq!(quotas.len(), 4);
     for row in quotas {
         round_trip::<Quota>(&row["quota"]);
     }
@@ -74,8 +90,9 @@ fn account_metadata_writes_the_bytes_typescript_wrote() {
     let rows = fixture["settings"].as_object().unwrap();
     let mut checked = 0;
     for (id, value) in rows.iter().filter(|(id, _)| id.starts_with("accounts:")) {
-        let text = value.as_str().unwrap();
-        let accounts: Vec<Account> = serde_json::from_str(text).unwrap();
+        let stored: Value = serde_json::from_str(value.as_str().unwrap()).unwrap();
+        let text = without_claude(&stored).to_string();
+        let accounts: Vec<Account> = serde_json::from_str(&text).unwrap();
         assert_eq!(serde_json::to_string(&accounts).unwrap(), text, "{id}");
         checked += 1;
     }
@@ -99,14 +116,13 @@ fn unknown_fields_survive_a_read_modify_write() {
 #[test]
 fn app_state_round_trips() {
     let account = json!({
-        "id": "claude-1.json", "name": "Work", "accountUuid": "a", "organizationUuid": "b",
-        "organizationName": "Acme", "provider": "claude", "kind": "oauth", "email": "a@b.c",
+        "id": "codex-1.json", "name": "Work", "provider": "codex", "kind": "oauth", "email": "a@b.c",
         "disabled": false, "status": "Needs attention", "priority": -3, "authIndex": "1",
         "quota": {
             "status": "error", "checkedAt": "2026-11-22T12:00:00.000Z", "error": "Timed out",
             "windows": [
                 { "label": "5-hour", "remainingPercent": 12.25, "resetsAt": null },
-                { "label": "Opus", "remainingPercent": null, "resetsAt": "2026-11-23T00:00:00.000Z", "scoped": true }
+                { "label": "Weekly", "remainingPercent": null, "resetsAt": "2026-11-23T00:00:00.000Z" }
             ]
         }
     });
@@ -175,11 +191,7 @@ fn responses_round_trip() {
     for status in [
         json!({ "status": "wait" }),
         json!({ "status": "ok" }),
-        json!({ "status": "ok", "reconnected": true }),
         json!({ "status": "error", "error": "Denied" }),
-        json!({ "status": "review", "review": { "action": "blocked", "message": "Seat taken",
-            "account": { "id": "x.json", "name": "X", "provider": "claude", "kind": "oauth",
-                "disabled": false, "status": "Ready", "priority": 0 } } }),
     ] {
         round_trip::<OAuthStatus>(&status);
     }
@@ -207,8 +219,6 @@ fn responses_round_trip() {
 #[test]
 fn literal_true_rejects_false() {
     assert!(serde_json::from_value::<Ok>(json!({ "ok": false })).is_err());
-    let window = json!({ "label": "x", "remainingPercent": 1, "resetsAt": null, "scoped": false });
-    assert!(serde_json::from_value::<QuotaWindow>(window).is_err());
 }
 
 #[test]

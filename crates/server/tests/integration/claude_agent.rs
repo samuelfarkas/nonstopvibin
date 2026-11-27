@@ -1,13 +1,11 @@
 //! Claude Agent through the daemon: the management API reports and connects a profile's
 //! Claude Agent subscription with a scripted `claude` that only answers `initialize`, a
-//! profile holds one such subscription and never beside Claude sign-ins, and the engine's
-//! routes answer local agent clients only. No provider is contacted and no real core runs.
+//! profile holds one such subscription, Claude sign-ins are gone, and the engine's routes
+//! answer local agent clients only. No provider is contacted and no real core runs.
 
 use std::path::{Path, PathBuf};
 
 use nsv_server::AllowedHost;
-use nsv_testkit::fake::response;
-use nsv_testkit::world::{ACCOUNT, ORGANIZATION_A, claude};
 use nsv_testkit::{TempDir, write_executable};
 use serde_json::{Value, json};
 
@@ -103,7 +101,7 @@ async fn a_signed_in_claude_code_connects_one_claude_agent_subscription() {
             &json!("This profile already has a Claude Agent subscription.")
         )
     );
-    // And never beside Claude sign-ins.
+    // Claude sign-ins are gone: neither a browser sign-in nor a credential file brings one in.
     let (status, refused) = app
         .call(
             "POST",
@@ -111,20 +109,32 @@ async fn a_signed_in_claude_code_connects_one_claude_agent_subscription() {
             Some(json!({ "provider": "claude" })),
         )
         .await;
-    assert_eq!(status, 409, "{refused}");
+    assert_eq!(status, 400, "{refused}");
+    let credential = json!({
+        "type": "claude", "access_token": "synthetic-access", "refresh_token": "synthetic-refresh",
+    });
     let (status, refused) = app
         .call(
             "POST",
             &format!("/profiles/{profile}/import"),
-            Some(json!({ "contents": claude(ORGANIZATION_A, "first") })),
+            Some(json!({ "contents": credential })),
         )
         .await;
-    assert_eq!(status, 409, "{refused}");
+    assert_eq!(
+        (status, &refused["error"]["message"]),
+        (
+            400,
+            &json!(
+                "Choose a CLIProxyAPI OAuth JSON file. It must contain a supported type and token."
+            )
+        )
+    );
+    assert_eq!(accounts(&app, &profile).await.len(), 1);
     app.close().await;
 }
 
 #[tokio::test]
-async fn claude_agent_is_refused_beside_claude_sign_ins_and_before_claude_code_signs_in() {
+async fn claude_agent_is_refused_before_claude_code_signs_in() {
     let signed_out = json!({ "tokenSource": "none", "apiProvider": "firstParty" });
     let app = running("claude-agent-refused", &signed_out, Vec::new()).await;
     let profile = app.profile("Agent").await;
@@ -141,51 +151,6 @@ async fn claude_agent_is_refused_beside_claude_sign_ins_and_before_claude_code_s
         )
     );
     assert_eq!(accounts(&app, &profile).await, Vec::<Value>::new());
-    app.close().await;
-
-    let app = running("claude-agent-seats", &signed_in(), Vec::new()).await;
-    let seats = app.profile("Seats").await;
-    app.outside.answer(|_| {
-        Ok(response(
-            200,
-            json!({
-                "account": { "uuid": ACCOUNT, "email": "same@example.invalid" },
-                "organization": { "uuid": ORGANIZATION_A, "name": "Example A" },
-            })
-            .to_string(),
-        ))
-    });
-    app.ok(
-        "POST",
-        &format!("/profiles/{seats}/import"),
-        Some(json!({ "contents": claude(ORGANIZATION_A, "first") })),
-    )
-    .await;
-    let (code, refused) = app
-        .call("POST", &format!("/profiles/{seats}/claude-agent"), None)
-        .await;
-    assert_eq!(code, 409, "{refused}");
-    assert_eq!(accounts(&app, &seats).await.len(), 1);
-
-    // A Claude credential the core holds but the account list has not caught up with, as after
-    // an import whose sync failed, refuses it too.
-    let unsynced = app.profile("Unsynced").await;
-    let auth = app
-        .root
-        .path()
-        .join("data/profiles")
-        .join(&unsynced)
-        .join("auth");
-    std::fs::create_dir_all(&auth).unwrap();
-    std::fs::write(
-        auth.join("claude-unsynced.json"),
-        claude(ORGANIZATION_A, "second").to_string(),
-    )
-    .unwrap();
-    let (code, refused) = app
-        .call("POST", &format!("/profiles/{unsynced}/claude-agent"), None)
-        .await;
-    assert_eq!(code, 409, "{refused}");
     app.close().await;
 }
 

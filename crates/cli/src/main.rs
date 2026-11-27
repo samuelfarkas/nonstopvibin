@@ -173,7 +173,7 @@ fn url_text(session: &Session, ssh_connection: Option<&str>) -> String {
             "2. Then open:".to_owned(),
             format!("   {url}"),
             String::new(),
-            "3. Optional, for automatic Codex and Claude sign-in, add to the tunnel:".to_owned(),
+            "3. Optional, for automatic Codex sign-in, add to the tunnel:".to_owned(),
             format!("   {}", forwards.join(" ")),
             "   Otherwise, paste the callback URL into the app when asked.".to_owned(),
         ]);

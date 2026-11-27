@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Extra, JsNumber, True, present};
+use super::{Extra, JsNumber, present};
 use crate::id::AccountId;
 use crate::registry::{Protocol, Provider, ResetResultCode};
 
@@ -36,13 +36,6 @@ pub struct Account {
     /// A credential file name, or an API-key account's id.
     pub id: AccountId,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[expect(clippy::struct_field_names, reason = "the wire name is accountUuid")]
-    pub account_uuid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_uuid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_name: Option<String>,
     /// The core's provider string, which may be one this build does not know.
     pub provider: String,
     pub kind: AccountKind,
@@ -99,9 +92,6 @@ pub struct QuotaWindow {
     pub remaining_percent: Option<JsNumber>,
     #[cfg_attr(test, ts(optional = false))]
     pub resets_at: Option<String>,
-    /// Limits one model only; never decides whether the whole account is out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scoped: Option<True>,
 }
 
 /// An API-key account as the `api_accounts.body` column stores it (`src/server/store.ts`).
@@ -143,25 +133,14 @@ pub struct ImportSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
     pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_uuid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_uuid: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_name: Option<String>,
 }
 
-/// A subscription's banked rate-limit resets: Codex's in its snake case, and Claude's reset
-/// grants read into the same shape.
+/// A subscription's banked rate-limit resets, in Codex's snake case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ResetCredits {
     pub available_count: u32,
     pub credits: Vec<ResetCredit>,
-    /// Why the provider offers this subscription no resets, when it says.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(test, ts(optional))]
-    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

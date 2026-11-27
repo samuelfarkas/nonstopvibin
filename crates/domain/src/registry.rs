@@ -50,13 +50,18 @@ pub struct Registry {
 /// What the core calls the providers it generates for compatible endpoints.
 const COMPATIBLE: &str = "openai-compatible-";
 
+/// What the core calls its Anthropic-protocol routes in usage records: every Claude Agent and
+/// Anthropic API request, and the retired Claude sign-ins' history.
+pub const CORE_CLAUDE: &str = "claude";
+
 impl Registry {
-    /// `providerLabel`: a known provider's label, `Compatible API` for a provider the core
-    /// generated for a compatible endpoint, else the id itself.
+    /// `providerLabel`: a known provider's label, `Claude` for [`CORE_CLAUDE`], `Compatible
+    /// API` for a provider the core generated for a compatible endpoint, else the id itself.
     #[must_use]
     pub fn label(&self, provider: &str) -> String {
         match Provider::from_id(provider) {
             Some(known) => self.providers.get(known).label.clone(),
+            None if provider == CORE_CLAUDE => "Claude".to_owned(),
             None if provider.starts_with(COMPATIBLE) => "Compatible API".to_owned(),
             None => provider.to_owned(),
         }
@@ -64,9 +69,13 @@ impl Registry {
 
     /// The agent whose vendor's models these are: `owned_by` is the vendor for OAuth models
     /// and [`Provider::compatible`] for API-key accounts registered as compatible providers.
+    /// [`CORE_CLAUDE`] is Anthropic.
     #[must_use]
     pub fn native_agent(&self, owner: Option<&str>) -> Option<Agent> {
-        let owner = owner?;
+        let owner = match owner? {
+            CORE_CLAUDE => Provider::Anthropic.as_str(),
+            owner => owner,
+        };
         self.providers
             .iter()
             .find(|(provider, _)| {
@@ -221,7 +230,6 @@ closed_enum!(
     /// `String`.
     Provider {
         ClaudeAgent = "claude-agent",
-        Claude = "claude",
         Codex = "codex",
         Antigravity = "antigravity",
         Kimi = "kimi",
@@ -236,7 +244,6 @@ closed_enum!(
 closed_enum!(
     /// A provider with browser sign-in through the core.
     OAuthProvider {
-        Claude = "claude",
         Codex = "codex",
         Antigravity = "antigravity",
         Kimi = "kimi",
@@ -284,7 +291,6 @@ closed_enum!(
 impl From<OAuthProvider> for Provider {
     fn from(provider: OAuthProvider) -> Self {
         match provider {
-            OAuthProvider::Claude => Self::Claude,
             OAuthProvider::Codex => Self::Codex,
             OAuthProvider::Antigravity => Self::Antigravity,
             OAuthProvider::Kimi => Self::Kimi,
@@ -369,7 +375,9 @@ pub struct ProviderEntry {
     /// `CLIProxyAPI` credential files of this type can be imported.
     #[serde(default)]
     pub credential_file: bool,
-    pub sign_in: Option<SignIn>,
+    /// Browser sign-in through the core.
+    #[serde(default)]
+    pub sign_in: bool,
     /// Accepted as an API-key account.
     #[serde(default)]
     pub api_key: bool,
@@ -377,20 +385,6 @@ pub struct ProviderEntry {
     /// Banked rate-limit resets can be redeemed for its signed-in accounts.
     #[serde(default)]
     pub banked_resets: bool,
-    /// One email can hold seats in several organizations, each its own account.
-    #[serde(default)]
-    pub organizations: bool,
-    /// A sign-in can replace an existing account's credential in place (organizations only).
-    #[serde(default)]
-    pub reconnect: bool,
-}
-
-/// Browser sign-in through the core.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SignIn {
-    /// The core's name for the provider, where it differs.
-    pub core: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,12 +423,6 @@ mod tests {
         assert_eq!(registry.usage_page_size, 500);
         assert_eq!(registry.quota_refresh_ms, 120_000);
         assert_eq!(registry.poll_ms, 4000);
-        let claude = registry.providers.get(Provider::Claude);
-        assert!(claude.organizations && claude.reconnect);
-        assert_eq!(
-            claude.sign_in.as_ref().unwrap().core.as_deref(),
-            Some("anthropic")
-        );
         let go = registry
             .providers
             .get(Provider::OpencodeGo)
@@ -450,7 +438,7 @@ mod tests {
         let signs_in: Vec<Provider> = registry
             .providers
             .iter()
-            .filter(|(_, entry)| entry.sign_in.is_some())
+            .filter(|(_, entry)| entry.sign_in)
             .map(|(provider, _)| provider)
             .collect();
         let oauth: Vec<Provider> = OAuthProvider::ALL.iter().map(|&p| p.into()).collect();
@@ -481,6 +469,7 @@ mod tests {
     fn labels_and_native_agents_follow_provider_names() {
         let registry = registry();
         assert_eq!(registry.label("codex"), "Codex");
+        assert_eq!(registry.label("claude"), "Claude");
         assert_eq!(registry.label("openai-compatible-abc"), "Compatible API");
         assert_eq!(registry.label("unknown"), "unknown");
         let compatible = Provider::Anthropic.compatible("x");
@@ -493,6 +482,7 @@ mod tests {
             Some(Agent::Claude)
         );
         assert_eq!(registry.native_agent(Some("openai")), Some(Agent::Codex));
+        assert_eq!(registry.native_agent(Some("claude")), Some(Agent::Claude));
         assert_eq!(registry.native_agent(Some("openaix")), None);
         assert!(registry.curated(Agent::Claude) && registry.curated(Agent::Codex));
         assert!(!registry.curated(Agent::Pi) && !registry.curated(Agent::Opencode));

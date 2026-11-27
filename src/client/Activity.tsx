@@ -15,7 +15,7 @@ import { api } from "./api.ts";
 import { messageOf } from "./action.ts";
 import { usePolling } from "./feed.tsx";
 import { Empty } from "./components.tsx";
-import { accountLabel, count, csvCell, dateLabel } from "./format.ts";
+import { count, csvCell, dateLabel } from "./format.ts";
 
 const ranges = [
   { days: 1, label: "24h" },
@@ -98,7 +98,7 @@ export function ActivityPage({ profile }: { profile: ProfileState }) {
   const accountKey = JSON.stringify(
     profile.accounts.map((account) => [
       account.authIndex || account.id,
-      { label: accountLabel(account), email: account.email ?? "" },
+      { label: account.name, email: account.email ?? "" },
     ]),
   );
   const accounts: AccountNames = useMemo(() => {

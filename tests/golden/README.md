@@ -98,6 +98,21 @@ The fixture's own profile UUIDs (api area) and the agents area's fixed profile
 - Bun- or Node-specific error texts (the `--bogus` parse error, `ENOENT`) are
   recorded as they are, but they are not behaviour to match.
 
+## Changed by hand since recording
+
+Behaviour the Rust server changed on purpose is edited into the files case by case. Claude
+sign-ins were retired for Claude Agent:
+
+- `accounts.json` lost Claude's quota, refresh, `claudeIdentity`, `sameSeat` and
+  `verifyClaudeIdentity` cases, its synced Claude accounts carry no seat identity, and banked
+  resets are Codex's only.
+- In `api.json`, launch deletes the fixture's Claude credentials and their accounts, so
+  `GET /state` lists none and the Personal profile is no longer kept running: no missing-core
+  error, and its agent setup answers. The import scan offers no Claude file, and
+  `oauth unknown provider` lists no Claude.
+- `cli.json` forwards only Codex's sign-in port, and the desktop opens no Claude host: the
+  `external url` cases on `claude.ai` are refused.
+
 ## Gitleaks
 
 Every secret is low-entropy and synthetic (`nv_` + 43 × one letter,

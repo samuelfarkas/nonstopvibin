@@ -1,6 +1,5 @@
-//! A profile's OAuth accounts as its core lists them in `/auth-files`, with the seat identity
-//! read from Claude credential files (`crate::identity`), and the account list the UI, quota
-//! and resets read. A port of `accounts.ts`.
+//! A profile's OAuth accounts as its core lists them in `/auth-files`, and the account list the
+//! UI, quota and resets read. A port of `accounts.ts`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -8,13 +7,12 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 use nsv_core::pool::Pool;
 use nsv_domain::error::AppError;
 use nsv_domain::id::{AccountId, ProfileId};
 use nsv_domain::js::{nullish, number, or, record, string, text, truthy};
-use nsv_domain::registry::{Provider, ProviderEntry, registry};
+use nsv_domain::registry::registry;
 use nsv_domain::sync::locked;
 use nsv_domain::wire::ApiAccount;
 use nsv_domain::wire::{Account, AccountKind, AccountStatus, Extra};
@@ -22,8 +20,6 @@ use nsv_files::DataDir;
 use nsv_net::Method;
 use nsv_store::{Db, Store, StoreError};
 use serde_json::{Map, Value};
-
-use crate::identity::{SeatIdentity, claude_identity};
 
 /// A profile's credential file `name`.
 ///
@@ -90,17 +86,8 @@ impl std::fmt::Debug for CredentialFile {
     }
 }
 
-/// A Claude credential file's identity, keyed by the file's version.
-#[derive(Debug, Clone)]
-struct Version {
-    modified: Option<SystemTime>,
-    len: u64,
-    identity: SeatIdentity,
-}
-
 #[derive(Debug, Default)]
 struct Profile {
-    claude: HashMap<String, Version>,
     chatgpt: HashMap<String, String>,
     /// Accounts the core keeps from requests for a quota reason.
     quota_cooldowns: HashSet<String>,
@@ -140,9 +127,8 @@ impl Accounts {
     }
 
     /// Reads the profile's account list from its usable core and stores it; unchanged metadata
-    /// is not rewritten. Claude identities are read again only from credential files that
-    /// changed, and credential files are made owner-only where they are not. A listing from a
-    /// core that was replaced meanwhile is dropped. Answers how many OAuth accounts were stored,
+    /// is not rewritten, and credential files are made owner-only where they are not. A listing
+    /// from a core that was replaced meanwhile is dropped. Answers how many OAuth accounts were stored,
     /// or `None` when nothing was.
     ///
     /// # Errors
@@ -161,33 +147,18 @@ impl Accounts {
             .get("files")
             .and_then(Value::as_array)
             .ok_or_else(|| AppError::new("The proxy returned an unexpected account list.", 502))?;
-        let named: Vec<String> = files
-            .iter()
-            .filter_map(|value| {
-                let file = record(Some(value));
-                let provider = provider(file, "undefined");
-                let name = text(file.get("name")).filter(|name| !name.is_empty())?;
-                let organizations = entry(&provider).is_some_and(|entry| entry.organizations);
-                (organizations && !truthy(file.get("runtime_only"))).then(|| name.to_owned())
-            })
-            .collect();
         let directory = self.store.directory().credentials(profile);
-        // A copy: a sync dropped during the scan leaves the cache for the next one.
-        let known = self.with(profile, |state| state.claude.clone());
-        let limit = registry().limits.credential_file_bytes;
-        let (identities, parsed, repaired) =
-            tokio::task::spawn_blocking(move || scan(&directory, &named, &known, limit))
-                .await
-                .map_err(AppError::internal)?;
-        self.with(profile, |state| state.claude = parsed);
-        repaired.map_err(AppError::internal)?;
+        tokio::task::spawn_blocking(move || repair_modes(&directory))
+            .await
+            .map_err(AppError::internal)?
+            .map_err(AppError::internal)?;
         let mut chatgpt = HashMap::new();
         let mut quota_cooldowns = HashSet::new();
         let accounts: Vec<Account> = files
             .iter()
             .filter_map(|value| {
                 let file = record(Some(value));
-                let account = oauth_account(file, &identities)?;
+                let account = oauth_account(file)?;
                 let id_token = record(file.get("id_token"));
                 if let Some(id) =
                     text(id_token.get("chatgpt_account_id")).filter(|id| !id.is_empty())
@@ -216,31 +187,6 @@ impl Accounts {
         Ok(Some(count))
     }
 
-    /// Refuses a Claude sign-in or credential for a profile with a Claude Agent subscription:
-    /// a profile's Claude requests go one way, never both.
-    ///
-    /// # Errors
-    /// 409 when the profile has a Claude Agent account, or a store failure.
-    pub async fn refuse_beside_claude_agent(&self, profile: &ProfileId) -> Result<(), AppError> {
-        let profile = profile.clone();
-        let agent = self
-            .store
-            .call(move |db| {
-                Ok(db
-                    .api_accounts(&profile)?
-                    .iter()
-                    .any(|account| account.provider == Provider::ClaudeAgent))
-            })
-            .await?;
-        if agent {
-            return Err(AppError::new(
-                "This profile has a Claude Agent subscription. Sign in to Claude in another profile.",
-                409,
-            ));
-        }
-        Ok(())
-    }
-
     /// The profile's accounts as the UI lists them: its OAuth accounts as last synced, then its
     /// API-key accounts, each with its stored quota (`Accounts.list`).
     ///
@@ -249,45 +195,6 @@ impl Accounts {
     pub async fn list(&self, profile: &ProfileId) -> Result<Vec<Account>, AppError> {
         let profile = profile.clone();
         Ok(self.store.call(move |db| listed(db, &profile)).await?)
-    }
-
-    /// A credential file was replaced without the core: its account shows the file's seat and
-    /// email from now on.
-    ///
-    /// # Errors
-    /// A store failure.
-    pub async fn replaced(
-        &self,
-        profile: &ProfileId,
-        account: &AccountId,
-        credential: &Map<String, Value>,
-    ) -> Result<(), AppError> {
-        let identity = claude_identity(&Value::Object(credential.clone()));
-        let email = text(credential.get("email")).map(str::to_owned);
-        let (profile, account) = (profile.clone(), account.clone());
-        Ok(self
-            .store
-            .call(move |db| {
-                let accounts: Vec<Account> = db
-                    .account_metadata(&profile)?
-                    .into_iter()
-                    .map(|mut listed| {
-                        if listed.id == account {
-                            listed.account_uuid.clone_from(&identity.account_uuid);
-                            listed
-                                .organization_uuid
-                                .clone_from(&identity.organization_uuid);
-                            listed
-                                .organization_name
-                                .clone_from(&identity.organization_name);
-                            listed.email = email.clone().or(listed.email);
-                        }
-                        listed
-                    })
-                    .collect();
-                db.save_account_metadata(&profile, &accounts)
-            })
-            .await?)
     }
 
     /// Every regular `.json` file in the profile's credential directory, read.
@@ -326,6 +233,60 @@ impl Accounts {
     }
 }
 
+/// The credential type of a Claude sign-in. Claude subscriptions are served by Claude Agent
+/// (`docs/decisions/claude-agent.md`): a core that loaded one would present it to Anthropic
+/// dressed up as Claude Code.
+const RETIRED_CLAUDE: &str = "claude";
+
+/// Deletes every profile's Claude sign-in credentials and drops their accounts from the
+/// stored lists. Startup runs it before any core starts.
+///
+/// # Errors
+/// A store failure, or a credential directory or file that cannot be read or deleted.
+pub(crate) async fn retire_claude_sign_ins(store: &Store) -> Result<(), AppError> {
+    for profile in store.call(|db| db.profiles()).await? {
+        let directory = store.directory().credentials(&profile.id);
+        tokio::task::spawn_blocking(move || delete_claude_credentials(&directory))
+            .await
+            .map_err(AppError::internal)??;
+        let id = profile.id;
+        store
+            .call(move |db| {
+                let mut accounts = db.account_metadata(&id)?;
+                accounts.retain(|account| account.provider != RETIRED_CLAUDE);
+                db.save_account_metadata(&id, &accounts)
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+/// Blocking.
+fn delete_claude_credentials(directory: &Path) -> Result<(), AppError> {
+    let listing = match fs::read_dir(directory) {
+        Ok(listing) => listing,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(AppError::internal(error)),
+    };
+    for entry in listing {
+        let entry = entry.map_err(AppError::internal)?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type().map_err(AppError::internal)?.is_file() || !has_json_extension(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let content = fs::read(&path).map_err(AppError::internal)?;
+        // A file that is not JSON is one the core cannot load either.
+        let Ok(raw) = serde_json::from_slice::<Value>(&content) else {
+            continue;
+        };
+        if text(raw.get("type")) == Some(RETIRED_CLAUDE) {
+            fs::remove_file(&path).map_err(AppError::internal)?;
+        }
+    }
+    Ok(())
+}
+
 #[expect(
     clippy::case_sensitive_file_extension_comparisons,
     reason = "accounts.ts listed only `.json`, as the core does"
@@ -356,9 +317,6 @@ fn api_listing(account: ApiAccount) -> Account {
     Account {
         id: account.id,
         name: account.name,
-        account_uuid: None,
-        organization_uuid: None,
-        organization_name: None,
         provider: account.provider.as_str().to_owned(),
         kind: AccountKind::ApiKey,
         email: None,
@@ -375,10 +333,6 @@ fn api_listing(account: ApiAccount) -> Account {
         model_count: Some(u32::try_from(account.models.len()).unwrap_or(u32::MAX)),
         extra: Extra::new(),
     }
-}
-
-fn entry(provider: &str) -> Option<&'static ProviderEntry> {
-    Provider::from_id(provider).map(|provider| registry().providers.get(provider))
 }
 
 /// `String(file.provider ?? file.type ?? fallback)`.
@@ -408,10 +362,7 @@ fn quota_cooldown(file: &Map<String, Value>) -> bool {
 
 /// One entry of the listing as a stored OAuth account, or nothing for a runtime-only file, an
 /// API key or an entry without a name.
-fn oauth_account(
-    file: &Map<String, Value>,
-    identities: &HashMap<String, SeatIdentity>,
-) -> Option<Account> {
+fn oauth_account(file: &Map<String, Value>) -> Option<Account> {
     if truthy(file.get("runtime_only")) || text(file.get("account_type")) == Some("api_key") {
         return None;
     }
@@ -420,7 +371,6 @@ fn oauth_account(
         .map_or_else(String::new, |value| string(Some(value)).into_owned());
     let id = AccountId::parse(&id).ok()?;
     let provider = provider(file, "unknown");
-    let identity = identities.get(id.as_str()).cloned().unwrap_or_default();
     // Core status messages: "disabled (invalid grant)", "invalid grant (retrying)",
     // "unauthorized", "token expired".
     let status = if truthy(file.get("disabled")) {
@@ -450,9 +400,6 @@ fn oauth_account(
             || registry().label(&provider),
             |value| string(Some(value)).into_owned(),
         ),
-        account_uuid: identity.account_uuid,
-        organization_uuid: identity.organization_uuid,
-        organization_name: identity.organization_name,
         provider,
         kind: AccountKind::OAuth,
         email: text(file.get("email")).map(str::to_owned),
@@ -470,55 +417,8 @@ fn oauth_account(
     })
 }
 
-/// Reads the identity of each named Claude credential whose file changed since `known`, then
-/// makes every credential file owner-only where it is not: a no-op chmod still writes inode
+/// Makes every credential file owner-only where it is not: a no-op chmod still writes inode
 /// metadata. Blocking.
-fn scan(
-    directory: &Path,
-    names: &[String],
-    known: &HashMap<String, Version>,
-    limit: u64,
-) -> (
-    HashMap<String, SeatIdentity>,
-    HashMap<String, Version>,
-    io::Result<()>,
-) {
-    let mut identities = HashMap::new();
-    let mut parsed = HashMap::new();
-    for name in names {
-        let read = || -> Result<Version, AppError> {
-            let path = credential_file(directory, name)?;
-            // Stat before reading: a later rewrite always shows a newer version.
-            let metadata = fs::symlink_metadata(&path).map_err(AppError::internal)?;
-            let (modified, len) = (metadata.modified().ok(), metadata.len());
-            if let Some(cached) = known.get(name)
-                && cached.modified == modified
-                && cached.len == len
-            {
-                return Ok(cached.clone());
-            }
-            let identity = claude_identity(&Value::Object(read_credential(&path, limit)?));
-            Ok(Version {
-                modified,
-                len,
-                identity,
-            })
-        };
-        match read() {
-            Ok(version) => {
-                identities.insert(name.clone(), version.identity.clone());
-                parsed.insert(name.clone(), version);
-            }
-            // Display enrichment is optional: a refresh can replace a file during a read. The
-            // row shows an unverified identity until a later sync succeeds.
-            Err(_) => {
-                identities.insert(name.clone(), SeatIdentity::default());
-            }
-        }
-    }
-    (identities, parsed, repair_modes(directory))
-}
-
 fn repair_modes(directory: &Path) -> io::Result<()> {
     for entry in fs::read_dir(directory)? {
         let entry = entry?;

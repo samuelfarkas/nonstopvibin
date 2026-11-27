@@ -111,7 +111,7 @@ impl DataDir {
         self.profile(profile).join("config.yaml")
     }
 
-    /// Throwaway data directories for Claude sign-ins awaiting review and core update checks.
+    /// Throwaway data directories for core update checks.
     #[must_use]
     pub fn oauth_pending(&self) -> PathBuf {
         self.0.join("oauth-pending")

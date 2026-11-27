@@ -188,15 +188,15 @@ full address from the address bar and paste it into the sign-in dialog, which
 offers a field for it in the browser. Do it before the dialog's expiry time; the
 code works once.
 
-For automatic completion, forward the provider callback ports as well:
+For automatic completion, forward the provider callback port as well:
 
 ```sh
 bun run server:open myserver --sign-in
 # or add to the manual tunnel:
-#   -L 127.0.0.1:1455:127.0.0.1:1455 -L 127.0.0.1:54545:127.0.0.1:54545
+#   -L 127.0.0.1:1455:127.0.0.1:1455
 ```
 
-Port 1455 is Codex and 54545 is Claude. If an agent on the server is signing in
+Port 1455 is Codex's. If an agent on the server is signing in
 to its own account at the same time, the port is busy there and NonstopVibin
 returns "Sign-in port N is in use" (HTTP 409); finish or cancel the other sign-in
 first. API keys and account imports need no extra ports.

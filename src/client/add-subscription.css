@@ -77,47 +77,6 @@
   margin-bottom: 2px;
 }
 
-.reconnect-intro {
-  margin-bottom: 16px;
-}
-
-.reconnect-intro .field-note {
-  margin-top: 10px;
-}
-
-.connected-organizations {
-  margin-top: 18px;
-  border-top: 1px solid var(--line);
-}
-
-.connected-organizations h3 {
-  padding: 14px 0 7px;
-  color: var(--ink-2);
-}
-
-.connected-organizations > div {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.connected-organizations > div > svg {
-  color: var(--green);
-}
-
-.connected-organizations span,
-.connected-organizations small {
-  display: block;
-}
-
-.connected-organizations small {
-  margin-top: 2px;
-  color: var(--ink-3);
-  font-family: var(--mono);
-}
-
 /* OAuth progress and organization review */
 .oauth-progress {
   max-width: 520px;
@@ -149,16 +108,9 @@
   margin-bottom: 6px;
 }
 
-.oauth-progress > p:not(.waiting):not(.organization-hint) {
+.oauth-progress > p:not(.waiting) {
   max-width: 62ch;
   color: var(--ink-2);
-}
-
-.organization-hint {
-  margin-top: 10px;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: var(--text-caption);
 }
 
 .oauth-progress > .button-row {
@@ -225,45 +177,11 @@
   margin-bottom: 10px;
 }
 
-.organization-review,
 .success-state {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 14px;
-}
-
-.verified-organization {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--green);
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-}
-
-.organization-destination {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 0;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  color: var(--ink-3);
-}
-
-.organization-destination span,
-.organization-destination strong {
-  display: block;
-}
-
-.organization-destination strong {
-  margin-top: 2px;
-  color: var(--ink);
-}
-
-.organization-review .modal-footer {
-  margin-top: 4px;
 }
 
 .success-state > svg {
@@ -423,8 +341,7 @@
     padding: 18px;
   }
 
-  .success-state > .button-row,
-  .organization-review .modal-footer {
+  .success-state > .button-row {
     justify-content: flex-start;
   }
 }

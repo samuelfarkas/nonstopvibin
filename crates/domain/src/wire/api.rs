@@ -5,7 +5,6 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Profile, True};
-use crate::id::AccountId;
 use crate::registry::{OAuthProvider, Protocol, Provider, RetentionDays, Strategy};
 use crate::secret::ApiKey;
 
@@ -183,14 +182,12 @@ pub struct CoreInstallBody {
 /// `POST /profiles/:profileId/oauth`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(test, derive(ts_rs::TS), ts(optional_fields))]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct OAuthStartBody {
     pub provider: OAuthProvider,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconnect_account_id: Option<AccountId>,
 }
 
-/// `POST /profiles/:profileId/oauth-confirm`, and the `state` query of the OAuth routes.
+/// The `state` query of the OAuth routes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub struct StateBody {
@@ -278,7 +275,6 @@ pub enum ProfileRoute {
     SignIn,
     SignInStatus,
     SignInCancel,
-    SignInConfirm,
     SignInSession,
     Callback,
     Import,
@@ -398,11 +394,6 @@ pub const ROUTES: &[(&str, &str, Route)] = &[
         "DELETE",
         "/profiles/:profileId/oauth",
         Route::Profile(ProfileRoute::SignInCancel),
-    ),
-    (
-        "POST",
-        "/profiles/:profileId/oauth-confirm",
-        Route::Profile(ProfileRoute::SignInConfirm),
     ),
     (
         "GET",

@@ -22,16 +22,14 @@ enum Upstream {
     CodexUsage,
     CodexResetCredits,
     CodexRedeemReset,
-    ClaudeUsage,
     XaiCredits,
 }
 
 impl Upstream {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 4] = [
         Self::CodexUsage,
         Self::CodexResetCredits,
         Self::CodexRedeemReset,
-        Self::ClaudeUsage,
         Self::XaiCredits,
     ];
 
@@ -52,11 +50,6 @@ impl Upstream {
                 "POST",
                 "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
                 Provider::Codex,
-            ),
-            Self::ClaudeUsage => (
-                "GET",
-                "https://api.anthropic.com/api/oauth/usage",
-                Provider::Claude,
             ),
             Self::XaiCredits => (
                 "GET",
@@ -87,7 +80,6 @@ impl Upstream {
             Self::CodexUsage | Self::CodexResetCredits | Self::CodexRedeemReset => {
                 UpstreamRequest::codex(method, url, chatgpt_account_id)
             }
-            Self::ClaudeUsage => UpstreamRequest::claude(method, url),
             Self::XaiCredits => UpstreamRequest::bearer(method, url),
         };
         request.data = data;
@@ -367,11 +359,6 @@ mod tests {
             ),
             (
                 "GET",
-                "https://api.anthropic.com/api/oauth/usage",
-                Upstream::ClaudeUsage,
-            ),
-            (
-                "GET",
                 "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
                 Upstream::XaiCredits,
             ),
@@ -395,10 +382,8 @@ mod tests {
                 "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
             ),
             ("get", "https://chatgpt.com/backend-api/wham/usage"),
-            (
-                "GET",
-                "https://api.anthropic.com/api/oauth/usage?cedar_ember=1",
-            ),
+            // Claude subscriptions are served by Claude Code itself: none to read.
+            ("GET", "https://api.anthropic.com/api/oauth/usage"),
             ("GET", "https://cli-chat-proxy.grok.com/v1/billing"),
             (
                 "GET",

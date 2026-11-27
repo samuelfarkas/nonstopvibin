@@ -705,13 +705,6 @@ input[role="switch"]:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.identity-unknown {
-  display: block;
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-  color: var(--amber-text);
-  margin-top: 3px;
-}
 .provider-icon {
   width: 30px;
   height: 30px;
@@ -1418,20 +1411,6 @@ details[open] > summary:before {
 details > p,
 details > dl {
   margin-top: 8px;
-}
-.identity-details {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 14px;
-  font-family: var(--mono);
-  font-size: var(--text-caption);
-}
-.identity-details dt {
-  color: var(--ink-3);
-}
-.identity-details dd {
-  color: var(--ink);
-  overflow-wrap: anywhere;
 }
 
 /* ---------- Fatal / boot ---------- */

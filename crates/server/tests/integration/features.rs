@@ -9,13 +9,10 @@ use nsv_core::binary::bundled_pin;
 use nsv_core::install::CoreSource;
 use nsv_core::pool::Backend;
 use nsv_desktop::HostEvent;
-use nsv_domain::id::ProfileId;
 use nsv_files::DataDir;
 use nsv_server::{AllowedHost, Boundaries, CoreOptions, Daemon, Desktop, Options};
 use nsv_testkit::fake::{Directory, FakeCores, response};
-use nsv_testkit::world::{
-    ACCOUNT, ORGANIZATION_A, StubFetch, UPDATE, bundled_core, claude, release,
-};
+use nsv_testkit::world::{StubFetch, UPDATE, bundled_core, release};
 use nsv_testkit::{Port, TempDir};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -294,8 +291,7 @@ async fn a_browser_callback_signs_in_and_brings_the_desktop_window_forward() {
 }
 
 #[tokio::test]
-#[expect(clippy::too_many_lines, reason = "one profile's accounts, in order")]
-async fn imported_accounts_reconnect_change_and_go_away() {
+async fn imported_accounts_change_and_go_away() {
     let app = running("http-credentials", None).await;
     let profile = app.profile("Edits").await;
     // A CLIProxyAPI credential the import catalog finds under the agents' home.
@@ -313,82 +309,23 @@ async fn imported_accounts_reconnect_change_and_go_away() {
         Some(json!({ "sourceId": source })),
     )
     .await;
-    // A Claude seat, whose identity the stub provider confirms.
-    app.outside.answer(|_| {
-        Ok(response(
-            200,
-            json!({
-                "account": { "uuid": ACCOUNT, "email": "same@example.invalid" },
-                "organization": { "uuid": ORGANIZATION_A, "name": "Example A" },
-            })
-            .to_string(),
-        ))
-    });
+    // A credential file the user picked.
+    let kimi = json!({ "type": "kimi", "access_token": "synthetic-kimi-access" });
     app.ok(
         "POST",
         &format!("/profiles/{profile}/import"),
-        Some(json!({ "contents": claude(ORGANIZATION_A, "first") })),
+        Some(json!({ "contents": kimi })),
     )
     .await;
     let accounts = app.accounts(&profile).await;
     assert_eq!(accounts.len(), 2, "{accounts:?}");
-    let id = |provider: &str| {
-        accounts
-            .iter()
-            .find(|account| account["provider"] == provider)
-            .unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-    let (account, seat) = (id("codex"), id("claude"));
-
-    // Signing the seat in again replaces its credential and keeps its id.
-    app.fake
-        .knobs(|knobs| knobs.credential = claude(ORGANIZATION_A, "again"));
-    let oauth = format!("/profiles/{profile}/oauth");
-    let session = app
-        .ok(
-            "POST",
-            &oauth,
-            Some(json!({ "provider": "claude", "reconnectAccountId": seat })),
-        )
-        .await;
-    let state = session["state"].as_str().unwrap();
-    app.ok(
-        "POST",
-        &format!("/profiles/{profile}/callback"),
-        Some(json!({
-            "url": format!("http://localhost:54545/callback?state={state}&code=synthetic")
-        })),
-    )
-    .await;
-    let review = app.ok("GET", &format!("{oauth}?state={state}"), None).await;
-    assert_eq!(
-        (&review["status"], &review["review"]["action"]),
-        (&json!("review"), &json!("reconnect")),
-        "{review}"
-    );
-    let confirmed = app
-        .ok(
-            "POST",
-            &format!("/profiles/{profile}/oauth-confirm"),
-            Some(json!({ "state": state })),
-        )
-        .await;
-    assert_eq!(
-        (&confirmed["status"], &confirmed["account"]["id"]),
-        (&json!("ok"), &json!(seat)),
-        "{confirmed}"
-    );
-    let directory = DataDir::new(app.root.path().join("data"))
-        .credentials(&ProfileId::parse(&profile).unwrap());
-    let credential = std::fs::read_to_string(directory.join(&seat)).unwrap();
-    assert!(
-        credential.contains("synthetic-access-again"),
-        "{credential}"
-    );
-    assert_eq!(app.accounts(&profile).await.len(), 2);
+    let account = accounts
+        .iter()
+        .find(|account| account["provider"] == "codex")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let path = format!("/profiles/{profile}/accounts/{account}");
     app.ok(

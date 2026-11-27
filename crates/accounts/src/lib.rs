@@ -8,7 +8,6 @@ pub mod catalog;
 pub mod cores;
 mod credentials;
 pub mod fetch;
-pub mod identity;
 pub mod imports;
 pub mod pricing;
 pub mod quota;

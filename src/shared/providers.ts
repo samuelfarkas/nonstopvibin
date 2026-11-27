@@ -5,7 +5,7 @@ export type { Protocol };
 /** Server rules an API-key preset can name: see `model_protocol` (crates/accounts/src/api_accounts.rs) and `upstream_headers` (crates/core/src/config.rs). */
 export type Upstream = "opencode-go";
 
-interface ProviderFields {
+export interface ProviderEntry {
   /** Short name in account lists, quotas and history. */
   label: string;
   /** The first release shows it; the server supports every entry. */
@@ -24,8 +24,6 @@ interface ProviderFields {
   signIn?: {
     name: string;
     detail: string;
-    /** The core's name for the provider, where it differs. */
-    core?: string;
     /** Quota windows it reports, shown before anything is connected. */
     limits?: string;
   };
@@ -45,19 +43,6 @@ interface ProviderFields {
   /** Banked rate-limit resets can be redeemed for its signed-in accounts. */
   bankedResets?: boolean;
 }
-export type ProviderEntry = ProviderFields &
-  (
-    | {
-        /**
-         * One email can hold seats in several organizations, each its own account: a sign-in
-         * runs in a sandbox and its seat is reviewed before it joins a profile.
-         */
-        organizations: true;
-        /** A sign-in can replace the credential of an existing account in place; only the review can. */
-        reconnect?: boolean;
-      }
-    | { organizations?: false; reconnect?: false }
-  );
 // One entry per provider. Key order is the order of the app's pickers.
 export const providers = {
   // The user's own signed-in Claude Code serves the subscription: no sign-in through the
@@ -68,25 +53,6 @@ export const providers = {
     icon: "claude",
     catalog: "anthropic",
     nativeAgent: "claude",
-  },
-  claude: {
-    label: "Claude",
-    visible: true,
-    icon: "claude",
-    catalog: "anthropic",
-    nativeAgent: "claude",
-    hosts: ["claude.ai", "console.anthropic.com", "platform.claude.com"],
-    credentialFile: true,
-    signIn: {
-      name: "Claude",
-      detail:
-        "Personal or organization seats · the same email can connect more than once",
-      core: "anthropic",
-      limits: "5-hour · weekly · opus weekly",
-    },
-    bankedResets: true,
-    reconnect: true,
-    organizations: true,
   },
   codex: {
     label: "Codex",
@@ -210,12 +176,6 @@ export function providerEntry(id: string): ProviderEntry | undefined {
 export function isOAuthProvider(id: string): id is OAuthProvider {
   return providerEntry(id)?.signIn !== undefined;
 }
-export type OrganizationProvider = {
-  [K in Provider]: Entries[K] extends { organizations: true } ? K : never;
-}[Provider];
-export function hasOrganizations(id: string): id is OrganizationProvider {
-  return providerEntry(id)?.organizations === true;
-}
 const providerIds = Object.keys(providers).filter(isProvider);
 export const oauthProviders = providerIds.flatMap((id) => {
   const { signIn, ...entry } = providerEntry(id);
@@ -229,7 +189,9 @@ export const apiPresets = providerIds.flatMap((id) => {
 /** The agent whose vendor owns a model, from its `owned_by`. */
 export function nativeAgent(owner: string | undefined): Agent | undefined {
   // owned_by is the vendor for OAuth models and "<provider>-<hash>" for
-  // API-key accounts registered as compatible providers.
+  // API-key accounts registered as compatible providers. The core's
+  // Anthropic-protocol routes are "claude".
+  if (owner === "claude") owner = "anthropic";
   const id = providerIds.find(
     (id) => owner === id || owner?.startsWith(`${id}-`),
   );
@@ -245,10 +207,15 @@ export function modelsFor<T extends { owned_by?: string }>(
   if (!agents[agent].native || otherProviders) return models;
   return models.filter(({ owned_by }) => nativeAgent(owned_by) === agent);
 }
-// The core names generated compatible providers "openai-compatible-<hash>".
+// The core names generated compatible providers "openai-compatible-<hash>", and records
+// its Anthropic-protocol routes (Claude Agent, Anthropic API) as "claude".
 export function providerLabel(provider: string): string {
   return (
     providerEntry(provider)?.label ??
-    (provider.startsWith("openai-compatible-") ? "Compatible API" : provider)
+    (provider === "claude"
+      ? "Claude"
+      : provider.startsWith("openai-compatible-")
+        ? "Compatible API"
+        : provider)
   );
 }

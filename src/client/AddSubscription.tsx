@@ -4,9 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  Building2,
   RefreshCw,
-  ShieldCheck,
   ExternalLink,
   FileUp,
   KeyRound,
@@ -15,9 +13,7 @@ import {
 } from "lucide-react";
 import {
   apiPresets,
-  hasOrganizations,
   oauthProviders,
-  providerLabel,
   type OAuthProvider,
   type Protocol,
   type Provider,
@@ -28,12 +24,9 @@ import {
   prefixLength,
 } from "../shared/vocabulary.ts";
 import type {
-  Account,
   AppState,
   ClaudeAgentStatus,
   ImportSource,
-  OAuthReview,
-  OAuthStatus,
   OAuthSession,
   ProfileState,
   Json,
@@ -41,22 +34,18 @@ import type {
 import { api, desktop, openExternal } from "./api.ts";
 import { messageOf, useAction } from "./action.ts";
 import { usePolling } from "./feed.tsx";
-import { AccountSummary, ProviderIcon } from "./components.tsx";
+import { ProviderIcon } from "./components.tsx";
 import { CopyButton, Modal, Select } from "./controls.tsx";
-
-import { accountLabel, organizationLabel } from "./format.ts";
 
 export function AddSubscription({
   profile: initialProfile,
   profiles,
-  reconnectAccount,
   onSelectProfile,
   onClose,
   onSaved,
 }: {
   profile: ProfileState;
   profiles: ProfileState[];
-  reconnectAccount?: Account;
   onSelectProfile(id: string): void;
   onClose(): void;
   onSaved(next?: AppState): Promise<void>;
@@ -64,25 +53,13 @@ export function AddSubscription({
   const [destinationId, setDestinationId] = useState(initialProfile.id);
   const profile =
     profiles.find((p) => p.id === destinationId) ?? initialProfile;
-  const [reconnectId, setReconnectId] = useState(reconnectAccount?.id);
-  const reconnectTarget = profile.accounts.find((a) => a.id === reconnectId);
-  const [organizationsOnly, setOrganizationsOnly] =
-    useState(!!reconnectAccount);
-  const organizationAccounts = organizationsOnly
-    ? profile.accounts.filter(
-        (a) => hasOrganizations(a.provider) && a.kind === "oauth",
-      )
-    : [];
-  const [review, setReview] = useState<OAuthReview>();
-  const [verificationFailed, setVerificationFailed] = useState(false);
-  const [selectedTab, setTab] = useState<"oauth" | "api" | "import">("oauth");
-  const tab = organizationsOnly ? "oauth" : selectedTab;
+  const [checkFailed, setCheckFailed] = useState(false);
+  const [tab, setTab] = useState<"oauth" | "api" | "import">("oauth");
   const { busy, error, setError, run: runAction } = useAction();
   const run = (action: () => Promise<void>) =>
     runAction(action, "Could not connect subscription.");
   const [session, setSession] = useState<OAuthSession>();
-  const [complete, setComplete] =
-    useState<Extract<OAuthStatus, { status: "ok" }>>();
+  const [complete, setComplete] = useState(false);
   const [presetId, setPresetId] = useState<Provider>("opencode-go");
   const preset = apiPresets.find((p) => p.id === presetId)!;
   const [name, setName] = useState("OpenCode Go");
@@ -110,10 +87,7 @@ export function AddSubscription({
       params: { profileId: profile.id },
     })
       .then((existing) => {
-        if (!cancelled && existing) {
-          setSession(existing);
-          setReconnectId(existing.reconnectAccountId);
-        }
+        if (!cancelled && existing) setSession(existing);
       })
       .catch((e) => {
         if (!cancelled) setError(e.message);
@@ -153,7 +127,7 @@ export function AddSubscription({
     });
   }
   const checkSignIn = useMemo(() => {
-    if (!session || complete || review || verificationFailed) return;
+    if (!session || complete || checkFailed) return;
     return async (signal: AbortSignal) => {
       try {
         const result = await api("GET /profiles/:profileId/oauth", {
@@ -161,35 +135,8 @@ export function AddSubscription({
           query: { state: session.state },
         });
         if (!signal.aborted && result.status === "ok") {
-          setComplete(result);
+          setComplete(true);
           await onSaved();
-        }
-        if (!signal.aborted && result.status === "review") {
-          if (result.review.action === "reconnect" && reconnectId) {
-            // The verified seat already matches the chosen connection; a confirm
-            // click adds nothing and users miss it. Fall back to manual review on failure.
-            let confirmed: OAuthStatus;
-            try {
-              confirmed = await api("POST /profiles/:profileId/oauth-confirm", {
-                params: { profileId: profile.id },
-                body: { state: session.state },
-              });
-              if (confirmed.status !== "ok")
-                throw new Error("The connection was not completed. Try again.");
-            } catch (e) {
-              if (signal.aborted) return;
-              setReview(result.review);
-              setError(messageOf(e, "Could not reconnect the subscription."));
-              return;
-            }
-            // The server has already replaced the credential; show the result even
-            // if a profile refresh restarted this poll while confirming.
-            setComplete(confirmed);
-            await onSaved();
-            return;
-          }
-          setReview(result.review);
-          setError("");
         }
         if (!signal.aborted && result.status === "error") {
           setError(
@@ -200,32 +147,21 @@ export function AddSubscription({
       } catch (e) {
         if (!signal.aborted) {
           setError(messageOf(e, "Could not check sign-in."));
-          setVerificationFailed(true);
+          setCheckFailed(true);
         }
       }
     };
-  }, [
-    session,
-    complete,
-    review,
-    verificationFailed,
-    profile.id,
-    reconnectId,
-    onSaved,
-    setError,
-  ]);
+  }, [session, complete, checkFailed, profile.id, onSaved, setError]);
   // Sign-in happens in a browser that usually covers this window; keep checking
   // while it is hidden so the dialog has the result when the user returns.
   usePolling(checkSignIn, 2000, { whileHidden: true });
   async function begin(provider: OAuthProvider) {
     const next = await api("POST /profiles/:profileId/oauth", {
       params: { profileId: profile.id },
-      // JSON.stringify drops undefined, so a fresh connection sends no target.
-      body: { provider, reconnectAccountId: reconnectTarget?.id },
+      body: { provider },
     });
     setSession(next);
-    setReview(undefined);
-    setVerificationFailed(false);
+    setCheckFailed(false);
     await openExternal(next.url);
   }
   async function checkAgent() {
@@ -241,14 +177,6 @@ export function AddSubscription({
     await onSaved(next);
     onSelectProfile(profile.id);
   }
-  async function chooseAgain() {
-    await cancelSignIn();
-    setSession(undefined);
-    setReview(undefined);
-    setVerificationFailed(false);
-    setCallback("");
-    setOrganizationsOnly(true);
-  }
   return (
     <Modal
       onClose={() => {
@@ -256,24 +184,12 @@ export function AddSubscription({
       }}
       title={
         complete
-          ? complete.reconnected
-            ? "Subscription reconnected"
-            : "Subscription connected"
-          : review
-            ? "Confirm your organization"
-            : session
-              ? "Finish signing in"
-              : reconnectTarget
-                ? "Reconnect your subscription"
-                : organizationsOnly
-                  ? "Connect another organization"
-                  : "Add a subscription"
+          ? "Subscription connected"
+          : session
+            ? "Finish signing in"
+            : "Add a subscription"
       }
-      description={
-        review
-          ? "Check the organization before connecting it to your profile."
-          : `This subscription will belong to ${profile.name}.`
-      }
+      description={`This subscription will belong to ${profile.name}.`}
       wide
     >
       {error && (
@@ -284,18 +200,10 @@ export function AddSubscription({
       {complete ? (
         <div className="success-state" role="status">
           <CheckCircle2 size={36} aria-hidden="true" />
-          <h3>
-            {complete.account
-              ? accountLabel(complete.account)
-              : "Subscription connected"}
-          </h3>
+          <h3>Subscription connected</h3>
           <p>
-            {complete.account?.disabled
-              ? "Your subscription is reconnected and still paused"
-              : "Connected"}{" "}
-            in <strong>{profile.name}</strong>.
+            Connected in <strong>{profile.name}</strong>.
           </p>
-          {complete.account && <AccountSummary account={complete.account} />}
           <div className="button-row">
             <button
               className="button primary"
@@ -304,106 +212,6 @@ export function AddSubscription({
             >
               Done
             </button>
-            {session && hasOrganizations(session.provider) && (
-              <button
-                className="button"
-                disabled={busy}
-                onClick={() => {
-                  setComplete(undefined);
-                  setSession(undefined);
-                  setReview(undefined);
-                  setReconnectId(undefined);
-                  setOrganizationsOnly(true);
-                }}
-              >
-                <Plus size={15} aria-hidden="true" /> Connect another
-                organization
-              </button>
-            )}
-          </div>
-          {session && hasOrganizations(session.provider) && (
-            <p className="field-note">
-              Use the same email and choose a different organization when you
-              sign in.
-            </p>
-          )}
-        </div>
-      ) : review ? (
-        <div className="organization-review">
-          <div className="verified-organization">
-            <ShieldCheck size={16} aria-hidden="true" /> Organization verified
-            by {providerLabel(review.account.provider)}
-          </div>
-          <AccountSummary account={review.account} />
-          <div className="organization-destination">
-            <Building2 size={18} aria-hidden="true" />
-            <span>
-              {review.action === "reconnect" ? "Reconnect in" : "Connect to"}
-              <strong>{profile.name}</strong>
-            </span>
-          </div>
-          {review.action === "blocked" ? (
-            <p className="inline-error" role="alert">
-              {review.message}
-            </p>
-          ) : (
-            <p className="field-note">
-              {review.action === "reconnect"
-                ? "This seat is already in this profile. Its history, label, priority, and paused state will stay in place. A running profile briefly restarts to apply the new sign-in."
-                : "This organization gets its own connection and quota readings, even when another seat uses the same email."}
-            </p>
-          )}
-          <details>
-            <summary>Organization details</summary>
-            <dl className="identity-details">
-              <dt>Organization ID</dt>
-              <dd>{review.account.organizationUuid}</dd>
-              <dt>Account ID</dt>
-              <dd>{review.account.accountUuid}</dd>
-            </dl>
-          </details>
-          <div className="modal-footer">
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() => run(chooseAgain)}
-            >
-              Choose another organization
-            </button>
-            {review.action !== "blocked" && (
-              <button
-                className="button primary"
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    const result = await api(
-                      "POST /profiles/:profileId/oauth-confirm",
-                      {
-                        params: { profileId: profile.id },
-                        body: { state: session!.state },
-                      },
-                    );
-                    if (result.status !== "ok")
-                      throw new Error(
-                        "The connection was not completed. Try again.",
-                      );
-                    setComplete(result);
-                    await onSaved();
-                  })
-                }
-              >
-                {busy ? (
-                  <LoaderCircle size={15} className="spin" aria-hidden="true" />
-                ) : (
-                  <CheckCircle2 size={15} aria-hidden="true" />
-                )}
-                {busy
-                  ? "Connecting…"
-                  : review.action === "reconnect"
-                    ? "Reconnect subscription"
-                    : "Connect organization"}
-              </button>
-            )}
           </div>
         </div>
       ) : session ? (
@@ -417,41 +225,10 @@ export function AddSubscription({
           </div>
           <h3>Continue in your browser</h3>
           <p>
-            {hasOrganizations(session.provider) ? (
-              <>
-                Choose{" "}
-                <strong>
-                  {reconnectTarget
-                    ? accountLabel(reconnectTarget)
-                    : "the organization you want to connect"}
-                </strong>{" "}
-                on the {providerLabel(session.provider)} authorization page.{" "}
-                {reconnectTarget ? (
-                  <>
-                    After you sign in, the reconnect in{" "}
-                    <strong>{profile.name}</strong> finishes here on its own.
-                  </>
-                ) : (
-                  <>
-                    You’ll confirm the selected organization here before it
-                    joins <strong>{profile.name}</strong>.
-                  </>
-                )}
-              </>
-            ) : (
-              <>
-                Sign in to the account you want to add to{" "}
-                <strong>{profile.name}</strong>. This screen will update when
-                you finish.
-              </>
-            )}
+            Sign in to the account you want to add to{" "}
+            <strong>{profile.name}</strong>. This screen will update when you
+            finish.
           </p>
-          {hasOrganizations(session.provider) && (
-            <p className="organization-hint">
-              One email can have several seats. Each organization connects
-              separately.
-            </p>
-          )}
           <div className="button-row">
             <button
               className="button primary"
@@ -476,26 +253,24 @@ export function AddSubscription({
               />
             </div>
           )}
-          {verificationFailed && (
+          {checkFailed && (
             <button
               className="button"
               disabled={busy}
               onClick={() => {
                 setError("");
-                setVerificationFailed(false);
+                setCheckFailed(false);
               }}
             >
-              <RefreshCw size={14} aria-hidden="true" /> Retry verification
+              <RefreshCw size={14} aria-hidden="true" /> Check again
             </button>
           )}
           <p className="waiting loading" role="status">
-            {!verificationFailed && (
+            {!checkFailed && (
               <LoaderCircle size={14} className="spin" aria-hidden="true" />
             )}{" "}
-            {verificationFailed
-              ? "Verification paused"
-              : "Waiting for the provider"}
-            · expires at{" "}
+            {checkFailed ? "Checking paused" : "Waiting for the provider"}·
+            expires at{" "}
             {new Date(session.expiresAt).toLocaleTimeString([], {
               hour: "numeric",
               minute: "2-digit",
@@ -550,58 +325,46 @@ export function AddSubscription({
         </div>
       ) : (
         <>
-          {reconnectTarget ? (
-            <div className="reconnect-intro">
-              <AccountSummary account={reconnectTarget} />
-              <p className="field-note">
-                Sign in with the same account and organization. Your other seats
-                will stay connected.
-              </p>
-            </div>
-          ) : (
-            <label className="field">
-              Destination profile
-              <Select
-                value={profile.id}
-                disabled={busy}
-                onValueChange={setDestinationId}
-                options={profiles.map((p) => ({ value: p.id, label: p.name }))}
-              />
-            </label>
-          )}
-          {!organizationsOnly && (
-            <div
-              className="segmented"
-              role="group"
-              aria-label="Connection method"
-            >
-              {(
-                [
-                  ["oauth", "Sign in"],
-                  ["api", "API key"],
-                  ["import", "Import"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  type="button"
-                  key={id}
-                  className={tab === id ? "active" : ""}
-                  aria-pressed={tab === id}
-                  onClick={() => {
-                    setTab(id);
-                    setError("");
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          <label className="field">
+            Destination profile
+            <Select
+              value={profile.id}
+              disabled={busy}
+              onValueChange={setDestinationId}
+              options={profiles.map((p) => ({ value: p.id, label: p.name }))}
+            />
+          </label>
+          <div
+            className="segmented"
+            role="group"
+            aria-label="Connection method"
+          >
+            {(
+              [
+                ["oauth", "Sign in"],
+                ["api", "API key"],
+                ["import", "Import"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                type="button"
+                key={id}
+                className={tab === id ? "active" : ""}
+                aria-pressed={tab === id}
+                onClick={() => {
+                  setTab(id);
+                  setError("");
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {tab === "oauth" && agent && (
             <div className="claude-agent">
               <p className="field-note">
-                Runs your own signed-in Claude Code for this profile, which is
-                lower risk than the cloaked Claude sign-in.
+                Runs your own signed-in Claude Code for this profile. Claude
+                Code makes every request to Claude itself.
               </p>
               {agent.error ? (
                 <p className="inline-error" role="alert">
@@ -654,32 +417,23 @@ export function AddSubscription({
           )}
           {tab === "oauth" && !agent && (
             <div className="provider-options">
-              {!organizationsOnly && (
-                <button
-                  className="provider-option"
-                  disabled={busy}
-                  onClick={() => run(checkAgent)}
-                >
-                  <span>
-                    <strong>Claude Agent</strong>
-                    <code>
-                      Your own signed-in Claude Code · lower risk than the
-                      cloaked Claude sign-in
-                    </code>
-                  </span>
-                  {busy ? (
-                    <LoaderCircle size={14} className="spin" />
-                  ) : (
-                    <ArrowRight size={14} />
-                  )}
-                </button>
-              )}
+              <button
+                className="provider-option"
+                disabled={busy}
+                onClick={() => run(checkAgent)}
+              >
+                <span>
+                  <strong>Claude Agent</strong>
+                  <code>Your own signed-in Claude Code</code>
+                </span>
+                {busy ? (
+                  <LoaderCircle size={14} className="spin" />
+                ) : (
+                  <ArrowRight size={14} />
+                )}
+              </button>
               {oauthProviders
-                .filter(
-                  (provider) =>
-                    provider.visible &&
-                    (!organizationsOnly || provider.organizations),
-                )
+                .filter((provider) => provider.visible)
                 .map((provider) => (
                   <button
                     className="provider-option"
@@ -688,11 +442,7 @@ export function AddSubscription({
                     onClick={() => run(() => begin(provider.id))}
                   >
                     <span>
-                      <strong>
-                        {reconnectTarget
-                          ? "Sign in to reconnect"
-                          : provider.name}
-                      </strong>
+                      <strong>{provider.name}</strong>
                       <code>{provider.detail}</code>
                     </span>
                     {busy ? (
@@ -702,20 +452,6 @@ export function AddSubscription({
                     )}
                   </button>
                 ))}
-              {organizationAccounts.length > 0 && (
-                <div className="connected-organizations">
-                  <h3>Already connected in {profile.name}</h3>
-                  {organizationAccounts.map((a) => (
-                    <div key={a.id}>
-                      <CheckCircle2 size={14} aria-hidden="true" />
-                      <span>
-                        {accountLabel(a)}
-                        <small>{a.email}</small>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
               <p className="field-note">
                 The provider handles sign-in. NonstopVibin never asks for your
                 account password.
@@ -883,18 +619,8 @@ export function AddSubscription({
                         }
                       />
                       <span>
-                        <strong>
-                          {organizationLabel(source) ||
-                            source.email ||
-                            source.provider}
-                        </strong>
-                        <small>
-                          {source.organizationUuid
-                            ? `${source.email || source.provider} · ${source.organizationUuid.slice(0, 8)}`
-                            : hasOrganizations(source.provider)
-                              ? "Organization unverified"
-                              : source.fileName}
-                        </small>
+                        <strong>{source.email || source.provider}</strong>
+                        <small>{source.fileName}</small>
                       </span>
                     </label>
                   ))}

@@ -20,9 +20,10 @@ _Screenshots use sample accounts and simulated quotas. [Capture notes](docs/medi
 - **Keep account pools separate.** Work, personal, and project profiles each have
   their own key and endpoint. Requests use only that profile's accounts and fail
   when none can serve them.
-- **Connect the agents you already use.** Sign in to Claude or ChatGPT/Codex,
-  connect OpenCode Go with a subscription key, add a compatible API, or import
-  CLIProxyAPI account files. Then open **Connect agents** for setup and launch
+- **Connect the agents you already use.** Serve a Claude subscription through
+  your own signed-in Claude Code, sign in to ChatGPT/Codex, connect OpenCode Go
+  with a subscription key, add a compatible API, or import CLIProxyAPI account
+  files. Then open **Connect agents** for setup and launch
   instructions.
 
 ![Subscription accounts, remaining quotas, and reset times in the Work profile](docs/media/subscriptions.png)
@@ -103,6 +104,8 @@ banked Codex resets. It cannot reach the agent API or other management endpoints
   compares only the origin, so it pools every hub you add for this app into every
   such thread. Add only the hub of the profile your T3 Code agents use.
 - Redeeming a banked Codex reset in T3 Code spends it.
+- A Claude Agent subscription shows no limits: the app never reads its Claude
+  login.
 
 ## Run on a Linux server
 

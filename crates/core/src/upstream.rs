@@ -15,12 +15,5 @@ pub fn cooldown(status: u16) -> Option<Duration> {
     }
 }
 
-/// The Claude Code identity the core presents to Anthropic for subscription traffic
-/// (`defaultClaudeFingerprintUserAgent` in `claude_device_profile.go`). Anthropic lists and
-/// redeems Claude's limit resets only for Claude Code (`ineligible_reason: "surface"`
-/// otherwise) of a recent enough version (`"cli_version"`), so the app's reset calls present
-/// the same one.
-pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.321 (external, cli)";
-
-/// The loopback ports the core's browser sign-in links redirect to: Codex, Claude.
-pub const SIGN_IN_PORTS: [u16; 2] = [1455, 54545];
+/// The loopback ports the core's browser sign-in links redirect to: Codex.
+pub const SIGN_IN_PORTS: [u16; 1] = [1455];

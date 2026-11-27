@@ -9,7 +9,7 @@ use std::fmt::Display;
 
 use nsv_agents::{Issue, PROJECT_LENGTH, project_issues, selection_issues, setup_issues};
 use nsv_domain::error::AppError;
-use nsv_domain::id::{AccountId, ProfileId};
+use nsv_domain::id::ProfileId;
 use nsv_domain::js;
 use nsv_domain::registry::{
     Agent, OAuthProvider, Protocol, Provider, RetentionDays, Strategy, registry,
@@ -18,7 +18,7 @@ use nsv_domain::secret::ApiKey;
 use nsv_domain::wire::{
     AccountPatch, AgentSelection, AgentSetupInput, ApiAccountInput, ApiModelInput, CallbackBody,
     CoreInstallBody, CreateProfileBody, CreditBody, ImportBody, ImportSourceBody, OAuthStartBody,
-    ProfilePatch, RetentionBody, StateBody,
+    ProfilePatch, RetentionBody,
 };
 use serde_json::{Map, Value};
 
@@ -398,11 +398,6 @@ pub(crate) fn state_query(state: Option<&str>) -> Result<String, Invalid> {
     issues.finish(text)
 }
 
-/// `POST /profiles/:profileId/oauth-confirm`.
-pub(crate) fn state(value: &Value) -> Result<StateBody, Invalid> {
-    single(value, "state", 500).map(|state| StateBody { state })
-}
-
 /// `POST /profiles/:profileId/accounts/:accountId/reset-credits/consume`.
 pub(crate) fn credit(value: &Value) -> Result<CreditBody, Invalid> {
     single(value, "creditId", 500).map(|credit_id| CreditBody { credit_id })
@@ -448,13 +443,7 @@ pub(crate) fn oauth_start(value: &Value) -> Result<OAuthStartBody, Invalid> {
     let offered: Vec<OAuthProvider> = OAuthProvider::ALL
         .iter()
         .copied()
-        .filter(|provider| {
-            registry()
-                .providers
-                .get(Provider::from(*provider))
-                .sign_in
-                .is_some()
-        })
+        .filter(|provider| registry().providers.get(Provider::from(*provider)).sign_in)
         .collect();
     let mut issues = Issues::default();
     let body = object(&mut issues, Some(value), "").and_then(|map| {
@@ -465,15 +454,9 @@ pub(crate) fn oauth_start(value: &Value) -> Result<OAuthStartBody, Invalid> {
             &offered,
             OAuthProvider::as_str,
         );
-        let reconnect = optional(map, "reconnectAccountId", |value| {
-            let text = string(&mut issues, Some(value), "reconnectAccountId")?;
-            length(&mut issues, text, "reconnectAccountId", 1, 255);
-            AccountId::parse(text).ok()
-        });
-        strict(&mut issues, map, "", &["provider", "reconnectAccountId"]);
+        strict(&mut issues, map, "", &["provider"]);
         Some(OAuthStartBody {
             provider: provider?,
-            reconnect_account_id: reconnect?,
         })
     });
     issues.finish(body)
@@ -771,12 +754,7 @@ mod tests {
         same(retention, &json!({ "days": 90 }));
         same(profile_name, &json!({ "name": "Work" }));
         same(core_install, &json!({ "version": "8.1.0" }));
-        same(oauth_start, &json!({ "provider": "claude" }));
-        same(
-            oauth_start,
-            &json!({ "provider": "claude", "reconnectAccountId": "claude-a.json" }),
-        );
-        same(state, &json!({ "state": "abc" }));
+        same(oauth_start, &json!({ "provider": "codex" }));
         same(
             callback,
             &json!({ "url": "http://localhost:1455/auth/callback?code=x" }),

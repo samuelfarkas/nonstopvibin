@@ -1,8 +1,8 @@
 # Decision record: serve Claude subscriptions through the user's own `claude`
 
-Status: accepted for a first version, November 2026. The policy evidence comes from a
-deep-research run with checked citations, kept outside the repository. The spike evidence
-below was run on Hive against Claude Code 2.1.326 and CLIProxyAPI 8.1.0.
+Status: accepted, November 2026, with the owner's decisions below. The policy evidence comes
+from a deep-research run with checked citations, kept outside the repository. The spike
+evidence below was run on Hive against Claude Code 2.1.326 and CLIProxyAPI 8.1.0.
 
 ## Context
 
@@ -22,6 +22,19 @@ native apps. In January 2026 an Anthropic staff post on X called third-party har
 Claude subscriptions a Terms of Service violation. This route removes the fingerprint imitation
 and the credential intermediation, so it carries less risk than cloaking. It does not make
 driving a subscription from other harnesses sanctioned.
+
+## Owner decisions
+
+- **The Claude sign-in is retired.** The cloaked route is deleted from the app, not kept
+  beside Claude Agent: no sign-in, credential import, reconnect, organization seats, quota
+  reading or usage resets for Claude. Users are alpha testers; the owner tells them. Launch
+  deletes every profile's Claude credential files and their stored accounts before any core
+  starts, since a core that loaded one would keep imitating Claude Code.
+- **Anthropic is not asked first.** OpenCode and T3 Code ship the same approach. The rules
+  quoted in the context still stand, and the account risk is the user's.
+- **Earlier images go along, as OpenCode sends them.** See Fresh, below.
+- **Downgrades are not supported.** A build from before Claude Agent cannot read a store that
+  holds a Claude Agent account.
 
 ## Decision
 
@@ -106,7 +119,13 @@ harness ─(Chat | Responses | Messages)─▶ daemon gateway /p/<slug>
     tools changed. The engine runs `--resume` with the new settings. A request that carries
     tool results never resumes: no stopped process can still answer its calls.
   - **Fresh.** Anything else, such as an edit, compaction, another model's turns or a lost
-    session. The unseen history goes as one `<conversation-checkpoint>` user message.
+    session. The unseen history goes as one `<conversation-checkpoint>` user message. Its
+    images, from user messages and from tool results, go along in place, each inside a
+    `document` block (`source.type: "content"`), as OpenCode sends them. Claude Code takes a
+    plain image block for one just pasted: it saves a copy under `/tmp/claude-<uid>/` and
+    adds a line naming that file (measured with 2.1.326). The new message's own images go
+    as plain image blocks, as OpenCode and T3 Code send them. T3 Code drops earlier images
+    instead.
   - **Side call.** A request without tools, such as a title, runs once with
     `--no-session-persistence`.
 
@@ -134,23 +153,20 @@ harness ─(Chat | Responses | Messages)─▶ daemon gateway /p/<slug>
   answer: 429 with `retry-after` when Claude Code reported a reset time, 400 "prompt is too
   long" so harnesses compact, 529 when overloaded, and 401 asking the user to sign in again. A
   client that hangs up interrupts the turn.
-- **One account.** A profile holds at most one Claude Agent subscription, and never together
-  with Claude OAuth seats: connecting beside either, a Claude sign-in or a Claude credential
-  import into such a profile all answer 409. Nothing rotates or fails over between Claude
-  accounts. A limit is a 429. The account is an API-key account of the `claude-agent` provider:
-  its models are the deduplicated `resolvedModel`s of `initialize`, its key is random and only
-  the profile's core presents it, and the core's entry points at the daemon's port, computed
-  when the config is written.
+- **One account.** A profile holds at most one Claude Agent subscription: connecting a
+  second answers 409. Nothing rotates or fails over between Claude accounts. A limit is a
+  429. The account is an API-key account of the `claude-agent` provider: its models are the
+  deduplicated `resolvedModel`s of `initialize`, its key is random and only the profile's
+  core presents it, and the core's entry points at the daemon's port, computed when the
+  config is written.
 
 ## Out of scope, kept as follow-ups
 
-- Deprecating or migrating existing Claude OAuth seats. The cloaked route stays available,
-  so this is the owner's call.
 - Forking a session at the last shared message. A divergence starts fresh with a checkpoint.
 - `count_tokens`, images in tool results beyond base64, and Windows.
-- Offering this to other users. The Agent SDK overview says third parties may not offer
-  claude.ai login "unless previously approved". This is for the owner's own use until Anthropic
-  is asked.
+- Asking Anthropic. The Agent SDK overview says third parties may not offer claude.ai login
+  "unless previously approved"; the owner relies on OpenCode's and T3 Code's precedent
+  instead.
 
 ## Evidence
 
@@ -164,6 +180,16 @@ harness ─(Chat | Responses | Messages)─▶ daemon gateway /p/<slug>
   against the spike's fake upstream: two parallel tool calls round-tripped, a call held for 75 s
   kept Claude Code waiting with progress notifications, and the upstream request carried
   `cc_entrypoint=nonstopvibin` with no cloak additions.
+- Images: the real `claude` 2.1.326 forwarded a plain image block and a document-wrapped
+  one to the fake upstream. It saved the plain one to a temporary file and added
+  `[Image: source: <path>]`, and passed the document on unchanged. Which other apps resend
+  earlier images was read from their source: OpenCode (`claude-agent` provider,
+  `convert-to-claude-message.ts`), T3 Code (`handoffBudget.ts`) and
+  `ai-sdk-provider-claude-code`.
+- The core records Claude Agent usage as provider `claude`, its name for the Anthropic
+  protocol's routes, and model owners as `anthropic` (the engine test checks the first).
+  The app prices `claude` records from Anthropic's catalog and labels them Claude, as it did
+  when `claude` was also the sign-in's provider.
 - Not covered here: traffic of a real subscription, a real plan-limit 429 and its reset headers
   (the `rate_limit_event` reset time is read as `rate_limit_info.resetsAt`, unverified), and
   macOS. These need the owner's account and are listed in the pull request.

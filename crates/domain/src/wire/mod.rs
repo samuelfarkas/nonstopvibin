@@ -50,7 +50,7 @@ pub use api::{
 pub use model::{
     CatalogModel, ContextTier, Cost, CostTier, Modality, Model, ModelMetadata, TierType,
 };
-pub use oauth::{OAuthAction, OAuthReview, OAuthSession, OAuthStatus};
+pub use oauth::{OAuthSession, OAuthStatus};
 pub use profile::{AppState, CorePhase, CoreState, Profile, ProfileState, Runtime};
 pub use usage::{
     Eur, PricingTokens, UsageHistory, UsagePricing, UsageRecord, UsageSummary, UsageTotals,
@@ -98,7 +98,7 @@ impl From<f64> for JsNumber {
     }
 }
 
-/// The literal `true`, for fields TypeScript types as `true` (`Ok.ok`, `QuotaWindow.scoped`).
+/// The literal `true`, for fields TypeScript types as `true` (`Ok.ok`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(test, derive(ts_rs::TS), ts(type = "true"))]
 pub struct True;

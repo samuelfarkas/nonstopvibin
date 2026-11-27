@@ -336,9 +336,7 @@ impl Api {
             }
             ProfileRoute::SignIn => {
                 let start = parse::oauth_start(&body(request).await?)?;
-                let session = cores
-                    .begin_sign_in(id, start.provider, start.reconnect_account_id)
-                    .await?;
+                let session = cores.begin_sign_in(id, start.provider).await?;
                 json(StatusCode::OK, &session)
             }
             ProfileRoute::SignInStatus => {
@@ -350,11 +348,6 @@ impl Api {
                 let state = parse::state_query(query(url, "state").as_deref())?;
                 cores.cancel_sign_in(id, &state).await?;
                 json(StatusCode::OK, &ok())
-            }
-            ProfileRoute::SignInConfirm => {
-                let state = parse::state(&body(request).await?)?.state;
-                let status = cores.confirm_sign_in(id, &state).await?;
-                json(StatusCode::OK, &status)
             }
             ProfileRoute::SignInSession => json(StatusCode::OK, &cores.sign_in_session(id)),
             ProfileRoute::Callback => {

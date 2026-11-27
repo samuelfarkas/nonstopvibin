@@ -7,9 +7,9 @@ import type { AppState, Account } from "../src/shared/types.ts";
 test("tray disclosures preserve quota details and surface stale, disabled, and unknown accounts", () => {
   const account: Account = {
     id: "a",
-    name: "Claude",
+    name: "Kimi Code",
     email: "person@example.test",
-    provider: "claude",
+    provider: "kimi",
     kind: "oauth",
     disabled: false,
     status: "Ready",
@@ -19,12 +19,7 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
       checkedAt: new Date().toISOString(),
       windows: [
         { label: "Weekly", remainingPercent: 59, resetsAt: null },
-        {
-          label: "Fable weekly",
-          remainingPercent: 0,
-          resetsAt: null,
-          scoped: true,
-        },
+        { label: "5-hour", remainingPercent: 80, resetsAt: null },
       ],
     },
   };
@@ -60,10 +55,10 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
   assert.equal((html.match(/<summary /g) ?? []).length, 3);
   assert.doesNotMatch(html, /<details[^>]*\bopen/);
   assert.match(html, /<strong>59%<\/strong>/);
-  assert.match(html, /Fable weekly/);
+  assert.match(html, /5-hour/);
   assert.match(html, /Check failed · last reading/);
   assert.match(html, /class="tray-account-notice">Paused</);
-  assert.match(html, /role="meter" aria-label="Fable weekly"/);
+  assert.match(html, /role="meter" aria-label="5-hour"/);
   assert.match(html, /<strong>—<\/strong>/);
   assert.match(html, />starting</);
   assert.match(html, /No current quota/);
@@ -111,7 +106,7 @@ test("tray disclosures preserve quota details and surface stale, disabled, and u
     },
   });
   const grouped = summary();
-  assert.match(grouped, /<strong>Claude<\/strong>/);
+  assert.match(grouped, /<strong>Kimi Code<\/strong>/);
   assert.match(grouped, /<strong>Codex<\/strong>/);
   assert.match(grouped, /<strong>30%<\/strong>/);
   assert.match(grouped, /<strong>90%<\/strong>/);

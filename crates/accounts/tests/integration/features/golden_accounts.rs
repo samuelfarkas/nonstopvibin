@@ -1,4 +1,4 @@
-//! Replays the quota, reset, identity and API-account cases of `tests/golden/accounts.json`
+//! Replays the quota, reset and API-account cases of `tests/golden/accounts.json`
 //! (`tests/golden/areas/accounts.ts`) and the import scan of `api.json`. The `sync`,
 //! `credentialPath` and `list` cases are replayed in `scheduler::golden`.
 
@@ -9,7 +9,6 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use nsv_accounts::api_accounts::{api_account, go_model_protocol};
-use nsv_accounts::identity::{SeatIdentity, claude_identity, same_seat, verify_claude_identity};
 use nsv_accounts::imports::ImportCatalog;
 use nsv_accounts::quota::{QuotaError, Quotas, RefreshQuota, parse_quota};
 use nsv_accounts::resets::{Resets, reset_credits, reset_result};
@@ -60,28 +59,13 @@ fn quotas_parse_as_typescript_did() {
             (result, _) => panic!("{}: {result:?}", case["name"]),
         }
     }
-    assert_eq!(parsed.len(), 31);
+    assert_eq!(parsed.len(), 21);
 }
 
 #[test]
-fn identities_and_protocols_match_typescript() {
+fn protocols_and_reset_schemas_match_typescript() {
     let cases = cases("accounts");
     let mut replayed = 0;
-    for case in named(&cases, "claudeIdentity ") {
-        assert_eq!(
-            serde_json::to_value(claude_identity(&case["input"])).unwrap(),
-            case["output"],
-            "{}",
-            case["name"]
-        );
-        replayed += 1;
-    }
-    for case in named(&cases, "sameSeat ") {
-        let a: SeatIdentity = serde_json::from_value(case["input"][0].clone()).unwrap();
-        let b: SeatIdentity = serde_json::from_value(case["input"][1].clone()).unwrap();
-        assert_eq!(json!(same_seat(&a, &b)), case["output"], "{}", case["name"]);
-        replayed += 1;
-    }
     for case in named(&cases, "goModelProtocol ") {
         let protocol = go_model_protocol(
             case["input"]["id"].as_str().unwrap(),
@@ -104,7 +88,7 @@ fn identities_and_protocols_match_typescript() {
         }
         replayed += 1;
     }
-    assert_eq!(replayed, 12 + 4 + 11 + 10);
+    assert_eq!(replayed, 11 + 10);
 }
 
 /// The recorder's stubbed `/models` answers.
@@ -173,48 +157,6 @@ async fn api_accounts_validate_and_discover_as_typescript_did() {
         }
     }
     assert_eq!(accounts.len(), 20);
-}
-
-#[tokio::test]
-async fn claude_identity_is_verified_with_the_token_as_typescript_did() {
-    let cases = cases("accounts");
-    let verified = named(&cases, "verifyClaudeIdentity ");
-    for case in &verified {
-        let answer = case["input"]["response"].clone();
-        let fetch = StubFetch::new(move |_| match &answer {
-            Value::String(network) if network == "network" => Err(nsv_net::NetError::Connect(
-                std::io::ErrorKind::ConnectionRefused.into(),
-            )),
-            answer => Ok(response(
-                u16::try_from(answer["status"].as_u64().unwrap()).unwrap(),
-                answer["body"].as_str().unwrap(),
-            )),
-        });
-        let raw = case["input"]["raw"].as_object().unwrap();
-        let result = verify_claude_identity(&fetch, raw).await;
-        let requests: Vec<Value> = fetch
-            .seen
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|seen| {
-                json!({ "url": seen.request.url, "method": "GET", "headers": headers(&seen.request), "redirect": "error" })
-            })
-            .collect();
-        match (result, case.get("output")) {
-            (Ok(credential), Some(expected)) => assert_eq!(
-                &json!({ "credential": credential, "requests": requests }),
-                expected,
-                "{}",
-                case["name"]
-            ),
-            (Err(error), None) => {
-                assert_error(&case["error"], &error.message, error.status, &case["name"]);
-            }
-            (result, _) => panic!("{}: {result:?}", case["name"]),
-        }
-    }
-    assert_eq!(verified.len(), 7);
 }
 
 /// Stands in for `Quotas` in the reset flow, as the recorder's stub did.
@@ -327,14 +269,9 @@ async fn quota_refreshes_and_resets_replay_in_order() {
         }
         replayed += 1;
     }
-    assert_eq!(replayed, 16);
+    assert_eq!(replayed, 13);
 
-    let resets = Resets::new(
-        store.clone(),
-        Arc::clone(&source),
-        Arc::new(Available),
-        fixed,
-    );
+    let resets = Resets::new(store.clone(), Arc::clone(&source), Arc::new(Available));
     let identity = chatgpt["codex-pro.json"].clone();
     for case in named(&cases, "reset ") {
         let input = &case["input"];
@@ -394,7 +331,7 @@ async fn quota_refreshes_and_resets_replay_in_order() {
         }
         replayed += 1;
     }
-    assert_eq!(replayed, 16 + 11);
+    assert_eq!(replayed, 13 + 11);
     store.close().await;
 }
 

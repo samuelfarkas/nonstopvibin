@@ -317,7 +317,7 @@ async fn a_switch_waits_for_no_sign_in_and_shutdown_aborts_a_download() {
     let updates = Arc::clone(&world.cores);
     let session = world
         .cores
-        .begin_sign_in(&profile, OAuthProvider::Codex, None)
+        .begin_sign_in(&profile, OAuthProvider::Codex)
         .await
         .unwrap();
     let refused = updates.install_core(UPDATE).await.unwrap_err();

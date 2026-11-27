@@ -27,7 +27,6 @@ export type RouteKey =
   | "POST /profiles/:profileId/oauth"
   | "GET /profiles/:profileId/oauth"
   | "DELETE /profiles/:profileId/oauth"
-  | "POST /profiles/:profileId/oauth-confirm"
   | "GET /profiles/:profileId/oauth-session"
   | "POST /profiles/:profileId/callback"
   | "POST /profiles/:profileId/import"

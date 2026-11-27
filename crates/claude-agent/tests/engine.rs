@@ -366,6 +366,7 @@ struct World {
     core: CoreProcess,
     port: u16,
     key: String,
+    management: String,
 }
 
 impl World {
@@ -442,6 +443,7 @@ impl World {
             core,
             port,
             key: config.core_key.expose_secret().to_owned(),
+            management: management.clone(),
         };
         let reported = world.reported(&management).await;
         assert!(applied(&config, &reported), "{reported}");
@@ -473,6 +475,23 @@ impl World {
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// The usage records the core queued since the last read, as the app drains them.
+    async fn usage(&self) -> Vec<Value> {
+        let authorization = format!("Bearer {}", self.management);
+        let response = loopback(LoopbackRequest {
+            to: Loopback::v4(self.port),
+            method: &Method::GET,
+            target: "/v0/management/usage-queue?count=50",
+            headers: &[("Authorization", &authorization)],
+            body: None,
+            timeout: Duration::from_secs(5),
+            limit: 1 << 20,
+        })
+        .await
+        .unwrap();
+        serde_json::from_slice::<Vec<Value>>(&response.body).unwrap()
     }
 
     /// A harness request to the core with its key; the JSON answer.
@@ -586,6 +605,16 @@ async fn a_chat_completions_tool_call_round_trips_through_one_claude_process() {
         )
         .await;
     assert_eq!(third["choices"][0]["message"]["content"], "echo: thanks");
+    // The core records Claude Agent requests as its `claude` routes, which pricing reads as
+    // Anthropic's (`CORE_CLAUDE`).
+    let usage = world.usage().await;
+    assert_eq!(usage.len(), 3, "{usage:?}");
+    assert!(
+        usage
+            .iter()
+            .all(|record| record["provider"] == "claude" && record["model"] == MODEL),
+        "{usage:?}"
+    );
     let starts = world.starts();
     assert_eq!(starts.len(), 1, "{:?}", world.log());
     let log = world.log();

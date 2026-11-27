@@ -224,7 +224,7 @@ async fn a_second_launch_during_restore_shows_the_window_once_the_shell_listens(
             profile.enabled = true;
             db.save_profile(&profile)?;
             let account: Account = serde_json::from_value(json!({
-                "id": "claude.json", "name": "Claude", "provider": "claude", "kind": "oauth",
+                "id": "codex.json", "name": "Codex", "provider": "codex", "kind": "oauth",
                 "disabled": false, "status": "Ready", "priority": 0, "authIndex": "1",
             }))?;
             db.save_account_metadata(&profile.id, &[account])

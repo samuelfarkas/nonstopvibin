@@ -365,9 +365,10 @@ impl Daemon {
         Ok(Self(app))
     }
 
-    /// Selects and checks the core, reaps cores and pending sign-ins an earlier run left,
-    /// starts the profiles that are kept running (the others start on their first request),
-    /// checks for a core update in the background, restores agent connections, and writes
+    /// Selects and checks the core, reaps cores and core checks an earlier run left, deletes
+    /// retired Claude sign-ins, starts the profiles that are kept running (the others start on
+    /// their first request), checks for a core update in the background, restores agent
+    /// connections, and writes
     /// `server.json`: a desktop daemon first, since a second launch finds it there and the
     /// cores may take a while. Dropping it part-way is safe: [`Daemon::close`] stops whatever
     /// it started.

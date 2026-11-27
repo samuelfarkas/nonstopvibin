@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import type { Account, AppState } from "../shared/types.ts";
+import type { AppState } from "../shared/types.ts";
 import { openedWith } from "../shared/renderer-url.ts";
 import { api, desktop } from "./api.ts";
 import { messageOf } from "./action.ts";
@@ -53,7 +53,6 @@ export function App() {
   useKeepDraft(Boolean(busy || shownError || notice));
   const [createOpen, setCreateOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [reconnecting, setReconnecting] = useState<Account>();
   const [accountId, setAccountId] = useState("");
   useEffect(() => {
     localStorage.setItem("nv-page", page);
@@ -82,7 +81,6 @@ export function App() {
     localStorage.setItem("nv-profile", id);
     setAccountId("");
     setAddOpen(false);
-    setReconnecting(undefined);
     setPage("subscriptions");
     setError("");
   }
@@ -335,23 +333,14 @@ export function App() {
         <AddSubscription
           profile={profile}
           profiles={state.profiles}
-          reconnectAccount={reconnecting}
           onSelectProfile={selectProfile}
-          onClose={() => {
-            setAddOpen(false);
-            setReconnecting(undefined);
-          }}
+          onClose={() => setAddOpen(false)}
           onSaved={refresh}
         />
       )}
       {account && profile && (
         <AccountDetails
           key={account.id}
-          onReconnect={() => {
-            setReconnecting(account);
-            setAccountId("");
-            setAddOpen(true);
-          }}
           account={account}
           profile={profile}
           onClose={() => setAccountId("")}

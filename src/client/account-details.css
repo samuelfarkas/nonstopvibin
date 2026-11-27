@@ -1,9 +1,3 @@
-.subscription-reconnect {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 16px 0;
-}
 .detail-status {
   display: flex;
   align-items: center;

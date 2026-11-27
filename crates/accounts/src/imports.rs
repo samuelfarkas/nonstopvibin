@@ -14,8 +14,6 @@ use nsv_domain::sha256_hex;
 use nsv_domain::wire::ImportSource;
 use serde_json::{Map, Value};
 
-use crate::identity::{SeatIdentity, claude_identity};
-
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
     #[error(transparent)]
@@ -94,9 +92,6 @@ impl ImportCatalog {
                 if !entry.is_some_and(|entry| entry.credential_file) {
                     continue;
                 }
-                let identity = entry
-                    .filter(|entry| entry.organizations)
-                    .map_or_else(SeatIdentity::default, |_| claude_identity(&raw));
                 let id = sha256_hex(path.as_os_str().as_encoded_bytes());
                 self.files.insert(id.clone(), path);
                 found.push(ImportSource {
@@ -105,9 +100,6 @@ impl ImportCatalog {
                     provider: kind,
                     email: js::text(js::field(Some(&raw), "email")).map(str::to_owned),
                     source: source.to_owned(),
-                    account_uuid: identity.account_uuid,
-                    organization_uuid: identity.organization_uuid,
-                    organization_name: identity.organization_name,
                 });
             }
         }

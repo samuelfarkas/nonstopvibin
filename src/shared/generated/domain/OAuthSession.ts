@@ -13,4 +13,4 @@ startedAt: number, userCode?: string,
 /**
  * Milliseconds since the Unix epoch.
  */
-expiresAt: number, reconnectAccountId?: string, };
+expiresAt: number, };

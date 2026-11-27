@@ -9,7 +9,6 @@ export type { CorePhase } from "./generated/domain/CorePhase.ts";
 export type { CoreState } from "./generated/domain/CoreState.ts";
 export type { ImportSource } from "./generated/domain/ImportSource.ts";
 export type { Model } from "./generated/domain/Model.ts";
-export type { OAuthReview } from "./generated/domain/OAuthReview.ts";
 export type { OAuthSession } from "./generated/domain/OAuthSession.ts";
 export type { OAuthStatus } from "./generated/domain/OAuthStatus.ts";
 export type { PricingTokens } from "./generated/domain/PricingTokens.ts";

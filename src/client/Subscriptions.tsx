@@ -6,12 +6,7 @@ import {
   providerLabel,
 } from "../shared/providers.ts";
 import { api } from "./api.ts";
-import {
-  accountLabel,
-  age,
-  groupAccountsByProvider,
-  planLabel,
-} from "./format.ts";
+import { age, groupAccountsByProvider, planLabel } from "./format.ts";
 import {
   accountTag,
   isQuotaStale,
@@ -72,7 +67,7 @@ function Headroom({ groups }: { groups: Map<string, Account[]> }) {
                   <div
                     className={`meter-track ${meterLevel(v)}`}
                     key={a.id}
-                    title={`${accountLabel(a)} · ${v === null ? "not checked" : `${Math.round(v)}%`}`}
+                    title={`${a.name} · ${v === null ? "not checked" : `${Math.round(v)}%`}`}
                   >
                     <div style={{ width: `${v ?? 0}%` }} />
                   </div>
@@ -237,9 +232,7 @@ export function SubscriptionsPage({
               <span />
             </div>
             {accounts.map((a) => {
-              const windows = [...(a.quota?.windows ?? [])]
-                .sort((x, y) => Number(!!x.scoped) - Number(!!y.scoped))
-                .slice(0, 3);
+              const windows = [...(a.quota?.windows ?? [])].slice(0, 3);
               const stale = isQuotaStale(a.quota);
               const tag = accountTag(a);
               return (
@@ -252,7 +245,7 @@ export function SubscriptionsPage({
                     onClick={() => onOpenAccount(a.id)}
                   >
                     <span className="account-name">
-                      <strong>{accountLabel(a)}</strong>
+                      <strong>{a.name}</strong>
                       {tag && (
                         <span className={`tag ${tag.tone}`}>
                           {tag.text}
@@ -274,14 +267,12 @@ export function SubscriptionsPage({
                       {a.quota?.plan && <span>{planLabel(a.quota.plan)}</span>}
                     </span>
                     {providerEntry(a.provider)?.bankedResets &&
-                      a.kind === "oauth" &&
-                      // Only Codex usage reports a count; Claude's resets show in its details.
-                      a.quota?.bankedResets !== undefined && (
+                      a.kind === "oauth" && (
                         <span
-                          className={`account-resets ${!stale && a.quota.bankedResets > 0 ? "available" : ""}`}
+                          className={`account-resets ${!stale && (a.quota?.bankedResets ?? 0) > 0 ? "available" : ""}`}
                         >
                           <RefreshCw size={13} aria-hidden="true" />
-                          {stale
+                          {stale || a.quota?.bankedResets === undefined
                             ? "Check banked resets"
                             : a.quota.bankedResets === 0
                               ? "No banked resets"
@@ -311,7 +302,7 @@ export function SubscriptionsPage({
                   </div>
                   <button
                     className="icon-button"
-                    aria-label={`Details for ${accountLabel(a)}`}
+                    aria-label={`Details for ${a.name}`}
                     onClick={() => onOpenAccount(a.id)}
                   >
                     <MoreHorizontal size={16} />

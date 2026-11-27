@@ -22,7 +22,7 @@ use nsv_store::Store;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
-use crate::accounts::Accounts;
+use crate::accounts::{self, Accounts};
 use crate::credentials::Credentials;
 use crate::fetch::Outside;
 use crate::quota::{QuotaError, Quotas};
@@ -204,12 +204,8 @@ impl Cores {
                     store.clone(),
                     pool.clone(),
                     Arc::clone(&accounts),
-                    credentials.clone(),
                     Arc::clone(&quotas),
                     SignInOptions {
-                        backends: Arc::clone(&backends),
-                        outside: Arc::clone(&outside),
-                        ready,
                         clock,
                         report: Arc::clone(&report),
                         accepted: sign_in_accepted,
@@ -241,7 +237,7 @@ impl Cores {
             },
         )?;
         Ok(Self {
-            resets: Resets::new(store.clone(), source, Arc::clone(&quotas), clock),
+            resets: Resets::new(store.clone(), source, Arc::clone(&quotas)),
             scheduler,
             pool,
             accounts,
@@ -427,12 +423,8 @@ impl Cores {
         &self,
         profile: &ProfileId,
         provider: OAuthProvider,
-        reconnect: Option<AccountId>,
     ) -> Result<OAuthSession, AppError> {
-        if provider == OAuthProvider::Claude {
-            self.accounts.refuse_beside_claude_agent(profile).await?;
-        }
-        self.sign_in.begin(profile, provider, reconnect).await
+        self.sign_in.begin(profile, provider).await
     }
 
     /// `GET …/oauth/status`; see [`SignIn::status`]. A sign-in that ended lets its profile's
@@ -450,18 +442,6 @@ impl Cores {
             self.scheduler.catch_up();
         }
         Ok(status)
-    }
-
-    /// `POST …/oauth/confirm`; see [`SignIn::confirm`].
-    ///
-    /// # Errors
-    /// The sign-in's.
-    pub async fn confirm_sign_in(
-        &self,
-        profile: &ProfileId,
-        state: &str,
-    ) -> Result<OAuthStatus, AppError> {
-        self.sign_in.confirm(profile, state).await
     }
 
     /// `DELETE …/oauth`; see [`SignIn::cancel`]. Its profile's core may stop for being idle
@@ -598,19 +578,21 @@ impl Cores {
     }
 
     /// At startup: profiles start from the core `CoreUpdates::select` picks. Cores a dead
-    /// earlier instance left are stopped (the profiles' and the pending sign-ins'), pending
-    /// sign-ins and core checks are deleted, the profiles start and scheduling begins. An installed build then checks for a core update
-    /// in the background; offline stays quiet, as Settings checks again.
+    /// earlier instance left are stopped (the profiles' and the core checks'), core checks
+    /// and retired Claude sign-ins are deleted, the profiles start and scheduling begins. An
+    /// installed build then checks for a core update in the background; offline stays quiet,
+    /// as Settings checks again.
     ///
     /// # Errors
     /// A bundled core that is missing or fails its check, a ledger or file-system error, or
     /// the scheduler's.
     pub async fn launch(&self) -> Result<(), AppError> {
         self.updates.select().await?;
-        // Orphans first: if the pending sign-ins cannot be removed, startup fails without
-        // leaving one running.
+        // Orphans first: if the core checks cannot be removed, startup fails without leaving
+        // one running.
         self.pool.reap_orphans().await.map_err(AppError::internal)?;
         sandbox::discard_all(self.store.directory(), &self.backends).await?;
+        accounts::retire_claude_sign_ins(&self.store).await?;
         self.scheduler.launch().await?;
         if self.updates.enabled() {
             let updates = self.updates.clone();
