@@ -603,7 +603,11 @@ export function AddSubscription({
                 Runs your own signed-in Claude Code for this profile, which is
                 lower risk than the cloaked Claude sign-in.
               </p>
-              {agent.claude ? (
+              {agent.error ? (
+                <p className="inline-error" role="alert">
+                  {agent.error}
+                </p>
+              ) : agent.claude ? (
                 <div className="device-code">
                   <p>
                     {agent.signedIn
