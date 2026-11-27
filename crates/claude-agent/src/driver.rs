@@ -146,7 +146,7 @@ impl Driver {
                 }
                 line = lines.next_line() => {
                     let Ok(Some(line)) = line else { break End::Exited };
-                    if let Some(end) = self.line(&line, &mut sink, &mut tail).await {
+                    if let Some(end) = self.line(&line, &mut sink, &mut tail, &mut stop).await {
                         break end;
                     }
                 }
@@ -155,12 +155,14 @@ impl Driver {
         self.finish(end, sink, Some(stdin)).await;
     }
 
-    /// Handles one stdout line; `Some` when the process must stop.
+    /// Handles one stdout line; `Some` when the process must stop, which `stop` can ask for
+    /// while a client that stopped reading holds up the response.
     async fn line(
         &mut self,
         line: &str,
         sink: &mut Option<Sink>,
         tail: &mut Option<Digest>,
+        stop: &mut oneshot::Receiver<bool>,
     ) -> Option<End> {
         let line = parse_line(line);
         if let Line::Init { session } = &line
@@ -180,7 +182,10 @@ impl Driver {
                         let _ = head.send(Head::Stream);
                     }
                     // A client that hung up is noticed by the loop, which interrupts.
-                    let _ = current.body.send(bytes).await;
+                    tokio::select! {
+                        _ = current.body.send(bytes) => {}
+                        keep = &mut *stop => return Some(End::Stopped(keep.unwrap_or(false))),
+                    }
                 }
                 Step::Hold { calls, turn, body } => {
                     answer(current, body);

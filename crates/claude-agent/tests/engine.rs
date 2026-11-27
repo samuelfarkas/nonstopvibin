@@ -112,6 +112,20 @@ mod fake {
         event(&json!({ "type": "content_block_stop", "index": index }));
     }
 
+    /// More text than every buffer between here and a client that stops reading holds.
+    fn flood(id: &str) {
+        start(id);
+        event(
+            &json!({ "type": "content_block_start", "index": 0, "content_block": { "type": "text", "text": "" } }),
+        );
+        let piece = "x".repeat(64 << 10);
+        for _ in 0..1024 {
+            event(
+                &json!({ "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": piece } }),
+            );
+        }
+    }
+
     fn stop(reason: &str) {
         event(
             &json!({ "type": "message_delta", "delta": { "stop_reason": reason, "stop_sequence": null }, "usage": { "output_tokens": 7 } }),
@@ -269,7 +283,9 @@ mod fake {
             log(&json!({ "turn": said }));
             let id = format!("msg_{}_{turns}", std::process::id());
             let call = |n: u64| format!("toolu_{}_{turns}_{n}", std::process::id());
-            if said.contains("wait forever") {
+            if said.contains("flood") {
+                flood(&id);
+            } else if said.contains("wait forever") {
                 start(&id);
                 text(0, "Working");
                 // Until the engine interrupts.
@@ -346,6 +362,8 @@ struct World {
     store: Store,
     profile: ProfileId,
     engine: Engine<Agent>,
+    /// The engine's port, the daemon's.
+    daemon: u16,
     core: CoreProcess,
     port: u16,
     key: String,
@@ -421,6 +439,7 @@ impl World {
             store,
             profile,
             engine,
+            daemon,
             core,
             port,
             key: config.core_key.expose_secret().to_owned(),
@@ -785,6 +804,36 @@ async fn a_request_waiting_for_room_is_refused_once_the_account_goes() {
     world.stop().await;
 }
 
+/// A client of the engine that stops reading a stream holds up neither removing the account
+/// nor shutdown: the driver stops anyway, within the grace before SIGKILL.
+async fn a_client_that_stops_reading_does_not_hold_up_stopping() {
+    let world = World::new("cae-stalled").await;
+    let body = json!({
+        "model": MODEL, "max_tokens": 100, "stream": true,
+        "tools": [{ "name": "read", "input_schema": { "type": "object" } }],
+        "messages": [{ "role": "user", "content": "flood" }],
+    })
+    .to_string();
+    let mut stream = TcpStream::connect(("127.0.0.1", world.daemon))
+        .await
+        .unwrap();
+    let request = format!(
+        "POST /claude-agent/{}/v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {AGENT_KEY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        world.profile,
+        world.daemon,
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    // The fake writes faster than the buffers drain into a client that never reads.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(15), world.engine.forget(&world.profile))
+        .await
+        .unwrap_or_else(|_| panic!("still stopping after {:?}", started.elapsed()));
+    drop(stream);
+    world.stop().await;
+}
+
 /// The manual check with the real Claude Code: `NSV_E2E_CLAUDE` names a script that runs it
 /// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
 /// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
@@ -850,7 +899,7 @@ fn block_on(test: impl Future<Output = ()>) {
 }
 
 fn run_tests(arguments: &[String]) -> ExitCode {
-    let tests: [(&str, fn()); 6] = [
+    let tests: [(&str, fn()); 7] = [
         (
             "a_chat_completions_tool_call_round_trips_through_one_claude_process",
             || block_on(a_chat_completions_tool_call_round_trips_through_one_claude_process()),
@@ -873,6 +922,10 @@ fn run_tests(arguments: &[String]) -> ExitCode {
         (
             "a_request_waiting_for_room_is_refused_once_the_account_goes",
             || block_on(a_request_waiting_for_room_is_refused_once_the_account_goes()),
+        ),
+        (
+            "a_client_that_stops_reading_does_not_hold_up_stopping",
+            || block_on(a_client_that_stops_reading_does_not_hold_up_stopping()),
         ),
     ];
     let filters: Vec<&String> = arguments.iter().filter(|a| !a.starts_with('-')).collect();
