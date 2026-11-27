@@ -65,7 +65,10 @@ harness ─(Chat | Responses | Messages)─▶ daemon gateway /p/<slug>
   An SSE response that sends `notifications/progress` held for 330 s without any setting.
 - **Sign-in is a command the user runs.** The app shows
   `CLAUDE_CONFIG_DIR=<dir> claude auth login`. It reads the sign-in state from the `account`
-  field of Claude Code's `initialize` answer, which makes no API call.
+  field of Claude Code's `initialize` answer, which makes no API call. The same answer's
+  `claude_code_version` must be 2.1.248 or newer, the version OpenCode's spec names for
+  `client_composed`: an older Claude Code would expand `@path` mentions and run slash commands
+  in the text the engine sends, such as a checkpoint's tool results.
 
 ### Engine behaviour
 

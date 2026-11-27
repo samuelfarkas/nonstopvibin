@@ -38,6 +38,10 @@ const MCP_LIMIT: usize = 4 << 20;
 const PROGRESS: Duration = Duration::from_secs(30);
 /// How long the sign-in probe may take.
 const PROBE: Duration = Duration::from_secs(30);
+/// The oldest Claude Code that delivers a user message flagged `client_composed` as written.
+/// An older one expands `@path` mentions and runs slash commands in the text it gets, such as
+/// a checkpoint's tool results.
+const OLDEST: (u64, u64, u64) = (2, 1, 248);
 
 /// A profile's Claude Agent account as the engine needs it.
 #[derive(Debug, Clone)]
@@ -65,6 +69,8 @@ pub struct Options {
 /// What Claude Code's `initialize` answer says about its sign-in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
+    /// Its version, `claude_code_version`; absent on a Claude Code too old to say.
+    pub version: Option<String>,
     pub signed_in: bool,
     pub email: Option<String>,
     /// The models it offers, by full name, without repeats.
@@ -550,12 +556,15 @@ impl<H: Host> Engine<H> {
             );
         };
         let probed = match self.sessions(profile).await {
-            Ok(sessions) => probe(&program, &sessions.paths).await.ok_or_else(|| {
-                Unready::new(
-                    502,
-                    "Claude Code did not answer. Run claude once in a terminal, then try again.",
-                )
-            }),
+            Ok(sessions) => probe(&program, &sessions.paths)
+                .await
+                .ok_or_else(|| {
+                    Unready::new(
+                        502,
+                        "Claude Code did not answer. Run claude once in a terminal, then try again.",
+                    )
+                })
+                .and_then(recent),
             Err(_) => Err(Unready::new(
                 500,
                 "Claude Agent could not prepare its files.",
@@ -717,6 +726,31 @@ async fn probe(program: &Path, paths: &Paths) -> Option<Probe> {
     read_probe(&answered?)
 }
 
+/// `probe` if its Claude Code is at least [`OLDEST`].
+fn recent(probe: Probe) -> Result<Probe, Unready> {
+    let parsed = probe.version.as_deref().and_then(|version| {
+        let mut parts = version.split('.').map(str::parse::<u64>);
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(Ok(major)), Some(Ok(minor)), Some(Ok(patch))) => Some((major, minor, patch)),
+            _ => None,
+        }
+    });
+    if parsed.is_some_and(|version| version >= OLDEST) {
+        return Ok(probe);
+    }
+    let (major, minor, patch) = OLDEST;
+    let claude = probe.version.map_or_else(
+        || "This Claude Code".to_owned(),
+        |version| format!("Claude Code {version}"),
+    );
+    Err(Unready::new(
+        409,
+        format!(
+            "{claude} is too old for Claude Agent, which needs {major}.{minor}.{patch} or newer. Update it, then try again."
+        ),
+    ))
+}
+
 /// The sign-in and models of an `initialize` control response.
 fn read_probe(response: &Value) -> Option<Probe> {
     (response.get("subtype").and_then(Value::as_str) == Some("success")).then_some(())?;
@@ -744,6 +778,10 @@ fn read_probe(response: &Value) -> Option<Probe> {
         }
     }
     Some(Probe {
+        version: answer
+            .get("claude_code_version")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         signed_in: token_source.is_some() || field("apiKeySource").is_some(),
         email: field("email"),
         models,
@@ -766,11 +804,13 @@ mod tests {
                     { "value": "sonnet", "resolvedModel": "claude-sonnet-5-5" },
                 ],
                 "account": { "tokenSource": "claude.ai", "email": "me@example.com" },
+                "claude_code_version": "2.1.326",
             },
         });
         assert_eq!(
             read_probe(&response),
             Some(Probe {
+                version: Some("2.1.326".to_owned()),
                 signed_in: true,
                 email: Some("me@example.com".to_owned()),
                 models: vec!["claude-opus-5-5".to_owned(), "claude-sonnet-5-5".to_owned()],
@@ -783,6 +823,7 @@ mod tests {
         assert_eq!(
             read_probe(&signed_out),
             Some(Probe {
+                version: None,
                 signed_in: false,
                 email: None,
                 models: Vec::new(),
@@ -791,6 +832,29 @@ mod tests {
         assert_eq!(
             read_probe(&json!({ "subtype": "error", "error": "x" })),
             None
+        );
+    }
+
+    #[test]
+    fn claude_code_before_verbatim_prompts_is_too_old() {
+        let probe = |version: Option<&str>| Probe {
+            version: version.map(str::to_owned),
+            signed_in: true,
+            email: None,
+            models: Vec::new(),
+        };
+        for version in ["2.1.248", "2.1.1000", "2.2.0", "3.0.0"] {
+            assert!(recent(probe(Some(version))).is_ok(), "{version}");
+        }
+        for version in [Some("2.1.247"), Some("2.0.999"), Some("2.1"), None] {
+            assert_eq!(
+                recent(probe(version)).map_err(|unready| unready.status),
+                Err(409)
+            );
+        }
+        assert_eq!(
+            recent(probe(None)).unwrap_err().message,
+            "This Claude Code is too old for Claude Agent, which needs 2.1.248 or newer. Update it, then try again."
         );
     }
 

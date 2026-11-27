@@ -14,11 +14,13 @@ use serde_json::{Value, json};
 use crate::common::send;
 use crate::features::{Running, start_with};
 
-/// A `claude` that answers `initialize` with `account`, then waits for its stdin to close.
-fn script(directory: &Path, account: &Value) -> PathBuf {
+/// A `claude` of `version` that answers `initialize` with `account`, then waits for its stdin
+/// to close.
+fn script(directory: &Path, version: &str, account: &Value) -> PathBuf {
     let answer = json!({ "type": "control_response", "response": {
         "subtype": "success", "request_id": "initialize",
         "response": {
+            "claude_code_version": version,
             "models": [
                 { "value": "default", "resolvedModel": "claude-opus-5-5" },
                 { "value": "opus", "resolvedModel": "claude-opus-5-5" },
@@ -34,8 +36,17 @@ fn script(directory: &Path, account: &Value) -> PathBuf {
 }
 
 async fn running(name: &str, account: &Value, allow_hosts: Vec<AllowedHost>) -> Running {
+    running_version(name, "2.1.326", account, allow_hosts).await
+}
+
+async fn running_version(
+    name: &str,
+    version: &str,
+    account: &Value,
+    allow_hosts: Vec<AllowedHost>,
+) -> Running {
     let root = TempDir::new(name);
-    let claude = script(root.path(), account);
+    let claude = script(root.path(), version, account);
     start_with(root, None, allow_hosts, Some(claude)).await
 }
 
@@ -175,6 +186,20 @@ async fn claude_agent_is_refused_beside_claude_sign_ins_and_before_claude_code_s
         .call("POST", &format!("/profiles/{unsynced}/claude-agent"), None)
         .await;
     assert_eq!(code, 409, "{refused}");
+    app.close().await;
+}
+
+#[tokio::test]
+async fn a_claude_code_older_than_verbatim_prompts_is_refused() {
+    let app = running_version("claude-agent-old", "2.1.200", &signed_in(), Vec::new()).await;
+    let profile = app.profile("Agent").await;
+    let route = format!("/profiles/{profile}/claude-agent");
+    let message = "Claude Code 2.1.200 is too old for Claude Agent, which needs 2.1.248 or newer. Update it, then try again.";
+    let status = app.ok("GET", &route, None).await;
+    assert_eq!(status["error"], message, "{status}");
+    let (code, refused) = app.call("POST", &route, None).await;
+    assert_eq!((code, &refused["error"]["message"]), (409, &json!(message)));
+    assert_eq!(accounts(&app, &profile).await, Vec::<Value>::new());
     app.close().await;
 }
 
