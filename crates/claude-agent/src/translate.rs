@@ -71,6 +71,7 @@ pub(crate) fn parse_line(line: &str) -> Line {
         Some("rate_limit_event") => {
             let resets = line
                 .get("rate_limit_info")
+                .filter(|info| info.get("status").and_then(Value::as_str) == Some("rejected"))
                 .and_then(|info| info.get("resetsAt"))
                 .and_then(Value::as_u64)
                 // Milliseconds, if the value is too large for seconds.
@@ -945,6 +946,13 @@ mod tests {
             Line::RateLimit {
                 resets_at: Some(1_800_000_000)
             }
+        );
+        // Claude Code also reports limits that still allow requests; their reset is no retry time.
+        assert_eq!(
+            parse_line(
+                r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1800000000}}"#
+            ),
+            Line::RateLimit { resets_at: None }
         );
         assert_eq!(
             parse_line(
