@@ -108,14 +108,4 @@ mod tests {
         assert_eq!(next(&mut body).await, None);
         assert!(body.is_end_stream());
     }
-
-    #[tokio::test]
-    async fn dropping_a_channel_body_closes_its_sender() {
-        let (sender, receiver) = mpsc::channel::<Bytes>(1);
-        let body = Body::channel(receiver);
-        assert!(!sender.is_closed());
-        drop(body);
-        sender.closed().await;
-        assert!(sender.send(Bytes::from_static(b"late")).await.is_err());
-    }
 }

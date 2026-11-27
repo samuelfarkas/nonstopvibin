@@ -837,7 +837,7 @@ async fn a_client_that_stops_reading_does_not_hold_up_stopping() {
 /// with `ANTHROPIC_BASE_URL` at the spike's fake upstream (scenario `parallel`) and a fake
 /// `ANTHROPIC_API_KEY`. Two tool calls round-trip through the engine's MCP server, after
 /// `NSV_E2E_HOLD` seconds if set. With `NSV_E2E_FORGET`, the account goes while Claude Code
-/// holds the calls instead.
+/// holds the calls instead, and its process must stop well within the grace before SIGKILL.
 async fn the_real_claude_code_answers_through_the_engine(program: PathBuf) {
     let world = World::running("cae-real", program).await;
     let echo = json!({ "type": "function", "function": {
@@ -852,11 +852,16 @@ async fn the_real_claude_code_answers_through_the_engine(program: PathBuf) {
         )
         .await;
     println!("first: {first}");
-    // `NSV_E2E_FORGET`: the account goes while Claude Code holds the calls; it must stop
-    // without another upstream request.
+    // `NSV_E2E_FORGET`: the account goes while Claude Code holds the calls. Interrupted first,
+    // it exits at once; it does not wait out the 5 s grace before SIGKILL.
     if std::env::var_os("NSV_E2E_FORGET").is_some() {
+        let started = Instant::now();
         world.engine.forget(&world.profile).await;
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        let stopped = started.elapsed();
+        assert!(
+            stopped < Duration::from_secs(3),
+            "stopped after {stopped:?}"
+        );
         world.stop().await;
         return;
     }
